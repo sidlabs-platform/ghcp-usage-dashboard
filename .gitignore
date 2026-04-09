@@ -22,12 +22,10 @@ npm-debug.log*
 
 # local env files
 .env*.local
+.env.local
 
-# data
-data/*.db
-data/*.sqlite
+# data (SQLite DB with synced metrics — never commit)
+data/
 
 # turbopack
 .turbo
-
-.env.local
