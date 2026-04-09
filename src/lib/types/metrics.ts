@@ -1,0 +1,212 @@
+// Complete TypeScript types for GitHub Copilot Usage Metrics API (NDJSON schema)
+// Based on: https://docs.github.com/en/copilot/reference/copilot-usage-metrics/copilot-usage-metrics
+
+// ── Sub-object types ──────────────────────────────────────────────────
+
+export interface TotalsByIDE {
+  ide: string;
+  code_acceptance_activity_count: number;
+  code_generation_activity_count: number;
+  loc_added_sum: number;
+  loc_deleted_sum: number;
+  loc_suggested_to_add_sum: number;
+  loc_suggested_to_delete_sum: number;
+  user_initiated_interaction_count: number;
+  last_known_ide_version?: {
+    ide_version: string;
+    sampled_at: string;
+  };
+  last_known_plugin_version?: {
+    plugin: string;
+    plugin_version: string;
+    sampled_at: string;
+  };
+}
+
+export interface TotalsByFeature {
+  feature: string; // "code_completion", "inline_chat", "chat_panel", etc.
+  code_acceptance_activity_count: number;
+  code_generation_activity_count: number;
+  loc_added_sum: number;
+  loc_deleted_sum: number;
+  loc_suggested_to_add_sum: number;
+  loc_suggested_to_delete_sum: number;
+  user_initiated_interaction_count: number;
+}
+
+export interface TotalsByLanguageFeature {
+  language: string;
+  feature: string;
+  code_acceptance_activity_count: number;
+  code_generation_activity_count: number;
+  loc_added_sum: number;
+  loc_deleted_sum: number;
+  loc_suggested_to_add_sum: number;
+  loc_suggested_to_delete_sum: number;
+}
+
+export interface TotalsByModelFeature {
+  model: string;
+  feature: string;
+  user_initiated_interaction_count: number;
+}
+
+export interface TotalsByLanguageModel {
+  language: string;
+  model: string;
+  user_initiated_interaction_count: number;
+}
+
+export interface CLITokenUsage {
+  output_tokens_sum: number;
+  prompt_tokens_sum: number;
+  avg_tokens_per_request: number;
+}
+
+export interface TotalsByCLI {
+  session_count: number;
+  request_count: number;
+  prompt_count: number;
+  token_usage: CLITokenUsage;
+  last_known_cli_version?: {
+    cli_version: string;
+    sampled_at: string;
+  };
+}
+
+export interface PullRequestMetrics {
+  total_created: number;
+  total_reviewed: number;
+  total_merged: number;
+  median_minutes_to_merge: number | null;
+  total_suggestions: number;
+  total_applied_suggestions: number;
+  total_created_by_copilot: number;
+  total_reviewed_by_copilot: number;
+  total_merged_created_by_copilot: number;
+  median_minutes_to_merge_copilot_authored: number | null;
+  total_copilot_suggestions: number;
+  total_copilot_applied_suggestions: number;
+}
+
+export interface AgentEdit {
+  loc_added_sum?: number;
+  loc_deleted_sum?: number;
+}
+
+// ── Enterprise/Org aggregate (day_totals) ─────────────────────────────
+
+export interface DayTotal {
+  day: string;
+  enterprise_id: string;
+  organization_id?: string;
+
+  // Active users
+  daily_active_users: number;
+  weekly_active_users: number;
+  monthly_active_users: number;
+  monthly_active_agent_users: number;
+  monthly_active_chat_users: number;
+  daily_active_cli_users?: number;
+
+  // Code activity
+  code_generation_activity_count: number;
+  code_acceptance_activity_count: number;
+  user_initiated_interaction_count: number;
+
+  // Lines of code
+  loc_suggested_to_add_sum: number;
+  loc_suggested_to_delete_sum: number;
+  loc_added_sum: number;
+  loc_deleted_sum: number;
+
+  // Breakdowns
+  totals_by_ide: TotalsByIDE[];
+  totals_by_feature: TotalsByFeature[];
+  totals_by_language_feature: TotalsByLanguageFeature[];
+  totals_by_model_feature: TotalsByModelFeature[];
+  totals_by_language_model: TotalsByLanguageModel[];
+  totals_by_cli?: TotalsByCLI;
+
+  // Pull requests
+  pull_requests?: PullRequestMetrics;
+}
+
+export interface EnterpriseReport {
+  enterprise_id: string;
+  report_start_day: string;
+  report_end_day: string;
+  day_totals: DayTotal[];
+  etl_id?: string;
+  day_partition?: string;
+  entity_id_partition?: number;
+}
+
+export interface OrgReport {
+  organization_id: string;
+  report_start_day: string;
+  report_end_day: string;
+  day_totals: DayTotal[];
+  etl_id?: string;
+}
+
+// ── User-level record ─────────────────────────────────────────────────
+
+export interface UserDayRecord {
+  day: string;
+  enterprise_id: string;
+  organization_id?: string;
+  user_id: number;
+  user_login: string;
+
+  // Code activity
+  code_generation_activity_count: number;
+  code_acceptance_activity_count: number;
+  user_initiated_interaction_count: number;
+
+  // Lines of code
+  loc_suggested_to_add_sum: number;
+  loc_suggested_to_delete_sum: number;
+  loc_added_sum: number;
+  loc_deleted_sum: number;
+
+  // Chat mode breakdown
+  chat_panel_agent_mode?: number;
+  chat_panel_ask_mode?: number;
+  chat_panel_custom_mode?: number;
+  chat_panel_edit_mode?: number;
+  chat_panel_plan_mode?: number;
+  chat_panel_unknown_mode?: number;
+
+  // Feature flags
+  used_agent: boolean;
+  used_chat: boolean;
+  used_cli: boolean;
+  used_copilot_code_review_active?: boolean;
+  used_copilot_code_review_passive?: boolean;
+
+  // Breakdowns
+  totals_by_ide: TotalsByIDE[];
+  totals_by_feature: TotalsByFeature[];
+  totals_by_language_feature: TotalsByLanguageFeature[];
+  totals_by_model_feature: TotalsByModelFeature[];
+  totals_by_language_model: TotalsByLanguageModel[];
+  totals_by_cli?: TotalsByCLI;
+
+  // Agent edit
+  agent_edit?: AgentEdit;
+
+  // Internal fields
+  etl_id?: string;
+  day_partition?: string;
+  entity_id_partition?: number;
+}
+
+// ── API response types ────────────────────────────────────────────────
+
+export interface ReportResponse {
+  download_links: string[];
+  report_day?: string;
+  report_start_day?: string;
+  report_end_day?: string;
+}
