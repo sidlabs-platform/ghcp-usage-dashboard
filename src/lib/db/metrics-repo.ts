@@ -281,16 +281,16 @@ export function getAllOrgMetrics(startDay: string, endDay: string): DayTotal[] {
     // Weighted-average medians by merged PR count (best approximation
     // without access to the underlying distribution)
     ep.median_minutes_to_merge = weightedMedian(
-      ep.median_minutes_to_merge, ep.total_merged - rp.total_merged,
-      rp.median_minutes_to_merge, rp.total_merged
+      ep.median_minutes_to_merge, ep.total_merged - (rp.total_merged ?? 0),
+      rp.median_minutes_to_merge, rp.total_merged ?? 0
     );
     ep.median_minutes_to_merge_copilot_authored = weightedMedian(
-      ep.median_minutes_to_merge_copilot_authored, ep.total_merged_created_by_copilot - rp.total_merged_created_by_copilot,
-      rp.median_minutes_to_merge_copilot_authored, rp.total_merged_created_by_copilot
+      ep.median_minutes_to_merge_copilot_authored, ep.total_merged_created_by_copilot - (rp.total_merged_created_by_copilot ?? 0),
+      rp.median_minutes_to_merge_copilot_authored, rp.total_merged_created_by_copilot ?? 0
     );
     ep.median_minutes_to_merge_copilot_reviewed = weightedMedian(
-      ep.median_minutes_to_merge_copilot_reviewed, ep.total_merged_reviewed_by_copilot - rp.total_merged_reviewed_by_copilot,
-      rp.median_minutes_to_merge_copilot_reviewed, rp.total_merged_reviewed_by_copilot
+      ep.median_minutes_to_merge_copilot_reviewed, ep.total_merged_reviewed_by_copilot - (rp.total_merged_reviewed_by_copilot ?? 0),
+      rp.median_minutes_to_merge_copilot_reviewed, rp.total_merged_reviewed_by_copilot ?? 0
     );
   }
 
