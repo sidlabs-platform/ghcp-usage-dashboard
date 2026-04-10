@@ -3,6 +3,89 @@
 import { getDb } from "./database";
 import type { DayTotal, UserDayRecord } from "@/lib/types/metrics";
 
+// ── Row-mapping helpers (structured columns → TypeScript objects) ─────
+
+const DAY_TOTAL_COLUMNS = `
+  day, enterprise_id, daily_active_users, weekly_active_users, monthly_active_users,
+  monthly_active_agent_users, monthly_active_chat_users, daily_active_cli_users,
+  code_generation_activity_count, code_acceptance_activity_count, user_initiated_interaction_count,
+  loc_suggested_to_add_sum, loc_suggested_to_delete_sum, loc_added_sum, loc_deleted_sum,
+  totals_by_ide, totals_by_feature, totals_by_language_feature,
+  totals_by_model_feature, totals_by_language_model, totals_by_cli, pull_requests`;
+
+function mapDayTotalRow(row: Record<string, unknown>): DayTotal {
+  return {
+    day: row.day as string,
+    enterprise_id: row.enterprise_id as string,
+    daily_active_users: row.daily_active_users as number,
+    weekly_active_users: row.weekly_active_users as number,
+    monthly_active_users: row.monthly_active_users as number,
+    monthly_active_agent_users: row.monthly_active_agent_users as number,
+    monthly_active_chat_users: row.monthly_active_chat_users as number,
+    daily_active_cli_users: (row.daily_active_cli_users as number) || 0,
+    code_generation_activity_count: row.code_generation_activity_count as number,
+    code_acceptance_activity_count: row.code_acceptance_activity_count as number,
+    user_initiated_interaction_count: row.user_initiated_interaction_count as number,
+    loc_suggested_to_add_sum: row.loc_suggested_to_add_sum as number,
+    loc_suggested_to_delete_sum: row.loc_suggested_to_delete_sum as number,
+    loc_added_sum: row.loc_added_sum as number,
+    loc_deleted_sum: row.loc_deleted_sum as number,
+    totals_by_ide: JSON.parse((row.totals_by_ide as string) || "[]"),
+    totals_by_feature: JSON.parse((row.totals_by_feature as string) || "[]"),
+    totals_by_language_feature: JSON.parse((row.totals_by_language_feature as string) || "[]"),
+    totals_by_model_feature: JSON.parse((row.totals_by_model_feature as string) || "[]"),
+    totals_by_language_model: JSON.parse((row.totals_by_language_model as string) || "[]"),
+    totals_by_cli: row.totals_by_cli ? JSON.parse(row.totals_by_cli as string) : undefined,
+    pull_requests: row.pull_requests ? JSON.parse(row.pull_requests as string) : undefined,
+  };
+}
+
+const USER_COLUMNS = `
+  day, enterprise_id, user_id, user_login,
+  code_generation_activity_count, code_acceptance_activity_count, user_initiated_interaction_count,
+  loc_suggested_to_add_sum, loc_suggested_to_delete_sum, loc_added_sum, loc_deleted_sum,
+  chat_panel_agent_mode, chat_panel_ask_mode, chat_panel_custom_mode,
+  chat_panel_edit_mode, chat_panel_plan_mode, chat_panel_unknown_mode,
+  used_agent, used_chat, used_cli, used_copilot_code_review_active, used_copilot_code_review_passive,
+  used_copilot_coding_agent,
+  totals_by_ide, totals_by_feature, totals_by_language_feature,
+  totals_by_model_feature, totals_by_language_model, totals_by_cli, agent_edit`;
+
+function mapUserRow(row: Record<string, unknown>): UserDayRecord {
+  return {
+    day: row.day as string,
+    enterprise_id: row.enterprise_id as string,
+    user_id: row.user_id as number,
+    user_login: row.user_login as string,
+    code_generation_activity_count: row.code_generation_activity_count as number,
+    code_acceptance_activity_count: row.code_acceptance_activity_count as number,
+    user_initiated_interaction_count: row.user_initiated_interaction_count as number,
+    loc_suggested_to_add_sum: row.loc_suggested_to_add_sum as number,
+    loc_suggested_to_delete_sum: row.loc_suggested_to_delete_sum as number,
+    loc_added_sum: row.loc_added_sum as number,
+    loc_deleted_sum: row.loc_deleted_sum as number,
+    chat_panel_agent_mode: (row.chat_panel_agent_mode as number) || 0,
+    chat_panel_ask_mode: (row.chat_panel_ask_mode as number) || 0,
+    chat_panel_custom_mode: (row.chat_panel_custom_mode as number) || 0,
+    chat_panel_edit_mode: (row.chat_panel_edit_mode as number) || 0,
+    chat_panel_plan_mode: (row.chat_panel_plan_mode as number) || 0,
+    chat_panel_unknown_mode: (row.chat_panel_unknown_mode as number) || 0,
+    used_agent: !!(row.used_agent as number),
+    used_chat: !!(row.used_chat as number),
+    used_cli: !!(row.used_cli as number),
+    used_copilot_code_review_active: !!(row.used_copilot_code_review_active as number),
+    used_copilot_code_review_passive: !!(row.used_copilot_code_review_passive as number),
+    used_copilot_coding_agent: !!(row.used_copilot_coding_agent as number),
+    totals_by_ide: JSON.parse((row.totals_by_ide as string) || "[]"),
+    totals_by_feature: JSON.parse((row.totals_by_feature as string) || "[]"),
+    totals_by_language_feature: JSON.parse((row.totals_by_language_feature as string) || "[]"),
+    totals_by_model_feature: JSON.parse((row.totals_by_model_feature as string) || "[]"),
+    totals_by_language_model: JSON.parse((row.totals_by_language_model as string) || "[]"),
+    totals_by_cli: row.totals_by_cli ? JSON.parse(row.totals_by_cli as string) : undefined,
+    agent_edit: row.agent_edit ? JSON.parse(row.agent_edit as string) : undefined,
+  };
+}
+
 // ── Enterprise ID resolution ──────────────────────────────────────────
 
 /** Resolve the numeric enterprise_id from any stored data (user metrics store it) */
@@ -50,12 +133,13 @@ export function upsertEnterpriseDayMetrics(record: DayTotal): void {
 export function getEnterpriseMetrics(enterpriseId: string, startDay: string, endDay: string): DayTotal[] {
   const db = getDb();
   const rows = db.prepare(`
-    SELECT raw_json FROM enterprise_daily_metrics
+    SELECT ${DAY_TOTAL_COLUMNS}
+    FROM enterprise_daily_metrics
     WHERE enterprise_id = ? AND day >= ? AND day <= ?
     ORDER BY day ASC
-  `).all(enterpriseId, startDay, endDay) as { raw_json: string }[];
+  `).all(enterpriseId, startDay, endDay) as Record<string, unknown>[];
 
-  return rows.map((r) => JSON.parse(r.raw_json));
+  return rows.map(mapDayTotalRow);
 }
 
 /** Check whether enterprise_daily_metrics has any rows for a date range */
@@ -116,12 +200,13 @@ export function upsertOrgDayMetrics(orgSlug: string, record: DayTotal): void {
 export function getOrgMetrics(orgSlug: string, startDay: string, endDay: string): DayTotal[] {
   const db = getDb();
   const rows = db.prepare(`
-    SELECT raw_json FROM org_daily_metrics
+    SELECT ${DAY_TOTAL_COLUMNS}
+    FROM org_daily_metrics
     WHERE org_slug = ? AND day >= ? AND day <= ?
     ORDER BY day ASC
-  `).all(orgSlug, startDay, endDay) as { raw_json: string }[];
+  `).all(orgSlug, startDay, endDay) as Record<string, unknown>[];
 
-  return rows.map((r) => JSON.parse(r.raw_json));
+  return rows.map(mapDayTotalRow);
 }
 
 export function getAllOrgSlugs(): string[] {
@@ -135,14 +220,15 @@ export function getAllOrgSlugs(): string[] {
 export function getAllOrgMetrics(startDay: string, endDay: string): DayTotal[] {
   const db = getDb();
   const rows = db.prepare(`
-    SELECT raw_json FROM org_daily_metrics
+    SELECT ${DAY_TOTAL_COLUMNS}
+    FROM org_daily_metrics
     WHERE day >= ? AND day <= ?
     ORDER BY day ASC
-  `).all(startDay, endDay) as { raw_json: string }[];
+  `).all(startDay, endDay) as Record<string, unknown>[];
 
   const byDay = new Map<string, DayTotal>();
   for (const row of rows) {
-    const record = JSON.parse(row.raw_json) as DayTotal;
+    const record = mapDayTotalRow(row);
     const existing = byDay.get(record.day);
     if (!existing) {
       byDay.set(record.day, record);
@@ -258,23 +344,25 @@ export function upsertUserDayMetrics(record: UserDayRecord): void {
 export function getUserMetrics(enterpriseId: string, startDay: string, endDay: string): UserDayRecord[] {
   const db = getDb();
   const rows = db.prepare(`
-    SELECT raw_json FROM user_daily_metrics
+    SELECT ${USER_COLUMNS}
+    FROM user_daily_metrics
     WHERE enterprise_id = ? AND day >= ? AND day <= ?
     ORDER BY day ASC, user_login ASC
-  `).all(enterpriseId, startDay, endDay) as { raw_json: string }[];
+  `).all(enterpriseId, startDay, endDay) as Record<string, unknown>[];
 
-  return rows.map((r) => JSON.parse(r.raw_json));
+  return rows.map(mapUserRow);
 }
 
 export function getUserMetricsByLogin(userLogin: string, startDay: string, endDay: string): UserDayRecord[] {
   const db = getDb();
   const rows = db.prepare(`
-    SELECT raw_json FROM user_daily_metrics
+    SELECT ${USER_COLUMNS}
+    FROM user_daily_metrics
     WHERE user_login = ? AND day >= ? AND day <= ?
     ORDER BY day ASC
-  `).all(userLogin, startDay, endDay) as { raw_json: string }[];
+  `).all(userLogin, startDay, endDay) as Record<string, unknown>[];
 
-  return rows.map((r) => JSON.parse(r.raw_json));
+  return rows.map(mapUserRow);
 }
 
 export function getDistinctUsers(enterpriseId: string, startDay: string, endDay: string): string[] {
@@ -345,12 +433,13 @@ export function getAggregatedDailySummary(startDay: string, endDay: string): {
 export function getAllUserMetrics(startDay: string, endDay: string): UserDayRecord[] {
   const db = getDb();
   const rows = db.prepare(`
-    SELECT raw_json FROM user_daily_metrics
+    SELECT ${USER_COLUMNS}
+    FROM user_daily_metrics
     WHERE day >= ? AND day <= ?
     ORDER BY day ASC, user_login ASC
-  `).all(startDay, endDay) as { raw_json: string }[];
+  `).all(startDay, endDay) as Record<string, unknown>[];
 
-  return rows.map((r) => JSON.parse(r.raw_json));
+  return rows.map(mapUserRow);
 }
 
 // ── Sync log ──────────────────────────────────────────────────────────

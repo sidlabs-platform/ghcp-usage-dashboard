@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getEnterpriseMetrics, getAllUserMetrics, getAggregatedDailySummary, resolveEnterpriseId } from "@/lib/db/metrics-repo";
 import { getSeatStats } from "@/lib/db/seats-repo";
 import { resolveFilteredUsers } from "@/lib/db/teams-repo";
+import { getChatModeSums, getAdoptionStats } from "@/lib/db/aggregation-queries";
 import { getDateRange } from "@/lib/utils";
 import { extractCompletionMetrics, extractAgentMetrics } from "@/lib/aggregation/separate-metrics";
 
@@ -29,8 +30,10 @@ export async function GET(request: NextRequest) {
 
     // Apply team/org filter to user records
     let allowedLogins: Set<string> | null = null;
+    let allowedLoginsArray: string[] | undefined;
     if (hasFilter) {
-      allowedLogins = new Set(resolveFilteredUsers(selectedTeams, selectedOrgs));
+      allowedLoginsArray = resolveFilteredUsers(selectedTeams, selectedOrgs);
+      allowedLogins = new Set(allowedLoginsArray);
       userRecords = userRecords.filter((r) => allowedLogins!.has(r.user_login));
     }
 
@@ -192,14 +195,11 @@ export async function GET(request: NextRequest) {
       }));
     }
 
-    // Chat mode distribution from user-level data
-    const chatModes = {
-      ask: userRecords.reduce((s, u) => s + (u.chat_panel_ask_mode || 0), 0),
-      edit: userRecords.reduce((s, u) => s + (u.chat_panel_edit_mode || 0), 0),
-      plan: userRecords.reduce((s, u) => s + (u.chat_panel_plan_mode || 0), 0),
-      agent: userRecords.reduce((s, u) => s + (u.chat_panel_agent_mode || 0), 0),
-      custom: userRecords.reduce((s, u) => s + (u.chat_panel_custom_mode || 0), 0),
-    };
+    // Chat mode distribution via SQL aggregation
+    const chatModes = getChatModeSums(start, end, allowedLoginsArray);
+
+    // Adoption stats via SQL aggregation
+    const adoption = getAdoptionStats(start, end, allowedLoginsArray);
 
     // KPIs
     const latestTrend = activeUsersTrend[activeUsersTrend.length - 1];
@@ -209,25 +209,13 @@ export async function GET(request: NextRequest) {
       dailyActiveUsers: latestTrend?.daily || 0,
       weeklyActiveUsers: latestTrend?.weekly || 0,
       monthlyActiveUsers: hasFilter
-        ? new Set(userRecords.map((u) => u.user_login)).size
+        ? adoption.totalUsers
         : (useAggregated
-          ? new Set(userRecords.map((u) => u.user_login)).size
+          ? adoption.totalUsers
           : (metrics[metrics.length - 1] as { monthly_active_users?: number })?.monthly_active_users || 0),
-      agentAdoption: (() => {
-        const totalUsers = new Set(userRecords.map((u) => u.user_login)).size;
-        const agentUsers = new Set(userRecords.filter((u) => u.used_agent).map((u) => u.user_login)).size;
-        return totalUsers > 0 ? (agentUsers / totalUsers) * 100 : 0;
-      })(),
-      codingAgentAdoption: (() => {
-        const totalUsers = new Set(userRecords.map((u) => u.user_login)).size;
-        const codingAgentUsers = new Set(userRecords.filter((u) => u.used_copilot_coding_agent).map((u) => u.user_login)).size;
-        return totalUsers > 0 ? (codingAgentUsers / totalUsers) * 100 : 0;
-      })(),
-      codeReviewAdoption: (() => {
-        const totalUsers = new Set(userRecords.map((u) => u.user_login)).size;
-        const reviewUsers = new Set(userRecords.filter((u) => u.used_copilot_code_review_active).map((u) => u.user_login)).size;
-        return totalUsers > 0 ? (reviewUsers / totalUsers) * 100 : 0;
-      })(),
+      agentAdoption: adoption.totalUsers > 0 ? (adoption.agentUsers / adoption.totalUsers) * 100 : 0,
+      codingAgentAdoption: adoption.totalUsers > 0 ? (adoption.codingAgentUsers / adoption.totalUsers) * 100 : 0,
+      codeReviewAdoption: adoption.totalUsers > 0 ? (adoption.codeReviewUsers / adoption.totalUsers) * 100 : 0,
       cliUsers: latestTrend ? cliVsIde[cliVsIde.length - 1]?.cliUsers || 0 : 0,
       licenseUtilization: hasFilter
         ? -1 // Indicate N/A when filtered
