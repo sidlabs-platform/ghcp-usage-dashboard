@@ -24,6 +24,8 @@ export async function GET(request: Request) {
         total_reviewed_by_copilot: 0,
         total_merged_created_by_copilot: 0,
         median_minutes_to_merge_copilot_authored: null,
+        total_merged_reviewed_by_copilot: 0,
+        median_minutes_to_merge_copilot_reviewed: null,
         total_copilot_suggestions: 0,
         total_copilot_applied_suggestions: 0,
       };
@@ -38,6 +40,7 @@ export async function GET(request: Request) {
         merged: acc.merged + d.total_merged,
         createdByCopilot: acc.createdByCopilot + d.total_created_by_copilot,
         mergedCopilot: acc.mergedCopilot + d.total_merged_created_by_copilot,
+        mergedReviewedByCopilot: acc.mergedReviewedByCopilot + d.total_merged_reviewed_by_copilot,
         suggestions: acc.suggestions + d.total_suggestions,
         appliedSuggestions: acc.appliedSuggestions + d.total_applied_suggestions,
         copilotSuggestions: acc.copilotSuggestions + d.total_copilot_suggestions,
@@ -45,7 +48,7 @@ export async function GET(request: Request) {
       }),
       {
         created: 0, reviewed: 0, merged: 0,
-        createdByCopilot: 0, mergedCopilot: 0,
+        createdByCopilot: 0, mergedCopilot: 0, mergedReviewedByCopilot: 0,
         suggestions: 0, appliedSuggestions: 0,
         copilotSuggestions: 0, copilotApplied: 0,
       }
@@ -58,12 +61,18 @@ export async function GET(request: Request) {
     const copilotMergeTimes = daily
       .filter((d) => d.median_minutes_to_merge_copilot_authored !== null)
       .map((d) => d.median_minutes_to_merge_copilot_authored as number);
+    const copilotReviewedMergeTimes = daily
+      .filter((d) => d.median_minutes_to_merge_copilot_reviewed !== null)
+      .map((d) => d.median_minutes_to_merge_copilot_reviewed as number);
 
     const avgMergeTime = humanMergeTimes.length > 0
       ? humanMergeTimes.reduce((a, b) => a + b, 0) / humanMergeTimes.length
       : null;
     const avgCopilotMergeTime = copilotMergeTimes.length > 0
       ? copilotMergeTimes.reduce((a, b) => a + b, 0) / copilotMergeTimes.length
+      : null;
+    const avgCopilotReviewedMergeTime = copilotReviewedMergeTimes.length > 0
+      ? copilotReviewedMergeTimes.reduce((a, b) => a + b, 0) / copilotReviewedMergeTimes.length
       : null;
 
     const copilotPct = totals.created > 0
@@ -79,6 +88,7 @@ export async function GET(request: Request) {
       totals,
       avgMergeTime,
       avgCopilotMergeTime,
+      avgCopilotReviewedMergeTime,
       copilotPct,
       suggestionRate,
     });

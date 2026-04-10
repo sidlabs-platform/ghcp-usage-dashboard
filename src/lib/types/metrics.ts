@@ -85,6 +85,8 @@ export interface PullRequestMetrics {
   total_reviewed_by_copilot: number;
   total_merged_created_by_copilot: number;
   median_minutes_to_merge_copilot_authored: number | null;
+  total_merged_reviewed_by_copilot: number;
+  median_minutes_to_merge_copilot_reviewed: number | null;
   total_copilot_suggestions: number;
   total_copilot_applied_suggestions: number;
 }
@@ -184,6 +186,7 @@ export interface UserDayRecord {
   used_cli: boolean;
   used_copilot_code_review_active?: boolean;
   used_copilot_code_review_passive?: boolean;
+  used_copilot_coding_agent?: boolean;
 
   // Breakdowns
   totals_by_ide: TotalsByIDE[];

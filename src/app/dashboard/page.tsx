@@ -10,7 +10,7 @@ import { ChatModeDonutChart } from "@/components/charts/ChatModeDonutChart";
 import { FeatureUsageStackedChart } from "@/components/charts/FeatureUsageStackedChart";
 import { CLIvsIDEChart } from "@/components/charts/CLIvsIDEChart";
 import { CHART_COLORS } from "@/lib/constants";
-import { Users, UserCheck, Bot, Terminal, CreditCard, Activity } from "lucide-react";
+import { Users, UserCheck, Bot, Terminal, CreditCard, Activity, Eye, GitPullRequest } from "lucide-react";
 
 interface OverviewData {
   kpis: {
@@ -18,6 +18,8 @@ interface OverviewData {
     weeklyActiveUsers: number;
     monthlyActiveUsers: number;
     agentAdoption: number;
+    codingAgentAdoption: number;
+    codeReviewAdoption: number;
     cliUsers: number;
     licenseUtilization: number;
     deltas: { dau: number; wau: number };
@@ -153,7 +155,7 @@ export default function DashboardOverview() {
       />
 
       {/* KPI Cards */}
-      <div className={`grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 ${isFiltered ? "xl:grid-cols-5" : "xl:grid-cols-6"} mb-8`}>
+      <div className={`grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4 ${isFiltered ? "xl:grid-cols-7" : "xl:grid-cols-8"} mb-8`}>
         <MetricCard
           title="Daily Active Users"
           value={kpis.dailyActiveUsers}
@@ -175,11 +177,25 @@ export default function DashboardOverview() {
           subtitle={isFiltered ? "In selected scope" : "This calendar month"}
         />
         <MetricCard
-          title="Agent Adoption"
+          title="IDE Agent Adoption"
           value={kpis.agentAdoption}
           format="percent"
           icon={<Bot className="h-4 w-4" />}
           subtitle="% of active users"
+        />
+        <MetricCard
+          title="Coding Agent"
+          value={kpis.codingAgentAdoption}
+          format="percent"
+          icon={<GitPullRequest className="h-4 w-4" />}
+          subtitle="% using coding agent"
+        />
+        <MetricCard
+          title="Code Review"
+          value={kpis.codeReviewAdoption}
+          format="percent"
+          icon={<Eye className="h-4 w-4" />}
+          subtitle="% with active review"
         />
         <MetricCard
           title="CLI Users"

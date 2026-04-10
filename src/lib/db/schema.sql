@@ -86,6 +86,7 @@ CREATE TABLE IF NOT EXISTS user_daily_metrics (
   used_cli INTEGER DEFAULT 0,
   used_copilot_code_review_active INTEGER DEFAULT 0,
   used_copilot_code_review_passive INTEGER DEFAULT 0,
+  used_copilot_coding_agent INTEGER DEFAULT 0,
   totals_by_ide TEXT DEFAULT '[]',
   totals_by_feature TEXT DEFAULT '[]',
   totals_by_language_feature TEXT DEFAULT '[]',

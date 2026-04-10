@@ -6,7 +6,7 @@ import { MetricCard } from "@/components/cards/MetricCard";
 import { ScopeFilter } from "@/components/filters/ScopeFilter";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Users, Code2, Activity, Search } from "lucide-react";
+import { Users, Code2, Activity, Search, Eye, Bot } from "lucide-react";
 
 interface UserRow {
   login: string;
@@ -20,7 +20,9 @@ interface UserRow {
   usedAgent: boolean;
   usedChat: boolean;
   usedCli: boolean;
-  usedCodeReview: boolean;
+  usedCodeReviewActive: boolean;
+  usedCodeReviewPassive: boolean;
+  usedCodingAgent: boolean;
 }
 
 interface FilterOptions {
@@ -70,8 +72,8 @@ export default function UsersPage() {
     return (
       <div>
         <PageHeader title="User Explorer" description="Individual developer Copilot usage" />
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4 mb-8">
-          {Array.from({ length: 4 }).map((_, i) => (
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 mb-8">
+          {Array.from({ length: 6 }).map((_, i) => (
             <div key={i} className="h-28 animate-pulse rounded-xl bg-[hsl(var(--muted))]/50" />
           ))}
         </div>
@@ -103,6 +105,9 @@ export default function UsersPage() {
   const totalLocAdded = users.reduce((s, u) => s + u.locAdded, 0);
   const totalInteractions = users.reduce((s, u) => s + u.interactions, 0);
   const agentUserCount = users.filter((u) => u.usedAgent).length;
+  const codingAgentUserCount = users.filter((u) => u.usedCodingAgent).length;
+  const codeReviewActiveCount = users.filter((u) => u.usedCodeReviewActive).length;
+  const codeReviewPassiveCount = users.filter((u) => u.usedCodeReviewPassive && !u.usedCodeReviewActive).length;
   const isFiltered = selectedEntTeams.length > 0 || selectedOrgTeams.length > 0 || selectedOrgs.length > 0;
 
   return (
@@ -121,7 +126,7 @@ export default function UsersPage() {
         onOrgsChange={setSelectedOrgs}
       />
 
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4 mb-8">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 mb-8">
         <MetricCard
           title="Total Users"
           value={users.length}
@@ -141,10 +146,22 @@ export default function UsersPage() {
           subtitle="User-initiated"
         />
         <MetricCard
-          title="Agent Users"
+          title="IDE Agent Users"
           value={agentUserCount}
           icon={<Search className="h-4 w-4" />}
           subtitle={`${users.length > 0 ? ((agentUserCount / users.length) * 100).toFixed(1) : 0}% of all users`}
+        />
+        <MetricCard
+          title="Coding Agent Users"
+          value={codingAgentUserCount}
+          icon={<Bot className="h-4 w-4" />}
+          subtitle={`${users.length > 0 ? ((codingAgentUserCount / users.length) * 100).toFixed(1) : 0}% of all users`}
+        />
+        <MetricCard
+          title="Code Review Users"
+          value={codeReviewActiveCount + codeReviewPassiveCount}
+          icon={<Eye className="h-4 w-4" />}
+          subtitle={`${codeReviewActiveCount} active, ${codeReviewPassiveCount} passive-only`}
         />
       </div>
 
@@ -193,9 +210,11 @@ export default function UsersPage() {
                       <td className="py-3">
                         <div className="flex gap-1 flex-wrap">
                           {user.usedAgent && <Badge variant="default">Agent</Badge>}
+                          {user.usedCodingAgent && <Badge variant="default">Coding Agent</Badge>}
                           {user.usedChat && <Badge variant="secondary">Chat</Badge>}
                           {user.usedCli && <Badge variant="success">CLI</Badge>}
-                          {user.usedCodeReview && <Badge variant="warning">Review</Badge>}
+                          {user.usedCodeReviewActive && <Badge variant="warning">Review (Active)</Badge>}
+                          {!user.usedCodeReviewActive && user.usedCodeReviewPassive && <Badge variant="secondary">Review (Passive)</Badge>}
                         </div>
                       </td>
                     </tr>

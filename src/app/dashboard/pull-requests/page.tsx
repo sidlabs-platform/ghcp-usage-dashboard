@@ -5,7 +5,7 @@ import { PageHeader } from "@/components/layout/PageHeader";
 import { MetricCard } from "@/components/cards/MetricCard";
 import { PRActivityChart } from "@/components/charts/PRActivityChart";
 import { MergeTimeChart } from "@/components/charts/MergeTimeChart";
-import { GitPullRequest, GitMerge, Bot, Clock } from "lucide-react";
+import { GitPullRequest, GitMerge, Bot, Clock, Eye, CheckCircle } from "lucide-react";
 import { formatMinutes } from "@/lib/utils";
 
 interface PRDay {
@@ -15,7 +15,9 @@ interface PRDay {
   total_merged: number;
   median_minutes_to_merge: number | null;
   median_minutes_to_merge_copilot_authored: number | null;
+  median_minutes_to_merge_copilot_reviewed: number | null;
   total_created_by_copilot: number;
+  total_merged_reviewed_by_copilot: number;
   total_suggestions: number;
   total_applied_suggestions: number;
 }
@@ -28,6 +30,7 @@ interface PRData {
     merged: number;
     createdByCopilot: number;
     mergedCopilot: number;
+    mergedReviewedByCopilot: number;
     suggestions: number;
     appliedSuggestions: number;
     copilotSuggestions: number;
@@ -35,6 +38,7 @@ interface PRData {
   };
   avgMergeTime: number | null;
   avgCopilotMergeTime: number | null;
+  avgCopilotReviewedMergeTime: number | null;
   copilotPct: number;
   suggestionRate: number;
 }
@@ -59,8 +63,8 @@ export default function PullRequestsPage() {
     return (
       <div>
         <PageHeader title="Pull Request Impact" description="PR activity, merge times, and Copilot contribution" />
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4 mb-8">
-          {Array.from({ length: 4 }).map((_, i) => (
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 mb-8">
+          {Array.from({ length: 6 }).map((_, i) => (
             <div key={i} className="h-28 animate-pulse rounded-xl bg-[hsl(var(--muted))]/50" />
           ))}
         </div>
@@ -83,7 +87,12 @@ export default function PullRequestsPage() {
     day: d.day,
     humanMinutes: d.median_minutes_to_merge,
     copilotMinutes: d.median_minutes_to_merge_copilot_authored,
+    copilotReviewedMinutes: d.median_minutes_to_merge_copilot_reviewed,
   }));
+
+  const copilotReviewedPct = data.totals.merged > 0
+    ? Number(((data.totals.mergedReviewedByCopilot / data.totals.merged) * 100).toFixed(1))
+    : 0;
 
   return (
     <div>
@@ -92,7 +101,7 @@ export default function PullRequestsPage() {
         description="PR activity, merge times, and Copilot contribution"
       />
 
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4 mb-8">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 mb-8">
         <MetricCard
           title="PRs Created"
           value={data.totals.created}
@@ -113,11 +122,25 @@ export default function PullRequestsPage() {
           subtitle={`${data.totals.createdByCopilot} of ${data.totals.created} PRs`}
         />
         <MetricCard
+          title="Copilot-reviewed"
+          value={copilotReviewedPct}
+          format="percent"
+          icon={<Eye className="h-4 w-4" />}
+          subtitle={`${data.totals.mergedReviewedByCopilot} merged with review`}
+        />
+        <MetricCard
           title="Avg Merge Time"
           value={data.avgMergeTime !== null ? formatMinutes(data.avgMergeTime) : "N/A"}
           format="raw"
           icon={<Clock className="h-4 w-4" />}
-          subtitle={data.avgCopilotMergeTime !== null ? `Copilot: ${formatMinutes(data.avgCopilotMergeTime)}` : "Copilot: N/A"}
+          subtitle={data.avgCopilotMergeTime !== null ? `Copilot-authored: ${formatMinutes(data.avgCopilotMergeTime)}` : "Copilot-authored: N/A"}
+        />
+        <MetricCard
+          title="Reviewed Merge Time"
+          value={data.avgCopilotReviewedMergeTime !== null ? formatMinutes(data.avgCopilotReviewedMergeTime) : "N/A"}
+          format="raw"
+          icon={<CheckCircle className="h-4 w-4" />}
+          subtitle="Copilot-reviewed PRs"
         />
       </div>
 

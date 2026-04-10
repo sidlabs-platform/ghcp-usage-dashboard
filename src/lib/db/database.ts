@@ -26,6 +26,14 @@ export function getDb(): Database.Database {
   const schema = fs.readFileSync(SCHEMA_PATH, "utf-8");
   _db.exec(schema);
 
+  // Add columns introduced after initial schema (safe if already present)
+  const migrations = [
+    "ALTER TABLE user_daily_metrics ADD COLUMN used_copilot_coding_agent INTEGER DEFAULT 0",
+  ];
+  for (const sql of migrations) {
+    try { _db.exec(sql); } catch { /* column already exists */ }
+  }
+
   return _db;
 }
 

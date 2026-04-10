@@ -218,6 +218,16 @@ export async function GET(request: NextRequest) {
         const agentUsers = new Set(userRecords.filter((u) => u.used_agent).map((u) => u.user_login)).size;
         return totalUsers > 0 ? (agentUsers / totalUsers) * 100 : 0;
       })(),
+      codingAgentAdoption: (() => {
+        const totalUsers = new Set(userRecords.map((u) => u.user_login)).size;
+        const codingAgentUsers = new Set(userRecords.filter((u) => u.used_copilot_coding_agent).map((u) => u.user_login)).size;
+        return totalUsers > 0 ? (codingAgentUsers / totalUsers) * 100 : 0;
+      })(),
+      codeReviewAdoption: (() => {
+        const totalUsers = new Set(userRecords.map((u) => u.user_login)).size;
+        const reviewUsers = new Set(userRecords.filter((u) => u.used_copilot_code_review_active).map((u) => u.user_login)).size;
+        return totalUsers > 0 ? (reviewUsers / totalUsers) * 100 : 0;
+      })(),
       cliUsers: latestTrend ? cliVsIde[cliVsIde.length - 1]?.cliUsers || 0 : 0,
       licenseUtilization: hasFilter
         ? -1 // Indicate N/A when filtered

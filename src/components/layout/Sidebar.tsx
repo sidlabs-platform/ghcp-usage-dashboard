@@ -15,6 +15,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Sparkles,
+  Brain,
 } from "lucide-react";
 import { useState } from "react";
 
@@ -22,6 +23,7 @@ const navItems = [
   { href: "/dashboard", label: "Overview", icon: LayoutDashboard },
   { href: "/dashboard/code-generation", label: "Code Generation", icon: Code2 },
   { href: "/dashboard/chat-modes", label: "Copilot Features", icon: Sparkles },
+  { href: "/dashboard/models", label: "Model Statistics", icon: Brain },
   { href: "/dashboard/cli", label: "CLI Analytics", icon: Terminal },
   { href: "/dashboard/pull-requests", label: "Pull Requests", icon: GitPullRequest },
   { href: "/dashboard/teams", label: "Team Analytics", icon: Users },

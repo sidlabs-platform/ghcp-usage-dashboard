@@ -44,13 +44,16 @@ export async function GET(request: Request) {
       const usedAgent = records.some((r) => r.used_agent);
       const usedChat = records.some((r) => r.used_chat);
       const usedCli = records.some((r) => r.used_cli);
-      const usedCodeReview = records.some((r) => r.used_copilot_code_review_active);
+      const usedCodeReviewActive = records.some((r) => r.used_copilot_code_review_active);
+      const usedCodeReviewPassive = records.some((r) => r.used_copilot_code_review_passive);
+      const usedCodingAgent = records.some((r) => r.used_copilot_coding_agent);
       const acceptanceRate = compMetrics.codeGen > 0 ? Number(((compMetrics.codeAccept / compMetrics.codeGen) * 100).toFixed(1)) : 0;
 
       return {
         login, activeDays, locAdded, locDeleted, interactions,
         codeGen: compMetrics.codeGen, codeAccept: compMetrics.codeAccept,
-        acceptanceRate, usedAgent, usedChat, usedCli, usedCodeReview,
+        acceptanceRate, usedAgent, usedChat, usedCli,
+        usedCodeReviewActive, usedCodeReviewPassive, usedCodingAgent,
       };
     });
 

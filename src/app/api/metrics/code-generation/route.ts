@@ -108,7 +108,7 @@ export async function GET(request: NextRequest) {
     const modelMap = new Map<string, number>();
     for (const r of userRecords) {
       for (const m of r.totals_by_model_feature ?? []) {
-        modelMap.set(m.model, (modelMap.get(m.model) ?? 0) + m.user_initiated_interaction_count);
+        modelMap.set(m.model, (modelMap.get(m.model) ?? 0) + (m.user_initiated_interaction_count ?? 0));
       }
     }
     const modelBreakdown = [...modelMap.entries()]

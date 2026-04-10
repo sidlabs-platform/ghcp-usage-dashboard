@@ -38,6 +38,7 @@ export const CHART_COLORS = {
   // Copilot actors
   human: "#3b82f6",
   copilot: "#8b5cf6",
+  copilotReviewed: "#f59e0b",  // amber-500 — Copilot-reviewed PRs
 } as const;
 
 export const FEATURE_LABELS: Record<string, string> = {

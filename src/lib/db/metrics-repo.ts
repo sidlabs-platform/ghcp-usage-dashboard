@@ -120,9 +120,10 @@ export function upsertUserDayMetrics(record: UserDayRecord): void {
       chat_panel_agent_mode, chat_panel_ask_mode, chat_panel_custom_mode,
       chat_panel_edit_mode, chat_panel_plan_mode, chat_panel_unknown_mode,
       used_agent, used_chat, used_cli, used_copilot_code_review_active, used_copilot_code_review_passive,
+      used_copilot_coding_agent,
       totals_by_ide, totals_by_feature, totals_by_language_feature,
       totals_by_model_feature, totals_by_language_model, totals_by_cli, agent_edit, raw_json
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     record.day, record.enterprise_id, record.user_id, record.user_login,
     record.code_generation_activity_count, record.code_acceptance_activity_count,
@@ -134,6 +135,7 @@ export function upsertUserDayMetrics(record: UserDayRecord): void {
     record.chat_panel_plan_mode || 0, record.chat_panel_unknown_mode || 0,
     record.used_agent ? 1 : 0, record.used_chat ? 1 : 0, record.used_cli ? 1 : 0,
     record.used_copilot_code_review_active ? 1 : 0, record.used_copilot_code_review_passive ? 1 : 0,
+    record.used_copilot_coding_agent ? 1 : 0,
     JSON.stringify(record.totals_by_ide || []),
     JSON.stringify(record.totals_by_feature || []),
     JSON.stringify(record.totals_by_language_feature || []),

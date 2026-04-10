@@ -18,6 +18,7 @@ interface MergeTimeChartProps {
     day: string;
     humanMinutes: number | null;
     copilotMinutes: number | null;
+    copilotReviewedMinutes: number | null;
   }[];
 }
 
@@ -78,6 +79,16 @@ export function MergeTimeChart({ data }: MergeTimeChartProps) {
                 dataKey="copilotMinutes"
                 name="Copilot-authored PRs"
                 stroke={CHART_COLORS.copilot}
+                strokeWidth={2}
+                dot={false}
+                activeDot={{ r: 4 }}
+                connectNulls
+              />
+              <Line
+                type="monotone"
+                dataKey="copilotReviewedMinutes"
+                name="Copilot-reviewed PRs"
+                stroke={CHART_COLORS.copilotReviewed}
                 strokeWidth={2}
                 dot={false}
                 activeDot={{ r: 4 }}
