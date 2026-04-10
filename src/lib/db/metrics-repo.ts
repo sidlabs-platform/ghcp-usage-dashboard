@@ -88,13 +88,19 @@ function mapUserRow(row: Record<string, unknown>): UserDayRecord {
 
 // ── Enterprise ID resolution ──────────────────────────────────────────
 
-/** Resolve the numeric enterprise_id from any stored data (user metrics store it) */
+/** Resolve the numeric enterprise_id from any stored data */
 export function resolveEnterpriseId(): string | null {
   const db = getDb();
+  // Check user metrics first (most common), then enterprise aggregate as fallback
   const row = db.prepare(
-    `SELECT DISTINCT enterprise_id FROM user_daily_metrics LIMIT 1`
+    `SELECT enterprise_id FROM user_daily_metrics LIMIT 1`
   ).get() as { enterprise_id: string } | undefined;
-  return row?.enterprise_id || null;
+  if (row?.enterprise_id) return row.enterprise_id;
+
+  const entRow = db.prepare(
+    `SELECT enterprise_id FROM enterprise_daily_metrics LIMIT 1`
+  ).get() as { enterprise_id: string } | undefined;
+  return entRow?.enterprise_id || null;
 }
 
 // ── Enterprise metrics ────────────────────────────────────────────────
@@ -260,17 +266,17 @@ export function getAllOrgMetrics(startDay: string, endDay: string): DayTotal[] {
     }
 
     const ep = existing.pull_requests;
-    ep.total_created += rp.total_created;
-    ep.total_reviewed += rp.total_reviewed;
-    ep.total_merged += rp.total_merged;
-    ep.total_suggestions += rp.total_suggestions;
-    ep.total_applied_suggestions += rp.total_applied_suggestions;
-    ep.total_created_by_copilot += rp.total_created_by_copilot;
-    ep.total_reviewed_by_copilot += rp.total_reviewed_by_copilot;
-    ep.total_merged_created_by_copilot += rp.total_merged_created_by_copilot;
-    ep.total_merged_reviewed_by_copilot += rp.total_merged_reviewed_by_copilot;
-    ep.total_copilot_suggestions += rp.total_copilot_suggestions;
-    ep.total_copilot_applied_suggestions += rp.total_copilot_applied_suggestions;
+    ep.total_created += rp.total_created ?? 0;
+    ep.total_reviewed += rp.total_reviewed ?? 0;
+    ep.total_merged += rp.total_merged ?? 0;
+    ep.total_suggestions += rp.total_suggestions ?? 0;
+    ep.total_applied_suggestions += rp.total_applied_suggestions ?? 0;
+    ep.total_created_by_copilot += rp.total_created_by_copilot ?? 0;
+    ep.total_reviewed_by_copilot += rp.total_reviewed_by_copilot ?? 0;
+    ep.total_merged_created_by_copilot += rp.total_merged_created_by_copilot ?? 0;
+    ep.total_merged_reviewed_by_copilot += rp.total_merged_reviewed_by_copilot ?? 0;
+    ep.total_copilot_suggestions += rp.total_copilot_suggestions ?? 0;
+    ep.total_copilot_applied_suggestions += rp.total_copilot_applied_suggestions ?? 0;
 
     // Weighted-average medians by merged PR count (best approximation
     // without access to the underlying distribution)
@@ -292,12 +298,12 @@ export function getAllOrgMetrics(startDay: string, endDay: string): DayTotal[] {
 }
 
 function weightedMedian(
-  a: number | null, weightA: number,
-  b: number | null, weightB: number
+  a: number | null | undefined, weightA: number,
+  b: number | null | undefined, weightB: number
 ): number | null {
-  if (a === null && b === null) return null;
-  if (a === null) return b;
-  if (b === null) return a;
+  if (a == null && b == null) return null;
+  if (a == null) return b ?? null;
+  if (b == null) return a ?? null;
   const total = weightA + weightB;
   return total > 0 ? (a * weightA + b * weightB) / total : (a + b) / 2;
 }

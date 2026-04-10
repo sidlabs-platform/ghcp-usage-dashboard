@@ -18,39 +18,42 @@ export async function GET(request: Request) {
       dataSource = "org";
     }
 
+    // Normalize PR fields — older API versions omit fields added later
+    const defaults: PullRequestMetrics = {
+      total_created: 0,
+      total_reviewed: 0,
+      total_merged: 0,
+      median_minutes_to_merge: null,
+      total_suggestions: 0,
+      total_applied_suggestions: 0,
+      total_created_by_copilot: 0,
+      total_reviewed_by_copilot: 0,
+      total_merged_created_by_copilot: 0,
+      median_minutes_to_merge_copilot_authored: null,
+      total_merged_reviewed_by_copilot: 0,
+      median_minutes_to_merge_copilot_reviewed: null,
+      total_copilot_suggestions: 0,
+      total_copilot_applied_suggestions: 0,
+    };
+
     const daily = records.map((d) => {
-      const pr: PullRequestMetrics = d.pull_requests ?? {
-        total_created: 0,
-        total_reviewed: 0,
-        total_merged: 0,
-        median_minutes_to_merge: null,
-        total_suggestions: 0,
-        total_applied_suggestions: 0,
-        total_created_by_copilot: 0,
-        total_reviewed_by_copilot: 0,
-        total_merged_created_by_copilot: 0,
-        median_minutes_to_merge_copilot_authored: null,
-        total_merged_reviewed_by_copilot: 0,
-        median_minutes_to_merge_copilot_reviewed: null,
-        total_copilot_suggestions: 0,
-        total_copilot_applied_suggestions: 0,
-      };
+      const pr = { ...defaults, ...(d.pull_requests ?? {}) };
       return { day: d.day, ...pr };
     });
 
-    // Aggregate totals
+    // Aggregate totals (use ?? 0 to guard against any remaining undefined)
     const totals = daily.reduce(
       (acc, d) => ({
-        created: acc.created + d.total_created,
-        reviewed: acc.reviewed + d.total_reviewed,
-        merged: acc.merged + d.total_merged,
-        createdByCopilot: acc.createdByCopilot + d.total_created_by_copilot,
-        mergedCopilot: acc.mergedCopilot + d.total_merged_created_by_copilot,
-        mergedReviewedByCopilot: acc.mergedReviewedByCopilot + d.total_merged_reviewed_by_copilot,
-        suggestions: acc.suggestions + d.total_suggestions,
-        appliedSuggestions: acc.appliedSuggestions + d.total_applied_suggestions,
-        copilotSuggestions: acc.copilotSuggestions + d.total_copilot_suggestions,
-        copilotApplied: acc.copilotApplied + d.total_copilot_applied_suggestions,
+        created: acc.created + (d.total_created ?? 0),
+        reviewed: acc.reviewed + (d.total_reviewed ?? 0),
+        merged: acc.merged + (d.total_merged ?? 0),
+        createdByCopilot: acc.createdByCopilot + (d.total_created_by_copilot ?? 0),
+        mergedCopilot: acc.mergedCopilot + (d.total_merged_created_by_copilot ?? 0),
+        mergedReviewedByCopilot: acc.mergedReviewedByCopilot + (d.total_merged_reviewed_by_copilot ?? 0),
+        suggestions: acc.suggestions + (d.total_suggestions ?? 0),
+        appliedSuggestions: acc.appliedSuggestions + (d.total_applied_suggestions ?? 0),
+        copilotSuggestions: acc.copilotSuggestions + (d.total_copilot_suggestions ?? 0),
+        copilotApplied: acc.copilotApplied + (d.total_copilot_applied_suggestions ?? 0),
       }),
       {
         created: 0, reviewed: 0, merged: 0,
@@ -60,15 +63,15 @@ export async function GET(request: Request) {
       }
     );
 
-    // Average merge times (from days that have a value)
+    // Average merge times (from days that have a numeric value)
     const humanMergeTimes = daily
-      .filter((d) => d.median_minutes_to_merge !== null)
+      .filter((d) => d.median_minutes_to_merge != null)
       .map((d) => d.median_minutes_to_merge as number);
     const copilotMergeTimes = daily
-      .filter((d) => d.median_minutes_to_merge_copilot_authored !== null)
+      .filter((d) => d.median_minutes_to_merge_copilot_authored != null)
       .map((d) => d.median_minutes_to_merge_copilot_authored as number);
     const copilotReviewedMergeTimes = daily
-      .filter((d) => d.median_minutes_to_merge_copilot_reviewed !== null)
+      .filter((d) => d.median_minutes_to_merge_copilot_reviewed != null)
       .map((d) => d.median_minutes_to_merge_copilot_reviewed as number);
 
     const avgMergeTime = humanMergeTimes.length > 0
