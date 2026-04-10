@@ -58,6 +58,28 @@ export function getEnterpriseMetrics(enterpriseId: string, startDay: string, end
   return rows.map((r) => JSON.parse(r.raw_json));
 }
 
+/** Check whether enterprise_daily_metrics has any rows for a date range */
+export function hasEnterpriseDataForRange(enterpriseId: string, startDay: string, endDay: string): boolean {
+  const db = getDb();
+  const row = db.prepare(`
+    SELECT 1 FROM enterprise_daily_metrics
+    WHERE enterprise_id = ? AND day >= ? AND day <= ?
+    LIMIT 1
+  `).get(enterpriseId, startDay, endDay);
+  return !!row;
+}
+
+/** Check whether org_daily_metrics has any rows for a given org and date range */
+export function hasOrgDataForRange(orgSlug: string, startDay: string, endDay: string): boolean {
+  const db = getDb();
+  const row = db.prepare(`
+    SELECT 1 FROM org_daily_metrics
+    WHERE org_slug = ? AND day >= ? AND day <= ?
+    LIMIT 1
+  `).get(orgSlug, startDay, endDay);
+  return !!row;
+}
+
 // ── Organization metrics ──────────────────────────────────────────────
 
 export function upsertOrgDayMetrics(orgSlug: string, record: DayTotal): void {
@@ -106,6 +128,92 @@ export function getAllOrgSlugs(): string[] {
   const db = getDb();
   const rows = db.prepare(`SELECT DISTINCT org_slug FROM org_daily_metrics`).all() as { org_slug: string }[];
   return rows.map((r) => r.org_slug);
+}
+
+/** Get aggregated org metrics across all orgs for a date range (one row per day).
+ *  Sums numeric fields across orgs; medians are weighted by PR count. */
+export function getAllOrgMetrics(startDay: string, endDay: string): DayTotal[] {
+  const db = getDb();
+  const rows = db.prepare(`
+    SELECT raw_json FROM org_daily_metrics
+    WHERE day >= ? AND day <= ?
+    ORDER BY day ASC
+  `).all(startDay, endDay) as { raw_json: string }[];
+
+  const byDay = new Map<string, DayTotal>();
+  for (const row of rows) {
+    const record = JSON.parse(row.raw_json) as DayTotal;
+    const existing = byDay.get(record.day);
+    if (!existing) {
+      byDay.set(record.day, record);
+      continue;
+    }
+
+    // Sum core numeric fields across orgs
+    existing.daily_active_users += record.daily_active_users ?? 0;
+    existing.weekly_active_users += record.weekly_active_users ?? 0;
+    existing.monthly_active_users += record.monthly_active_users ?? 0;
+    existing.monthly_active_agent_users += record.monthly_active_agent_users ?? 0;
+    existing.monthly_active_chat_users += record.monthly_active_chat_users ?? 0;
+    existing.daily_active_cli_users = (existing.daily_active_cli_users ?? 0) + (record.daily_active_cli_users ?? 0);
+    existing.code_generation_activity_count += record.code_generation_activity_count ?? 0;
+    existing.code_acceptance_activity_count += record.code_acceptance_activity_count ?? 0;
+    existing.user_initiated_interaction_count += record.user_initiated_interaction_count ?? 0;
+    existing.loc_suggested_to_add_sum += record.loc_suggested_to_add_sum ?? 0;
+    existing.loc_suggested_to_delete_sum += record.loc_suggested_to_delete_sum ?? 0;
+    existing.loc_added_sum += record.loc_added_sum ?? 0;
+    existing.loc_deleted_sum += record.loc_deleted_sum ?? 0;
+
+    // Aggregate PR metrics
+    const rp = record.pull_requests;
+    if (!rp) continue;
+
+    if (!existing.pull_requests) {
+      existing.pull_requests = { ...rp };
+      continue;
+    }
+
+    const ep = existing.pull_requests;
+    ep.total_created += rp.total_created;
+    ep.total_reviewed += rp.total_reviewed;
+    ep.total_merged += rp.total_merged;
+    ep.total_suggestions += rp.total_suggestions;
+    ep.total_applied_suggestions += rp.total_applied_suggestions;
+    ep.total_created_by_copilot += rp.total_created_by_copilot;
+    ep.total_reviewed_by_copilot += rp.total_reviewed_by_copilot;
+    ep.total_merged_created_by_copilot += rp.total_merged_created_by_copilot;
+    ep.total_merged_reviewed_by_copilot += rp.total_merged_reviewed_by_copilot;
+    ep.total_copilot_suggestions += rp.total_copilot_suggestions;
+    ep.total_copilot_applied_suggestions += rp.total_copilot_applied_suggestions;
+
+    // Weighted-average medians by merged PR count (best approximation
+    // without access to the underlying distribution)
+    ep.median_minutes_to_merge = weightedMedian(
+      ep.median_minutes_to_merge, ep.total_merged - rp.total_merged,
+      rp.median_minutes_to_merge, rp.total_merged
+    );
+    ep.median_minutes_to_merge_copilot_authored = weightedMedian(
+      ep.median_minutes_to_merge_copilot_authored, ep.total_merged_created_by_copilot - rp.total_merged_created_by_copilot,
+      rp.median_minutes_to_merge_copilot_authored, rp.total_merged_created_by_copilot
+    );
+    ep.median_minutes_to_merge_copilot_reviewed = weightedMedian(
+      ep.median_minutes_to_merge_copilot_reviewed, ep.total_merged_reviewed_by_copilot - rp.total_merged_reviewed_by_copilot,
+      rp.median_minutes_to_merge_copilot_reviewed, rp.total_merged_reviewed_by_copilot
+    );
+  }
+
+  return Array.from(byDay.values());
+}
+
+function weightedMedian(
+  a: number | null, weightA: number,
+  b: number | null, weightB: number
+): number | null {
+  if (a === null && b === null) return null;
+  if (a === null) return b;
+  if (b === null) return a;
+  const total = weightA + weightB;
+  return total > 0 ? (a * weightA + b * weightB) / total : (a + b) / 2;
 }
 
 // ── User metrics ──────────────────────────────────────────────────────
@@ -313,4 +421,17 @@ export function isSyncLocked(): boolean {
   db.prepare(`DELETE FROM sync_lock WHERE expires_at < ?`).run(new Date().toISOString());
   const row = db.prepare(`SELECT 1 FROM sync_lock WHERE lock_key = 'global'`).get();
   return !!row;
+}
+
+/** Clear sync_log entries where enterprise/org data returned 0 records, allowing re-sync */
+export function clearEmptySyncEntries(): number {
+  const db = getDb();
+  const result = db.prepare(`
+    DELETE FROM sync_log
+    WHERE record_count = 0
+      AND status = 'success'
+      AND scope IN ('enterprise', 'org')
+      AND day != '__none__'
+  `).run();
+  return result.changes;
 }

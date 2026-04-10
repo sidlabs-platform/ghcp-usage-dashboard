@@ -1,8 +1,17 @@
 import { NextResponse } from "next/server";
 import { fullSync } from "@/lib/db/sync-service";
-import { getSyncStatus, acquireSyncLock, releaseSyncLock, isSyncLocked } from "@/lib/db/metrics-repo";
+import { getSyncStatus, acquireSyncLock, releaseSyncLock, isSyncLocked, clearEmptySyncEntries } from "@/lib/db/metrics-repo";
 
-export async function POST() {
+export async function POST(request: Request) {
+  const { searchParams } = new URL(request.url);
+  const resync = searchParams.get("resync") === "true";
+
+  // Clear empty sync entries to allow re-fetching enterprise/org data
+  if (resync) {
+    const cleared = clearEmptySyncEntries();
+    console.log(`[Sync] Cleared ${cleared} empty sync_log entries for re-sync`);
+  }
+
   if (!acquireSyncLock()) {
     return NextResponse.json({
       success: true,

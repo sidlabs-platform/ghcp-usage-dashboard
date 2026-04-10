@@ -12,7 +12,7 @@ import type {
 
 export class MetricsClient {
   // Helper to extract DayTotal[] from NDJSON that may be wrapped or flat
-  private extractDayTotals(records: Record<string, unknown>[]): DayTotal[] {
+  private extractDayTotals(records: Record<string, unknown>[], context?: string): DayTotal[] {
     const results: DayTotal[] = [];
     for (const record of records) {
       if (Array.isArray(record.day_totals)) {
@@ -24,6 +24,8 @@ export class MetricsClient {
       } else if (record.day) {
         // Might be a DayTotal without daily_active_users (partial data)
         results.push(record as unknown as DayTotal);
+      } else {
+        console.warn(`[MetricsClient] ${context ?? "unknown"}: skipped unrecognised NDJSON record with keys: ${Object.keys(record).join(", ")}`);
       }
     }
     return results;
@@ -35,7 +37,10 @@ export class MetricsClient {
     const report = await githubFetch<ReportResponse>(
       `/enterprises/${enterprise}/copilot/metrics/reports/enterprise-1-day?day=${day}`
     );
-    if (!report?.download_links?.length) return [];
+    if (!report?.download_links?.length) {
+      console.warn(`[MetricsClient] enterprise-1-day ${day}: no download_links (report keys: ${report ? Object.keys(report).join(", ") : "null"})`);
+      return [];
+    }
 
     const allRecords: Record<string, unknown>[] = [];
     for (const link of report.download_links) {
@@ -43,7 +48,11 @@ export class MetricsClient {
       allRecords.push(...records);
     }
 
-    return this.extractDayTotals(allRecords);
+    const results = this.extractDayTotals(allRecords, `enterprise-1-day ${day}`);
+    if (results.length === 0 && allRecords.length > 0) {
+      console.warn(`[MetricsClient] enterprise-1-day ${day}: ${allRecords.length} NDJSON records fetched but 0 matched DayTotal shape`);
+    }
+    return results;
   }
 
   // ── Enterprise aggregate (28-day latest) ───────────────────────────
@@ -52,7 +61,10 @@ export class MetricsClient {
     const report = await githubFetch<ReportResponse>(
       `/enterprises/${enterprise}/copilot/metrics/reports/enterprise-28-day/latest`
     );
-    if (!report?.download_links?.length) return [];
+    if (!report?.download_links?.length) {
+      console.warn(`[MetricsClient] enterprise-28-day: no download_links (report keys: ${report ? Object.keys(report).join(", ") : "null"})`);
+      return [];
+    }
 
     const allRecords: Record<string, unknown>[] = [];
     for (const link of report.download_links) {
@@ -60,7 +72,9 @@ export class MetricsClient {
       allRecords.push(...records);
     }
 
-    return this.extractDayTotals(allRecords);
+    const results = this.extractDayTotals(allRecords, "enterprise-28-day");
+    console.log(`[MetricsClient] enterprise-28-day: ${results.length} day-totals extracted from ${allRecords.length} NDJSON records`);
+    return results;
   }
 
   // ── Enterprise user-level (1-day) ──────────────────────────────────
@@ -101,7 +115,10 @@ export class MetricsClient {
     const report = await githubFetch<ReportResponse>(
       `/orgs/${org}/copilot/metrics/reports/organization-1-day?day=${day}`
     );
-    if (!report?.download_links?.length) return [];
+    if (!report?.download_links?.length) {
+      console.warn(`[MetricsClient] org-1-day ${org} ${day}: no download_links`);
+      return [];
+    }
 
     const allRecords: Record<string, unknown>[] = [];
     for (const link of report.download_links) {
@@ -109,7 +126,7 @@ export class MetricsClient {
       allRecords.push(...records);
     }
 
-    return this.extractDayTotals(allRecords);
+    return this.extractDayTotals(allRecords, `org-1-day ${org} ${day}`);
   }
 
   // ── Organization aggregate (28-day latest) ─────────────────────────
@@ -118,7 +135,10 @@ export class MetricsClient {
     const report = await githubFetch<ReportResponse>(
       `/orgs/${org}/copilot/metrics/reports/organization-28-day/latest`
     );
-    if (!report?.download_links?.length) return [];
+    if (!report?.download_links?.length) {
+      console.warn(`[MetricsClient] org-28-day ${org}: no download_links`);
+      return [];
+    }
 
     const allRecords: Record<string, unknown>[] = [];
     for (const link of report.download_links) {
@@ -126,7 +146,9 @@ export class MetricsClient {
       allRecords.push(...records);
     }
 
-    return this.extractDayTotals(allRecords);
+    const results = this.extractDayTotals(allRecords, `org-28-day ${org}`);
+    console.log(`[MetricsClient] org-28-day ${org}: ${results.length} day-totals extracted`);
+    return results;
   }
 
   // ── Organization user-level (1-day) ────────────────────────────────

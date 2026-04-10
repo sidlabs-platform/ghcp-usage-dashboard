@@ -11,6 +11,8 @@ import {
   recordSync,
   isSynced,
   getLatestSyncDay,
+  hasEnterpriseDataForRange,
+  hasOrgDataForRange,
 } from "./metrics-repo";
 import { upsertSeats } from "./seats-repo";
 import { upsertAllTeams } from "./teams-repo";
@@ -287,5 +289,67 @@ export async function fullSync(
   onProgress?.({ phase: "backfill", current: 0, total: 1, message: "Starting metrics backfill..." });
   const bf = await backfill(undefined, onProgress);
 
+  // Try 28-day reports as fallback when per-day enterprise/org data is empty
+  await sync28DayFallback(onProgress);
+
   return { backfill: bf, seats, teams };
+}
+
+// ── 28-day fallback: fill enterprise/org gaps ─────────────────────────
+// The enterprise-28-day and org-28-day endpoints may return data when
+// the per-day endpoints return empty results. This runs once per sync
+// pass and upserts any days returned.
+
+async function sync28DayFallback(
+  onProgress?: (progress: SyncProgress) => void
+): Promise<void> {
+  const enterprise = getEnterprise();
+  const orgs = getOrgs();
+
+  // Only run if enterprise_daily_metrics is still empty for the last 28 days
+  const yesterday = new Date();
+  yesterday.setDate(yesterday.getDate() - 1);
+  const start28 = new Date(yesterday);
+  start28.setDate(start28.getDate() - 27);
+  const startStr = start28.toISOString().split("T")[0];
+  const endStr = yesterday.toISOString().split("T")[0];
+
+  if (hasEnterpriseDataForRange(enterprise, startStr, endStr)) {
+    return; // Already have enterprise data, no fallback needed
+  }
+
+  // Enterprise 28-day fallback
+  onProgress?.({ phase: "fallback", current: 0, total: 1, message: "Trying enterprise 28-day report as fallback..." });
+  try {
+    const data = await metricsClient.getEnterprise28DayReport(enterprise);
+    if (data.length > 0) {
+      console.log(`[Sync] 28-day enterprise fallback: ${data.length} day-totals received`);
+      for (const record of data) {
+        upsertEnterpriseDayMetrics(record);
+        recordSync("enterprise", enterprise, record.day, 1, "success");
+      }
+    }
+  } catch (err) {
+    console.error("[Sync] 28-day enterprise fallback failed:", err);
+  }
+
+  // Org 28-day fallback — only for orgs without existing data
+  for (const org of orgs) {
+    if (hasOrgDataForRange(org, startStr, endStr)) {
+      continue; // Already have org data, skip fallback
+    }
+    onProgress?.({ phase: "fallback", current: 0, total: orgs.length, message: `Trying org ${org} 28-day report as fallback...` });
+    try {
+      const data = await metricsClient.getOrg28DayReport(org);
+      if (data.length > 0) {
+        console.log(`[Sync] 28-day org fallback for ${org}: ${data.length} day-totals received`);
+        for (const record of data) {
+          upsertOrgDayMetrics(org, record);
+          recordSync("org", org, record.day, 1, "success");
+        }
+      }
+    } catch (err) {
+      console.error(`[Sync] 28-day org fallback failed for ${org}:`, err);
+    }
+  }
 }

@@ -41,6 +41,8 @@ interface PRData {
   avgCopilotReviewedMergeTime: number | null;
   copilotPct: number;
   suggestionRate: number;
+  hasData?: boolean;
+  dataSource?: string;
 }
 
 export default function PullRequestsPage() {
@@ -78,6 +80,25 @@ export default function PullRequestsPage() {
         <PageHeader title="Pull Request Impact" description="PR activity, merge times, and Copilot contribution" />
         <div className="flex h-64 items-center justify-center text-sm text-red-500">
           {error ?? "Failed to load data"}
+        </div>
+      </div>
+    );
+  }
+
+  if (!data.hasData) {
+    return (
+      <div>
+        <PageHeader title="Pull Request Impact" description="PR activity, merge times, and Copilot contribution" />
+        <div className="flex h-64 flex-col items-center justify-center gap-3 text-sm text-[hsl(var(--muted-foreground))]">
+          <GitPullRequest className="h-10 w-10 opacity-40" />
+          <div className="text-center">
+            <p className="font-medium">No pull request data available</p>
+            <p className="mt-1 max-w-md">
+              Enterprise-level PR metrics have not been synced yet. Try running a sync with{" "}
+              <code className="rounded bg-[hsl(var(--muted))] px-1 py-0.5 text-xs">POST /api/sync?resync=true</code>{" "}
+              to re-fetch aggregate data.
+            </p>
+          </div>
         </div>
       </div>
     );

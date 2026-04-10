@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { resolveEnterpriseId, getEnterpriseMetrics } from "@/lib/db/metrics-repo";
+import { resolveEnterpriseId, getEnterpriseMetrics, getAllOrgMetrics } from "@/lib/db/metrics-repo";
 import { getDateRange } from "@/lib/utils";
 import type { PullRequestMetrics } from "@/lib/types/metrics";
 
@@ -10,7 +10,13 @@ export async function GET(request: Request) {
     const { start, end } = getDateRange(days);
     const eid = resolveEnterpriseId();
 
-    const records = eid ? getEnterpriseMetrics(eid, start, end) : [];
+    // Try enterprise metrics first, fall back to org metrics
+    let records = eid ? getEnterpriseMetrics(eid, start, end) : [];
+    let dataSource = "enterprise";
+    if (records.length === 0) {
+      records = getAllOrgMetrics(start, end);
+      dataSource = "org";
+    }
 
     const daily = records.map((d) => {
       const pr: PullRequestMetrics = d.pull_requests ?? {
@@ -91,6 +97,8 @@ export async function GET(request: Request) {
       avgCopilotReviewedMergeTime,
       copilotPct,
       suggestionRate,
+      dataSource,
+      hasData: records.length > 0,
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
