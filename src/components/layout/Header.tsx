@@ -4,14 +4,15 @@ import { Sun, Moon, RefreshCw, CheckCircle2 } from "lucide-react";
 import { useEffect, useState, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { DATE_PRESETS, DEFAULT_DATE_RANGE_DAYS } from "@/lib/constants";
+import { DATE_PRESETS } from "@/lib/constants";
+import { useDateRange } from "@/contexts/DateRangeContext";
 import { cn } from "@/lib/utils";
 
 export function Header() {
   const [dark, setDark] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [syncStatus, setSyncStatus] = useState<string | null>(null);
-  const [selectedDays, setSelectedDays] = useState(DEFAULT_DATE_RANGE_DAYS);
+  const { days: selectedDays, setDays: setSelectedDays } = useDateRange();
 
   useEffect(() => {
     const stored = localStorage.getItem("theme");
@@ -55,7 +56,7 @@ export function Header() {
       } catch {
         // ignore polling errors
       }
-    }, 5000);
+    }, 30000);
     return () => clearInterval(interval);
   }, []);
 

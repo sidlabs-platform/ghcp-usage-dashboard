@@ -1,22 +1,36 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import dynamic from "next/dynamic";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { MetricCard } from "@/components/cards/MetricCard";
-import { ModelUsageBarChart } from "@/components/charts/ModelUsageBarChart";
-import { ModelTrendChart } from "@/components/charts/ModelTrendChart";
-import { ModelFeatureTable } from "@/components/charts/ModelFeatureTable";
+import { ChartSkeleton } from "@/components/states/ChartSkeleton";
+import { useDateRange } from "@/contexts/DateRangeContext";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
+
+const ModelUsageBarChart = dynamic(
+  () => import("@/components/charts/ModelUsageBarChart").then(m => ({ default: m.ModelUsageBarChart })),
+  { ssr: false, loading: () => <ChartSkeleton /> }
+);
+const ModelTrendChart = dynamic(
+  () => import("@/components/charts/ModelTrendChart").then(m => ({ default: m.ModelTrendChart })),
+  { ssr: false, loading: () => <ChartSkeleton /> }
+);
+const ModelFeatureTable = dynamic(
+  () => import("@/components/charts/ModelFeatureTable").then(m => ({ default: m.ModelFeatureTable })),
+  { ssr: false, loading: () => <ChartSkeleton /> }
+);
 import { Brain, Hash, Trophy, Percent } from "lucide-react";
 import type { ModelStatsResponse } from "@/app/api/metrics/models/route";
 
 export default function ModelsPage() {
+  const { days } = useDateRange();
   const [data, setData] = useState<ModelStatsResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    fetch("/api/metrics/models")
+    fetch(`/api/metrics/models?days=${days}`)
       .then(async (res) => {
         if (!res.ok) {
           const body = await res.json().catch(() => ({}));
@@ -27,7 +41,7 @@ export default function ModelsPage() {
       .then(setData)
       .catch((err) => setError(err.message))
       .finally(() => setLoading(false));
-  }, []);
+  }, [days]);
 
   if (loading) {
     return (

@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useMemo } from "react";
 import { PageHeader } from "@/components/layout/PageHeader";
+import { useDateRange } from "@/contexts/DateRangeContext";
 import { MetricCard } from "@/components/cards/MetricCard";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { CHART_COLORS, FEATURE_LABELS } from "@/lib/constants";
@@ -83,12 +84,13 @@ function formatDate(dateStr: string) {
 // ── Page Component ────────────────────────────────────────────────────
 
 export default function CopilotFeaturesPage() {
+  const { days } = useDateRange();
   const [data, setData] = useState<FeaturesData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    fetch("/api/metrics/chat-modes")
+    fetch(`/api/metrics/chat-modes?days=${days}`)
       .then((res) => {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         return res.json();
@@ -96,7 +98,7 @@ export default function CopilotFeaturesPage() {
       .then((json) => setData(json))
       .catch((err) => setError(err.message))
       .finally(() => setLoading(false));
-  }, []);
+  }, [days]);
 
   // Derive top features for the stacked area chart
   const topFeatures = useMemo(() => {

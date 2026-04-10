@@ -82,4 +82,4 @@ export const DATE_PRESETS = [
   { label: "365 days", days: 365 },
 ] as const;
 
-export const DEFAULT_DATE_RANGE_DAYS = 90;
+export const DEFAULT_DATE_RANGE_DAYS = 7;

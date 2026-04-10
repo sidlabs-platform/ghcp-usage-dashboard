@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { PageHeader } from "@/components/layout/PageHeader";
+import { useDateRange } from "@/contexts/DateRangeContext";
 import { MetricCard } from "@/components/cards/MetricCard";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import {
@@ -76,12 +77,13 @@ function formatDate(dateStr: string) {
 }
 
 export default function IDELanguagesPage() {
+  const { days } = useDateRange();
   const [data, setData] = useState<IDELangData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    fetch("/api/metrics/ide-languages")
+    fetch(`/api/metrics/ide-languages?days=${days}`)
       .then((res) => {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         return res.json();
@@ -89,7 +91,7 @@ export default function IDELanguagesPage() {
       .then((json) => setData(json))
       .catch((err) => setError(err.message))
       .finally(() => setLoading(false));
-  }, []);
+  }, [days]);
 
   if (loading) {
     return (

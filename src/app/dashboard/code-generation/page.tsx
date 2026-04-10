@@ -1,12 +1,25 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import dynamic from "next/dynamic";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { MetricCard } from "@/components/cards/MetricCard";
-import { LocTrendChart } from "@/components/charts/LocTrendChart";
-import { LanguageBarChart } from "@/components/charts/LanguageBarChart";
-import { FeatureBreakdownChart } from "@/components/charts/FeatureBreakdownChart";
+import { ChartSkeleton } from "@/components/states/ChartSkeleton";
+import { useDateRange } from "@/contexts/DateRangeContext";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
+
+const LocTrendChart = dynamic(
+  () => import("@/components/charts/LocTrendChart").then(m => ({ default: m.LocTrendChart })),
+  { ssr: false, loading: () => <ChartSkeleton /> }
+);
+const LanguageBarChart = dynamic(
+  () => import("@/components/charts/LanguageBarChart").then(m => ({ default: m.LanguageBarChart })),
+  { ssr: false, loading: () => <ChartSkeleton /> }
+);
+const FeatureBreakdownChart = dynamic(
+  () => import("@/components/charts/FeatureBreakdownChart").then(m => ({ default: m.FeatureBreakdownChart })),
+  { ssr: false, loading: () => <ChartSkeleton /> }
+);
 import { Code2, TrendingUp, FileCode, Percent } from "lucide-react";
 import type { CodeGenerationResponse } from "@/app/api/metrics/code-generation/route";
 import {
@@ -21,12 +34,13 @@ import {
 import { CHART_COLORS } from "@/lib/constants";
 
 export default function CodeGenerationPage() {
+  const { days } = useDateRange();
   const [data, setData] = useState<CodeGenerationResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    fetch("/api/metrics/code-generation")
+    fetch(`/api/metrics/code-generation?days=${days}`)
       .then(async (res) => {
         if (!res.ok) {
           const body = await res.json().catch(() => ({}));
@@ -37,7 +51,7 @@ export default function CodeGenerationPage() {
       .then(setData)
       .catch((err) => setError(err.message))
       .finally(() => setLoading(false));
-  }, []);
+  }, [days]);
 
   if (loading) return <LoadingSkeleton />;
   if (error) return <ErrorState message={error} />;

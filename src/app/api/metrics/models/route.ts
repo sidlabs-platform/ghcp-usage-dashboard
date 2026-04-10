@@ -19,7 +19,7 @@ export interface ModelStatsResponse {
 export async function GET(request: NextRequest) {
   try {
     const params = request.nextUrl.searchParams;
-    const defaultRange = getDateRange(90);
+    const defaultRange = getDateRange(7);
     const startDay = params.get("startDay") || defaultRange.start;
     const endDay = params.get("endDay") || defaultRange.end;
 
@@ -105,7 +105,9 @@ export async function GET(request: NextRequest) {
         topModelPct: totalInteractions > 0 && topModel
           ? (topModel.interactions / totalInteractions) * 100 : 0,
       },
-    } as ModelStatsResponse);
+    } as ModelStatsResponse, {
+      headers: { "Cache-Control": "private, max-age=300, stale-while-revalidate=60" },
+    });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     return NextResponse.json({ error: message }, { status: 500 });

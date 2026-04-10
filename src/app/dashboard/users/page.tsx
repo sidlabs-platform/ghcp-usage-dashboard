@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback } from "react";
 import { PageHeader } from "@/components/layout/PageHeader";
+import { useDateRange } from "@/contexts/DateRangeContext";
 import { MetricCard } from "@/components/cards/MetricCard";
 import { ScopeFilter } from "@/components/filters/ScopeFilter";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
@@ -32,6 +33,7 @@ interface FilterOptions {
 }
 
 export default function UsersPage() {
+  const { days } = useDateRange();
   const [users, setUsers] = useState<UserRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -51,7 +53,7 @@ export default function UsersPage() {
 
   const fetchUsers = useCallback(() => {
     setLoading(true);
-    const params = new URLSearchParams();
+    const params = new URLSearchParams({ days: String(days) });
     const allTeams = [...selectedEntTeams, ...selectedOrgTeams];
     if (allTeams.length > 0) params.set("teams", allTeams.join(","));
     if (selectedOrgs.length > 0) params.set("orgs", selectedOrgs.join(","));
@@ -64,7 +66,7 @@ export default function UsersPage() {
       .then((json) => { setUsers(json.users ?? []); setError(null); })
       .catch((err) => setError(err.message))
       .finally(() => setLoading(false));
-  }, [selectedEntTeams, selectedOrgTeams, selectedOrgs]);
+  }, [days, selectedEntTeams, selectedOrgTeams, selectedOrgs]);
 
   useEffect(() => { fetchUsers(); }, [fetchUsers]);
 

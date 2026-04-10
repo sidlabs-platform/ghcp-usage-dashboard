@@ -1,11 +1,21 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import dynamic from "next/dynamic";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { MetricCard } from "@/components/cards/MetricCard";
-import { CLIUsersTrendChart } from "@/components/charts/CLIUsersTrendChart";
-import { CLITokenChart } from "@/components/charts/CLITokenChart";
+import { ChartSkeleton } from "@/components/states/ChartSkeleton";
+import { useDateRange } from "@/contexts/DateRangeContext";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
+
+const CLIUsersTrendChart = dynamic(
+  () => import("@/components/charts/CLIUsersTrendChart").then(m => ({ default: m.CLIUsersTrendChart })),
+  { ssr: false, loading: () => <ChartSkeleton /> }
+);
+const CLITokenChart = dynamic(
+  () => import("@/components/charts/CLITokenChart").then(m => ({ default: m.CLITokenChart })),
+  { ssr: false, loading: () => <ChartSkeleton /> }
+);
 import { Terminal, Activity, Zap, Hash } from "lucide-react";
 
 interface DailyTrendDay {
@@ -47,12 +57,13 @@ interface CLIData {
 }
 
 export default function CLIPage() {
+  const { days } = useDateRange();
   const [data, setData] = useState<CLIData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    fetch("/api/metrics/cli")
+    fetch(`/api/metrics/cli?days=${days}`)
       .then((res) => {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         return res.json();
@@ -60,7 +71,7 @@ export default function CLIPage() {
       .then((json) => setData(json))
       .catch((err) => setError(err.message))
       .finally(() => setLoading(false));
-  }, []);
+  }, [days]);
 
   if (loading) {
     return (

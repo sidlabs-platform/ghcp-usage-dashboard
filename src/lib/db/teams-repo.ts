@@ -101,6 +101,28 @@ export function getDistinctOrgs(): { slug: string; name: string }[] {
   return rows.map((r) => ({ slug: r.org_slug, name: r.org_slug }));
 }
 
+/** Load all teams with their members in a single query (avoids N+1) */
+export function getAllTeamsWithMembers(): { team_slug: string; team_name: string; source: string; org_slug: string | null; members: string[] }[] {
+  const db = getDb();
+  const rows = db.prepare(`
+    SELECT team_slug, team_name, source, org_slug, user_login
+    FROM team_memberships
+    ORDER BY team_slug, user_login
+  `).all() as { team_slug: string; team_name: string; source: string; org_slug: string | null; user_login: string }[];
+
+  const teamMap = new Map<string, { team_slug: string; team_name: string; source: string; org_slug: string | null; members: string[] }>();
+  for (const row of rows) {
+    const key = `${row.team_slug}:${row.source}`;
+    let team = teamMap.get(key);
+    if (!team) {
+      team = { team_slug: row.team_slug, team_name: row.team_name, source: row.source, org_slug: row.org_slug, members: [] };
+      teamMap.set(key, team);
+    }
+    team.members.push(row.user_login);
+  }
+  return Array.from(teamMap.values());
+}
+
 /** Resolve team + org filters into a unique set of user logins */
 export function resolveFilteredUsers(teamSlugs: string[], orgSlugs: string[]): string[] {
   const logins = new Set<string>();

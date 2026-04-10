@@ -156,3 +156,10 @@ CREATE TABLE IF NOT EXISTS sync_lock (
 );
 
 CREATE INDEX IF NOT EXISTS idx_sync_log_scope ON sync_log(scope, scope_id);
+
+-- Composite indexes for common query patterns
+CREATE INDEX IF NOT EXISTS idx_enterprise_metrics_eid_day ON enterprise_daily_metrics(enterprise_id, day);
+CREATE INDEX IF NOT EXISTS idx_org_metrics_org_day ON org_daily_metrics(org_slug, day);
+CREATE INDEX IF NOT EXISTS idx_sync_log_scope_day ON sync_log(scope, scope_id, day);
+CREATE INDEX IF NOT EXISTS idx_team_members_org ON team_memberships(org_slug);
+CREATE INDEX IF NOT EXISTS idx_seats_org ON copilot_seats(org_slug);

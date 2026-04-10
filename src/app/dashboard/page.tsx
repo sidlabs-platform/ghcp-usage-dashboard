@@ -1,15 +1,34 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
+import dynamic from "next/dynamic";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { MetricCard } from "@/components/cards/MetricCard";
 import { ScopeFilter } from "@/components/filters/ScopeFilter";
-import { ActiveUsersTrendChart } from "@/components/charts/ActiveUsersTrendChart";
-import { AcceptanceRateChart } from "@/components/charts/AcceptanceRateChart";
-import { ChatModeDonutChart } from "@/components/charts/ChatModeDonutChart";
-import { FeatureUsageStackedChart } from "@/components/charts/FeatureUsageStackedChart";
-import { CLIvsIDEChart } from "@/components/charts/CLIvsIDEChart";
+import { ChartSkeleton } from "@/components/states/ChartSkeleton";
+import { useDateRange } from "@/contexts/DateRangeContext";
 import { CHART_COLORS } from "@/lib/constants";
+
+const ActiveUsersTrendChart = dynamic(
+  () => import("@/components/charts/ActiveUsersTrendChart").then(m => ({ default: m.ActiveUsersTrendChart })),
+  { ssr: false, loading: () => <ChartSkeleton /> }
+);
+const AcceptanceRateChart = dynamic(
+  () => import("@/components/charts/AcceptanceRateChart").then(m => ({ default: m.AcceptanceRateChart })),
+  { ssr: false, loading: () => <ChartSkeleton /> }
+);
+const ChatModeDonutChart = dynamic(
+  () => import("@/components/charts/ChatModeDonutChart").then(m => ({ default: m.ChatModeDonutChart })),
+  { ssr: false, loading: () => <ChartSkeleton /> }
+);
+const FeatureUsageStackedChart = dynamic(
+  () => import("@/components/charts/FeatureUsageStackedChart").then(m => ({ default: m.FeatureUsageStackedChart })),
+  { ssr: false, loading: () => <ChartSkeleton /> }
+);
+const CLIvsIDEChart = dynamic(
+  () => import("@/components/charts/CLIvsIDEChart").then(m => ({ default: m.CLIvsIDEChart })),
+  { ssr: false, loading: () => <ChartSkeleton /> }
+);
 import { Users, UserCheck, Bot, Terminal, CreditCard, Activity, Eye, GitPullRequest } from "lucide-react";
 
 interface OverviewData {
@@ -41,6 +60,7 @@ interface FilterOptions {
 }
 
 export default function DashboardOverview() {
+  const { days } = useDateRange();
   const [data, setData] = useState<OverviewData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -59,7 +79,7 @@ export default function DashboardOverview() {
 
   const fetchData = useCallback(() => {
     setLoading(true);
-    const params = new URLSearchParams({ days: "90" });
+    const params = new URLSearchParams({ days: String(days) });
     const allTeams = [...selectedEntTeams, ...selectedOrgTeams];
     if (allTeams.length > 0) params.set("teams", allTeams.join(","));
     if (selectedOrgs.length > 0) params.set("orgs", selectedOrgs.join(","));
@@ -72,7 +92,7 @@ export default function DashboardOverview() {
       })
       .catch((err) => setError(err.message))
       .finally(() => setLoading(false));
-  }, [selectedEntTeams, selectedOrgTeams, selectedOrgs]);
+  }, [days, selectedEntTeams, selectedOrgTeams, selectedOrgs]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
 

@@ -5,7 +5,7 @@ import { getDateRange } from "@/lib/utils";
 export async function GET(request: Request) {
   try {
     const { searchParams } = new URL(request.url);
-    const days = Number(searchParams.get("days") ?? 90);
+    const days = Number(searchParams.get("days") ?? 7);
     const { start, end } = getDateRange(days);
     const eid = resolveEnterpriseId();
 
@@ -85,6 +85,8 @@ export async function GET(request: Request) {
       languageDistribution,
       ideTrend,
       allIdes,
+    }, {
+      headers: { "Cache-Control": "private, max-age=300, stale-while-revalidate=60" },
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

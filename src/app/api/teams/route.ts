@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getAllTeams, getTeamMembers } from "@/lib/db/teams-repo";
+import { getAllTeamsWithMembers } from "@/lib/db/teams-repo";
 import { getAllUserMetrics } from "@/lib/db/metrics-repo";
 import { computeTeamSummary } from "@/lib/aggregation/team-metrics";
 import { getDateRange } from "@/lib/utils";
@@ -7,23 +7,22 @@ import { getDateRange } from "@/lib/utils";
 export async function GET(request: Request) {
   try {
     const { searchParams } = new URL(request.url);
-    const days = Number(searchParams.get("days") ?? 90);
+    const days = Number(searchParams.get("days") ?? 7);
     const { start, end } = getDateRange(days);
 
     const teamsParam = searchParams.get("teams");
     const selectedSlugs = teamsParam ? teamsParam.split(",").filter(Boolean) : [];
 
-    let teams = getAllTeams();
+    let teamsWithMembers = getAllTeamsWithMembers();
     if (selectedSlugs.length > 0) {
       const slugSet = new Set(selectedSlugs);
-      teams = teams.filter((t) => slugSet.has(t.team_slug));
+      teamsWithMembers = teamsWithMembers.filter((t) => slugSet.has(t.team_slug));
     }
 
     const userRecords = getAllUserMetrics(start, end);
 
-    const summaries = teams.map((team) => {
-      const members = getTeamMembers(team.team_slug);
-      const summary = computeTeamSummary(team.team_slug, team.team_name, members, userRecords);
+    const summaries = teamsWithMembers.map((team) => {
+      const summary = computeTeamSummary(team.team_slug, team.team_name, team.members, userRecords);
       return {
         teamSlug: summary.teamSlug,
         teamName: summary.teamName,
@@ -41,7 +40,9 @@ export async function GET(request: Request) {
       };
     });
 
-    return NextResponse.json({ teams: summaries });
+    return NextResponse.json({ teams: summaries }, {
+      headers: { "Cache-Control": "private, max-age=300, stale-while-revalidate=60" },
+    });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     return NextResponse.json({ error: message }, { status: 500 });

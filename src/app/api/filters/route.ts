@@ -30,6 +30,8 @@ export async function GET() {
       enterpriseTeams: entTeams,
       orgTeams,
       orgs: orgs.map((o) => ({ slug: o.slug, name: o.slug })),
+    }, {
+      headers: { "Cache-Control": "private, max-age=600, stale-while-revalidate=120" },
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

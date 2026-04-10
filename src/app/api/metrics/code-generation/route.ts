@@ -30,7 +30,7 @@ export async function GET(request: NextRequest) {
     const { resolveEnterpriseId, getAllUserMetrics } = await import("@/lib/db/metrics-repo");
     const { extractCompletionMetrics, extractAgentMetrics } = await import("@/lib/aggregation/separate-metrics");
 
-    const defaultRange = getDateRange(90);
+    const defaultRange = getDateRange(7);
     const startDay = params.get("startDay") || defaultRange.start;
     const endDay = params.get("endDay") || defaultRange.end;
 
@@ -148,7 +148,9 @@ export async function GET(request: NextRequest) {
           ? (agentLocAddedTotal / (compAcceptedTotal + agentLocAddedTotal)) * 100 : 0,
         totalCodeGenerations: compGenTotal,
       },
-    } as CodeGenerationResponse);
+    } as CodeGenerationResponse, {
+      headers: { "Cache-Control": "private, max-age=300, stale-while-revalidate=60" },
+    });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     return NextResponse.json({ error: message }, { status: 500 });

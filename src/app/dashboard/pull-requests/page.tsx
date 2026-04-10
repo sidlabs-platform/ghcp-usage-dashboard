@@ -1,10 +1,20 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import dynamic from "next/dynamic";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { MetricCard } from "@/components/cards/MetricCard";
-import { PRActivityChart } from "@/components/charts/PRActivityChart";
-import { MergeTimeChart } from "@/components/charts/MergeTimeChart";
+import { ChartSkeleton } from "@/components/states/ChartSkeleton";
+import { useDateRange } from "@/contexts/DateRangeContext";
+
+const PRActivityChart = dynamic(
+  () => import("@/components/charts/PRActivityChart").then(m => ({ default: m.PRActivityChart })),
+  { ssr: false, loading: () => <ChartSkeleton /> }
+);
+const MergeTimeChart = dynamic(
+  () => import("@/components/charts/MergeTimeChart").then(m => ({ default: m.MergeTimeChart })),
+  { ssr: false, loading: () => <ChartSkeleton /> }
+);
 import { GitPullRequest, GitMerge, Bot, Clock, Eye, CheckCircle } from "lucide-react";
 import { formatMinutes } from "@/lib/utils";
 
@@ -46,12 +56,13 @@ interface PRData {
 }
 
 export default function PullRequestsPage() {
+  const { days } = useDateRange();
   const [data, setData] = useState<PRData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    fetch("/api/metrics/pull-requests")
+    fetch(`/api/metrics/pull-requests?days=${days}`)
       .then((res) => {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         return res.json();
@@ -59,7 +70,7 @@ export default function PullRequestsPage() {
       .then((json) => setData(json))
       .catch((err) => setError(err.message))
       .finally(() => setLoading(false));
-  }, []);
+  }, [days]);
 
   if (loading) {
     return (

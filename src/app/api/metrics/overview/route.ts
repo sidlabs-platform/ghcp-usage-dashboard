@@ -8,7 +8,7 @@ import { extractCompletionMetrics, extractAgentMetrics } from "@/lib/aggregation
 export async function GET(request: NextRequest) {
   try {
     const params = request.nextUrl.searchParams;
-    const days = parseInt(params.get("days") || "90", 10);
+    const days = parseInt(params.get("days") || "7", 10);
     const { start, end } = getDateRange(days);
 
     const teamsParam = params.get("teams");
@@ -252,6 +252,8 @@ export async function GET(request: NextRequest) {
       daysLoaded: totalDays,
       dataSource: hasFilter ? "filtered-users" : (useAggregated ? "user-aggregated" : "enterprise"),
       filtered: hasFilter,
+    }, {
+      headers: { "Cache-Control": "private, max-age=300, stale-while-revalidate=60" },
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

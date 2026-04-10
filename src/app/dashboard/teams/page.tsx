@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback } from "react";
 import { PageHeader } from "@/components/layout/PageHeader";
+import { useDateRange } from "@/contexts/DateRangeContext";
 import { MetricCard } from "@/components/cards/MetricCard";
 import { ScopeFilter } from "@/components/filters/ScopeFilter";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
@@ -33,6 +34,7 @@ interface FilterOptions {
 type SortField = "teamName" | "totalMembers" | "avgDailyActiveUsers" | "totalLocAdded" | "overallAcceptanceRate" | "agentAdoptionRate" | "chatAdoptionRate" | "cliAdoptionRate";
 
 export default function TeamsPage() {
+  const { days } = useDateRange();
   const [teams, setTeams] = useState<TeamSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -53,7 +55,7 @@ export default function TeamsPage() {
 
   const fetchTeams = useCallback(() => {
     setLoading(true);
-    const params = new URLSearchParams();
+    const params = new URLSearchParams({ days: String(days) });
     const allTeams = [...selectedEntTeams, ...selectedOrgTeams];
     if (allTeams.length > 0) params.set("teams", allTeams.join(","));
 
@@ -74,7 +76,7 @@ export default function TeamsPage() {
       })
       .catch((err) => setError(err.message))
       .finally(() => setLoading(false));
-  }, [selectedEntTeams, selectedOrgTeams, selectedOrgs]);
+  }, [days, selectedEntTeams, selectedOrgTeams, selectedOrgs]);
 
   useEffect(() => { fetchTeams(); }, [fetchTeams]);
 

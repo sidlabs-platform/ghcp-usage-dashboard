@@ -9,7 +9,9 @@ export async function GET() {
       ? Number(((stats.active30d / stats.total) * 100).toFixed(1))
       : 0;
 
-    return NextResponse.json({ seats, stats, utilization });
+    return NextResponse.json({ seats, stats, utilization }, {
+      headers: { "Cache-Control": "private, max-age=300, stale-while-revalidate=60" },
+    });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     return NextResponse.json({ error: message }, { status: 500 });
