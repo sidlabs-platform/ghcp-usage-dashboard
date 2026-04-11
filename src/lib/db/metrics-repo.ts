@@ -297,6 +297,65 @@ export function getAllOrgMetrics(startDay: string, endDay: string): DayTotal[] {
   return Array.from(byDay.values());
 }
 
+/** Get aggregated org metrics for specific orgs for a date range (one row per day).
+ *  Same aggregation logic as getAllOrgMetrics but filtered to given org slugs. */
+export function getFilteredOrgMetrics(orgSlugs: string[], startDay: string, endDay: string): DayTotal[] {
+  if (orgSlugs.length === 0) return getAllOrgMetrics(startDay, endDay);
+  const db = getDb();
+  const placeholders = orgSlugs.map(() => "?").join(",");
+  const rows = db.prepare(`
+    SELECT ${DAY_TOTAL_COLUMNS}
+    FROM org_daily_metrics
+    WHERE day >= ? AND day <= ? AND org_slug IN (${placeholders})
+    ORDER BY day ASC
+  `).all(startDay, endDay, ...orgSlugs) as Record<string, unknown>[];
+
+  const byDay = new Map<string, DayTotal>();
+  for (const row of rows) {
+    const record = mapDayTotalRow(row);
+    const existing = byDay.get(record.day);
+    if (!existing) {
+      byDay.set(record.day, record);
+      continue;
+    }
+
+    existing.daily_active_users += record.daily_active_users ?? 0;
+    existing.weekly_active_users += record.weekly_active_users ?? 0;
+    existing.monthly_active_users += record.monthly_active_users ?? 0;
+    existing.monthly_active_agent_users += record.monthly_active_agent_users ?? 0;
+    existing.monthly_active_chat_users += record.monthly_active_chat_users ?? 0;
+    existing.daily_active_cli_users = (existing.daily_active_cli_users ?? 0) + (record.daily_active_cli_users ?? 0);
+    existing.code_generation_activity_count += record.code_generation_activity_count ?? 0;
+    existing.code_acceptance_activity_count += record.code_acceptance_activity_count ?? 0;
+    existing.user_initiated_interaction_count += record.user_initiated_interaction_count ?? 0;
+    existing.loc_suggested_to_add_sum += record.loc_suggested_to_add_sum ?? 0;
+    existing.loc_suggested_to_delete_sum += record.loc_suggested_to_delete_sum ?? 0;
+    existing.loc_added_sum += record.loc_added_sum ?? 0;
+    existing.loc_deleted_sum += record.loc_deleted_sum ?? 0;
+
+    const rp = record.pull_requests;
+    if (!rp) continue;
+    if (!existing.pull_requests) { existing.pull_requests = { ...rp }; continue; }
+    const ep = existing.pull_requests;
+    ep.total_created += rp.total_created ?? 0;
+    ep.total_reviewed += rp.total_reviewed ?? 0;
+    ep.total_merged += rp.total_merged ?? 0;
+    ep.total_suggestions += rp.total_suggestions ?? 0;
+    ep.total_applied_suggestions += rp.total_applied_suggestions ?? 0;
+    ep.total_created_by_copilot += rp.total_created_by_copilot ?? 0;
+    ep.total_reviewed_by_copilot += rp.total_reviewed_by_copilot ?? 0;
+    ep.total_merged_created_by_copilot += rp.total_merged_created_by_copilot ?? 0;
+    ep.total_merged_reviewed_by_copilot += rp.total_merged_reviewed_by_copilot ?? 0;
+    ep.total_copilot_suggestions += rp.total_copilot_suggestions ?? 0;
+    ep.total_copilot_applied_suggestions += rp.total_copilot_applied_suggestions ?? 0;
+    ep.median_minutes_to_merge = weightedMedian(ep.median_minutes_to_merge, ep.total_merged - (rp.total_merged ?? 0), rp.median_minutes_to_merge, rp.total_merged ?? 0);
+    ep.median_minutes_to_merge_copilot_authored = weightedMedian(ep.median_minutes_to_merge_copilot_authored, ep.total_merged_created_by_copilot - (rp.total_merged_created_by_copilot ?? 0), rp.median_minutes_to_merge_copilot_authored, rp.total_merged_created_by_copilot ?? 0);
+    ep.median_minutes_to_merge_copilot_reviewed = weightedMedian(ep.median_minutes_to_merge_copilot_reviewed, ep.total_merged_reviewed_by_copilot - (rp.total_merged_reviewed_by_copilot ?? 0), rp.median_minutes_to_merge_copilot_reviewed, rp.total_merged_reviewed_by_copilot ?? 0);
+  }
+
+  return Array.from(byDay.values());
+}
+
 function weightedMedian(
   a: number | null | undefined, weightA: number,
   b: number | null | undefined, weightB: number

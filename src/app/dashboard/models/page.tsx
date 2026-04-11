@@ -1,11 +1,13 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import dynamic from "next/dynamic";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { MetricCard } from "@/components/cards/MetricCard";
+import { ScopeFilter } from "@/components/filters/ScopeFilter";
 import { ChartSkeleton } from "@/components/states/ChartSkeleton";
 import { useDateRange } from "@/contexts/DateRangeContext";
+import { useScope } from "@/contexts/ScopeContext";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 
 const ModelUsageBarChart = dynamic(
@@ -25,12 +27,18 @@ import type { ModelStatsResponse } from "@/app/api/metrics/models/route";
 
 export default function ModelsPage() {
   const { days } = useDateRange();
+  const { buildScopeParams } = useScope();
   const [data, setData] = useState<ModelStatsResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    fetch(`/api/metrics/models?days=${days}`)
+  const fetchData = useCallback(() => {
+    setLoading(true);
+    const params = new URLSearchParams({ days: String(days) });
+    const scopeParams = buildScopeParams();
+    scopeParams.forEach((v, k) => params.set(k, v));
+
+    fetch(`/api/metrics/models?${params}`)
       .then(async (res) => {
         if (!res.ok) {
           const body = await res.json().catch(() => ({}));
@@ -41,7 +49,9 @@ export default function ModelsPage() {
       .then(setData)
       .catch((err) => setError(err.message))
       .finally(() => setLoading(false));
-  }, [days]);
+  }, [days, buildScopeParams]);
+
+  useEffect(() => { fetchData(); }, [fetchData]);
 
   if (loading) {
     return (
@@ -85,6 +95,8 @@ export default function ModelsPage() {
         title="Model Statistics"
         description="AI model usage, trends, and feature breakdown across your enterprise"
       />
+
+      <ScopeFilter />
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4 mb-8">
         <MetricCard

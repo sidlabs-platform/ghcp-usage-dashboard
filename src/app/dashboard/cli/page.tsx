@@ -1,11 +1,13 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import dynamic from "next/dynamic";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { MetricCard } from "@/components/cards/MetricCard";
+import { ScopeFilter } from "@/components/filters/ScopeFilter";
 import { ChartSkeleton } from "@/components/states/ChartSkeleton";
 import { useDateRange } from "@/contexts/DateRangeContext";
+import { useScope } from "@/contexts/ScopeContext";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 
 const CLIUsersTrendChart = dynamic(
@@ -60,12 +62,18 @@ interface CLIData {
 
 export default function CLIPage() {
   const { days } = useDateRange();
+  const { buildScopeParams } = useScope();
   const [data, setData] = useState<CLIData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    fetch(`/api/metrics/cli?days=${days}`)
+  const fetchData = useCallback(() => {
+    setLoading(true);
+    const params = new URLSearchParams({ days: String(days) });
+    const scopeParams = buildScopeParams();
+    scopeParams.forEach((v, k) => params.set(k, v));
+
+    fetch(`/api/metrics/cli?${params}`)
       .then((res) => {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         return res.json();
@@ -73,7 +81,9 @@ export default function CLIPage() {
       .then((json) => setData(json))
       .catch((err) => setError(err.message))
       .finally(() => setLoading(false));
-  }, [days]);
+  }, [days, buildScopeParams]);
+
+  useEffect(() => { fetchData(); }, [fetchData]);
 
   if (loading) {
     return (
@@ -113,6 +123,8 @@ export default function CLIPage() {
         title="CLI Analytics"
         description="Copilot CLI usage, sessions, and token consumption"
       />
+
+      <ScopeFilter />
 
       {/* KPI Cards */}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4 mb-8">

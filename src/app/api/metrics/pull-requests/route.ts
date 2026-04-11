@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { resolveEnterpriseId, getEnterpriseMetrics, getAllOrgMetrics } from "@/lib/db/metrics-repo";
+import { resolveEnterpriseId, getEnterpriseMetrics, getAllOrgMetrics, getFilteredOrgMetrics } from "@/lib/db/metrics-repo";
 import { getDateRange } from "@/lib/utils";
 import type { PullRequestMetrics } from "@/lib/types/metrics";
 
@@ -8,14 +8,20 @@ export async function GET(request: Request) {
     const { searchParams } = new URL(request.url);
     const days = Number(searchParams.get("days") ?? 7);
     const { start, end } = getDateRange(days);
-    const eid = resolveEnterpriseId();
+
+    // Org-only filtering for PRs (team filtering not available — data is org-level aggregate)
+    const orgsParam = searchParams.get("orgs");
+    const selectedOrgs = orgsParam ? orgsParam.split(",").filter(Boolean) : [];
+    const hasOrgFilter = selectedOrgs.length > 0;
+
+    const eid = hasOrgFilter ? null : resolveEnterpriseId();
 
     // Try enterprise metrics first, fall back to org metrics
     let records = eid ? getEnterpriseMetrics(eid, start, end) : [];
     let dataSource = "enterprise";
-    if (records.length === 0) {
-      records = getAllOrgMetrics(start, end);
-      dataSource = "org";
+    if (records.length === 0 || hasOrgFilter) {
+      records = hasOrgFilter ? getFilteredOrgMetrics(selectedOrgs, start, end) : getAllOrgMetrics(start, end);
+      dataSource = hasOrgFilter ? "org-filtered" : "org";
     }
 
     // Normalize PR fields — older API versions omit fields added later

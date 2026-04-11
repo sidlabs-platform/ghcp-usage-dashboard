@@ -1,19 +1,22 @@
 import { NextResponse } from "next/server";
 import { resolveEnterpriseId, getEnterpriseMetrics, getAllUserMetrics } from "@/lib/db/metrics-repo";
 import { getDateRange } from "@/lib/utils";
+import { parseScopeFilter, filterByScope } from "@/lib/api/scope-filter";
 
 export async function GET(request: Request) {
   try {
     const { searchParams } = new URL(request.url);
     const days = Number(searchParams.get("days") ?? 7);
     const { start, end } = getDateRange(days);
-    const eid = resolveEnterpriseId();
+
+    const scopeFilter = parseScopeFilter(searchParams);
+    const eid = scopeFilter.hasFilter ? null : resolveEnterpriseId();
 
     let records = eid ? getEnterpriseMetrics(eid, start, end) : [];
 
-    // Fallback: build from user-level data if no enterprise-level data
-    if (records.length === 0) {
-      const userRecords = getAllUserMetrics(start, end);
+    // Fallback or filtered: build from user-level data
+    if (records.length === 0 || scopeFilter.hasFilter) {
+      const userRecords = filterByScope(getAllUserMetrics(start, end), scopeFilter);
       // Group by day and aggregate totals_by_ide and totals_by_language_feature
       const dayMap = new Map<string, { totals_by_ide: Record<string, unknown>[]; totals_by_language_feature: Record<string, unknown>[] }>();
       for (const u of userRecords) {

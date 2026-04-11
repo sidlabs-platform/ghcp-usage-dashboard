@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { useDateRange } from "@/contexts/DateRangeContext";
+import { useScope } from "@/contexts/ScopeContext";
 import { MetricCard } from "@/components/cards/MetricCard";
 import { ScopeFilter } from "@/components/filters/ScopeFilter";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
@@ -27,31 +28,14 @@ interface TeamSummary {
   codeReviewAdoptionRate: number;
 }
 
-interface FilterOptions {
-  enterpriseTeams: { slug: string; name: string; memberCount: number }[];
-  orgTeams: { slug: string; name: string; orgSlug: string; memberCount: number }[];
-  orgs: { slug: string; name: string }[];
-}
-
 type SortField = "teamName" | "totalMembers" | "avgDailyActiveUsers" | "totalLocAdded" | "overallAcceptanceRate" | "agentAdoptionRate" | "chatAdoptionRate" | "cliAdoptionRate";
 
 export default function TeamsPage() {
   const { days } = useDateRange();
+  const { selectedEntTeams, selectedOrgTeams, selectedOrgs } = useScope();
   const [teams, setTeams] = useState<TeamSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [filters, setFilters] = useState<FilterOptions>({ enterpriseTeams: [], orgTeams: [], orgs: [] });
-  const [selectedEntTeams, setSelectedEntTeams] = useState<string[]>([]);
-  const [selectedOrgTeams, setSelectedOrgTeams] = useState<string[]>([]);
-  const [selectedOrgs, setSelectedOrgs] = useState<string[]>([]);
-
-  // Fetch filter options once
-  useEffect(() => {
-    fetch("/api/filters")
-      .then((res) => res.json())
-      .then((json) => { if (!json.error) setFilters(json); })
-      .catch(() => {});
-  }, []);
 
   const fetchTeams = useCallback(() => {
     setLoading(true);
@@ -99,14 +83,7 @@ export default function TeamsPage() {
     return (
       <div>
         <PageHeader title="Team Analytics" description="Copilot adoption and usage by team" />
-        <ScopeFilter
-          enterpriseTeams={filters.enterpriseTeams} orgTeams={filters.orgTeams}
-          orgs={filters.orgs}
-          selectedEnterpriseTeams={selectedEntTeams} selectedOrgTeams={selectedOrgTeams}
-          selectedOrgs={selectedOrgs}
-          onEnterpriseTeamsChange={setSelectedEntTeams} onOrgTeamsChange={setSelectedOrgTeams}
-          onOrgsChange={setSelectedOrgs}
-        />
+        <ScopeFilter />
         <div className="flex h-64 items-center justify-center text-sm text-red-500">{error}</div>
       </div>
     );
@@ -129,14 +106,7 @@ export default function TeamsPage() {
         description="Copilot adoption and usage by team"
       />
 
-      <ScopeFilter
-        enterpriseTeams={filters.enterpriseTeams} orgTeams={filters.orgTeams}
-        orgs={filters.orgs}
-        selectedEnterpriseTeams={selectedEntTeams} selectedOrgTeams={selectedOrgTeams}
-        selectedOrgs={selectedOrgs}
-        onEnterpriseTeamsChange={setSelectedEntTeams} onOrgTeamsChange={setSelectedOrgTeams}
-        onOrgsChange={setSelectedOrgs}
-      />
+      <ScopeFilter />
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5 mb-8">
         <MetricCard

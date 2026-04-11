@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { useDateRange } from "@/contexts/DateRangeContext";
+import { useScope } from "@/contexts/ScopeContext";
 import { MetricCard } from "@/components/cards/MetricCard";
 import { ScopeFilter } from "@/components/filters/ScopeFilter";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
@@ -28,37 +29,19 @@ interface UserRow {
   usedCodingAgent: boolean;
 }
 
-interface FilterOptions {
-  enterpriseTeams: { slug: string; name: string; memberCount: number }[];
-  orgTeams: { slug: string; name: string; orgSlug: string; memberCount: number }[];
-  orgs: { slug: string; name: string }[];
-}
-
 export default function UsersPage() {
   const { days } = useDateRange();
+  const { hasFilter, buildScopeParams } = useScope();
   const [users, setUsers] = useState<UserRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
-  const [filters, setFilters] = useState<FilterOptions>({ enterpriseTeams: [], orgTeams: [], orgs: [] });
-  const [selectedEntTeams, setSelectedEntTeams] = useState<string[]>([]);
-  const [selectedOrgTeams, setSelectedOrgTeams] = useState<string[]>([]);
-  const [selectedOrgs, setSelectedOrgs] = useState<string[]>([]);
-
-  // Fetch filter options once
-  useEffect(() => {
-    fetch("/api/filters")
-      .then((res) => res.json())
-      .then((json) => { if (!json.error) setFilters(json); })
-      .catch(() => {});
-  }, []);
 
   const fetchUsers = useCallback(() => {
     setLoading(true);
     const params = new URLSearchParams({ days: String(days) });
-    const allTeams = [...selectedEntTeams, ...selectedOrgTeams];
-    if (allTeams.length > 0) params.set("teams", allTeams.join(","));
-    if (selectedOrgs.length > 0) params.set("orgs", selectedOrgs.join(","));
+    const scopeParams = buildScopeParams();
+    scopeParams.forEach((value, key) => params.set(key, value));
 
     fetch(`/api/users?${params}`)
       .then((res) => {
@@ -68,7 +51,7 @@ export default function UsersPage() {
       .then((json) => { setUsers(json.users ?? []); setError(null); })
       .catch((err) => setError(err.message))
       .finally(() => setLoading(false));
-  }, [days, selectedEntTeams, selectedOrgTeams, selectedOrgs]);
+  }, [days, buildScopeParams]);
 
   useEffect(() => { fetchUsers(); }, [fetchUsers]);
 
@@ -89,14 +72,7 @@ export default function UsersPage() {
     return (
       <div>
         <PageHeader title="User Explorer" description="Individual developer Copilot usage" />
-        <ScopeFilter
-          enterpriseTeams={filters.enterpriseTeams} orgTeams={filters.orgTeams}
-          orgs={filters.orgs}
-          selectedEnterpriseTeams={selectedEntTeams} selectedOrgTeams={selectedOrgTeams}
-          selectedOrgs={selectedOrgs}
-          onEnterpriseTeamsChange={setSelectedEntTeams} onOrgTeamsChange={setSelectedOrgTeams}
-          onOrgsChange={setSelectedOrgs}
-        />
+        <ScopeFilter />
         <div className="flex h-64 items-center justify-center text-sm text-red-500">{error}</div>
       </div>
     );
@@ -115,7 +91,7 @@ export default function UsersPage() {
   const codingAgentUserCount = users.filter((u) => u.usedCodingAgent).length;
   const codeReviewActiveCount = users.filter((u) => u.usedCodeReviewActive).length;
   const codeReviewPassiveCount = users.filter((u) => u.usedCodeReviewPassive && !u.usedCodeReviewActive).length;
-  const isFiltered = selectedEntTeams.length > 0 || selectedOrgTeams.length > 0 || selectedOrgs.length > 0;
+  const isFiltered = hasFilter;
 
   return (
     <div>
@@ -124,14 +100,7 @@ export default function UsersPage() {
         description="Individual developer Copilot usage"
       />
 
-      <ScopeFilter
-        enterpriseTeams={filters.enterpriseTeams} orgTeams={filters.orgTeams}
-        orgs={filters.orgs}
-        selectedEnterpriseTeams={selectedEntTeams} selectedOrgTeams={selectedOrgTeams}
-        selectedOrgs={selectedOrgs}
-        onEnterpriseTeamsChange={setSelectedEntTeams} onOrgTeamsChange={setSelectedOrgTeams}
-        onOrgsChange={setSelectedOrgs}
-      />
+      <ScopeFilter />
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 mb-8">
         <MetricCard

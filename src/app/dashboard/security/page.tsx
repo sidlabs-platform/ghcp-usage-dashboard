@@ -4,8 +4,10 @@ import { useEffect, useState, useCallback } from "react";
 import dynamic from "next/dynamic";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { MetricCard } from "@/components/cards/MetricCard";
+import { ScopeFilter } from "@/components/filters/ScopeFilter";
 import { ChartSkeleton } from "@/components/states/ChartSkeleton";
 import { useDateRange } from "@/contexts/DateRangeContext";
+import { useScope } from "@/contexts/ScopeContext";
 import { ShieldCheck, ShieldAlert, Bug, Key, Sparkles, TrendingDown } from "lucide-react";
 
 const SecurityTrendChart = dynamic(
@@ -54,6 +56,7 @@ interface CategoryData {
 
 export default function SecurityPage() {
   const { days } = useDateRange();
+  const { selectedOrgs } = useScope();
   const [overview, setOverview] = useState<SecurityOverviewData | null>(null);
   const [csData, setCsData] = useState<CategoryData | null>(null);
   const [depData, setDepData] = useState<CategoryData | null>(null);
@@ -65,11 +68,16 @@ export default function SecurityPage() {
   const fetchData = useCallback(async () => {
     setLoading(true);
     try {
+      // When an org is selected, use scope=org&scopeId=<org>
+      const scopeParams = selectedOrgs.length === 1
+        ? `&scope=org&scopeId=${encodeURIComponent(selectedOrgs[0])}`
+        : "";
+
       const [overviewRes, csRes, depRes, ssRes] = await Promise.all([
-        fetch(`/api/security/overview?days=${days}`),
-        fetch(`/api/security/code-scanning?days=${days}`),
-        fetch(`/api/security/dependabot?days=${days}`),
-        fetch(`/api/security/secret-scanning?days=${days}`),
+        fetch(`/api/security/overview?days=${days}${scopeParams}`),
+        fetch(`/api/security/code-scanning?days=${days}${scopeParams}`),
+        fetch(`/api/security/dependabot?days=${days}${scopeParams}`),
+        fetch(`/api/security/secret-scanning?days=${days}${scopeParams}`),
       ]);
 
       setOverview(await overviewRes.json());
@@ -81,7 +89,7 @@ export default function SecurityPage() {
     } finally {
       setLoading(false);
     }
-  }, [days]);
+  }, [days, selectedOrgs]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
@@ -137,6 +145,8 @@ export default function SecurityPage() {
   return (
     <div className="space-y-8">
       <PageHeader title="Security" description="GitHub Advanced Security metrics across your organization" />
+
+      <ScopeFilter orgOnly />
 
       {/* Sync status banner */}
       {syncStatus && (

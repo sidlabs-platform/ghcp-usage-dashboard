@@ -1,11 +1,13 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import dynamic from "next/dynamic";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { MetricCard } from "@/components/cards/MetricCard";
+import { ScopeFilter } from "@/components/filters/ScopeFilter";
 import { ChartSkeleton } from "@/components/states/ChartSkeleton";
 import { useDateRange } from "@/contexts/DateRangeContext";
+import { useScope } from "@/contexts/ScopeContext";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 
 const LocTrendChart = dynamic(
@@ -35,12 +37,18 @@ import { CHART_COLORS } from "@/lib/constants";
 
 export default function CodeGenerationPage() {
   const { days } = useDateRange();
+  const { buildScopeParams } = useScope();
   const [data, setData] = useState<CodeGenerationResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    fetch(`/api/metrics/code-generation?days=${days}`)
+  const fetchData = useCallback(() => {
+    setLoading(true);
+    const params = new URLSearchParams({ days: String(days) });
+    const scopeParams = buildScopeParams();
+    scopeParams.forEach((v, k) => params.set(k, v));
+
+    fetch(`/api/metrics/code-generation?${params}`)
       .then(async (res) => {
         if (!res.ok) {
           const body = await res.json().catch(() => ({}));
@@ -51,7 +59,9 @@ export default function CodeGenerationPage() {
       .then(setData)
       .catch((err) => setError(err.message))
       .finally(() => setLoading(false));
-  }, [days]);
+  }, [days, buildScopeParams]);
+
+  useEffect(() => { fetchData(); }, [fetchData]);
 
   if (loading) return <LoadingSkeleton />;
   if (error) return <ErrorState message={error} />;
@@ -65,6 +75,8 @@ export default function CodeGenerationPage() {
         title="Code Generation & Activity"
         description="Lines of code, acceptance rates, and feature breakdown across your enterprise"
       />
+
+      <ScopeFilter />
 
       {/* KPI Cards — separated completion vs agent */}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-6 mb-8">

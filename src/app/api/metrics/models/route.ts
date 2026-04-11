@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getAllUserMetrics } from "@/lib/db/metrics-repo";
 import { getDateRange, datesBetween } from "@/lib/utils";
 import { FEATURE_LABELS } from "@/lib/constants";
+import { parseScopeFilter, filterByScope } from "@/lib/api/scope-filter";
 
 export interface ModelStatsResponse {
   modelBreakdown: { model: string; interactions: number }[];
@@ -23,7 +24,8 @@ export async function GET(request: NextRequest) {
     const startDay = params.get("startDay") || defaultRange.start;
     const endDay = params.get("endDay") || defaultRange.end;
 
-    const userRecords = getAllUserMetrics(startDay, endDay);
+    const scopeFilter = parseScopeFilter(params);
+    const userRecords = filterByScope(getAllUserMetrics(startDay, endDay), scopeFilter);
 
     // Model breakdown (total interactions per model)
     const modelMap = new Map<string, number>();

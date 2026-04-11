@@ -1,9 +1,11 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { useDateRange } from "@/contexts/DateRangeContext";
+import { useScope } from "@/contexts/ScopeContext";
 import { MetricCard } from "@/components/cards/MetricCard";
+import { ScopeFilter } from "@/components/filters/ScopeFilter";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import {
   PieChart,
@@ -78,12 +80,18 @@ function formatDate(dateStr: string) {
 
 export default function IDELanguagesPage() {
   const { days } = useDateRange();
+  const { buildScopeParams } = useScope();
   const [data, setData] = useState<IDELangData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    fetch(`/api/metrics/ide-languages?days=${days}`)
+  const fetchData = useCallback(() => {
+    setLoading(true);
+    const params = new URLSearchParams({ days: String(days) });
+    const scopeParams = buildScopeParams();
+    scopeParams.forEach((v, k) => params.set(k, v));
+
+    fetch(`/api/metrics/ide-languages?${params}`)
       .then((res) => {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         return res.json();
@@ -91,7 +99,9 @@ export default function IDELanguagesPage() {
       .then((json) => setData(json))
       .catch((err) => setError(err.message))
       .finally(() => setLoading(false));
-  }, [days]);
+  }, [days, buildScopeParams]);
+
+  useEffect(() => { fetchData(); }, [fetchData]);
 
   if (loading) {
     return (
@@ -137,6 +147,8 @@ export default function IDELanguagesPage() {
         title="IDE & Languages"
         description="Editor and programming language usage breakdown"
       />
+
+      <ScopeFilter />
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4 mb-8">
         <MetricCard

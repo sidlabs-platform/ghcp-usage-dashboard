@@ -1,11 +1,13 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { MetricCard } from "@/components/cards/MetricCard";
+import { ScopeFilter } from "@/components/filters/ScopeFilter";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { CreditCard, UserCheck, UserX, Percent } from "lucide-react";
+import { useScope } from "@/contexts/ScopeContext";
 import { useTableSort } from "@/hooks/useTableSort";
 import { SortableHeader } from "@/components/tables/SortableHeader";
 
@@ -45,13 +47,18 @@ function daysAgo(dateStr: string | null): string {
 }
 
 export default function SeatsPage() {
+  const { buildScopeParams } = useScope();
   const [data, setData] = useState<SeatsData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [showInactiveOnly, setShowInactiveOnly] = useState(false);
 
-  useEffect(() => {
-    fetch("/api/seats")
+  const fetchData = useCallback(() => {
+    setLoading(true);
+    const scopeParams = buildScopeParams();
+    const url = scopeParams.toString() ? `/api/seats?${scopeParams}` : "/api/seats";
+
+    fetch(url)
       .then((res) => {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         return res.json();
@@ -59,7 +66,9 @@ export default function SeatsPage() {
       .then((json) => setData(json))
       .catch((err) => setError(err.message))
       .finally(() => setLoading(false));
-  }, []);
+  }, [buildScopeParams]);
+
+  useEffect(() => { fetchData(); }, [fetchData]);
 
   if (loading) {
     return (
@@ -110,6 +119,8 @@ export default function SeatsPage() {
         title="Seat Management"
         description="Copilot license allocation and utilization"
       />
+
+      <ScopeFilter />
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4 mb-8">
         <MetricCard

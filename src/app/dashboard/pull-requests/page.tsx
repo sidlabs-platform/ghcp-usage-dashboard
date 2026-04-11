@@ -1,11 +1,13 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import dynamic from "next/dynamic";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { MetricCard } from "@/components/cards/MetricCard";
+import { ScopeFilter } from "@/components/filters/ScopeFilter";
 import { ChartSkeleton } from "@/components/states/ChartSkeleton";
 import { useDateRange } from "@/contexts/DateRangeContext";
+import { useScope } from "@/contexts/ScopeContext";
 
 const PRActivityChart = dynamic(
   () => import("@/components/charts/PRActivityChart").then(m => ({ default: m.PRActivityChart })),
@@ -57,12 +59,17 @@ interface PRData {
 
 export default function PullRequestsPage() {
   const { days } = useDateRange();
+  const { selectedOrgs } = useScope();
   const [data, setData] = useState<PRData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    fetch(`/api/metrics/pull-requests?days=${days}`)
+  const fetchData = useCallback(() => {
+    setLoading(true);
+    const params = new URLSearchParams({ days: String(days) });
+    if (selectedOrgs.length > 0) params.set("orgs", selectedOrgs.join(","));
+
+    fetch(`/api/metrics/pull-requests?${params}`)
       .then((res) => {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         return res.json();
@@ -70,7 +77,9 @@ export default function PullRequestsPage() {
       .then((json) => setData(json))
       .catch((err) => setError(err.message))
       .finally(() => setLoading(false));
-  }, [days]);
+  }, [days, selectedOrgs]);
+
+  useEffect(() => { fetchData(); }, [fetchData]);
 
   if (loading) {
     return (
@@ -132,6 +141,8 @@ export default function PullRequestsPage() {
         title="Pull Request Impact"
         description="PR activity, merge times, and Copilot contribution"
       />
+
+      <ScopeFilter orgOnly />
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 mb-8">
         <MetricCard

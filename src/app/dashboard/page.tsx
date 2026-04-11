@@ -8,6 +8,7 @@ import { MetricCard } from "@/components/cards/MetricCard";
 import { ScopeFilter } from "@/components/filters/ScopeFilter";
 import { ChartSkeleton } from "@/components/states/ChartSkeleton";
 import { useDateRange } from "@/contexts/DateRangeContext";
+import { useScope } from "@/contexts/ScopeContext";
 import { CHART_COLORS } from "@/lib/constants";
 
 const ActiveUsersTrendChart = dynamic(
@@ -54,31 +55,17 @@ interface OverviewData {
   filtered?: boolean;
 }
 
-interface FilterOptions {
-  enterpriseTeams: { slug: string; name: string; memberCount: number }[];
-  orgTeams: { slug: string; name: string; orgSlug: string; memberCount: number }[];
-  orgs: { slug: string; name: string }[];
-}
-
 export default function DashboardOverview() {
   const { days } = useDateRange();
+  const { selectedEntTeams, selectedOrgTeams, selectedOrgs, hasFilter, buildScopeParams } = useScope();
   const [data, setData] = useState<OverviewData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [filters, setFilters] = useState<FilterOptions>({ enterpriseTeams: [], orgTeams: [], orgs: [] });
-  const [selectedEntTeams, setSelectedEntTeams] = useState<string[]>([]);
-  const [selectedOrgTeams, setSelectedOrgTeams] = useState<string[]>([]);
-  const [selectedOrgs, setSelectedOrgs] = useState<string[]>([]);
   const [securityData, setSecurityData] = useState<any>(null);
   const [securityEnabled, setSecurityEnabled] = useState(false);
 
-  // Fetch filter options and config once
+  // Fetch config once
   useEffect(() => {
-    fetch("/api/filters")
-      .then((res) => res.json())
-      .then((json) => { if (!json.error) setFilters(json); })
-      .catch(() => {});
-
     fetch("/api/config")
       .then((r) => r.json())
       .then((config) => {
@@ -94,9 +81,8 @@ export default function DashboardOverview() {
   const fetchData = useCallback(() => {
     setLoading(true);
     const params = new URLSearchParams({ days: String(days) });
-    const allTeams = [...selectedEntTeams, ...selectedOrgTeams];
-    if (allTeams.length > 0) params.set("teams", allTeams.join(","));
-    if (selectedOrgs.length > 0) params.set("orgs", selectedOrgs.join(","));
+    const scopeParams = buildScopeParams();
+    scopeParams.forEach((value, key) => params.set(key, value));
 
     fetch(`/api/metrics/overview?${params}`)
       .then((res) => res.json())
@@ -118,7 +104,7 @@ export default function DashboardOverview() {
     } else {
       setSecurityData(null);
     }
-  }, [days, selectedEntTeams, selectedOrgTeams, selectedOrgs, securityEnabled]);
+  }, [days, buildScopeParams, securityEnabled]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
@@ -144,17 +130,7 @@ export default function DashboardOverview() {
     return (
       <div>
         <PageHeader title="Executive Overview" description="GitHub Copilot usage across your enterprise" />
-        <ScopeFilter
-          enterpriseTeams={filters.enterpriseTeams}
-          orgTeams={filters.orgTeams}
-          orgs={filters.orgs}
-          selectedEnterpriseTeams={selectedEntTeams}
-          selectedOrgTeams={selectedOrgTeams}
-          selectedOrgs={selectedOrgs}
-          onEnterpriseTeamsChange={setSelectedEntTeams}
-          onOrgTeamsChange={setSelectedOrgTeams}
-          onOrgsChange={setSelectedOrgs}
-        />
+        <ScopeFilter />
         <div className="rounded-xl border bg-[hsl(var(--card))] p-12 text-center">
           <Activity className="h-12 w-12 mx-auto text-[hsl(var(--muted-foreground))] mb-4" />
           <h3 className="text-lg font-semibold mb-2">
@@ -171,7 +147,7 @@ export default function DashboardOverview() {
   if (!data) return null;
 
   const { kpis, activeUsersTrend, acceptanceRateTrend, chatModes, featureUsage, cliVsIde } = data;
-  const isFiltered = data.filtered;
+  const isFiltered = data.filtered || hasFilter;
 
   const chatModeDonutData = [
     { name: "Ask", value: chatModes.ask, color: CHART_COLORS.ask },
@@ -188,17 +164,7 @@ export default function DashboardOverview() {
         description={`GitHub Copilot usage metrics — ${data.daysLoaded} days loaded (as of ${data.dataAsOf})`}
       />
 
-      <ScopeFilter
-        enterpriseTeams={filters.enterpriseTeams}
-        orgTeams={filters.orgTeams}
-        orgs={filters.orgs}
-        selectedEnterpriseTeams={selectedEntTeams}
-        selectedOrgTeams={selectedOrgTeams}
-        selectedOrgs={selectedOrgs}
-        onEnterpriseTeamsChange={setSelectedEntTeams}
-        onOrgTeamsChange={setSelectedOrgTeams}
-        onOrgsChange={setSelectedOrgs}
-      />
+      <ScopeFilter />
 
       {/* KPI Cards */}
       <div className={`grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4 ${isFiltered ? "xl:grid-cols-7" : "xl:grid-cols-8"} mb-8`}>

@@ -1,30 +1,48 @@
 import { NextResponse } from "next/server";
 import { resolveEnterpriseId, getEnterpriseMetrics, getAllUserMetrics, getAggregatedDailySummary } from "@/lib/db/metrics-repo";
 import { getDateRange } from "@/lib/utils";
+import { parseScopeFilter, filterByScope } from "@/lib/api/scope-filter";
 
 export async function GET(request: Request) {
   try {
     const { searchParams } = new URL(request.url);
     const days = Number(searchParams.get("days") ?? 7);
     const { start, end } = getDateRange(days);
-    const eid = resolveEnterpriseId();
+
+    const scopeFilter = parseScopeFilter(searchParams);
+    const eid = scopeFilter.hasFilter ? null : resolveEnterpriseId();
 
     const enterpriseRecords = eid ? getEnterpriseMetrics(eid, start, end) : [];
-    const aggregated = enterpriseRecords.length === 0 ? getAggregatedDailySummary(start, end) : [];
-    const userRecords = getAllUserMetrics(start, end);
+    const aggregated = enterpriseRecords.length === 0 && !scopeFilter.hasFilter ? getAggregatedDailySummary(start, end) : [];
+    const userRecords = filterByScope(getAllUserMetrics(start, end), scopeFilter);
 
     // Daily CLI users and IDE users trend
-    const dailyTrend = enterpriseRecords.length > 0
-      ? enterpriseRecords.map((d) => ({
-          day: d.day,
-          cliUsers: d.daily_active_cli_users ?? 0,
-          ideUsers: d.daily_active_users - (d.daily_active_cli_users ?? 0),
-        }))
-      : aggregated.map((d) => ({
-          day: d.day,
-          cliUsers: d.daily_active_cli_users ?? 0,
-          ideUsers: d.daily_active_users - (d.daily_active_cli_users ?? 0),
-        }));
+    // When filtered, build from user-level data instead of enterprise/aggregated
+    let dailyTrend;
+    if (scopeFilter.hasFilter) {
+      const byDay = new Map<string, { cliLogins: Set<string>; ideLogins: Set<string> }>();
+      for (const r of userRecords) {
+        const entry = byDay.get(r.day) ?? { cliLogins: new Set(), ideLogins: new Set() };
+        if (r.used_cli) entry.cliLogins.add(r.user_login);
+        else entry.ideLogins.add(r.user_login);
+        byDay.set(r.day, entry);
+      }
+      dailyTrend = Array.from(byDay.entries())
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([day, sets]) => ({ day, cliUsers: sets.cliLogins.size, ideUsers: sets.ideLogins.size }));
+    } else {
+      dailyTrend = enterpriseRecords.length > 0
+        ? enterpriseRecords.map((d) => ({
+            day: d.day,
+            cliUsers: d.daily_active_cli_users ?? 0,
+            ideUsers: d.daily_active_users - (d.daily_active_cli_users ?? 0),
+          }))
+        : aggregated.map((d) => ({
+            day: d.day,
+            cliUsers: d.daily_active_cli_users ?? 0,
+            ideUsers: d.daily_active_users - (d.daily_active_cli_users ?? 0),
+          }));
+    }
 
     // Daily token/session/request volume from enterprise totals_by_cli
     const dailyTokens = enterpriseRecords.map((d) => {

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getAllUserMetrics } from "@/lib/db/metrics-repo";
 import { getDateRange } from "@/lib/utils";
+import { parseScopeFilter, filterByScope } from "@/lib/api/scope-filter";
 
 export async function GET(request: Request) {
   try {
@@ -8,7 +9,8 @@ export async function GET(request: Request) {
     const days = Number(searchParams.get("days") ?? 7);
     const { start, end } = getDateRange(days);
 
-    const userRecords = getAllUserMetrics(start, end);
+    const scopeFilter = parseScopeFilter(searchParams);
+    const userRecords = filterByScope(getAllUserMetrics(start, end), scopeFilter);
 
     // ── Feature breakdown from totals_by_feature ──────────────────────
     // dailyTrend: { day, [feature]: interaction_count }

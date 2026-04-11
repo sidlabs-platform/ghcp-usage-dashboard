@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDateRange, datesBetween } from "@/lib/utils";
+import { parseScopeFilter, filterByScope } from "@/lib/api/scope-filter";
 
 // ── Response shape ────────────────────────────────────────────────────
 
@@ -34,8 +35,10 @@ export async function GET(request: NextRequest) {
     const startDay = params.get("startDay") || defaultRange.start;
     const endDay = params.get("endDay") || defaultRange.end;
 
+    const scopeFilter = parseScopeFilter(params);
+
     // Use user-level data — it always has totals_by_feature
-    const userRecords = getAllUserMetrics(startDay, endDay);
+    const userRecords = filterByScope(getAllUserMetrics(startDay, endDay), scopeFilter);
 
     // Group by day
     const byDay = new Map<string, typeof userRecords>();

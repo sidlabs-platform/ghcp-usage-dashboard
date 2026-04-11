@@ -3,17 +3,11 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { cn } from "@/lib/utils";
 import { Building2, Users, ChevronDown, Search, X, Check, Shield } from "lucide-react";
+import { useScope } from "@/contexts/ScopeContext";
 
 export interface ScopeFilterProps {
-  enterpriseTeams: { slug: string; name: string; memberCount: number }[];
-  orgTeams: { slug: string; name: string; orgSlug: string; memberCount: number }[];
-  orgs: { slug: string; name: string }[];
-  selectedEnterpriseTeams: string[];
-  selectedOrgTeams: string[];
-  selectedOrgs: string[];
-  onEnterpriseTeamsChange: (slugs: string[]) => void;
-  onOrgTeamsChange: (slugs: string[]) => void;
-  onOrgsChange: (slugs: string[]) => void;
+  /** When true, only show organization filter (hide team dropdowns) */
+  orgOnly?: boolean;
 }
 
 type ScopeMode = "none" | "enterprise" | "org";
@@ -190,20 +184,22 @@ function FilterDropdown({
   );
 }
 
-export function ScopeFilter({
-  enterpriseTeams,
-  orgTeams,
-  orgs,
-  selectedEnterpriseTeams,
-  selectedOrgTeams,
-  selectedOrgs,
-  onEnterpriseTeamsChange,
-  onOrgTeamsChange,
-  onOrgsChange,
-}: ScopeFilterProps) {
+export function ScopeFilter({ orgOnly = false }: ScopeFilterProps) {
+  const {
+    filterOptions,
+    selectedEntTeams,
+    selectedOrgTeams,
+    selectedOrgs,
+    setSelectedEntTeams,
+    setSelectedOrgTeams,
+    setSelectedOrgs,
+  } = useScope();
+
+  const { enterpriseTeams, orgTeams, orgs } = filterOptions;
+
   // Determine current mode based on selections
   const mode: ScopeMode =
-    selectedEnterpriseTeams.length > 0 ? "enterprise" :
+    selectedEntTeams.length > 0 ? "enterprise" :
     (selectedOrgs.length > 0 || selectedOrgTeams.length > 0) ? "org" :
     "none";
 
@@ -219,25 +215,25 @@ export function ScopeFilter({
   }));
 
   const clearAll = () => {
-    onEnterpriseTeamsChange([]);
-    onOrgTeamsChange([]);
-    onOrgsChange([]);
+    setSelectedEntTeams([]);
+    setSelectedOrgTeams([]);
+    setSelectedOrgs([]);
   };
 
-  const hasAnyFilter = selectedEnterpriseTeams.length > 0 || selectedOrgTeams.length > 0 || selectedOrgs.length > 0;
+  const hasAnyFilter = selectedEntTeams.length > 0 || selectedOrgTeams.length > 0 || selectedOrgs.length > 0;
 
   return (
     <div className="flex flex-wrap items-center gap-3 mb-6">
-      {/* Enterprise Teams */}
-      {entItems.length > 0 && (
+      {/* Enterprise Teams — hidden in orgOnly mode */}
+      {!orgOnly && entItems.length > 0 && (
         <FilterDropdown
           label="Enterprise Team"
           icon={<Shield className="h-4 w-4 text-[hsl(var(--muted-foreground))]" />}
           items={entItems}
-          selected={selectedEnterpriseTeams}
+          selected={selectedEntTeams}
           onChange={(slugs) => {
-            onEnterpriseTeamsChange(slugs);
-            if (slugs.length > 0) { onOrgTeamsChange([]); onOrgsChange([]); }
+            setSelectedEntTeams(slugs);
+            if (slugs.length > 0) { setSelectedOrgTeams([]); setSelectedOrgs([]); }
           }}
           searchable
           placeholder="All Enterprise Teams"
@@ -246,8 +242,8 @@ export function ScopeFilter({
         />
       )}
 
-      {/* Separator */}
-      {entItems.length > 0 && (
+      {/* Separator — hidden in orgOnly mode */}
+      {!orgOnly && entItems.length > 0 && (
         <span className="text-xs text-[hsl(var(--muted-foreground))] font-medium px-1">or</span>
       )}
 
@@ -259,30 +255,32 @@ export function ScopeFilter({
           items={orgItems}
           selected={selectedOrgs}
           onChange={(slugs) => {
-            onOrgsChange(slugs);
-            if (slugs.length > 0) onEnterpriseTeamsChange([]);
+            setSelectedOrgs(slugs);
+            if (slugs.length > 0) setSelectedEntTeams([]);
           }}
           placeholder="All Organizations"
+          disabled={orgOnly ? false : orgDisabled}
+          disabledReason={orgOnly ? undefined : "Clear enterprise team filters first"}
+        />
+      )}
+
+      {/* Org Teams — hidden in orgOnly mode */}
+      {!orgOnly && (
+        <FilterDropdown
+          label="Org Team"
+          icon={<Users className="h-4 w-4 text-[hsl(var(--muted-foreground))]" />}
+          items={orgTeamItems}
+          selected={selectedOrgTeams}
+          onChange={(slugs) => {
+            setSelectedOrgTeams(slugs);
+            if (slugs.length > 0) setSelectedEntTeams([]);
+          }}
+          searchable
+          placeholder="All Org Teams"
           disabled={orgDisabled}
           disabledReason="Clear enterprise team filters first"
         />
       )}
-
-      {/* Org Teams */}
-      <FilterDropdown
-        label="Org Team"
-        icon={<Users className="h-4 w-4 text-[hsl(var(--muted-foreground))]" />}
-        items={orgTeamItems}
-        selected={selectedOrgTeams}
-        onChange={(slugs) => {
-          onOrgTeamsChange(slugs);
-          if (slugs.length > 0) onEnterpriseTeamsChange([]);
-        }}
-        searchable
-        placeholder="All Org Teams"
-        disabled={orgDisabled}
-        disabledReason="Clear enterprise team filters first"
-      />
 
       {hasAnyFilter && (
         <button
@@ -298,6 +296,7 @@ export function ScopeFilter({
       {mode !== "none" && (
         <span className="text-xs text-[hsl(var(--muted-foreground))] italic">
           Filtering by {mode === "enterprise" ? "enterprise teams" : "organization scope"}
+          {orgOnly && (selectedEntTeams.length > 0 || selectedOrgTeams.length > 0) && " (team filters ignored on this page)"}
         </span>
       )}
     </div>
