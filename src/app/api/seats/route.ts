@@ -16,13 +16,7 @@ export async function GET(request: Request) {
 
     if (hasFilter) {
       const allowedLogins = new Set(resolveFilteredUsers(selectedTeams, selectedOrgs));
-      // Also filter by org_slug when orgs are selected directly
-      const orgSet = selectedOrgs.length > 0 ? new Set(selectedOrgs) : null;
-      seats = seats.filter((s) => {
-        if (allowedLogins.has(s.user_login)) return true;
-        if (orgSet && orgSet.has(s.org_slug)) return true;
-        return false;
-      });
+      seats = seats.filter((s) => allowedLogins.has(s.user_login));
     }
 
     const utilization = stats.total > 0

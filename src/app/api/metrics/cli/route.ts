@@ -20,16 +20,16 @@ export async function GET(request: Request) {
     // When filtered, build from user-level data instead of enterprise/aggregated
     let dailyTrend;
     if (scopeFilter.hasFilter) {
-      const byDay = new Map<string, { cliLogins: Set<string>; ideLogins: Set<string> }>();
+      const byDay = new Map<string, { cliLogins: Set<string>; allLogins: Set<string> }>();
       for (const r of userRecords) {
-        const entry = byDay.get(r.day) ?? { cliLogins: new Set(), ideLogins: new Set() };
+        const entry = byDay.get(r.day) ?? { cliLogins: new Set(), allLogins: new Set() };
+        entry.allLogins.add(r.user_login);
         if (r.used_cli) entry.cliLogins.add(r.user_login);
-        else entry.ideLogins.add(r.user_login);
         byDay.set(r.day, entry);
       }
       dailyTrend = Array.from(byDay.entries())
         .sort(([a], [b]) => a.localeCompare(b))
-        .map(([day, sets]) => ({ day, cliUsers: sets.cliLogins.size, ideUsers: sets.ideLogins.size }));
+        .map(([day, sets]) => ({ day, cliUsers: sets.cliLogins.size, ideUsers: sets.allLogins.size - sets.cliLogins.size }));
     } else {
       dailyTrend = enterpriseRecords.length > 0
         ? enterpriseRecords.map((d) => ({
