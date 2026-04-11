@@ -6,6 +6,7 @@ import fs from "fs";
 
 const DB_PATH = path.join(process.cwd(), "data", "copilot-metrics.db");
 const SCHEMA_PATH = path.join(process.cwd(), "src", "lib", "db", "schema.sql");
+const GHAS_SCHEMA_PATH = path.join(process.cwd(), "src", "lib", "db", "ghas-schema.sql");
 
 let _db: Database.Database | null = null;
 
@@ -25,6 +26,10 @@ export function getDb(): Database.Database {
   // Run schema migrations
   const schema = fs.readFileSync(SCHEMA_PATH, "utf-8");
   _db.exec(schema);
+
+  // GHAS schema
+  const ghasSchema = fs.readFileSync(GHAS_SCHEMA_PATH, "utf-8");
+  _db.exec(ghasSchema);
 
   // Add columns introduced after initial schema (safe if already present)
   const migrations = [

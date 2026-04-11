@@ -16,11 +16,13 @@ import {
   ChevronRight,
   Sparkles,
   Brain,
+  ShieldCheck,
 } from "lucide-react";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 
 const navItems = [
   { href: "/dashboard", label: "Overview", icon: LayoutDashboard },
+  { href: "/dashboard/security", label: "Security", icon: ShieldCheck },
   { href: "/dashboard/code-generation", label: "Code Generation", icon: Code2 },
   { href: "/dashboard/chat-modes", label: "Copilot Features", icon: Sparkles },
   { href: "/dashboard/models", label: "Model Statistics", icon: Brain },
@@ -35,6 +37,24 @@ const navItems = [
 export function Sidebar() {
   const pathname = usePathname();
   const [collapsed, setCollapsed] = useState(false);
+  const [securityEnabled, setSecurityEnabled] = useState(true);
+
+  useEffect(() => {
+    fetch("/api/config")
+      .then((r) => r.json())
+      .then((config) => {
+        const enabled =
+          config?.metrics?.codeScanning?.enabled ||
+          config?.metrics?.dependabot?.enabled ||
+          config?.metrics?.secretScanning?.enabled;
+        setSecurityEnabled(enabled);
+      })
+      .catch(() => {}); // Default to showing if config unavailable
+  }, []);
+
+  const visibleNavItems = navItems.filter(
+    (item) => item.href !== "/dashboard/security" || securityEnabled
+  );
 
   return (
     <aside
@@ -58,7 +78,7 @@ export function Sidebar() {
 
       {/* Nav items */}
       <nav className="flex-1 space-y-1 p-3">
-        {navItems.map((item) => {
+        {visibleNavItems.map((item) => {
           const isActive =
             item.href === "/dashboard"
               ? pathname === "/dashboard"

@@ -92,4 +92,126 @@ export async function fetchNDJSON<T>(downloadUrl: string): Promise<T[]> {
     .map((line) => JSON.parse(line) as T);
 }
 
+export async function githubFetchPaginatedWithCutoff<
+  T extends { updated_at: string },
+>(
+  path: string,
+  cutoffDate: string | null = null,
+  perPage = 100,
+): Promise<T[]> {
+  const all: T[] = [];
+  let page = 1;
+  const MAX_PAGES = 500;
+
+  while (page <= MAX_PAGES) {
+    const separator = path.includes("?") ? "&" : "?";
+    const url = `${path}${separator}per_page=${perPage}&page=${page}`;
+    const fullUrl = url.startsWith("http") ? url : `${GITHUB_API_BASE}${url}`;
+    const resp = await fetch(fullUrl, { headers: headers(), cache: "no-store" });
+
+    if (!resp.ok) {
+      if (resp.status === 204) break;
+      if (resp.status === 429 || resp.status >= 500) {
+        const retryAfter = resp.headers.get("retry-after");
+        const waitMs = retryAfter
+          ? parseInt(retryAfter) * 1000
+          : Math.pow(2, page % 3) * 1000;
+        console.warn(`GitHub API ${resp.status}, retrying in ${waitMs}ms`);
+        await sleep(waitMs);
+        continue;
+      }
+      const body = await resp.text().catch(() => "");
+      throw new Error(`GitHub API error ${resp.status}: ${body}`);
+    }
+
+    const batch: T[] = await resp.json();
+    if (!batch || batch.length === 0) break;
+
+    if (cutoffDate) {
+      let foundCutoff = false;
+      for (const item of batch) {
+        if (item.updated_at >= cutoffDate) {
+          all.push(item);
+        } else {
+          foundCutoff = true;
+        }
+      }
+      if (foundCutoff) return all;
+    } else {
+      all.push(...batch);
+    }
+
+    if (batch.length < perPage) break;
+    page++;
+    if (page > 1) await sleep(200);
+  }
+
+  return all;
+}
+
+export async function githubFetchCursorPaginatedWithCutoff<
+  T extends { updated_at: string },
+>(
+  path: string,
+  cutoffDate: string | null = null,
+  perPage = 100,
+): Promise<T[]> {
+  const all: T[] = [];
+  let after: string | null = null;
+  const MAX_ITERATIONS = 500;
+
+  for (let i = 0; i < MAX_ITERATIONS; i++) {
+    const separator: string = path.includes("?") ? "&" : "?";
+    const cursorParam: string = after ? `&after=${after}` : "";
+    const url: string = `${path}${separator}per_page=${perPage}${cursorParam}`;
+    const fullUrl: string = url.startsWith("http") ? url : `${GITHUB_API_BASE}${url}`;
+    const resp: Response = await fetch(fullUrl, { headers: headers(), cache: "no-store" });
+
+    if (!resp.ok) {
+      if (resp.status === 204) break;
+      if (resp.status === 429 || resp.status >= 500) {
+        const retryAfter = resp.headers.get("retry-after");
+        const waitMs = retryAfter
+          ? parseInt(retryAfter) * 1000
+          : Math.pow(2, i % 3) * 1000;
+        console.warn(`GitHub API ${resp.status}, retrying in ${waitMs}ms`);
+        await sleep(waitMs);
+        continue;
+      }
+      const body = await resp.text().catch(() => "");
+      throw new Error(`GitHub API error ${resp.status}: ${body}`);
+    }
+
+    const batch: T[] = await resp.json();
+    if (!batch || batch.length === 0) break;
+
+    if (cutoffDate) {
+      let foundCutoff = false;
+      for (const item of batch) {
+        if (item.updated_at >= cutoffDate) {
+          all.push(item);
+        } else {
+          foundCutoff = true;
+        }
+      }
+      if (foundCutoff) return all;
+    } else {
+      all.push(...batch);
+    }
+
+    // Extract cursor from Link header: <...&after=CURSOR>; rel="next"
+    const linkHeader: string = resp.headers.get("link") || "";
+    const nextMatch: RegExpMatchArray | null = linkHeader.match(/<[^>]*[?&]after=([^&>]+)[^>]*>;\s*rel="next"/);
+    if (nextMatch) {
+      after = nextMatch[1];
+    } else {
+      break;
+    }
+
+    await sleep(200);
+  }
+
+  return all;
+}
+
 export { GITHUB_API_BASE, sleep };

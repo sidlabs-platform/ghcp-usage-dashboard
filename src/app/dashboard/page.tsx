@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback } from "react";
 import dynamic from "next/dynamic";
+import Link from "next/link";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { MetricCard } from "@/components/cards/MetricCard";
 import { ScopeFilter } from "@/components/filters/ScopeFilter";
@@ -29,7 +30,7 @@ const CLIvsIDEChart = dynamic(
   () => import("@/components/charts/CLIvsIDEChart").then(m => ({ default: m.CLIvsIDEChart })),
   { ssr: false, loading: () => <ChartSkeleton /> }
 );
-import { Users, UserCheck, Bot, Terminal, CreditCard, Activity, Eye, GitPullRequest } from "lucide-react";
+import { Users, UserCheck, Bot, Terminal, CreditCard, Activity, Eye, GitPullRequest, ShieldCheck, ShieldAlert, TrendingDown, Sparkles } from "lucide-react";
 
 interface OverviewData {
   kpis: {
@@ -68,12 +69,25 @@ export default function DashboardOverview() {
   const [selectedEntTeams, setSelectedEntTeams] = useState<string[]>([]);
   const [selectedOrgTeams, setSelectedOrgTeams] = useState<string[]>([]);
   const [selectedOrgs, setSelectedOrgs] = useState<string[]>([]);
+  const [securityData, setSecurityData] = useState<any>(null);
+  const [securityEnabled, setSecurityEnabled] = useState(false);
 
-  // Fetch filter options once
+  // Fetch filter options and config once
   useEffect(() => {
     fetch("/api/filters")
       .then((res) => res.json())
       .then((json) => { if (!json.error) setFilters(json); })
+      .catch(() => {});
+
+    fetch("/api/config")
+      .then((r) => r.json())
+      .then((config) => {
+        const enabled =
+          config?.metrics?.codeScanning?.enabled ||
+          config?.metrics?.dependabot?.enabled ||
+          config?.metrics?.secretScanning?.enabled;
+        setSecurityEnabled(enabled);
+      })
       .catch(() => {});
   }, []);
 
@@ -92,7 +106,19 @@ export default function DashboardOverview() {
       })
       .catch((err) => setError(err.message))
       .finally(() => setLoading(false));
-  }, [days, selectedEntTeams, selectedOrgTeams, selectedOrgs]);
+
+    // Fetch security overview separately so failures don't break the main dashboard
+    if (securityEnabled) {
+      try {
+        fetch(`/api/security/overview?days=${days}`)
+          .then((res) => { if (res.ok) return res.json(); })
+          .then((json) => { if (json) setSecurityData(json); })
+          .catch(() => { /* Security metrics may not be available */ });
+      } catch { /* Security metrics may not be available */ }
+    } else {
+      setSecurityData(null);
+    }
+  }, [days, selectedEntTeams, selectedOrgTeams, selectedOrgs, securityEnabled]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
@@ -244,6 +270,43 @@ export default function DashboardOverview() {
           <CLIvsIDEChart data={cliVsIde} />
         </div>
       </div>
+
+      {/* Security Summary */}
+      {securityData?.summary && (
+        <section className="space-y-4 mt-8">
+          <h2 className="text-lg font-semibold flex items-center gap-2">
+            <ShieldCheck className="h-5 w-5" /> Security Overview
+          </h2>
+          <div className="grid gap-4 grid-cols-2 lg:grid-cols-4">
+            <MetricCard
+              title="Open Alerts"
+              value={securityData.summary.totalOpenAlerts}
+              icon={<ShieldAlert className="h-4 w-4" />}
+              subtitle={`${securityData.summary.criticalAlerts} critical`}
+            />
+            <MetricCard
+              title="Fix Rate"
+              value={securityData.summary.overallFixRate}
+              format="percent"
+              icon={<TrendingDown className="h-4 w-4" />}
+              subtitle={`${securityData.summary.fixedLast30d} fixed last 30d`}
+            />
+            <MetricCard
+              title="Autofix Adoption"
+              value={securityData.summary.autofixAdoptionRate}
+              format="percent"
+              icon={<Sparkles className="h-4 w-4" />}
+              subtitle="Copilot Autofix"
+            />
+            <Link
+              href="/dashboard/security"
+              className="flex items-center justify-center rounded-xl border border-dashed border-[hsl(var(--border))] p-6 text-sm text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--accent))] hover:text-[hsl(var(--foreground))] transition-colors"
+            >
+              View Full Security Dashboard →
+            </Link>
+          </div>
+        </section>
+      )}
     </div>
   );
 }

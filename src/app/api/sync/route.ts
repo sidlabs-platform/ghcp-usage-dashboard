@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { fullSync } from "@/lib/db/sync-service";
+import { fullGhasSync } from "@/lib/db/ghas-sync-service";
 import { getSyncStatus, acquireSyncLock, releaseSyncLock, isSyncLocked, clearEmptySyncEntries } from "@/lib/db/metrics-repo";
+import { isMetricEnabled } from "@/lib/config/dashboard-config";
 
 export async function POST(request: Request) {
   const { searchParams } = new URL(request.url);
@@ -25,14 +27,26 @@ export async function POST(request: Request) {
   const syncPromise = fullSync((progress) => {
     console.log(`[Sync] ${progress.message}`);
   })
-    .then((result) => {
-      console.log("[Sync] Complete:", JSON.stringify({
+    .then(async (result) => {
+      console.log("[Sync] Copilot sync complete:", JSON.stringify({
         daysSynced: result.backfill.daysSynced,
         daysSkipped: result.backfill.daysSkipped,
         errors: result.backfill.errors,
         seatsSynced: result.seats,
         teamsSynced: result.teams,
       }));
+
+      // Run GHAS sync if any security metrics are enabled
+      const ghasEnabled = isMetricEnabled("codeScanning") || isMetricEnabled("dependabot") || isMetricEnabled("secretScanning");
+      if (ghasEnabled) {
+        try {
+          console.log("[Sync] Starting GHAS sync...");
+          const ghasResult = await fullGhasSync((p) => console.log(`[GHAS Sync] ${p.message}`));
+          console.log("[Sync] GHAS sync complete:", JSON.stringify(ghasResult));
+        } catch (err) {
+          console.error("[Sync] GHAS sync failed:", err);
+        }
+      }
     })
     .catch((err) => {
       console.error("[Sync] Failed:", err);

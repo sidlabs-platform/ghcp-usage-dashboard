@@ -1,0 +1,20 @@
+{
+  "metrics": {
+    "copilot": {
+      "enabled": true
+    },
+    "codeScanning": {
+      "enabled": true
+    },
+    "dependabot": {
+      "enabled": true
+    },
+    "secretScanning": {
+      "enabled": true
+    }
+  },
+  "security": {
+    "syncIntervalMinutes": 60,
+    "backfillDays": 90
+  }
+}
