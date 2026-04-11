@@ -17,6 +17,8 @@ const CLITokenChart = dynamic(
   { ssr: false, loading: () => <ChartSkeleton /> }
 );
 import { Terminal, Activity, Zap, Hash } from "lucide-react";
+import { useTableSort } from "@/hooks/useTableSort";
+import { SortableHeader } from "@/components/tables/SortableHeader";
 
 interface DailyTrendDay {
   day: string;
@@ -102,6 +104,9 @@ export default function CLIPage() {
     avgPerRequest: d.avgPerRequest,
   }));
 
+  type CLISortField = "login" | "sessions" | "requests" | "promptTokens" | "outputTokens" | "days";
+  const { sortedData: sortedCliUsers, sortField: cliSortField, sortAsc: cliSortAsc, handleSort: handleCliSort } = useTableSort<CLIUser, CLISortField>(data.topCliUsers, "sessions");
+
   return (
     <div>
       <PageHeader
@@ -158,16 +163,16 @@ export default function CLIPage() {
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b text-left text-[hsl(var(--muted-foreground))]">
-                    <th className="pb-3 pr-4 font-medium">User</th>
-                    <th className="pb-3 pr-4 font-medium text-right">Sessions</th>
-                    <th className="pb-3 pr-4 font-medium text-right">Requests</th>
-                    <th className="pb-3 pr-4 font-medium text-right">Prompt Tokens</th>
-                    <th className="pb-3 pr-4 font-medium text-right">Output Tokens</th>
-                    <th className="pb-3 font-medium text-right">Active Days</th>
+                    <SortableHeader label="User" field={"login" as CLISortField} sortField={cliSortField} sortAsc={cliSortAsc} onSort={handleCliSort} />
+                    <SortableHeader label="Sessions" field={"sessions" as CLISortField} sortField={cliSortField} sortAsc={cliSortAsc} onSort={handleCliSort} align="right" />
+                    <SortableHeader label="Requests" field={"requests" as CLISortField} sortField={cliSortField} sortAsc={cliSortAsc} onSort={handleCliSort} align="right" />
+                    <SortableHeader label="Prompt Tokens" field={"promptTokens" as CLISortField} sortField={cliSortField} sortAsc={cliSortAsc} onSort={handleCliSort} align="right" />
+                    <SortableHeader label="Output Tokens" field={"outputTokens" as CLISortField} sortField={cliSortField} sortAsc={cliSortAsc} onSort={handleCliSort} align="right" />
+                    <SortableHeader label="Active Days" field={"days" as CLISortField} sortField={cliSortField} sortAsc={cliSortAsc} onSort={handleCliSort} align="right" last />
                   </tr>
                 </thead>
                 <tbody>
-                  {data.topCliUsers.map((user) => (
+                  {sortedCliUsers.map((user) => (
                     <tr key={user.login} className="border-b last:border-0">
                       <td className="py-3 pr-4 font-medium">{user.login}</td>
                       <td className="py-3 pr-4 text-right">{user.sessions.toLocaleString()}</td>

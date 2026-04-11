@@ -6,6 +6,8 @@ import { MetricCard } from "@/components/cards/MetricCard";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { CreditCard, UserCheck, UserX, Percent } from "lucide-react";
+import { useTableSort } from "@/hooks/useTableSort";
+import { SortableHeader } from "@/components/tables/SortableHeader";
 
 interface SeatRow {
   org_slug: string;
@@ -91,6 +93,17 @@ export default function SeatsPage() {
     ? data.seats.filter((s) => !s.last_activity_at || s.last_activity_at < cutoff)
     : data.seats;
 
+  // Enrich seats with a sortable status rank: Active=0, Pending Cancel=1, Inactive=2
+  const enrichedSeats = displayedSeats.map((s) => {
+    const isActive = s.last_activity_at && s.last_activity_at >= cutoff;
+    const isPending = !!s.pending_cancellation_date;
+    const statusRank = isPending ? 1 : isActive ? 0 : 2;
+    return { ...s, statusRank, _lastActivity: s.last_activity_at };
+  });
+
+  type SeatSortField = "user_login" | "org_slug" | "plan_type" | "_lastActivity" | "last_activity_editor" | "statusRank";
+  const { sortedData: sortedSeats, sortField: seatSortField, sortAsc: seatSortAsc, handleSort: handleSeatSort } = useTableSort(enrichedSeats, "_lastActivity" as SeatSortField);
+
   return (
     <div>
       <PageHeader
@@ -148,16 +161,16 @@ export default function SeatsPage() {
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b text-left text-[hsl(var(--muted-foreground))]">
-                    <th className="pb-3 pr-4 font-medium">User</th>
-                    <th className="pb-3 pr-4 font-medium">Org</th>
-                    <th className="pb-3 pr-4 font-medium">Plan</th>
-                    <th className="pb-3 pr-4 font-medium">Last Activity</th>
-                    <th className="pb-3 pr-4 font-medium">Editor</th>
-                    <th className="pb-3 font-medium">Status</th>
+                    <SortableHeader label="User" field={"user_login" as SeatSortField} sortField={seatSortField} sortAsc={seatSortAsc} onSort={handleSeatSort} />
+                    <SortableHeader label="Org" field={"org_slug" as SeatSortField} sortField={seatSortField} sortAsc={seatSortAsc} onSort={handleSeatSort} />
+                    <SortableHeader label="Plan" field={"plan_type" as SeatSortField} sortField={seatSortField} sortAsc={seatSortAsc} onSort={handleSeatSort} />
+                    <SortableHeader label="Last Activity" field={"_lastActivity" as SeatSortField} sortField={seatSortField} sortAsc={seatSortAsc} onSort={handleSeatSort} />
+                    <SortableHeader label="Editor" field={"last_activity_editor" as SeatSortField} sortField={seatSortField} sortAsc={seatSortAsc} onSort={handleSeatSort} />
+                    <SortableHeader label="Status" field={"statusRank" as SeatSortField} sortField={seatSortField} sortAsc={seatSortAsc} onSort={handleSeatSort} last />
                   </tr>
                 </thead>
                 <tbody>
-                  {displayedSeats.map((seat) => {
+                  {sortedSeats.map((seat) => {
                     const isActive = seat.last_activity_at && seat.last_activity_at >= cutoff;
                     const isPending = !!seat.pending_cancellation_date;
                     return (

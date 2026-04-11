@@ -8,6 +8,8 @@ import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { CHART_COLORS, FEATURE_LABELS } from "@/lib/constants";
 import { formatNumber } from "@/lib/utils";
 import { Sparkles, Bot, MessageSquare, Terminal } from "lucide-react";
+import { useTableSort } from "@/hooks/useTableSort";
+import { SortableHeader } from "@/components/tables/SortableHeader";
 import {
   BarChart,
   Bar,
@@ -138,6 +140,9 @@ export default function CopilotFeaturesPage() {
   }
 
   const { kpis, featureDistribution, adoptionTrend, dailyTrend } = data;
+
+  type FeatureSortField = "feature" | "interactions" | "codeGen" | "codeAccept" | "locAdded";
+  const { sortedData: sortedFeatures, sortField: featureSortField, sortAsc: featureSortAsc, handleSort: handleFeatureSort } = useTableSort<FeatureRow, FeatureSortField>(featureDistribution, "interactions");
 
   // Bar chart data (horizontal): top 10 features by interactions+codeGen
   const barData = featureDistribution.slice(0, 10).map((f) => ({
@@ -326,15 +331,15 @@ export default function CopilotFeaturesPage() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b text-left text-[hsl(var(--muted-foreground))]">
-                  <th className="pb-3 pr-4 font-medium">Feature</th>
-                  <th className="pb-3 pr-4 font-medium text-right">Interactions</th>
-                  <th className="pb-3 pr-4 font-medium text-right">Code Generations</th>
-                  <th className="pb-3 pr-4 font-medium text-right">Acceptances</th>
-                  <th className="pb-3 font-medium text-right">LoC Added</th>
+                  <SortableHeader label="Feature" field={"feature" as FeatureSortField} sortField={featureSortField} sortAsc={featureSortAsc} onSort={handleFeatureSort} />
+                  <SortableHeader label="Interactions" field={"interactions" as FeatureSortField} sortField={featureSortField} sortAsc={featureSortAsc} onSort={handleFeatureSort} align="right" />
+                  <SortableHeader label="Code Generations" field={"codeGen" as FeatureSortField} sortField={featureSortField} sortAsc={featureSortAsc} onSort={handleFeatureSort} align="right" />
+                  <SortableHeader label="Acceptances" field={"codeAccept" as FeatureSortField} sortField={featureSortField} sortAsc={featureSortAsc} onSort={handleFeatureSort} align="right" />
+                  <SortableHeader label="LoC Added" field={"locAdded" as FeatureSortField} sortField={featureSortField} sortAsc={featureSortAsc} onSort={handleFeatureSort} align="right" last />
                 </tr>
               </thead>
               <tbody>
-                {featureDistribution.map((f) => (
+                {sortedFeatures.map((f) => (
                   <tr key={f.feature} className="border-b last:border-0">
                     <td className="py-2.5 pr-4 font-medium">{featureLabel(f.feature)}</td>
                     <td className="py-2.5 pr-4 text-right tabular-nums">{formatNumber(f.interactions)}</td>

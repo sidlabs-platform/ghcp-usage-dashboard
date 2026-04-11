@@ -8,6 +8,8 @@ import { ScopeFilter } from "@/components/filters/ScopeFilter";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Users, Code2, Activity, Search, Eye, Bot } from "lucide-react";
+import { useTableSort } from "@/hooks/useTableSort";
+import { SortableHeader } from "@/components/tables/SortableHeader";
 
 interface UserRow {
   login: string;
@@ -104,6 +106,9 @@ export default function UsersPage() {
     u.login.toLowerCase().includes(search.toLowerCase())
   );
 
+  type UserSortField = "login" | "activeDays" | "locAdded" | "interactions" | "acceptanceRate";
+  const { sortedData: sortedUsers, sortField, sortAsc, handleSort } = useTableSort<UserRow, UserSortField>(filtered, "activeDays");
+
   const totalLocAdded = users.reduce((s, u) => s + u.locAdded, 0);
   const totalInteractions = users.reduce((s, u) => s + u.interactions, 0);
   const agentUserCount = users.filter((u) => u.usedAgent).length;
@@ -193,16 +198,16 @@ export default function UsersPage() {
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b text-left text-[hsl(var(--muted-foreground))]">
-                    <th className="pb-3 pr-4 font-medium">User</th>
-                    <th className="pb-3 pr-4 font-medium text-right">Active Days</th>
-                    <th className="pb-3 pr-4 font-medium text-right">LoC Added</th>
-                    <th className="pb-3 pr-4 font-medium text-right">Interactions</th>
-                    <th className="pb-3 pr-4 font-medium text-right">Accept %</th>
+                    <SortableHeader label="User" field={"login" as UserSortField} sortField={sortField} sortAsc={sortAsc} onSort={handleSort} />
+                    <SortableHeader label="Active Days" field={"activeDays" as UserSortField} sortField={sortField} sortAsc={sortAsc} onSort={handleSort} align="right" />
+                    <SortableHeader label="LoC Added" field={"locAdded" as UserSortField} sortField={sortField} sortAsc={sortAsc} onSort={handleSort} align="right" />
+                    <SortableHeader label="Interactions" field={"interactions" as UserSortField} sortField={sortField} sortAsc={sortAsc} onSort={handleSort} align="right" />
+                    <SortableHeader label="Accept %" field={"acceptanceRate" as UserSortField} sortField={sortField} sortAsc={sortAsc} onSort={handleSort} align="right" />
                     <th className="pb-3 font-medium">Features</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {filtered.map((user) => (
+                  {sortedUsers.map((user) => (
                     <tr key={user.login} className="border-b last:border-0">
                       <td className="py-3 pr-4 font-medium">{user.login}</td>
                       <td className="py-3 pr-4 text-right">{user.activeDays}</td>

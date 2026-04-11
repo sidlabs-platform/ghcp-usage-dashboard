@@ -8,6 +8,8 @@ import { ScopeFilter } from "@/components/filters/ScopeFilter";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Users, UserCheck, Bot, Code2, MessageSquare, Terminal } from "lucide-react";
+import { useTableSort } from "@/hooks/useTableSort";
+import { SortableHeader } from "@/components/tables/SortableHeader";
 
 interface TeamSummary {
   teamSlug: string;
@@ -38,8 +40,6 @@ export default function TeamsPage() {
   const [teams, setTeams] = useState<TeamSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [sortField, setSortField] = useState<SortField>("totalMembers");
-  const [sortAsc, setSortAsc] = useState(false);
   const [filters, setFilters] = useState<FilterOptions>({ enterpriseTeams: [], orgTeams: [], orgs: [] });
   const [selectedEntTeams, setSelectedEntTeams] = useState<string[]>([]);
   const [selectedOrgTeams, setSelectedOrgTeams] = useState<string[]>([]);
@@ -80,26 +80,7 @@ export default function TeamsPage() {
 
   useEffect(() => { fetchTeams(); }, [fetchTeams]);
 
-  const handleSort = (field: SortField) => {
-    if (sortField === field) {
-      setSortAsc(!sortAsc);
-    } else {
-      setSortField(field);
-      setSortAsc(false);
-    }
-  };
-
-  const sortedTeams = [...teams].sort((a, b) => {
-    const aVal = a[sortField];
-    const bVal = b[sortField];
-    if (typeof aVal === "string" && typeof bVal === "string") {
-      return sortAsc ? aVal.localeCompare(bVal) : bVal.localeCompare(aVal);
-    }
-    return sortAsc ? (aVal as number) - (bVal as number) : (bVal as number) - (aVal as number);
-  });
-
-  const sortIndicator = (field: SortField) =>
-    sortField === field ? (sortAsc ? " ↑" : " ↓") : "";
+  const { sortedData: sortedTeams, sortField, sortAsc, handleSort } = useTableSort<TeamSummary, SortField>(teams, "totalMembers");
 
   if (loading && teams.length === 0) {
     return (
@@ -206,30 +187,14 @@ export default function TeamsPage() {
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b text-left text-[hsl(var(--muted-foreground))]">
-                    <th className="pb-3 pr-4 font-medium cursor-pointer" onClick={() => handleSort("teamName")}>
-                      Team{sortIndicator("teamName")}
-                    </th>
-                    <th className="pb-3 pr-4 font-medium text-right cursor-pointer" onClick={() => handleSort("totalMembers")}>
-                      Members{sortIndicator("totalMembers")}
-                    </th>
-                    <th className="pb-3 pr-4 font-medium text-right cursor-pointer" onClick={() => handleSort("avgDailyActiveUsers")}>
-                      Active Users{sortIndicator("avgDailyActiveUsers")}
-                    </th>
-                    <th className="pb-3 pr-4 font-medium text-right cursor-pointer" onClick={() => handleSort("totalLocAdded")}>
-                      LoC Added{sortIndicator("totalLocAdded")}
-                    </th>
-                    <th className="pb-3 pr-4 font-medium text-right cursor-pointer" onClick={() => handleSort("overallAcceptanceRate")}>
-                      Acceptance %{sortIndicator("overallAcceptanceRate")}
-                    </th>
-                    <th className="pb-3 pr-4 font-medium text-right cursor-pointer" onClick={() => handleSort("agentAdoptionRate")}>
-                      Agent{sortIndicator("agentAdoptionRate")}
-                    </th>
-                    <th className="pb-3 pr-4 font-medium text-right cursor-pointer" onClick={() => handleSort("chatAdoptionRate")}>
-                      Chat{sortIndicator("chatAdoptionRate")}
-                    </th>
-                    <th className="pb-3 font-medium text-right cursor-pointer" onClick={() => handleSort("cliAdoptionRate")}>
-                      CLI{sortIndicator("cliAdoptionRate")}
-                    </th>
+                    <SortableHeader label="Team" field="teamName" sortField={sortField} sortAsc={sortAsc} onSort={handleSort} />
+                    <SortableHeader label="Members" field="totalMembers" sortField={sortField} sortAsc={sortAsc} onSort={handleSort} align="right" />
+                    <SortableHeader label="Active Users" field="avgDailyActiveUsers" sortField={sortField} sortAsc={sortAsc} onSort={handleSort} align="right" />
+                    <SortableHeader label="LoC Added" field="totalLocAdded" sortField={sortField} sortAsc={sortAsc} onSort={handleSort} align="right" />
+                    <SortableHeader label="Acceptance %" field="overallAcceptanceRate" sortField={sortField} sortAsc={sortAsc} onSort={handleSort} align="right" />
+                    <SortableHeader label="Agent" field="agentAdoptionRate" sortField={sortField} sortAsc={sortAsc} onSort={handleSort} align="right" />
+                    <SortableHeader label="Chat" field="chatAdoptionRate" sortField={sortField} sortAsc={sortAsc} onSort={handleSort} align="right" />
+                    <SortableHeader label="CLI" field="cliAdoptionRate" sortField={sortField} sortAsc={sortAsc} onSort={handleSort} align="right" last />
                   </tr>
                 </thead>
                 <tbody>
