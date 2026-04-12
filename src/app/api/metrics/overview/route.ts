@@ -5,8 +5,11 @@ import { resolveFilteredUsers } from "@/lib/db/teams-repo";
 import { getChatModeSums, getAdoptionStats } from "@/lib/db/aggregation-queries";
 import { getDateRange } from "@/lib/utils";
 import { extractCompletionMetrics, extractAgentMetrics } from "@/lib/aggregation/separate-metrics";
+import { withCache } from "@/lib/cache/with-cache";
+import { withTimeout } from "@/lib/api/timeout";
+import { CACHE_TTL } from "@/lib/cache/memory-cache";
 
-export async function GET(request: NextRequest) {
+async function handler(request: NextRequest) {
   try {
     const params = request.nextUrl.searchParams;
     const days = parseInt(params.get("days") || "7", 10);
@@ -248,3 +251,5 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }
+
+export const GET = withTimeout(withCache(handler, CACHE_TTL.MEDIUM));

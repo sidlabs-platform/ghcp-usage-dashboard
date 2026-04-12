@@ -11,6 +11,9 @@
     },
     "secretScanning": {
       "enabled": true
+    },
+    "billing": {
+      "enabled": false
     }
   },
   "security": {

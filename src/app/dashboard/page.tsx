@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { PageHeader } from "@/components/layout/PageHeader";
@@ -10,6 +10,7 @@ import { ChartSkeleton } from "@/components/states/ChartSkeleton";
 import { useDateRange } from "@/contexts/DateRangeContext";
 import { useScope } from "@/contexts/ScopeContext";
 import { CHART_COLORS } from "@/lib/constants";
+import { ExportMenu } from "@/components/ui/ExportMenu";
 
 const ActiveUsersTrendChart = dynamic(
   () => import("@/components/charts/ActiveUsersTrendChart").then(m => ({ default: m.ActiveUsersTrendChart })),
@@ -149,6 +150,10 @@ export default function DashboardOverview() {
   const { kpis, activeUsersTrend, acceptanceRateTrend, chatModes, featureUsage, cliVsIde } = data;
   const isFiltered = data.filtered || hasFilter;
 
+  const kpiRef = useRef<HTMLDivElement>(null);
+  const chartsRef = useRef<HTMLDivElement>(null);
+  const securityRef = useRef<HTMLDivElement>(null);
+
   const chatModeDonutData = [
     { name: "Ask", value: chatModes.ask, color: CHART_COLORS.ask },
     { name: "Edit", value: chatModes.edit, color: CHART_COLORS.edit },
@@ -162,12 +167,27 @@ export default function DashboardOverview() {
       <PageHeader
         title="Executive Overview"
         description={`GitHub Copilot usage metrics — ${data.daysLoaded} days loaded (as of ${data.dataAsOf})`}
-      />
+      >
+        <ExportMenu
+          pdf={{
+            sectionRefs: [kpiRef, chartsRef, ...(securityData?.summary ? [securityRef] : [])],
+            title: "Executive Overview",
+            filename: `overview-report-${days}d`,
+            metadata: {
+              reportName: "Executive Overview",
+              dateRange: `Last ${days} days`,
+              teams: buildScopeParams().get("teams") || undefined,
+              orgs: buildScopeParams().get("orgs") || undefined,
+            },
+          }}
+          isReady={!!data}
+        />
+      </PageHeader>
 
       <ScopeFilter />
 
       {/* KPI Cards */}
-      <div className={`grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4 ${isFiltered ? "xl:grid-cols-7" : "xl:grid-cols-8"} mb-8`}>
+      <div ref={kpiRef} className={`grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4 ${isFiltered ? "xl:grid-cols-7" : "xl:grid-cols-8"} mb-8`}>
         <MetricCard
           title="Daily Active Users"
           value={kpis.dailyActiveUsers}
@@ -227,7 +247,7 @@ export default function DashboardOverview() {
       </div>
 
       {/* Charts grid */}
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+      <div ref={chartsRef} className="grid grid-cols-1 gap-6 lg:grid-cols-2">
         <ActiveUsersTrendChart data={activeUsersTrend} />
         <AcceptanceRateChart data={acceptanceRateTrend} />
         <ChatModeDonutChart data={chatModeDonutData} />
@@ -239,7 +259,7 @@ export default function DashboardOverview() {
 
       {/* Security Summary */}
       {securityData?.summary && (
-        <section className="space-y-4 mt-8">
+        <section ref={securityRef} className="space-y-4 mt-8">
           <h2 className="text-lg font-semibold flex items-center gap-2">
             <ShieldCheck className="h-5 w-5" /> Security Overview
           </h2>

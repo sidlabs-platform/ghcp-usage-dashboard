@@ -4,19 +4,25 @@
 import { metricsClient } from "@/lib/github/metrics-client";
 import { seatsClient } from "@/lib/github/seats-client";
 import { teamsClient } from "@/lib/github/teams-client";
+import pLimit from "p-limit";
 import {
   upsertEnterpriseDayMetrics,
   upsertOrgDayMetrics,
   upsertUserDayMetrics,
+  batchUpsertUserDayMetrics,
   recordSync,
   isSynced,
   getLatestSyncDay,
   hasEnterpriseDataForRange,
   hasOrgDataForRange,
+  heartbeatSyncLock,
 } from "./metrics-repo";
 import { upsertSeats } from "./seats-repo";
+import { refreshAllSummaries } from "./summary-tables";
+import { cache } from "@/lib/cache/memory-cache";
 import { upsertAllTeams } from "./teams-repo";
 import { datesBetween } from "@/lib/utils";
+import { syncBilling } from "./billing-sync-service";
 
 const BACKFILL_DAYS = parseInt(process.env.BACKFILL_DAYS || "90", 10);
 
@@ -72,9 +78,7 @@ export async function syncDay(
     onProgress?.({ phase: "users", day, current: 0, total: 1, message: `Fetching user metrics for ${day}` });
     try {
       const users = await metricsClient.getEnterpriseUserDailyReport(enterprise, day);
-      for (const user of users) {
-        upsertUserDayMetrics(user);
-      }
+      batchUpsertUserDayMetrics(users);
       result.users = users.length;
       recordSync("users", enterprise, day, users.length);
     } catch (err) {
@@ -84,8 +88,9 @@ export async function syncDay(
     }
   }
 
-  // 3. Organization aggregates
-  for (const org of orgs) {
+  // 3. Organization aggregates (parallel with concurrency limit)
+  const orgLimit = pLimit(5);
+  await Promise.all(orgs.map((org) => orgLimit(async () => {
     if (!isSynced("org", org, day)) {
       onProgress?.({ phase: "org", day, current: 0, total: orgs.length, message: `Fetching org ${org} metrics for ${day}` });
       try {
@@ -101,7 +106,7 @@ export async function syncDay(
         console.error(`Failed to sync org ${org} data for ${day}:`, msg);
       }
     }
-  }
+  })));
 
   return result;
 }
@@ -130,13 +135,11 @@ export async function backfill(
   let daysSkipped = 0;
   let errors = 0;
 
-  for (let i = 0; i < allDays.length; i++) {
-    const day = allDays[i];
-
-    // Skip if already synced
+  const dayLimit = pLimit(3);
+  const dayPromises = allDays.map((day, i) => dayLimit(async () => {
     if (isSynced("enterprise", enterprise, day) && isSynced("users", enterprise, day)) {
       daysSkipped++;
-      continue;
+      return;
     }
 
     onProgress?.({
@@ -154,12 +157,9 @@ export async function backfill(
       errors++;
       console.error(`Error syncing ${day}:`, err);
     }
+  }));
 
-    // Rate limit courtesy: 500ms delay between days (API handles it well)
-    if (i < allDays.length - 1) {
-      await new Promise((r) => setTimeout(r, 500));
-    }
-  }
+  await Promise.all(dayPromises);
 
   return { daysSynced, daysSkipped, errors };
 }
@@ -282,15 +282,47 @@ export async function fullSync(
 }> {
   onProgress?.({ phase: "teams", current: 0, total: 1, message: "Syncing team memberships..." });
   const teams = await syncTeams();
+  heartbeatSyncLock();
 
   onProgress?.({ phase: "seats", current: 0, total: 1, message: "Syncing seat data..." });
   const seats = await syncSeats();
+  heartbeatSyncLock();
 
   onProgress?.({ phase: "backfill", current: 0, total: 1, message: "Starting metrics backfill..." });
   const bf = await backfill(undefined, onProgress);
+  heartbeatSyncLock();
 
   // Try 28-day reports as fallback when per-day enterprise/org data is empty
   await sync28DayFallback(onProgress);
+
+  // Refresh pre-aggregated summary tables
+  onProgress?.({ phase: "summaries", current: 0, total: 1, message: "Refreshing summary tables..." });
+  const BACKFILL_RANGE = parseInt(process.env.BACKFILL_DAYS || "90", 10);
+  const summaryEnd = new Date();
+  summaryEnd.setDate(summaryEnd.getDate() - 1);
+  const summaryStart = new Date(summaryEnd);
+  summaryStart.setDate(summaryStart.getDate() - BACKFILL_RANGE + 1);
+  try {
+    refreshAllSummaries(
+      summaryStart.toISOString().split("T")[0],
+      summaryEnd.toISOString().split("T")[0],
+    );
+  } catch (err) {
+    console.error("[Sync] Failed to refresh summary tables:", err);
+  }
+
+  // Sync billing reports (if enabled)
+  onProgress?.({ phase: "billing", current: 0, total: 1, message: "Syncing billing reports..." });
+  try {
+    await syncBilling((p) => {
+      onProgress?.({ phase: "billing", current: p.current, total: p.total, message: p.message });
+    });
+  } catch (err) {
+    console.error("[Sync] Billing sync failed:", err);
+  }
+
+  // Invalidate in-memory cache so fresh data is served
+  cache.invalidateAll();
 
   return { backfill: bf, seats, teams };
 }

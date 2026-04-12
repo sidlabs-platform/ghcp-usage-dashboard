@@ -2,6 +2,7 @@
 
 import { Sun, Moon, RefreshCw, CheckCircle2 } from "lucide-react";
 import { useEffect, useState, useCallback } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { DATE_PRESETS } from "@/lib/constants";
@@ -9,6 +10,7 @@ import { useDateRange } from "@/contexts/DateRangeContext";
 import { cn } from "@/lib/utils";
 
 export function Header() {
+  const queryClient = useQueryClient();
   const [dark, setDark] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [syncStatus, setSyncStatus] = useState<string | null>(null);
@@ -47,8 +49,8 @@ export function Header() {
           setSyncing(false);
           const total = data.status?.reduce((s: number, r: { days_synced: number }) => s + r.days_synced, 0) || 0;
           setSyncStatus(`${total} days synced`);
-          // Reload page to show new data
-          window.location.reload();
+          // Invalidate all queries to refresh data
+          queryClient.invalidateQueries();
         } else {
           const total = data.status?.reduce((s: number, r: { days_synced: number }) => s + r.days_synced, 0) || 0;
           setSyncStatus(`Syncing... ${total} days`);
@@ -56,7 +58,7 @@ export function Header() {
       } catch {
         // ignore polling errors
       }
-    }, 30000);
+    }, 60000);
     return () => clearInterval(interval);
   }, []);
 

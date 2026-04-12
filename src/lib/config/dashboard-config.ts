@@ -18,6 +18,7 @@ export interface DashboardConfig {
     codeScanning: MetricConfig;
     dependabot: MetricConfig;
     secretScanning: MetricConfig;
+    billing: MetricConfig;
   };
   security: SecurityConfig;
 }
@@ -26,7 +27,8 @@ export type MetricCategory =
   | "copilot"
   | "codeScanning"
   | "dependabot"
-  | "secretScanning";
+  | "secretScanning"
+  | "billing";
 
 // --- Defaults ---
 
@@ -36,6 +38,7 @@ const DEFAULT_CONFIG: DashboardConfig = {
     codeScanning: { enabled: true },
     dependabot: { enabled: true },
     secretScanning: { enabled: true },
+    billing: { enabled: false },
   },
   security: {
     syncIntervalMinutes: 60,

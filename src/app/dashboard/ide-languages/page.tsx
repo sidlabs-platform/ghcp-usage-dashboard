@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { useDateRange } from "@/contexts/DateRangeContext";
 import { useScope } from "@/contexts/ScopeContext";
@@ -24,6 +24,7 @@ import {
 } from "recharts";
 import { CHART_COLORS } from "@/lib/constants";
 import { Monitor, Code2, Languages, TrendingUp } from "lucide-react";
+import { ExportMenu } from "@/components/ui/ExportMenu";
 
 interface IDEEntry {
   name: string;
@@ -132,6 +133,10 @@ export default function IDELanguagesPage() {
   const topIDE = data.ideDistribution.length > 0 ? data.ideDistribution[0].name : "N/A";
   const topLanguage = data.languageDistribution.length > 0 ? data.languageDistribution[0].name : "N/A";
 
+  const kpiRef = useRef<HTMLDivElement>(null);
+  const chartsRef = useRef<HTMLDivElement>(null);
+  const trendRef = useRef<HTMLDivElement>(null);
+
   // Donut data for IDE distribution by interactions
   const ideDonutData = data.ideDistribution.map((ide) => ({
     name: ide.name,
@@ -146,11 +151,26 @@ export default function IDELanguagesPage() {
       <PageHeader
         title="IDE & Languages"
         description="Editor and programming language usage breakdown"
-      />
+      >
+        <ExportMenu
+          pdf={{
+            sectionRefs: [kpiRef, chartsRef, trendRef],
+            title: "IDE & Languages",
+            filename: `ide-languages-report-${days}d`,
+            metadata: {
+              reportName: "IDE & Languages",
+              dateRange: `Last ${days} days`,
+              teams: buildScopeParams().get("teams") || undefined,
+              orgs: buildScopeParams().get("orgs") || undefined,
+            },
+          }}
+          isReady={!!data}
+        />
+      </PageHeader>
 
       <ScopeFilter />
 
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4 mb-8">
+      <div ref={kpiRef} className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4 mb-8">
         <MetricCard
           title="IDEs Used"
           value={totalIDEs}
@@ -177,7 +197,7 @@ export default function IDELanguagesPage() {
         />
       </div>
 
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2 mb-6">
+      <div ref={chartsRef} className="grid grid-cols-1 gap-6 lg:grid-cols-2 mb-6">
         {/* IDE Donut Chart */}
         <Card>
           <CardHeader>
@@ -261,7 +281,7 @@ export default function IDELanguagesPage() {
       </div>
 
       {/* IDE Trend Chart */}
-      <Card>
+      <Card ref={trendRef}>
         <CardHeader>
           <CardTitle>IDE Usage Trend</CardTitle>
         </CardHeader>

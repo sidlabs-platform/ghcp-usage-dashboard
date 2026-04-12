@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import dynamic from "next/dynamic";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { MetricCard } from "@/components/cards/MetricCard";
@@ -9,6 +9,7 @@ import { ChartSkeleton } from "@/components/states/ChartSkeleton";
 import { useDateRange } from "@/contexts/DateRangeContext";
 import { useScope } from "@/contexts/ScopeContext";
 import { ShieldCheck, ShieldAlert, Bug, Key, Sparkles, TrendingDown } from "lucide-react";
+import { ExportMenu } from "@/components/ui/ExportMenu";
 
 const SecurityTrendChart = dynamic(
   () => import("@/components/charts/SecurityTrendChart").then(m => ({ default: m.SecurityTrendChart })),
@@ -142,9 +143,28 @@ export default function SecurityPage() {
 
   const summary = overview?.summary;
 
+  const kpiRef = useRef<HTMLDivElement>(null);
+  const csRef = useRef<HTMLElement>(null);
+  const depRef = useRef<HTMLElement>(null);
+  const ssRef = useRef<HTMLElement>(null);
+
   return (
     <div className="space-y-8">
-      <PageHeader title="Security" description="GitHub Advanced Security metrics across your organization" />
+      <PageHeader title="Security" description="GitHub Advanced Security metrics across your organization">
+        <ExportMenu
+          pdf={{
+            sectionRefs: [kpiRef, csRef, depRef, ssRef],
+            title: "Security Dashboard",
+            filename: `security-report-${days}d`,
+            metadata: {
+              reportName: "Security Dashboard",
+              dateRange: `Last ${days} days`,
+              orgs: selectedOrgs.length > 0 ? selectedOrgs.join(", ") : undefined,
+            },
+          }}
+          isReady={hasData}
+        />
+      </PageHeader>
 
       <ScopeFilter orgOnly />
 
@@ -181,7 +201,7 @@ export default function SecurityPage() {
 
       {/* KPI Cards — only show when we have data */}
       {hasData && (
-      <div className="grid gap-4 grid-cols-2 lg:grid-cols-4">
+      <div ref={kpiRef} className="grid gap-4 grid-cols-2 lg:grid-cols-4">
         <MetricCard
           title="Total Open Alerts"
           value={summary?.totalOpenAlerts || 0}
@@ -216,7 +236,7 @@ export default function SecurityPage() {
 
       {/* Code Scanning Section */}
       {csData?.enabled && (
-        <section className="space-y-4">
+        <section ref={csRef} className="space-y-4">
           <h2 className="text-lg font-semibold flex items-center gap-2">
             <Bug className="h-5 w-5" /> Code Scanning
             <span className="text-sm font-normal text-[hsl(var(--muted-foreground))]">
@@ -244,7 +264,7 @@ export default function SecurityPage() {
 
       {/* Dependabot Section */}
       {depData?.enabled && (
-        <section className="space-y-4">
+        <section ref={depRef} className="space-y-4">
           <h2 className="text-lg font-semibold flex items-center gap-2">
             <ShieldAlert className="h-5 w-5" /> Dependabot
             <span className="text-sm font-normal text-[hsl(var(--muted-foreground))]">
@@ -276,7 +296,7 @@ export default function SecurityPage() {
 
       {/* Secret Scanning Section */}
       {ssData?.enabled && (
-        <section className="space-y-4">
+        <section ref={ssRef} className="space-y-4">
           <h2 className="text-lg font-semibold flex items-center gap-2">
             <Key className="h-5 w-5" /> Secret Scanning
             <span className="text-sm font-normal text-[hsl(var(--muted-foreground))]">

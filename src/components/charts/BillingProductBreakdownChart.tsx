@@ -1,0 +1,92 @@
+"use client";
+
+import { useMemo } from "react";
+import {
+  ResponsiveContainer,
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  Legend,
+  Cell,
+} from "recharts";
+
+interface ProductRow {
+  product: string;
+  total_net: number;
+  charge_scope: "user" | "org";
+}
+
+interface BillingProductBreakdownChartProps {
+  data: ProductRow[];
+}
+
+const SCOPE_COLORS: Record<string, string> = {
+  user: "#3b82f6",
+  org: "#10b981",
+};
+
+const fmtCurrency = (v: number) =>
+  v >= 1000 ? `$${(v / 1000).toFixed(1)}K` : `$${v.toFixed(2)}`;
+
+export function BillingProductBreakdownChart({ data }: BillingProductBreakdownChartProps) {
+  if (!data || data.length === 0)
+    return (
+      <div className="flex items-center justify-center h-64 text-[hsl(var(--muted-foreground))]">
+        No data available
+      </div>
+    );
+
+  const sorted = useMemo(
+    () => [...data].sort((a, b) => b.total_net - a.total_net),
+    [data],
+  );
+
+  const chartHeight = Math.max(300, sorted.length * 36 + 40);
+
+  return (
+    <ResponsiveContainer width="100%" height={chartHeight}>
+      <BarChart
+        data={sorted}
+        layout="vertical"
+        margin={{ top: 5, right: 30, left: 20, bottom: 5 }}
+      >
+        <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
+        <XAxis
+          type="number"
+          stroke="hsl(var(--muted-foreground))"
+          fontSize={12}
+          tickFormatter={fmtCurrency}
+        />
+        <YAxis
+          type="category"
+          dataKey="product"
+          stroke="hsl(var(--muted-foreground))"
+          fontSize={12}
+          width={140}
+          tickFormatter={(value: string) => {
+            const row = sorted.find((r) => r.product === value);
+            const scope = row ? row.charge_scope : "";
+            return `${value} [${scope}]`;
+          }}
+        />
+        <Tooltip
+          contentStyle={{
+            backgroundColor: "hsl(var(--card))",
+            border: "1px solid hsl(var(--border))",
+            borderRadius: "8px",
+          }}
+          formatter={(value: number) => [fmtCurrency(value), "Cost"]}
+        />
+        <Legend />
+        <Bar dataKey="total_net" name="Cost" radius={[0, 4, 4, 0]}>
+          {sorted.map((entry, index) => (
+            <Cell key={`cell-${index}`} fill={SCOPE_COLORS[entry.charge_scope] ?? "#94a3b8"} />
+          ))}
+        </Bar>
+      </BarChart>
+    </ResponsiveContainer>
+  );
+}

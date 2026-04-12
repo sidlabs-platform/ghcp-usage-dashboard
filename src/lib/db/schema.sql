@@ -163,3 +163,7 @@ CREATE INDEX IF NOT EXISTS idx_org_metrics_org_day ON org_daily_metrics(org_slug
 CREATE INDEX IF NOT EXISTS idx_sync_log_scope_day ON sync_log(scope, scope_id, day);
 CREATE INDEX IF NOT EXISTS idx_team_members_org ON team_memberships(org_slug);
 CREATE INDEX IF NOT EXISTS idx_seats_org ON copilot_seats(org_slug);
+
+-- Scalability indexes for large-scale queries
+CREATE INDEX IF NOT EXISTS idx_user_metrics_login_day ON user_daily_metrics(user_login, day);
+CREATE INDEX IF NOT EXISTS idx_copilot_seats_user ON copilot_seats(user_login);

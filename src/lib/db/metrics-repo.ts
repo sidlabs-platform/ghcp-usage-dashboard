@@ -406,6 +406,55 @@ export function upsertUserDayMetrics(record: UserDayRecord): void {
   );
 }
 
+/** Batch-insert user day metrics in a single transaction (much faster than individual inserts) */
+export function batchUpsertUserDayMetrics(records: UserDayRecord[]): number {
+  if (records.length === 0) return 0;
+  const db = getDb();
+
+  const stmt = db.prepare(`
+    INSERT OR REPLACE INTO user_daily_metrics (
+      day, enterprise_id, user_id, user_login,
+      code_generation_activity_count, code_acceptance_activity_count, user_initiated_interaction_count,
+      loc_suggested_to_add_sum, loc_suggested_to_delete_sum, loc_added_sum, loc_deleted_sum,
+      chat_panel_agent_mode, chat_panel_ask_mode, chat_panel_custom_mode,
+      chat_panel_edit_mode, chat_panel_plan_mode, chat_panel_unknown_mode,
+      used_agent, used_chat, used_cli, used_copilot_code_review_active, used_copilot_code_review_passive,
+      used_copilot_coding_agent,
+      totals_by_ide, totals_by_feature, totals_by_language_feature,
+      totals_by_model_feature, totals_by_language_model, totals_by_cli, agent_edit, raw_json
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+
+  const tx = db.transaction(() => {
+    for (const r of records) {
+      stmt.run(
+        r.day, r.enterprise_id, r.user_id, r.user_login,
+        r.code_generation_activity_count, r.code_acceptance_activity_count,
+        r.user_initiated_interaction_count,
+        r.loc_suggested_to_add_sum, r.loc_suggested_to_delete_sum,
+        r.loc_added_sum, r.loc_deleted_sum,
+        r.chat_panel_agent_mode || 0, r.chat_panel_ask_mode || 0,
+        r.chat_panel_custom_mode || 0, r.chat_panel_edit_mode || 0,
+        r.chat_panel_plan_mode || 0, r.chat_panel_unknown_mode || 0,
+        r.used_agent ? 1 : 0, r.used_chat ? 1 : 0, r.used_cli ? 1 : 0,
+        r.used_copilot_code_review_active ? 1 : 0, r.used_copilot_code_review_passive ? 1 : 0,
+        r.used_copilot_coding_agent ? 1 : 0,
+        JSON.stringify(r.totals_by_ide || []),
+        JSON.stringify(r.totals_by_feature || []),
+        JSON.stringify(r.totals_by_language_feature || []),
+        JSON.stringify(r.totals_by_model_feature || []),
+        JSON.stringify(r.totals_by_language_model || []),
+        r.totals_by_cli ? JSON.stringify(r.totals_by_cli) : null,
+        r.agent_edit ? JSON.stringify(r.agent_edit) : null,
+        JSON.stringify(r)
+      );
+    }
+  });
+
+  tx();
+  return records.length;
+}
+
 export function getUserMetrics(enterpriseId: string, startDay: string, endDay: string): UserDayRecord[] {
   const db = getDb();
   const rows = db.prepare(`
@@ -556,7 +605,7 @@ export function acquireSyncLock(): boolean {
       VALUES ('global', ?, ?)
     `).run(
       new Date().toISOString(),
-      new Date(Date.now() + 3600000).toISOString() // 1 hour expiry
+      new Date(Date.now() + 900000).toISOString() // 15 minute expiry
     );
     return true;
   } catch {
@@ -568,6 +617,17 @@ export function acquireSyncLock(): boolean {
 export function releaseSyncLock(): void {
   const db = getDb();
   db.prepare(`DELETE FROM sync_lock WHERE lock_key = 'global'`).run();
+}
+
+/** Extend the sync lock TTL (call periodically during long syncs) */
+export function heartbeatSyncLock(): void {
+  const db = getDb();
+  db.prepare(`
+    UPDATE sync_lock SET acquired_at = ?, expires_at = ? WHERE lock_key = 'global'
+  `).run(
+    new Date().toISOString(),
+    new Date(Date.now() + 900000).toISOString(), // extend 15 minutes
+  );
 }
 
 export function isSyncLocked(): boolean {

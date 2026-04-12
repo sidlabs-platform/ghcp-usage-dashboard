@@ -1,6 +1,7 @@
 "use client";
 
 import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from "react";
+import { useQuery } from "@tanstack/react-query";
 
 export interface ScopeFilterOptions {
   enterpriseTeams: { slug: string; name: string; memberCount: number }[];
@@ -45,15 +46,21 @@ export function ScopeProvider({ children }: { children: ReactNode }) {
   const [selectedOrgTeams, setSelectedOrgTeams] = useState<string[]>([]);
   const [selectedOrgs, setSelectedOrgs] = useState<string[]>([]);
 
-  // Fetch filter options once on mount
+  const { data: filterData } = useQuery({
+    queryKey: ["filters"],
+    queryFn: async () => {
+      const res = await fetch("/api/filters");
+      if (!res.ok) throw new Error("Failed to fetch filters");
+      return res.json();
+    },
+    staleTime: 30 * 60 * 1000, // 30 minutes
+  });
+
   useEffect(() => {
-    fetch("/api/filters")
-      .then((res) => res.json())
-      .then((json) => {
-        if (!json.error) setFilterOptions(json);
-      })
-      .catch(() => {});
-  }, []);
+    if (filterData && !filterData.error) {
+      setFilterOptions(filterData);
+    }
+  }, [filterData]);
 
   const clearAll = useCallback(() => {
     setSelectedEntTeams([]);

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import dynamic from "next/dynamic";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { MetricCard } from "@/components/cards/MetricCard";
@@ -9,6 +9,7 @@ import { ChartSkeleton } from "@/components/states/ChartSkeleton";
 import { useDateRange } from "@/contexts/DateRangeContext";
 import { useScope } from "@/contexts/ScopeContext";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
+import { ExportMenu } from "@/components/ui/ExportMenu";
 
 const LocTrendChart = dynamic(
   () => import("@/components/charts/LocTrendChart").then(m => ({ default: m.LocTrendChart })),
@@ -69,17 +70,35 @@ export default function CodeGenerationPage() {
 
   const { kpis, dailyTrend, acceptanceRate, languageBreakdown, featureBreakdown } = data;
 
+  const kpiRef = useRef<HTMLDivElement>(null);
+  const chartsRef = useRef<HTMLDivElement>(null);
+
   return (
     <div>
       <PageHeader
         title="Code Generation & Activity"
         description="Lines of code, acceptance rates, and feature breakdown across your enterprise"
-      />
+      >
+        <ExportMenu
+          pdf={{
+            sectionRefs: [kpiRef, chartsRef],
+            title: "Code Generation & Activity",
+            filename: `code-generation-report-${days}d`,
+            metadata: {
+              reportName: "Code Generation & Activity",
+              dateRange: `Last ${days} days`,
+              teams: buildScopeParams().get("teams") || undefined,
+              orgs: buildScopeParams().get("orgs") || undefined,
+            },
+          }}
+          isReady={!!data}
+        />
+      </PageHeader>
 
       <ScopeFilter />
 
       {/* KPI Cards — separated completion vs agent */}
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-6 mb-8">
+      <div ref={kpiRef} className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-6 mb-8">
         <MetricCard
           title="Total LoC Changed"
           value={kpis.totalLocChanged}
@@ -121,7 +140,7 @@ export default function CodeGenerationPage() {
       </div>
 
       {/* Charts — 2-column grid */}
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+      <div ref={chartsRef} className="grid grid-cols-1 gap-6 lg:grid-cols-2">
         <LocTrendChart data={dailyTrend} />
 
         <Card>

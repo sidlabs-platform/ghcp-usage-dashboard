@@ -17,6 +17,9 @@ import {
   Sparkles,
   Brain,
   ShieldCheck,
+  Receipt,
+  DollarSign,
+  Zap,
 } from "lucide-react";
 import { useState, useEffect } from "react";
 
@@ -32,12 +35,16 @@ const navItems = [
   { href: "/dashboard/users", label: "User Explorer", icon: UserSearch },
   { href: "/dashboard/seats", label: "Seat Management", icon: CreditCard },
   { href: "/dashboard/ide-languages", label: "IDE & Languages", icon: Monitor },
+  { href: "/dashboard/billing", label: "Billing", icon: Receipt, billing: true },
+  { href: "/dashboard/billing-usage", label: "Metered Usage", icon: DollarSign, billing: true },
+  { href: "/dashboard/billing-premium", label: "Premium Requests", icon: Zap, billing: true },
 ];
 
 export function Sidebar() {
   const pathname = usePathname();
   const [collapsed, setCollapsed] = useState(false);
   const [securityEnabled, setSecurityEnabled] = useState(true);
+  const [billingEnabled, setBillingEnabled] = useState(false);
 
   useEffect(() => {
     fetch("/api/config")
@@ -48,13 +55,16 @@ export function Sidebar() {
           config?.metrics?.dependabot?.enabled ||
           config?.metrics?.secretScanning?.enabled;
         setSecurityEnabled(enabled);
+        setBillingEnabled(config?.metrics?.billing?.enabled ?? false);
       })
       .catch(() => {}); // Default to showing if config unavailable
   }, []);
 
-  const visibleNavItems = navItems.filter(
-    (item) => item.href !== "/dashboard/security" || securityEnabled
-  );
+  const visibleNavItems = navItems.filter((item) => {
+    if (item.href === "/dashboard/security" && !securityEnabled) return false;
+    if ('billing' in item && item.billing && !billingEnabled) return false;
+    return true;
+  });
 
   return (
     <aside
@@ -82,7 +92,7 @@ export function Sidebar() {
           const isActive =
             item.href === "/dashboard"
               ? pathname === "/dashboard"
-              : pathname.startsWith(item.href);
+              : pathname === item.href || pathname.startsWith(item.href + "/");
           return (
             <Link
               key={item.href}

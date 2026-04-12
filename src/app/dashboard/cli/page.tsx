@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import dynamic from "next/dynamic";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { MetricCard } from "@/components/cards/MetricCard";
@@ -9,6 +9,8 @@ import { ChartSkeleton } from "@/components/states/ChartSkeleton";
 import { useDateRange } from "@/contexts/DateRangeContext";
 import { useScope } from "@/contexts/ScopeContext";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
+import { ExportMenu } from "@/components/ui/ExportMenu";
+import type { CSVColumn } from "@/lib/export/csv";
 
 const CLIUsersTrendChart = dynamic(
   () => import("@/components/charts/CLIUsersTrendChart").then(m => ({ default: m.CLIUsersTrendChart })),
@@ -60,6 +62,15 @@ interface CLIData {
   topCliUsers: CLIUser[];
 }
 
+const cliUserExportColumns: CSVColumn[] = [
+  { key: "login", label: "User" },
+  { key: "sessions", label: "Sessions" },
+  { key: "requests", label: "Requests" },
+  { key: "promptTokens", label: "Prompt Tokens" },
+  { key: "outputTokens", label: "Output Tokens" },
+  { key: "days", label: "Active Days" },
+];
+
 export default function CLIPage() {
   const { days } = useDateRange();
   const { buildScopeParams } = useScope();
@@ -84,6 +95,9 @@ export default function CLIPage() {
   }, [days, buildScopeParams]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
+
+  type CLISortField = "login" | "sessions" | "requests" | "promptTokens" | "outputTokens" | "days";
+  const { sortedData: sortedCliUsers, sortField: cliSortField, sortAsc: cliSortAsc, handleSort: handleCliSort } = useTableSort<CLIUser, CLISortField>(data?.topCliUsers ?? [], "sessions");
 
   if (loading) {
     return (
@@ -114,20 +128,49 @@ export default function CLIPage() {
     avgPerRequest: d.avgPerRequest,
   }));
 
-  type CLISortField = "login" | "sessions" | "requests" | "promptTokens" | "outputTokens" | "days";
-  const { sortedData: sortedCliUsers, sortField: cliSortField, sortAsc: cliSortAsc, handleSort: handleCliSort } = useTableSort<CLIUser, CLISortField>(data.topCliUsers, "sessions");
+  const kpiRef = useRef<HTMLDivElement>(null);
+  const chartsRef = useRef<HTMLDivElement>(null);
+  const tableRef = useRef<HTMLDivElement>(null);
 
   return (
     <div>
       <PageHeader
         title="CLI Analytics"
         description="Copilot CLI usage, sessions, and token consumption"
-      />
+      >
+        <ExportMenu
+          csv={{
+            fetchUrl: "/api/metrics/cli",
+            extraParams: new URLSearchParams({ days: String(days), ...Object.fromEntries(buildScopeParams()) }),
+            columns: cliUserExportColumns,
+            dataExtractor: (json) => json.topCliUsers ?? [],
+            filename: `cli-users-export-${days}d`,
+            metadata: {
+              reportName: "CLI Analytics — Top Users",
+              dateRange: `Last ${days} days`,
+              teams: buildScopeParams().get("teams") || undefined,
+              orgs: buildScopeParams().get("orgs") || undefined,
+            },
+          }}
+          pdf={{
+            sectionRefs: [kpiRef, chartsRef, tableRef],
+            title: "CLI Analytics",
+            filename: `cli-report-${days}d`,
+            metadata: {
+              reportName: "CLI Analytics",
+              dateRange: `Last ${days} days`,
+              teams: buildScopeParams().get("teams") || undefined,
+              orgs: buildScopeParams().get("orgs") || undefined,
+            },
+          }}
+          isReady={!!data}
+        />
+      </PageHeader>
 
       <ScopeFilter />
 
       {/* KPI Cards */}
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4 mb-8">
+      <div ref={kpiRef} className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4 mb-8">
         <MetricCard
           title="Daily CLI Users"
           value={data.kpis.dailyCliUsers}
@@ -155,13 +198,13 @@ export default function CLIPage() {
       </div>
 
       {/* Charts */}
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2 mb-6">
+      <div ref={chartsRef} className="grid grid-cols-1 gap-6 lg:grid-cols-2 mb-6">
         <CLIUsersTrendChart data={data.dailyTrend} />
         <CLITokenChart data={tokenChartData} />
       </div>
 
       {/* Top CLI Users Table */}
-      <Card>
+      <Card ref={tableRef}>
         <CardHeader>
           <CardTitle>Top CLI Users</CardTitle>
         </CardHeader>

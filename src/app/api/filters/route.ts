@@ -1,7 +1,10 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/db/database";
+import { withCache } from "@/lib/cache/with-cache";
+import { withTimeout } from "@/lib/api/timeout";
+import { CACHE_TTL } from "@/lib/cache/memory-cache";
 
-export async function GET() {
+async function handler(_request: NextRequest) {
   try {
     const db = getDb();
 
@@ -38,3 +41,5 @@ export async function GET() {
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }
+
+export const GET = withTimeout(withCache(handler, CACHE_TTL.FILTERS));

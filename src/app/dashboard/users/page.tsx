@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useState } from "react";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { useDateRange } from "@/contexts/DateRangeContext";
 import { useScope } from "@/contexts/ScopeContext";
@@ -8,9 +8,10 @@ import { MetricCard } from "@/components/cards/MetricCard";
 import { ScopeFilter } from "@/components/filters/ScopeFilter";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Users, Code2, Activity, Search, Eye, Bot } from "lucide-react";
-import { useTableSort } from "@/hooks/useTableSort";
-import { SortableHeader } from "@/components/tables/SortableHeader";
+import { Users } from "lucide-react";
+import { PaginatedTable, type ColumnDef } from "@/components/tables/PaginatedTable";
+import { ExportMenu } from "@/components/ui/ExportMenu";
+import type { CSVColumn } from "@/lib/export/csv";
 
 interface UserRow {
   login: string;
@@ -29,176 +30,105 @@ interface UserRow {
   usedCodingAgent: boolean;
 }
 
+const userColumns: ColumnDef<UserRow>[] = [
+  { key: "login", label: "User", render: (row) => <span className="font-medium">{row.login}</span> },
+  { key: "activeDays", label: "Active Days", align: "right", render: (row) => row.activeDays },
+  { key: "locAdded", label: "LoC Added", align: "right", render: (row) => row.locAdded.toLocaleString() },
+  { key: "interactions", label: "Interactions", align: "right", render: (row) => row.interactions.toLocaleString() },
+  { key: "acceptanceRate", label: "Accept %", align: "right", render: (row) => `${row.acceptanceRate.toFixed(1)}%` },
+  {
+    key: "features",
+    label: "Features",
+    sortable: false,
+    render: (row) => (
+      <div className="flex gap-1 flex-wrap">
+        {row.usedAgent && <Badge variant="default">Agent</Badge>}
+        {row.usedCodingAgent && <Badge variant="default">Coding Agent</Badge>}
+        {row.usedChat && <Badge variant="secondary">Chat</Badge>}
+        {row.usedCli && <Badge variant="success">CLI</Badge>}
+        {row.usedCodeReviewActive && <Badge variant="warning">Review (Active)</Badge>}
+        {!row.usedCodeReviewActive && row.usedCodeReviewPassive && <Badge variant="secondary">Review (Passive)</Badge>}
+      </div>
+    ),
+  },
+];
+
+const userExportColumns: CSVColumn[] = [
+  { key: "login", label: "User" },
+  { key: "activeDays", label: "Active Days" },
+  { key: "locAdded", label: "LoC Added" },
+  { key: "interactions", label: "Interactions" },
+  { key: "acceptanceRate", label: "Acceptance %", format: (row) => `${row.acceptanceRate.toFixed(1)}%` },
+  {
+    key: "features", label: "Features", format: (row) => {
+      const f: string[] = [];
+      if (row.usedAgent) f.push("Agent");
+      if (row.usedCodingAgent) f.push("Coding Agent");
+      if (row.usedChat) f.push("Chat");
+      if (row.usedCli) f.push("CLI");
+      if (row.usedCodeReviewActive) f.push("Code Review (Active)");
+      else if (row.usedCodeReviewPassive) f.push("Code Review (Passive)");
+      return f.join(", ");
+    },
+  },
+];
+
 export default function UsersPage() {
   const { days } = useDateRange();
   const { hasFilter, buildScopeParams } = useScope();
-  const [users, setUsers] = useState<UserRow[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [search, setSearch] = useState("");
+  const [totalUsers, setTotalUsers] = useState(0);
 
-  const fetchUsers = useCallback(() => {
-    setLoading(true);
-    const params = new URLSearchParams({ days: String(days) });
-    const scopeParams = buildScopeParams();
-    scopeParams.forEach((value, key) => params.set(key, value));
-
-    fetch(`/api/users?${params}`)
-      .then((res) => {
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return res.json();
-      })
-      .then((json) => { setUsers(json.users ?? []); setError(null); })
-      .catch((err) => setError(err.message))
-      .finally(() => setLoading(false));
-  }, [days, buildScopeParams]);
-
-  useEffect(() => { fetchUsers(); }, [fetchUsers]);
-
-  if (loading && users.length === 0) {
-    return (
-      <div>
-        <PageHeader title="User Explorer" description="Individual developer Copilot usage" />
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 mb-8">
-          {Array.from({ length: 6 }).map((_, i) => (
-            <div key={i} className="h-28 animate-pulse rounded-xl bg-[hsl(var(--muted))]/50" />
-          ))}
-        </div>
-      </div>
-    );
-  }
-
-  if (error && users.length === 0) {
-    return (
-      <div>
-        <PageHeader title="User Explorer" description="Individual developer Copilot usage" />
-        <ScopeFilter />
-        <div className="flex h-64 items-center justify-center text-sm text-red-500">{error}</div>
-      </div>
-    );
-  }
-
-  const filtered = users.filter((u) =>
-    u.login.toLowerCase().includes(search.toLowerCase())
-  );
-
-  type UserSortField = "login" | "activeDays" | "locAdded" | "interactions" | "acceptanceRate";
-  const { sortedData: sortedUsers, sortField, sortAsc, handleSort } = useTableSort<UserRow, UserSortField>(filtered, "activeDays");
-
-  const totalLocAdded = users.reduce((s, u) => s + u.locAdded, 0);
-  const totalInteractions = users.reduce((s, u) => s + u.interactions, 0);
-  const agentUserCount = users.filter((u) => u.usedAgent).length;
-  const codingAgentUserCount = users.filter((u) => u.usedCodingAgent).length;
-  const codeReviewActiveCount = users.filter((u) => u.usedCodeReviewActive).length;
-  const codeReviewPassiveCount = users.filter((u) => u.usedCodeReviewPassive && !u.usedCodeReviewActive).length;
-  const isFiltered = hasFilter;
+  const extraParams = new URLSearchParams({ days: String(days) });
+  const scopeParams = buildScopeParams();
+  scopeParams.forEach((v, k) => extraParams.set(k, v));
 
   return (
     <div>
-      <PageHeader
-        title="User Explorer"
-        description="Individual developer Copilot usage"
-      />
-
+      <PageHeader title="User Explorer" description="Individual developer Copilot usage">
+        <ExportMenu
+          csv={{
+            fetchUrl: "/api/users",
+            extraParams,
+            columns: userExportColumns,
+            dataExtractor: (json) => json.users ?? [],
+            filename: `users-export-${days}d`,
+            metadata: {
+              reportName: "User Explorer",
+              dateRange: `Last ${days} days`,
+              teams: scopeParams.get("teams") || undefined,
+              orgs: scopeParams.get("orgs") || undefined,
+            },
+          }}
+        />
+      </PageHeader>
       <ScopeFilter />
 
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 mb-8">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 mb-8">
         <MetricCard
           title="Total Users"
-          value={users.length}
+          value={totalUsers}
           icon={<Users className="h-4 w-4" />}
-          subtitle={isFiltered ? "In selected scope" : "With activity in period"}
-        />
-        <MetricCard
-          title="Total LoC Added"
-          value={totalLocAdded}
-          icon={<Code2 className="h-4 w-4" />}
-          subtitle="Across all users"
-        />
-        <MetricCard
-          title="Total Interactions"
-          value={totalInteractions}
-          icon={<Activity className="h-4 w-4" />}
-          subtitle="User-initiated"
-        />
-        <MetricCard
-          title="IDE Agent Users"
-          value={agentUserCount}
-          icon={<Search className="h-4 w-4" />}
-          subtitle={`${users.length > 0 ? ((agentUserCount / users.length) * 100).toFixed(1) : 0}% of all users`}
-        />
-        <MetricCard
-          title="Coding Agent Users"
-          value={codingAgentUserCount}
-          icon={<Bot className="h-4 w-4" />}
-          subtitle={`${users.length > 0 ? ((codingAgentUserCount / users.length) * 100).toFixed(1) : 0}% of all users`}
-        />
-        <MetricCard
-          title="Code Review Users"
-          value={codeReviewActiveCount + codeReviewPassiveCount}
-          icon={<Eye className="h-4 w-4" />}
-          subtitle={`${codeReviewActiveCount} active, ${codeReviewPassiveCount} passive-only`}
+          subtitle={hasFilter ? "In selected scope" : "With activity in period"}
         />
       </div>
 
       <Card>
         <CardHeader>
-          <div className="flex items-center justify-between">
-            <CardTitle>Users</CardTitle>
-            <div className="relative">
-              <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[hsl(var(--muted-foreground))]" />
-              <input
-                type="text"
-                placeholder="Search users…"
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                className="h-9 w-64 rounded-md border bg-transparent pl-9 pr-3 text-sm outline-none focus:ring-2 focus:ring-[hsl(var(--ring))]"
-              />
-            </div>
-          </div>
+          <CardTitle>Users</CardTitle>
         </CardHeader>
         <CardContent>
-          {filtered.length === 0 ? (
-            <div className="flex h-32 items-center justify-center text-sm text-[hsl(var(--muted-foreground))]">
-              {users.length === 0 ? "No user data available. Sync data to populate." : "No users match your search."}
-            </div>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b text-left text-[hsl(var(--muted-foreground))]">
-                    <SortableHeader label="User" field={"login" as UserSortField} sortField={sortField} sortAsc={sortAsc} onSort={handleSort} />
-                    <SortableHeader label="Active Days" field={"activeDays" as UserSortField} sortField={sortField} sortAsc={sortAsc} onSort={handleSort} align="right" />
-                    <SortableHeader label="LoC Added" field={"locAdded" as UserSortField} sortField={sortField} sortAsc={sortAsc} onSort={handleSort} align="right" />
-                    <SortableHeader label="Interactions" field={"interactions" as UserSortField} sortField={sortField} sortAsc={sortAsc} onSort={handleSort} align="right" />
-                    <SortableHeader label="Accept %" field={"acceptanceRate" as UserSortField} sortField={sortField} sortAsc={sortAsc} onSort={handleSort} align="right" />
-                    <th className="pb-3 font-medium">Features</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {sortedUsers.map((user) => (
-                    <tr key={user.login} className="border-b last:border-0">
-                      <td className="py-3 pr-4 font-medium">{user.login}</td>
-                      <td className="py-3 pr-4 text-right">{user.activeDays}</td>
-                      <td className="py-3 pr-4 text-right">{user.locAdded.toLocaleString()}</td>
-                      <td className="py-3 pr-4 text-right">{user.interactions.toLocaleString()}</td>
-                      <td className="py-3 pr-4 text-right">{user.acceptanceRate.toFixed(1)}%</td>
-                      <td className="py-3">
-                        <div className="flex gap-1 flex-wrap">
-                          {user.usedAgent && <Badge variant="default">Agent</Badge>}
-                          {user.usedCodingAgent && <Badge variant="default">Coding Agent</Badge>}
-                          {user.usedChat && <Badge variant="secondary">Chat</Badge>}
-                          {user.usedCli && <Badge variant="success">CLI</Badge>}
-                          {user.usedCodeReviewActive && <Badge variant="warning">Review (Active)</Badge>}
-                          {!user.usedCodeReviewActive && user.usedCodeReviewPassive && <Badge variant="secondary">Review (Passive)</Badge>}
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
+          <PaginatedTable<UserRow>
+            fetchUrl="/api/users"
+            extraParams={extraParams}
+            columns={userColumns}
+            defaultSort="activeDays"
+            rowKey={(row) => row.login}
+            dataExtractor={(json) => (json.users as UserRow[]) ?? []}
+            queryKey="users-table"
+            searchable
+            searchPlaceholder="Search users…"
+            onTotalChange={setTotalUsers}
+          />
         </CardContent>
       </Card>
     </div>

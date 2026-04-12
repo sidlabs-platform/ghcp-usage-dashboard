@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import dynamic from "next/dynamic";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { MetricCard } from "@/components/cards/MetricCard";
@@ -8,6 +8,7 @@ import { ScopeFilter } from "@/components/filters/ScopeFilter";
 import { ChartSkeleton } from "@/components/states/ChartSkeleton";
 import { useDateRange } from "@/contexts/DateRangeContext";
 import { useScope } from "@/contexts/ScopeContext";
+import { ExportMenu } from "@/components/ui/ExportMenu";
 
 const PRActivityChart = dynamic(
   () => import("@/components/charts/PRActivityChart").then(m => ({ default: m.PRActivityChart })),
@@ -135,16 +136,33 @@ export default function PullRequestsPage() {
     ? Number(((data.totals.mergedReviewedByCopilot / data.totals.merged) * 100).toFixed(1))
     : 0;
 
+  const kpiRef = useRef<HTMLDivElement>(null);
+  const chartsRef = useRef<HTMLDivElement>(null);
+
   return (
     <div>
       <PageHeader
         title="Pull Request Impact"
         description="PR activity, merge times, and Copilot contribution"
-      />
+      >
+        <ExportMenu
+          pdf={{
+            sectionRefs: [kpiRef, chartsRef],
+            title: "Pull Request Impact",
+            filename: `pull-requests-report-${days}d`,
+            metadata: {
+              reportName: "Pull Request Impact",
+              dateRange: `Last ${days} days`,
+              orgs: selectedOrgs.length > 0 ? selectedOrgs.join(", ") : undefined,
+            },
+          }}
+          isReady={!!data}
+        />
+      </PageHeader>
 
       <ScopeFilter orgOnly />
 
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 mb-8">
+      <div ref={kpiRef} className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 mb-8">
         <MetricCard
           title="PRs Created"
           value={data.totals.created}
@@ -187,7 +205,7 @@ export default function PullRequestsPage() {
         />
       </div>
 
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+      <div ref={chartsRef} className="grid grid-cols-1 gap-6 lg:grid-cols-2">
         <PRActivityChart data={data.daily} />
         <MergeTimeChart data={mergeTimeData} />
       </div>

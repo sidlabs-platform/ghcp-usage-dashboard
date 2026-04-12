@@ -7,6 +7,8 @@ import fs from "fs";
 const DB_PATH = path.join(process.cwd(), "data", "copilot-metrics.db");
 const SCHEMA_PATH = path.join(process.cwd(), "src", "lib", "db", "schema.sql");
 const GHAS_SCHEMA_PATH = path.join(process.cwd(), "src", "lib", "db", "ghas-schema.sql");
+const SUMMARY_SCHEMA_PATH = path.join(process.cwd(), "src", "lib", "db", "summary-schema.sql");
+const BILLING_SCHEMA_PATH = path.join(process.cwd(), "src", "lib", "db", "billing-schema.sql");
 
 let _db: Database.Database | null = null;
 
@@ -31,7 +33,17 @@ export function getDb(): Database.Database {
   const ghasSchema = fs.readFileSync(GHAS_SCHEMA_PATH, "utf-8");
   _db.exec(ghasSchema);
 
-  // Add columns introduced after initial schema (safe if already present)
+  // Summary tables schema
+  const summarySchema = fs.readFileSync(SUMMARY_SCHEMA_PATH, "utf-8");
+  _db.exec(summarySchema);
+
+  // Billing schema
+  const billingSchema = fs.readFileSync(BILLING_SCHEMA_PATH, "utf-8");
+  _db.exec(billingSchema);
+
+  // Note: Run ANALYZE after bulk inserts (e.g. after sync) to update query planner stats
+
+  // Add columnsintroduced after initial schema (safe if already present)
   const migrations = [
     "ALTER TABLE user_daily_metrics ADD COLUMN used_copilot_coding_agent INTEGER DEFAULT 0",
   ];

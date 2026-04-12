@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useMemo, useCallback } from "react";
+import { useEffect, useState, useMemo, useCallback, useRef } from "react";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { useDateRange } from "@/contexts/DateRangeContext";
 import { useScope } from "@/contexts/ScopeContext";
@@ -12,6 +12,8 @@ import { formatNumber } from "@/lib/utils";
 import { Sparkles, Bot, MessageSquare, Terminal } from "lucide-react";
 import { useTableSort } from "@/hooks/useTableSort";
 import { SortableHeader } from "@/components/tables/SortableHeader";
+import { ExportMenu } from "@/components/ui/ExportMenu";
+import type { CSVColumn } from "@/lib/export/csv";
 import {
   BarChart,
   Bar,
@@ -76,6 +78,14 @@ const FEATURE_COLORS = [
   "#f97316", // orange
 ];
 
+const featureExportColumns: CSVColumn[] = [
+  { key: "feature", label: "Feature", format: (row) => featureLabel(row.feature) },
+  { key: "interactions", label: "Interactions" },
+  { key: "codeGen", label: "Code Generations" },
+  { key: "codeAccept", label: "Acceptances" },
+  { key: "locAdded", label: "LoC Added" },
+];
+
 function featureLabel(f: string): string {
   return FEATURE_LABELS[f] ?? f.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
@@ -121,6 +131,9 @@ export default function CopilotFeaturesPage() {
       .map((f) => f.feature);
   }, [data]);
 
+  type FeatureSortField = "feature" | "interactions" | "codeGen" | "codeAccept" | "locAdded";
+  const { sortedData: sortedFeatures, sortField: featureSortField, sortAsc: featureSortAsc, handleSort: handleFeatureSort } = useTableSort<FeatureRow, FeatureSortField>(data?.featureDistribution ?? [], "interactions");
+
   if (loading) {
     return (
       <div>
@@ -151,8 +164,10 @@ export default function CopilotFeaturesPage() {
 
   const { kpis, featureDistribution, adoptionTrend, dailyTrend } = data;
 
-  type FeatureSortField = "feature" | "interactions" | "codeGen" | "codeAccept" | "locAdded";
-  const { sortedData: sortedFeatures, sortField: featureSortField, sortAsc: featureSortAsc, handleSort: handleFeatureSort } = useTableSort<FeatureRow, FeatureSortField>(featureDistribution, "interactions");
+  const kpiRef = useRef<HTMLDivElement>(null);
+  const chartsRef = useRef<HTMLDivElement>(null);
+  const adoptionRef = useRef<HTMLDivElement>(null);
+  const tableRef = useRef<HTMLDivElement>(null);
 
   // Bar chart data (horizontal): top 10 features by interactions+codeGen
   const barData = featureDistribution.slice(0, 10).map((f) => ({
@@ -167,12 +182,40 @@ export default function CopilotFeaturesPage() {
       <PageHeader
         title="Copilot Features"
         description="Feature-level usage breakdown across code completions, chat modes, agent, and CLI"
-      />
+      >
+        <ExportMenu
+          csv={{
+            fetchUrl: "/api/metrics/chat-modes",
+            extraParams: new URLSearchParams({ days: String(days), ...Object.fromEntries(buildScopeParams()) }),
+            columns: featureExportColumns,
+            dataExtractor: (json) => json.featureDistribution ?? [],
+            filename: `features-export-${days}d`,
+            metadata: {
+              reportName: "Copilot Features",
+              dateRange: `Last ${days} days`,
+              teams: buildScopeParams().get("teams") || undefined,
+              orgs: buildScopeParams().get("orgs") || undefined,
+            },
+          }}
+          pdf={{
+            sectionRefs: [kpiRef, chartsRef, adoptionRef, tableRef],
+            title: "Copilot Features",
+            filename: `features-report-${days}d`,
+            metadata: {
+              reportName: "Copilot Features",
+              dateRange: `Last ${days} days`,
+              teams: buildScopeParams().get("teams") || undefined,
+              orgs: buildScopeParams().get("orgs") || undefined,
+            },
+          }}
+          isReady={!!data}
+        />
+      </PageHeader>
 
       <ScopeFilter />
 
       {/* ── KPI Cards─────────────────────────────────────────────── */}
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4 mb-8">
+      <div ref={kpiRef} className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4 mb-8">
         <MetricCard
           title="Total Interactions"
           value={kpis.totalInteractions}
@@ -202,7 +245,7 @@ export default function CopilotFeaturesPage() {
       </div>
 
       {/* ── Feature Distribution + Daily Trend ────────────────────── */}
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2 mb-6">
+      <div ref={chartsRef} className="grid grid-cols-1 gap-6 lg:grid-cols-2 mb-6">
         {/* Horizontal bar chart */}
         <Card>
           <CardHeader>
@@ -304,7 +347,7 @@ export default function CopilotFeaturesPage() {
       </div>
 
       {/* ── Adoption Trend ────────────────────────────────────────── */}
-      <Card className="mb-6">
+      <Card ref={adoptionRef} className="mb-6">
         <CardHeader>
           <CardTitle>Adoption Trend (Unique Users / Day)</CardTitle>
         </CardHeader>
@@ -334,7 +377,7 @@ export default function CopilotFeaturesPage() {
       </Card>
 
       {/* ── Feature Detail Table ──────────────────────────────────── */}
-      <Card>
+      <Card ref={tableRef}>
         <CardHeader>
           <CardTitle>Feature Detail</CardTitle>
         </CardHeader>

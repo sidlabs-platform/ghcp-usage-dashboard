@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useState } from "react";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { useDateRange } from "@/contexts/DateRangeContext";
 import { useScope } from "@/contexts/ScopeContext";
@@ -8,9 +8,10 @@ import { MetricCard } from "@/components/cards/MetricCard";
 import { ScopeFilter } from "@/components/filters/ScopeFilter";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Users, UserCheck, Bot, Code2, MessageSquare, Terminal } from "lucide-react";
-import { useTableSort } from "@/hooks/useTableSort";
-import { SortableHeader } from "@/components/tables/SortableHeader";
+import { Users } from "lucide-react";
+import { PaginatedTable, type ColumnDef } from "@/components/tables/PaginatedTable";
+import { ExportMenu } from "@/components/ui/ExportMenu";
+import type { CSVColumn } from "@/lib/export/csv";
 
 interface TeamSummary {
   teamSlug: string;
@@ -28,118 +29,115 @@ interface TeamSummary {
   codeReviewAdoptionRate: number;
 }
 
-type SortField = "teamName" | "totalMembers" | "avgDailyActiveUsers" | "totalLocAdded" | "overallAcceptanceRate" | "agentAdoptionRate" | "chatAdoptionRate" | "cliAdoptionRate";
+const teamColumns: ColumnDef<TeamSummary>[] = [
+  {
+    key: "teamName",
+    label: "Team",
+    render: (row) => (
+      <>
+        <span className="font-medium">{row.teamName}</span>
+        <Badge variant="outline" className="ml-2 text-[10px]">{row.source}</Badge>
+      </>
+    ),
+  },
+  { key: "totalMembers", label: "Members", align: "right", render: (row) => row.totalMembers },
+  {
+    key: "avgDailyActiveUsers",
+    label: "Active Users",
+    align: "right",
+    render: (row) => {
+      const adoption = row.totalMembers > 0 ? ((row.avgDailyActiveUsers / row.totalMembers) * 100) : 0;
+      return (
+        <>
+          {row.avgDailyActiveUsers.toFixed(1)}
+          <span className="ml-1 text-xs text-[hsl(var(--muted-foreground))]">({adoption.toFixed(0)}%)</span>
+        </>
+      );
+    },
+  },
+  { key: "totalLocAdded", label: "LoC Added", align: "right", render: (row) => row.totalLocAdded.toLocaleString() },
+  { key: "overallAcceptanceRate", label: "Acceptance %", align: "right", render: (row) => `${row.overallAcceptanceRate.toFixed(1)}%` },
+  {
+    key: "agentAdoptionRate",
+    label: "Agent",
+    align: "right",
+    render: (row) => (
+      <Badge variant={row.agentAdoptionRate >= 50 ? "success" : row.agentAdoptionRate >= 20 ? "warning" : "secondary"}>
+        {row.agentAdoptionRate.toFixed(1)}%
+      </Badge>
+    ),
+  },
+  {
+    key: "chatAdoptionRate",
+    label: "Chat",
+    align: "right",
+    render: (row) => (
+      <Badge variant={row.chatAdoptionRate >= 50 ? "success" : row.chatAdoptionRate >= 20 ? "warning" : "secondary"}>
+        {row.chatAdoptionRate.toFixed(1)}%
+      </Badge>
+    ),
+  },
+  {
+    key: "cliAdoptionRate",
+    label: "CLI",
+    align: "right",
+    render: (row) => (
+      <Badge variant={row.cliAdoptionRate >= 50 ? "success" : row.cliAdoptionRate >= 20 ? "warning" : "secondary"}>
+        {row.cliAdoptionRate.toFixed(1)}%
+      </Badge>
+    ),
+  },
+];
+
+const teamExportColumns: CSVColumn[] = [
+  { key: "teamName", label: "Team" },
+  { key: "source", label: "Source" },
+  { key: "totalMembers", label: "Members" },
+  { key: "avgDailyActiveUsers", label: "Avg Daily Active Users", format: (row) => row.avgDailyActiveUsers.toFixed(1) },
+  { key: "totalLocAdded", label: "LoC Added" },
+  { key: "overallAcceptanceRate", label: "Acceptance %", format: (row) => `${row.overallAcceptanceRate.toFixed(1)}%` },
+  { key: "agentAdoptionRate", label: "Agent Adoption %", format: (row) => `${row.agentAdoptionRate.toFixed(1)}%` },
+  { key: "chatAdoptionRate", label: "Chat Adoption %", format: (row) => `${row.chatAdoptionRate.toFixed(1)}%` },
+  { key: "cliAdoptionRate", label: "CLI Adoption %", format: (row) => `${row.cliAdoptionRate.toFixed(1)}%` },
+];
 
 export default function TeamsPage() {
   const { days } = useDateRange();
-  const { selectedEntTeams, selectedOrgTeams, selectedOrgs } = useScope();
-  const [teams, setTeams] = useState<TeamSummary[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const { selectedEntTeams, selectedOrgTeams, selectedOrgs, hasFilter } = useScope();
+  const [totalTeams, setTotalTeams] = useState(0);
 
-  const fetchTeams = useCallback(() => {
-    setLoading(true);
-    const params = new URLSearchParams({ days: String(days) });
-    const allTeams = [...selectedEntTeams, ...selectedOrgTeams];
-    if (allTeams.length > 0) params.set("teams", allTeams.join(","));
-
-    fetch(`/api/teams?${params}`)
-      .then((res) => {
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return res.json();
-      })
-      .then((json) => {
-        let result: TeamSummary[] = json.teams ?? [];
-        // Client-side org filtering
-        if (selectedOrgs.length > 0) {
-          const orgSet = new Set(selectedOrgs);
-          result = result.filter((t) => t.orgSlug && orgSet.has(t.orgSlug));
-        }
-        setTeams(result);
-        setError(null);
-      })
-      .catch((err) => setError(err.message))
-      .finally(() => setLoading(false));
-  }, [days, selectedEntTeams, selectedOrgTeams, selectedOrgs]);
-
-  useEffect(() => { fetchTeams(); }, [fetchTeams]);
-
-  const { sortedData: sortedTeams, sortField, sortAsc, handleSort } = useTableSort<TeamSummary, SortField>(teams, "totalMembers");
-
-  if (loading && teams.length === 0) {
-    return (
-      <div>
-        <PageHeader title="Team Analytics" description="Copilot adoption and usage by team" />
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4 mb-8">
-          {Array.from({ length: 4 }).map((_, i) => (
-            <div key={i} className="h-28 animate-pulse rounded-xl bg-[hsl(var(--muted))]/50" />
-          ))}
-        </div>
-      </div>
-    );
-  }
-
-  if (error && teams.length === 0) {
-    return (
-      <div>
-        <PageHeader title="Team Analytics" description="Copilot adoption and usage by team" />
-        <ScopeFilter />
-        <div className="flex h-64 items-center justify-center text-sm text-red-500">{error}</div>
-      </div>
-    );
-  }
-
-  const totalTeams = teams.length;
-  const totalMembers = teams.reduce((s, t) => s + t.totalMembers, 0);
-  const totalLocAdded = teams.reduce((s, t) => s + t.totalLocAdded, 0);
-  const avgAcceptance = teams.length > 0
-    ? teams.reduce((s, t) => s + t.overallAcceptanceRate, 0) / teams.length
-    : 0;
-  const avgAgentAdoption = teams.length > 0
-    ? teams.reduce((s, t) => s + t.agentAdoptionRate, 0) / teams.length
-    : 0;
+  const extraParams = new URLSearchParams({ days: String(days) });
+  const allTeams = [...selectedEntTeams, ...selectedOrgTeams];
+  if (allTeams.length > 0) extraParams.set("teams", allTeams.join(","));
+  if (selectedOrgs.length > 0) extraParams.set("orgs", selectedOrgs.join(","));
 
   return (
     <div>
-      <PageHeader
-        title="Team Analytics"
-        description="Copilot adoption and usage by team"
-      />
-
+      <PageHeader title="Team Analytics" description="Copilot adoption and usage by team">
+        <ExportMenu
+          csv={{
+            fetchUrl: "/api/teams",
+            extraParams,
+            columns: teamExportColumns,
+            dataExtractor: (json) => json.teams ?? [],
+            filename: `teams-export-${days}d`,
+            metadata: {
+              reportName: "Team Analytics",
+              dateRange: `Last ${days} days`,
+              teams: extraParams.get("teams") || undefined,
+              orgs: extraParams.get("orgs") || undefined,
+            },
+          }}
+        />
+      </PageHeader>
       <ScopeFilter />
 
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5 mb-8">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 mb-8">
         <MetricCard
           title="Total Teams"
           value={totalTeams}
           icon={<Users className="h-4 w-4" />}
-          subtitle={selectedEntTeams.length > 0 || selectedOrgTeams.length > 0 || selectedOrgs.length > 0 ? "In selected scope" : "Synced teams"}
-        />
-        <MetricCard
-          title="Total Members"
-          value={totalMembers}
-          icon={<UserCheck className="h-4 w-4" />}
-          subtitle="Across teams"
-        />
-        <MetricCard
-          title="Total LoC Added"
-          value={totalLocAdded}
-          icon={<Code2 className="h-4 w-4" />}
-          subtitle="Across teams"
-        />
-        <MetricCard
-          title="Avg Acceptance Rate"
-          value={avgAcceptance}
-          format="percent"
-          icon={<Code2 className="h-4 w-4" />}
-          subtitle="Across teams"
-        />
-        <MetricCard
-          title="Avg Agent Adoption"
-          value={avgAgentAdoption}
-          format="percent"
-          icon={<Bot className="h-4 w-4" />}
-          subtitle="Across teams"
+          subtitle={hasFilter ? "In selected scope" : "Synced teams"}
         />
       </div>
 
@@ -148,67 +146,18 @@ export default function TeamsPage() {
           <CardTitle>Team Leaderboard</CardTitle>
         </CardHeader>
         <CardContent>
-          {teams.length === 0 ? (
-            <div className="flex h-32 items-center justify-center text-sm text-[hsl(var(--muted-foreground))]">
-              No team data available. Sync teams to populate this table.
-            </div>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b text-left text-[hsl(var(--muted-foreground))]">
-                    <SortableHeader label="Team" field="teamName" sortField={sortField} sortAsc={sortAsc} onSort={handleSort} />
-                    <SortableHeader label="Members" field="totalMembers" sortField={sortField} sortAsc={sortAsc} onSort={handleSort} align="right" />
-                    <SortableHeader label="Active Users" field="avgDailyActiveUsers" sortField={sortField} sortAsc={sortAsc} onSort={handleSort} align="right" />
-                    <SortableHeader label="LoC Added" field="totalLocAdded" sortField={sortField} sortAsc={sortAsc} onSort={handleSort} align="right" />
-                    <SortableHeader label="Acceptance %" field="overallAcceptanceRate" sortField={sortField} sortAsc={sortAsc} onSort={handleSort} align="right" />
-                    <SortableHeader label="Agent" field="agentAdoptionRate" sortField={sortField} sortAsc={sortAsc} onSort={handleSort} align="right" />
-                    <SortableHeader label="Chat" field="chatAdoptionRate" sortField={sortField} sortAsc={sortAsc} onSort={handleSort} align="right" />
-                    <SortableHeader label="CLI" field="cliAdoptionRate" sortField={sortField} sortAsc={sortAsc} onSort={handleSort} align="right" last />
-                  </tr>
-                </thead>
-                <tbody>
-                  {sortedTeams.map((team, idx) => {
-                    const adoption = team.totalMembers > 0
-                      ? ((team.avgDailyActiveUsers / team.totalMembers) * 100)
-                      : 0;
-                    return (
-                      <tr key={`${team.teamSlug}-${idx}`} className="border-b last:border-0">
-                        <td className="py-3 pr-4">
-                          <span className="font-medium">{team.teamName}</span>
-                          <Badge variant="outline" className="ml-2 text-[10px]">{team.source}</Badge>
-                        </td>
-                        <td className="py-3 pr-4 text-right">{team.totalMembers}</td>
-                        <td className="py-3 pr-4 text-right">
-                          {team.avgDailyActiveUsers.toFixed(1)}
-                          <span className="ml-1 text-xs text-[hsl(var(--muted-foreground))]">
-                            ({adoption.toFixed(0)}%)
-                          </span>
-                        </td>
-                        <td className="py-3 pr-4 text-right">{team.totalLocAdded.toLocaleString()}</td>
-                        <td className="py-3 pr-4 text-right">{team.overallAcceptanceRate.toFixed(1)}%</td>
-                        <td className="py-3 pr-4 text-right">
-                          <Badge variant={team.agentAdoptionRate >= 50 ? "success" : team.agentAdoptionRate >= 20 ? "warning" : "secondary"}>
-                            {team.agentAdoptionRate.toFixed(1)}%
-                          </Badge>
-                        </td>
-                        <td className="py-3 pr-4 text-right">
-                          <Badge variant={team.chatAdoptionRate >= 50 ? "success" : team.chatAdoptionRate >= 20 ? "warning" : "secondary"}>
-                            {team.chatAdoptionRate.toFixed(1)}%
-                          </Badge>
-                        </td>
-                        <td className="py-3 text-right">
-                          <Badge variant={team.cliAdoptionRate >= 50 ? "success" : team.cliAdoptionRate >= 20 ? "warning" : "secondary"}>
-                            {team.cliAdoptionRate.toFixed(1)}%
-                          </Badge>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          )}
+          <PaginatedTable<TeamSummary>
+            fetchUrl="/api/teams"
+            extraParams={extraParams}
+            columns={teamColumns}
+            defaultSort="totalMembers"
+            rowKey={(row) => `${row.source}:${row.teamSlug}`}
+            dataExtractor={(json) => (json.teams as TeamSummary[]) ?? []}
+            queryKey="teams-table"
+            searchable
+            searchPlaceholder="Search teams…"
+            onTotalChange={setTotalTeams}
+          />
         </CardContent>
       </Card>
     </div>

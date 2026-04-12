@@ -21,11 +21,56 @@ async function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+// ── Adaptive rate-limit tracking ──────────────────────────────────────
+
+interface RateLimitState {
+  remaining: number;
+  resetAt: number; // Unix timestamp in ms
+}
+
+let rateLimitState: RateLimitState = {
+  remaining: 5000,
+  resetAt: Date.now() + 3600_000,
+};
+
+function updateRateLimit(resp: Response): void {
+  const remaining = resp.headers.get("x-ratelimit-remaining");
+  const reset = resp.headers.get("x-ratelimit-reset");
+  if (remaining !== null) {
+    rateLimitState.remaining = parseInt(remaining, 10);
+  }
+  if (reset !== null) {
+    rateLimitState.resetAt = parseInt(reset, 10) * 1000;
+  }
+}
+
+/**
+ * Adaptive delay based on remaining rate limit quota.
+ * - > 1000 remaining: no delay
+ * - 100–1000 remaining: 200ms delay
+ * - < 100 remaining: wait until reset
+ */
+async function adaptiveRateDelay(): Promise<void> {
+  if (rateLimitState.remaining > 1000) return;
+  if (rateLimitState.remaining > 100) {
+    await sleep(200);
+    return;
+  }
+  // Low quota: wait until reset
+  const waitMs = Math.max(0, rateLimitState.resetAt - Date.now() + 1000);
+  if (waitMs > 0 && waitMs < 3600_000) {
+    console.warn(`[Rate Limit] Only ${rateLimitState.remaining} requests remaining, waiting ${Math.round(waitMs / 1000)}s until reset`);
+    await sleep(waitMs);
+  }
+}
+
 export async function githubFetch<T>(path: string, retries = 3): Promise<T> {
   const url = path.startsWith("http") ? path : `${GITHUB_API_BASE}${path}`;
 
   for (let attempt = 0; attempt < retries; attempt++) {
+    await adaptiveRateDelay();
     const resp = await fetch(url, { headers: headers(), cache: "no-store" });
+    updateRateLimit(resp);
 
     if (resp.ok) {
       return resp.json() as Promise<T>;
@@ -57,6 +102,7 @@ export async function githubFetchPaginated<T>(path: string, perPage = 100): Prom
   while (true) {
     const separator = path.includes("?") ? "&" : "?";
     const url = `${path}${separator}per_page=${perPage}&page=${page}`;
+    await adaptiveRateDelay();
     const resp = await fetch(
       url.startsWith("http") ? url : `${GITHUB_API_BASE}${url}`,
       { headers: headers(), cache: "no-store" }
@@ -66,6 +112,8 @@ export async function githubFetchPaginated<T>(path: string, perPage = 100): Prom
       if (resp.status === 204) break;
       throw new Error(`GitHub API error ${resp.status} on ${url}`);
     }
+
+    updateRateLimit(resp);
 
     const data = await resp.json();
     const items = Array.isArray(data) ? data : data.seats || data.members || [];
@@ -85,11 +133,48 @@ export async function fetchNDJSON<T>(downloadUrl: string): Promise<T[]> {
     throw new Error(`Failed to download NDJSON: ${resp.status}`);
   }
 
-  const text = await resp.text();
-  return text
-    .split("\n")
-    .filter((line) => line.trim())
-    .map((line) => JSON.parse(line) as T);
+  const results: T[] = [];
+
+  // Use streaming if body is available, otherwise fall back to text
+  if (resp.body) {
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      // Keep incomplete last line in buffer
+      buffer = lines.pop() || "";
+
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (trimmed) {
+          results.push(JSON.parse(trimmed) as T);
+        }
+      }
+    }
+
+    // Process remaining buffer
+    const remaining = buffer.trim();
+    if (remaining) {
+      results.push(JSON.parse(remaining) as T);
+    }
+  } else {
+    // Fallback: load entire response as text
+    const text = await resp.text();
+    for (const line of text.split("\n")) {
+      const trimmed = line.trim();
+      if (trimmed) {
+        results.push(JSON.parse(trimmed) as T);
+      }
+    }
+  }
+
+  return results;
 }
 
 export async function githubFetchPaginatedWithCutoff<
@@ -107,6 +192,7 @@ export async function githubFetchPaginatedWithCutoff<
     const separator = path.includes("?") ? "&" : "?";
     const url = `${path}${separator}per_page=${perPage}&page=${page}`;
     const fullUrl = url.startsWith("http") ? url : `${GITHUB_API_BASE}${url}`;
+    await adaptiveRateDelay();
     const resp = await fetch(fullUrl, { headers: headers(), cache: "no-store" });
 
     if (!resp.ok) {
@@ -125,6 +211,7 @@ export async function githubFetchPaginatedWithCutoff<
     }
 
     const batch: T[] = await resp.json();
+    updateRateLimit(resp);
     if (!batch || batch.length === 0) break;
 
     if (cutoffDate) {
@@ -143,7 +230,6 @@ export async function githubFetchPaginatedWithCutoff<
 
     if (batch.length < perPage) break;
     page++;
-    if (page > 1) await sleep(200);
   }
 
   return all;
@@ -165,6 +251,7 @@ export async function githubFetchCursorPaginatedWithCutoff<
     const cursorParam: string = after ? `&after=${after}` : "";
     const url: string = `${path}${separator}per_page=${perPage}${cursorParam}`;
     const fullUrl: string = url.startsWith("http") ? url : `${GITHUB_API_BASE}${url}`;
+    await adaptiveRateDelay();
     const resp: Response = await fetch(fullUrl, { headers: headers(), cache: "no-store" });
 
     if (!resp.ok) {
@@ -183,6 +270,7 @@ export async function githubFetchCursorPaginatedWithCutoff<
     }
 
     const batch: T[] = await resp.json();
+    updateRateLimit(resp);
     if (!batch || batch.length === 0) break;
 
     if (cutoffDate) {
@@ -207,11 +295,9 @@ export async function githubFetchCursorPaginatedWithCutoff<
     } else {
       break;
     }
-
-    await sleep(200);
   }
 
   return all;
 }
 
-export { GITHUB_API_BASE, sleep };
+export { GITHUB_API_BASE, sleep, adaptiveRateDelay };

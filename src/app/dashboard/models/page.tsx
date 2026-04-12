@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import dynamic from "next/dynamic";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { MetricCard } from "@/components/cards/MetricCard";
@@ -9,6 +9,7 @@ import { ChartSkeleton } from "@/components/states/ChartSkeleton";
 import { useDateRange } from "@/contexts/DateRangeContext";
 import { useScope } from "@/contexts/ScopeContext";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
+import { ExportMenu } from "@/components/ui/ExportMenu";
 
 const ModelUsageBarChart = dynamic(
   () => import("@/components/charts/ModelUsageBarChart").then(m => ({ default: m.ModelUsageBarChart })),
@@ -80,6 +81,11 @@ export default function ModelsPage() {
   const { kpis, modelBreakdown, modelByFeature, modelTrend, modelByLanguage } = data;
   const topModels = modelBreakdown.slice(0, 8).map((m) => m.model);
 
+  const kpiRef = useRef<HTMLDivElement>(null);
+  const chartsRef = useRef<HTMLDivElement>(null);
+  const featureRef = useRef<HTMLDivElement>(null);
+  const langRef = useRef<HTMLDivElement>(null);
+
   // Top languages per model (top 3 models, top 5 languages each)
   const topModelNames = modelBreakdown.slice(0, 5).map((m) => m.model);
   const topLangByModel = topModelNames.map((model) => ({
@@ -94,11 +100,26 @@ export default function ModelsPage() {
       <PageHeader
         title="Model Statistics"
         description="AI model usage, trends, and feature breakdown across your enterprise"
-      />
+      >
+        <ExportMenu
+          pdf={{
+            sectionRefs: [kpiRef, chartsRef, featureRef, langRef],
+            title: "Model Statistics",
+            filename: `models-report-${days}d`,
+            metadata: {
+              reportName: "Model Statistics",
+              dateRange: `Last ${days} days`,
+              teams: buildScopeParams().get("teams") || undefined,
+              orgs: buildScopeParams().get("orgs") || undefined,
+            },
+          }}
+          isReady={!!data}
+        />
+      </PageHeader>
 
       <ScopeFilter />
 
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4 mb-8">
+      <div ref={kpiRef} className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4 mb-8">
         <MetricCard
           title="Models Used"
           value={kpis.totalModels}
@@ -127,7 +148,7 @@ export default function ModelsPage() {
         />
       </div>
 
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2 mb-6">
+      <div ref={chartsRef} className="grid grid-cols-1 gap-6 lg:grid-cols-2 mb-6">
         <ModelUsageBarChart data={modelBreakdown} />
 
         <div className="lg:col-span-1">
@@ -135,12 +156,12 @@ export default function ModelsPage() {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 gap-6 mb-6">
+      <div ref={featureRef} className="grid grid-cols-1 gap-6 mb-6">
         <ModelFeatureTable data={modelByFeature} />
       </div>
 
       {topLangByModel.length > 0 && (
-        <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
+        <div ref={langRef} className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
           {topLangByModel.map(({ model, languages }) => (
             <Card key={model}>
               <CardHeader>

@@ -77,6 +77,59 @@ export function getSeatsByOrg(orgSlug: string): SeatRow[] {
   return db.prepare(`SELECT * FROM copilot_seats WHERE org_slug = ? ORDER BY user_login`).all(orgSlug) as SeatRow[];
 }
 
+export interface PaginatedSeats {
+  seats: SeatRow[];
+  total: number;
+}
+
+export function getSeatsPaginated(
+  page: number,
+  pageSize: number,
+  sortField: string,
+  sortDir: "asc" | "desc",
+  allowedLogins?: Set<string>,
+): PaginatedSeats {
+  const db = getDb();
+
+  const sortColumns: Record<string, string> = {
+    user_login: "user_login",
+    org_slug: "org_slug",
+    plan_type: "plan_type",
+    _lastActivity: "last_activity_at",
+    last_activity_editor: "last_activity_editor",
+  };
+  const sqlSort = sortColumns[sortField] || "last_activity_at";
+  const sqlDir = sortDir === "asc" ? "ASC" : "DESC";
+  const offset = (page - 1) * pageSize;
+
+  if (allowedLogins && allowedLogins.size > 0) {
+    const loginsArray = Array.from(allowedLogins);
+    const placeholders = loginsArray.map(() => "?").join(",");
+
+    const countRow = db.prepare(
+      `SELECT COUNT(*) as total FROM copilot_seats WHERE user_login IN (${placeholders})`
+    ).get(...loginsArray) as { total: number };
+
+    const seats = db.prepare(`
+      SELECT * FROM copilot_seats
+      WHERE user_login IN (${placeholders})
+      ORDER BY ${sqlSort} ${sqlDir}
+      LIMIT ? OFFSET ?
+    `).all(...loginsArray, pageSize, offset) as SeatRow[];
+
+    return { seats, total: countRow.total };
+  }
+
+  const countRow = db.prepare(`SELECT COUNT(*) as total FROM copilot_seats`).get() as { total: number };
+  const seats = db.prepare(`
+    SELECT * FROM copilot_seats
+    ORDER BY ${sqlSort} ${sqlDir}
+    LIMIT ? OFFSET ?
+  `).all(pageSize, offset) as SeatRow[];
+
+  return { seats, total: countRow.total };
+}
+
 export function getSeatStats(): { total: number; active30d: number; inactive30d: number; pendingCancellation: number } {
   const db = getDb();
   const thirtyDaysAgo = new Date();
