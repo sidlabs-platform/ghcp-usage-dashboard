@@ -31,9 +31,8 @@ export async function GET(request: NextRequest) {
     const { resolveEnterpriseId, getAllUserMetrics } = await import("@/lib/db/metrics-repo");
     const { extractCompletionMetrics, extractAgentMetrics } = await import("@/lib/aggregation/separate-metrics");
 
-    const defaultRange = getDateRange(7);
-    const startDay = params.get("startDay") || defaultRange.start;
-    const endDay = params.get("endDay") || defaultRange.end;
+    const days = Number(params.get("days") ?? 7);
+    const { start: startDay, end: endDay } = getDateRange(days);
 
     const scopeFilter = parseScopeFilter(params);
 

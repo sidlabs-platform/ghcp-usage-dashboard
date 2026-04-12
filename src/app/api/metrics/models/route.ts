@@ -20,9 +20,8 @@ export interface ModelStatsResponse {
 export async function GET(request: NextRequest) {
   try {
     const params = request.nextUrl.searchParams;
-    const defaultRange = getDateRange(7);
-    const startDay = params.get("startDay") || defaultRange.start;
-    const endDay = params.get("endDay") || defaultRange.end;
+    const days = Number(params.get("days") ?? 7);
+    const { start: startDay, end: endDay } = getDateRange(days);
 
     const scopeFilter = parseScopeFilter(params);
     const userRecords = filterByScope(getAllUserMetrics(startDay, endDay), scopeFilter);
