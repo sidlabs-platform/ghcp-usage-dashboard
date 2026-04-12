@@ -68,8 +68,8 @@ function getDateRange(
       ? nextDay(lastEnd)
       : subtractDays(today, 365);
     const endDate = subtractDays(today, 31);
-    // Skip if start >= end (detailed already covers the window)
-    if (startDate >= endDate) return null;
+    // Skip if start > end (detailed already covers the window)
+    if (startDate > endDate) return null;
     return { startDate, endDate };
   }
 
@@ -212,8 +212,10 @@ export async function syncBilling(
   let usageRecords = 0;
   let premiumRecords = 0;
 
-  const reportTypes: BillingReportType[] = ["summarized", "detailed", "premium_request"];
-  const totalSteps = reportTypes.length + 1; // +1 for aggregation step
+  // Compute totalSteps dynamically based on enabled sub-toggles
+  let totalSteps = 1; // aggregation always runs
+  if (isBillingSubEnabled("meteredUsage")) totalSteps += 2; // summarized + detailed
+  if (isBillingSubEnabled("premiumRequests")) totalSteps += 1;
   let step = 0;
 
   // ── Summarized usage ────────────────────────────────────────────────
