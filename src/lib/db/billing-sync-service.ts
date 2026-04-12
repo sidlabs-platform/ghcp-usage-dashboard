@@ -54,11 +54,14 @@ function getDateRange(
 ): { startDate: string; endDate: string } | null {
   const today = todayStr();
 
+  // Helper: advance one day past last_report_end to avoid re-fetching the last day
+  const nextDay = (dateStr: string) => subtractDays(dateStr, -1);
+
   if (reportType === "summarized") {
     // Summarized: from up to 365 days ago → 32 days ago (non-overlapping with detailed's 31-day window)
     const syncState = getBillingSyncState(reportType);
     const startDate = syncState?.last_report_end
-      ? syncState.last_report_end
+      ? nextDay(syncState.last_report_end)
       : subtractDays(today, 365);
     const endDate = subtractDays(today, 32);
     // Skip if start >= end (detailed already covers the window)
@@ -71,12 +74,15 @@ function getDateRange(
   const syncState = getBillingSyncState(reportType);
   let startDate: string;
   if (syncState?.last_report_end) {
-    startDate = syncState.last_report_end;
+    startDate = nextDay(syncState.last_report_end);
   } else {
     startDate = subtractDays(today, maxDays);
   }
   const earliest = subtractDays(today, maxDays);
   if (startDate < earliest) startDate = earliest;
+
+  // Skip if start > end (already fully synced)
+  if (startDate > today) return null;
 
   return { startDate, endDate: today };
 }

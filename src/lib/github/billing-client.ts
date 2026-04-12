@@ -143,54 +143,73 @@ async function downloadReportCSV(downloadUrl: string): Promise<string> {
 
 // ── CSV Parsing ───────────────────────────────────────────────────────
 
-function parseCSVLine(line: string): string[] {
-  const values: string[] = [];
-  let current = "";
+/**
+ * Parse CSV content into rows, correctly handling:
+ * - Quoted fields with commas
+ * - Escaped quotes (doubled "")
+ * - Multiline quoted fields (newlines inside quotes)
+ * - CRLF and LF line endings
+ */
+function parseCSV<T>(csvContent: string): T[] {
+  const rows: string[][] = [];
+  let currentRow: string[] = [];
+  let currentField = "";
   let inQuotes = false;
 
-  for (let i = 0; i < line.length; i++) {
-    const ch = line[i];
+  for (let i = 0; i < csvContent.length; i++) {
+    const ch = csvContent[i];
+
     if (inQuotes) {
       if (ch === '"') {
-        if (i + 1 < line.length && line[i + 1] === '"') {
-          current += '"';
+        if (i + 1 < csvContent.length && csvContent[i + 1] === '"') {
+          currentField += '"';
           i++;
         } else {
           inQuotes = false;
         }
       } else {
-        current += ch;
+        currentField += ch;
       }
     } else if (ch === '"') {
       inQuotes = true;
     } else if (ch === ",") {
-      values.push(current.trim());
-      current = "";
+      currentRow.push(currentField.trim());
+      currentField = "";
+    } else if (ch === "\r") {
+      // skip CR, handle LF next
+    } else if (ch === "\n") {
+      currentRow.push(currentField.trim());
+      currentField = "";
+      if (currentRow.some((v) => v.length > 0)) {
+        rows.push(currentRow);
+      }
+      currentRow = [];
     } else {
-      current += ch;
+      currentField += ch;
     }
   }
-  values.push(current.trim());
-  return values;
-}
 
-function parseCSV<T>(csvContent: string): T[] {
-  const lines = csvContent.split("\n").filter((l) => l.trim().length > 0);
-  if (lines.length < 2) return [];
+  // Flush last field/row
+  currentRow.push(currentField.trim());
+  if (currentRow.some((v) => v.length > 0)) {
+    rows.push(currentRow);
+  }
 
-  const headers = parseCSVLine(lines[0]);
-  const rows: T[] = [];
+  if (rows.length < 2) return [];
 
-  for (let i = 1; i < lines.length; i++) {
-    const values = parseCSVLine(lines[i]);
+  const headers = rows[0];
+  const result: T[] = [];
+
+  for (let i = 1; i < rows.length; i++) {
+    const values = rows[i];
     const row: Record<string, string> = {};
     for (let j = 0; j < headers.length; j++) {
       row[headers[j]] = values[j] ?? "";
     }
-    rows.push(row as T);
+    result.push(row as T);
   }
 
-  return rows;
+  return result;
 }
 
 /**
