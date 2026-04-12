@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getCodeScanningDaily, getDependabotDaily, getSecretScanningDaily, getSecurityOverview, computeMTTR } from "@/lib/db/ghas-repo";
 import { computeSecuritySummary, formatMTTR } from "@/lib/aggregation/ghas-aggregation";
-import { isMetricEnabled } from "@/lib/config/dashboard-config";
+import { isMetricEnabled, isEnterpriseEnabled, getResolvedOrgs } from "@/lib/config/dashboard-config";
 import { getDateRange } from "@/lib/utils";
 
 export async function GET(request: NextRequest) {
@@ -10,9 +10,14 @@ export async function GET(request: NextRequest) {
     const days = parseInt(params.get("days") || "28", 10);
     const { start, end } = getDateRange(days);
 
-    // Resolve scope: defaults to enterprise, supports ?scope=org&scopeId=my-org
-    const scope = params.get("scope") || "enterprise";
-    const scopeId = params.get("scopeId") || process.env.GITHUB_ENTERPRISE || "";
+    // Resolve scope: defaults to enterprise when available, otherwise first org
+    let scope = params.get("scope") || (isEnterpriseEnabled() ? "enterprise" : "org");
+    let scopeId = params.get("scopeId") || "";
+    if (!scopeId) {
+      scopeId = isEnterpriseEnabled()
+        ? (process.env.GITHUB_ENTERPRISE || "")
+        : (getResolvedOrgs()[0] || "");
+    }
 
     // Get overview stats from DB
     const overview = getSecurityOverview(scope, scopeId);

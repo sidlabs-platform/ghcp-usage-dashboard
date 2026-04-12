@@ -2,7 +2,7 @@
 // Supports incremental sync via per-report-type sync state tracking
 
 import { billingClient } from "@/lib/github/billing-client";
-import { isMetricEnabled } from "@/lib/config/dashboard-config";
+import { isMetricEnabled, getEffectiveBillingEnabled, isBillingSubEnabled } from "@/lib/config/dashboard-config";
 import {
   upsertUsageRecords,
   upsertPremiumRequests,
@@ -45,8 +45,9 @@ export interface BillingSyncProgress {
 }
 
 // ── Date range calculation ────────────────────────────────────────────
-// Summarized covers the historical window BEFORE the last 31 days.
-// Detailed covers the most recent 31 days (has user-level detail).
+// Summarized covers the historical window BEFORE the last 30 days.
+// Detailed covers the most recent 30 days (has user-level detail).
+// The API maximum inclusive range is 31 days, so maxDays=30 ⇒ [today-30, today] = 31 inclusive.
 // This ensures NO overlap — each date is sourced from exactly one report type.
 
 function getDateRange(
@@ -57,24 +58,26 @@ function getDateRange(
   // Helper: advance one day past last_report_end to avoid re-fetching the last day
   const nextDay = (dateStr: string) => subtractDays(dateStr, -1);
 
+  // Only trust sync state if the last sync succeeded
+  const syncState = getBillingSyncState(reportType);
+  const lastEnd = syncState?.status === "ok" ? syncState.last_report_end : null;
+
   if (reportType === "summarized") {
-    // Summarized: from up to 365 days ago → 32 days ago (non-overlapping with detailed's 31-day window)
-    const syncState = getBillingSyncState(reportType);
-    const startDate = syncState?.last_report_end
-      ? nextDay(syncState.last_report_end)
+    // Summarized: from up to 365 days ago → 31 days ago (non-overlapping with detailed's 30-day window)
+    const startDate = lastEnd
+      ? nextDay(lastEnd)
       : subtractDays(today, 365);
-    const endDate = subtractDays(today, 32);
+    const endDate = subtractDays(today, 31);
     // Skip if start >= end (detailed already covers the window)
     if (startDate >= endDate) return null;
     return { startDate, endDate };
   }
 
-  // Detailed and premium_request: last 31 days
-  const maxDays = 31;
-  const syncState = getBillingSyncState(reportType);
+  // Detailed and premium_request: last 30 days (31 inclusive with endDate=today)
+  const maxDays = 30;
   let startDate: string;
-  if (syncState?.last_report_end) {
-    startDate = nextDay(syncState.last_report_end);
+  if (lastEnd) {
+    startDate = nextDay(lastEnd);
   } else {
     startDate = subtractDays(today, maxDays);
   }
@@ -199,8 +202,8 @@ async function syncPremiumRequestReport(
 export async function syncBilling(
   onProgress?: (p: BillingSyncProgress) => void,
 ): Promise<{ usageRecords: number; premiumRecords: number; errors: string[] }> {
-  if (!isMetricEnabled("billing")) {
-    console.log("[Billing Sync] Billing metric is disabled, skipping");
+  if (!getEffectiveBillingEnabled()) {
+    console.log("[Billing Sync] Billing is disabled (enterprise off or billing metric disabled), skipping");
     return { usageRecords: 0, premiumRecords: 0, errors: [] };
   }
 
@@ -214,60 +217,64 @@ export async function syncBilling(
   let step = 0;
 
   // ── Summarized usage ────────────────────────────────────────────────
-  try {
-    step++;
-    onProgress?.({
-      phase: "billing-sync",
-      reportType: "summarized",
-      current: step,
-      total: totalSteps,
-      message: "Starting summarized usage sync...",
-    });
-    usageRecords += await syncUsageReport(enterprise, "summarized", onProgress);
-  } catch (err) {
-    const msg = formatError("summarized", err);
-    errors.push(msg);
-    console.error(`[Billing Sync] ${msg}`);
-    const prev = getBillingSyncState("summarized");
-    updateBillingSyncState("summarized", new Date().toISOString(), prev?.last_report_start ?? "", prev?.last_report_end ?? "", "error", msg);
-  }
+  if (isBillingSubEnabled("meteredUsage")) {
+    try {
+      step++;
+      onProgress?.({
+        phase: "billing-sync",
+        reportType: "summarized",
+        current: step,
+        total: totalSteps,
+        message: "Starting summarized usage sync...",
+      });
+      usageRecords += await syncUsageReport(enterprise, "summarized", onProgress);
+    } catch (err) {
+      const msg = formatError("summarized", err);
+      errors.push(msg);
+      console.error(`[Billing Sync] ${msg}`);
+      const prev = getBillingSyncState("summarized");
+      updateBillingSyncState("summarized", new Date().toISOString(), prev?.last_report_start ?? "", prev?.last_report_end ?? "", "error", msg);
+    }
 
-  // ── Detailed usage ──────────────────────────────────────────────────
-  try {
-    step++;
-    onProgress?.({
-      phase: "billing-sync",
-      reportType: "detailed",
-      current: step,
-      total: totalSteps,
-      message: "Starting detailed usage sync...",
-    });
-    usageRecords += await syncUsageReport(enterprise, "detailed", onProgress);
-  } catch (err) {
-    const msg = formatError("detailed", err);
-    errors.push(msg);
-    console.error(`[Billing Sync] ${msg}`);
-    const prev = getBillingSyncState("detailed");
-    updateBillingSyncState("detailed", new Date().toISOString(), prev?.last_report_start ?? "", prev?.last_report_end ?? "", "error", msg);
+    // ── Detailed usage ──────────────────────────────────────────────────
+    try {
+      step++;
+      onProgress?.({
+        phase: "billing-sync",
+        reportType: "detailed",
+        current: step,
+        total: totalSteps,
+        message: "Starting detailed usage sync...",
+      });
+      usageRecords += await syncUsageReport(enterprise, "detailed", onProgress);
+    } catch (err) {
+      const msg = formatError("detailed", err);
+      errors.push(msg);
+      console.error(`[Billing Sync] ${msg}`);
+      const prev = getBillingSyncState("detailed");
+      updateBillingSyncState("detailed", new Date().toISOString(), prev?.last_report_start ?? "", prev?.last_report_end ?? "", "error", msg);
+    }
   }
 
   // ── Premium requests ────────────────────────────────────────────────
-  try {
-    step++;
-    onProgress?.({
-      phase: "billing-sync",
-      reportType: "premium_request",
-      current: step,
-      total: totalSteps,
-      message: "Starting premium request sync...",
-    });
-    premiumRecords += await syncPremiumRequestReport(enterprise, onProgress);
-  } catch (err) {
-    const msg = formatError("premium_request", err);
-    errors.push(msg);
-    console.error(`[Billing Sync] ${msg}`);
-    const prev = getBillingSyncState("premium_request");
-    updateBillingSyncState("premium_request", new Date().toISOString(), prev?.last_report_start ?? "", prev?.last_report_end ?? "", "error", msg);
+  if (isBillingSubEnabled("premiumRequests")) {
+    try {
+      step++;
+      onProgress?.({
+        phase: "billing-sync",
+        reportType: "premium_request",
+        current: step,
+        total: totalSteps,
+        message: "Starting premium request sync...",
+      });
+      premiumRecords += await syncPremiumRequestReport(enterprise, onProgress);
+    } catch (err) {
+      const msg = formatError("premium_request", err);
+      errors.push(msg);
+      console.error(`[Billing Sync] ${msg}`);
+      const prev = getBillingSyncState("premium_request");
+      updateBillingSyncState("premium_request", new Date().toISOString(), prev?.last_report_start ?? "", prev?.last_report_end ?? "", "error", msg);
+    }
   }
 
   // ── Refresh daily aggregates ────────────────────────────────────────

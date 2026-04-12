@@ -1,5 +1,6 @@
-// Data Sync Service — fetches data day-by-day using enterprise-1-day endpoint
+// Data Sync Service — fetches data day-by-day using enterprise-1-day or org-1-day endpoints
 // Supports 90+ day backfill by looping through each day individually
+// Respects dashboard-config.json for enterprise/userMetrics/seats/teams toggles
 
 import { metricsClient } from "@/lib/github/metrics-client";
 import { seatsClient } from "@/lib/github/seats-client";
@@ -23,19 +24,18 @@ import { cache } from "@/lib/cache/memory-cache";
 import { upsertAllTeams } from "./teams-repo";
 import { datesBetween } from "@/lib/utils";
 import { syncBilling } from "./billing-sync-service";
+import {
+  isEnterpriseEnabled,
+  isCopilotSubEnabled,
+  getResolvedOrgs,
+} from "@/lib/config/dashboard-config";
 
 const BACKFILL_DAYS = parseInt(process.env.BACKFILL_DAYS || "90", 10);
 
-function getEnterprise(): string {
-  const ent = process.env.GITHUB_ENTERPRISE;
-  if (!ent) throw new Error("GITHUB_ENTERPRISE environment variable is required");
-  return ent;
-}
-
-function getOrgs(): string[] {
-  const orgs = process.env.GITHUB_ORGS;
-  if (!orgs) return [];
-  return orgs.split(",").map((o) => o.trim()).filter(Boolean);
+/** Returns the enterprise slug, or null when enterprise mode is disabled. */
+function getEnterprise(): string | null {
+  if (!isEnterpriseEnabled()) return null;
+  return process.env.GITHUB_ENTERPRISE || null;
 }
 
 export interface SyncProgress {
@@ -53,11 +53,12 @@ export async function syncDay(
   onProgress?: (progress: SyncProgress) => void
 ): Promise<{ enterprise: number; users: number; orgs: Record<string, number> }> {
   const enterprise = getEnterprise();
-  const orgs = getOrgs();
+  const orgs = getResolvedOrgs();
+  const userMetricsEnabled = isCopilotSubEnabled("userMetrics");
   const result = { enterprise: 0, users: 0, orgs: {} as Record<string, number> };
 
-  // 1. Enterprise aggregate
-  if (!isSynced("enterprise", enterprise, day)) {
+  // 1. Enterprise aggregate (skipped when enterprise is disabled)
+  if (enterprise && !isSynced("enterprise", enterprise, day)) {
     onProgress?.({ phase: "enterprise", day, current: 0, total: 1, message: `Fetching enterprise metrics for ${day}` });
     try {
       const data = await metricsClient.getEnterpriseDailyReport(enterprise, day);
@@ -73,18 +74,45 @@ export async function syncDay(
     }
   }
 
-  // 2. Enterprise user-level
-  if (!isSynced("users", enterprise, day)) {
-    onProgress?.({ phase: "users", day, current: 0, total: 1, message: `Fetching user metrics for ${day}` });
-    try {
-      const users = await metricsClient.getEnterpriseUserDailyReport(enterprise, day);
-      batchUpsertUserDayMetrics(users);
-      result.users = users.length;
-      recordSync("users", enterprise, day, users.length);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      recordSync("users", enterprise, day, 0, "error", msg);
-      console.error(`Failed to sync user data for ${day}:`, msg);
+  // 2. User-level metrics (skipped when userMetrics is disabled)
+  if (userMetricsEnabled) {
+    if (enterprise) {
+      // Enterprise mode: fetch user data at enterprise scope
+      if (!isSynced("users", enterprise, day)) {
+        onProgress?.({ phase: "users", day, current: 0, total: 1, message: `Fetching user metrics for ${day}` });
+        try {
+          const users = await metricsClient.getEnterpriseUserDailyReport(enterprise, day);
+          batchUpsertUserDayMetrics(users);
+          result.users = users.length;
+          recordSync("users", enterprise, day, users.length);
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          recordSync("users", enterprise, day, 0, "error", msg);
+          console.error(`Failed to sync user data for ${day}:`, msg);
+        }
+      }
+    } else {
+      // Org-only mode: fetch user data per org.
+      // NOTE: The user_daily_metrics PK is (day, enterprise_id, user_id). If a user
+      // belongs to multiple orgs, later fetches overwrite earlier ones. This is
+      // acceptable because Copilot user metrics are global (not per-org scoped),
+      // so the data for a given user is the same regardless of queried org.
+      const orgUserLimit = pLimit(5);
+      await Promise.all(orgs.map((org) => orgUserLimit(async () => {
+        if (!isSynced("users", org, day)) {
+          onProgress?.({ phase: "users", day, current: 0, total: orgs.length, message: `Fetching user metrics for org ${org} on ${day}` });
+          try {
+            const users = await metricsClient.getOrgUserDailyReport(org, day);
+            batchUpsertUserDayMetrics(users);
+            result.users += users.length;
+            recordSync("users", org, day, users.length);
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            recordSync("users", org, day, 0, "error", msg);
+            console.error(`Failed to sync user data for org ${org} on ${day}:`, msg);
+          }
+        }
+      })));
     }
   }
 
@@ -119,6 +147,8 @@ export async function backfill(
 ): Promise<{ daysSynced: number; daysSkipped: number; errors: number }> {
   const numDays = days || BACKFILL_DAYS;
   const enterprise = getEnterprise();
+  const orgs = getResolvedOrgs();
+  const userMetricsEnabled = isCopilotSubEnabled("userMetrics");
 
   // Calculate date range: from (today - numDays) to yesterday
   const yesterday = new Date();
@@ -137,7 +167,14 @@ export async function backfill(
 
   const dayLimit = pLimit(3);
   const dayPromises = allDays.map((day, i) => dayLimit(async () => {
-    if (isSynced("enterprise", enterprise, day) && isSynced("users", enterprise, day)) {
+    // Determine if this day is already fully synced
+    const entSynced = enterprise ? isSynced("enterprise", enterprise, day) : true;
+    const userSynced = !userMetricsEnabled || (enterprise
+      ? isSynced("users", enterprise, day)
+      : orgs.every((org) => isSynced("users", org, day)));
+    const orgSynced = orgs.every((org) => isSynced("org", org, day));
+
+    if (entSynced && userSynced && orgSynced) {
       daysSkipped++;
       return;
     }
@@ -170,7 +207,28 @@ export async function incrementalSync(
   onProgress?: (progress: SyncProgress) => void
 ): Promise<{ daysSynced: number; daysSkipped: number }> {
   const enterprise = getEnterprise();
-  const latestDay = getLatestSyncDay("enterprise", enterprise);
+  const orgs = getResolvedOrgs();
+
+  // Find the minimum latest sync day across all relevant scopes.
+  // This ensures no org/scope falls behind.
+  const latestDays: (string | null)[] = [];
+  if (enterprise) {
+    latestDays.push(getLatestSyncDay("enterprise", enterprise));
+  }
+  for (const org of orgs) {
+    latestDays.push(getLatestSyncDay("org", org));
+  }
+
+  if (latestDays.length === 0) {
+    console.warn("[Sync] No enterprise and no orgs configured — nothing to sync");
+    return { daysSynced: 0, daysSkipped: 0 };
+  }
+
+  // Use the minimum (oldest) day so we catch up all scopes
+  const nonNullDays = latestDays.filter((d): d is string => d !== null);
+  const latestDay = nonNullDays.length > 0
+    ? nonNullDays.reduce((min, d) => d < min ? d : min)
+    : null;
 
   const yesterday = new Date();
   yesterday.setDate(yesterday.getDate() - 1);
@@ -187,19 +245,15 @@ export async function incrementalSync(
   }
 
   // Otherwise, sync from day after latest to yesterday
-  const start = new Date(latestDay);
-  start.setDate(start.getDate() + 1);
-  const days = datesBetween(start.toISOString().split("T")[0], yesterdayStr);
+  const startDate = new Date(latestDay);
+  startDate.setDate(startDate.getDate() + 1);
+  const days = datesBetween(startDate.toISOString().split("T")[0], yesterdayStr);
 
   let daysSynced = 0;
   let daysSkipped = 0;
 
   for (let i = 0; i < days.length; i++) {
-    if (isSynced("enterprise", enterprise, days[i])) {
-      daysSkipped++;
-      continue;
-    }
-
+    // syncDay() internally checks isSynced per-scope and skips already-synced scopes
     onProgress?.({
       phase: "incremental",
       day: days[i],
@@ -222,7 +276,12 @@ export async function incrementalSync(
 // ── Sync seats ────────────────────────────────────────────────────────
 
 export async function syncSeats(): Promise<number> {
-  const orgs = getOrgs();
+  if (!isCopilotSubEnabled("seats")) {
+    console.log("[Sync] Seats sync disabled by config");
+    return 0;
+  }
+
+  const orgs = getResolvedOrgs();
   let total = 0;
 
   for (const org of orgs) {
@@ -242,18 +301,25 @@ export async function syncSeats(): Promise<number> {
 // ── Sync teams ────────────────────────────────────────────────────────
 
 export async function syncTeams(): Promise<number> {
+  if (!isCopilotSubEnabled("teams")) {
+    console.log("[Sync] Teams sync disabled by config");
+    return 0;
+  }
+
   const enterprise = getEnterprise();
-  const orgs = getOrgs();
+  const orgs = getResolvedOrgs();
   let total = 0;
 
-  // Enterprise teams
-  try {
-    const entTeams = await teamsClient.getEnterpriseTeamsWithMembers(enterprise);
-    upsertAllTeams(entTeams);
-    total += entTeams.length;
-    recordSync("teams", enterprise, null, entTeams.length);
-  } catch (err) {
-    console.error("Failed to sync enterprise teams:", err);
+  // Enterprise teams (only when enterprise mode is on)
+  if (enterprise) {
+    try {
+      const entTeams = await teamsClient.getEnterpriseTeamsWithMembers(enterprise);
+      upsertAllTeams(entTeams);
+      total += entTeams.length;
+      recordSync("teams", enterprise, null, entTeams.length);
+    } catch (err) {
+      console.error("Failed to sync enterprise teams:", err);
+    }
   }
 
   // Org teams
@@ -311,7 +377,7 @@ export async function fullSync(
     console.error("[Sync] Failed to refresh summary tables:", err);
   }
 
-  // Sync billing reports (if enabled)
+  // Sync billing reports (only available in enterprise mode)
   onProgress?.({ phase: "billing", current: 0, total: 1, message: "Syncing billing reports..." });
   try {
     await syncBilling((p) => {
@@ -336,7 +402,7 @@ async function sync28DayFallback(
   onProgress?: (progress: SyncProgress) => void
 ): Promise<void> {
   const enterprise = getEnterprise();
-  const orgs = getOrgs();
+  const orgs = getResolvedOrgs();
 
   // Only run if enterprise_daily_metrics is still empty for the last 28 days
   const yesterday = new Date();
@@ -346,23 +412,21 @@ async function sync28DayFallback(
   const startStr = start28.toISOString().split("T")[0];
   const endStr = yesterday.toISOString().split("T")[0];
 
-  if (hasEnterpriseDataForRange(enterprise, startStr, endStr)) {
-    return; // Already have enterprise data, no fallback needed
-  }
-
-  // Enterprise 28-day fallback
-  onProgress?.({ phase: "fallback", current: 0, total: 1, message: "Trying enterprise 28-day report as fallback..." });
-  try {
-    const data = await metricsClient.getEnterprise28DayReport(enterprise);
-    if (data.length > 0) {
-      console.log(`[Sync] 28-day enterprise fallback: ${data.length} day-totals received`);
-      for (const record of data) {
-        upsertEnterpriseDayMetrics(record);
-        recordSync("enterprise", enterprise, record.day, 1, "success");
+  // Enterprise 28-day fallback (only when enterprise mode is on)
+  if (enterprise && !hasEnterpriseDataForRange(enterprise, startStr, endStr)) {
+    onProgress?.({ phase: "fallback", current: 0, total: 1, message: "Trying enterprise 28-day report as fallback..." });
+    try {
+      const data = await metricsClient.getEnterprise28DayReport(enterprise);
+      if (data.length > 0) {
+        console.log(`[Sync] 28-day enterprise fallback: ${data.length} day-totals received`);
+        for (const record of data) {
+          upsertEnterpriseDayMetrics(record);
+          recordSync("enterprise", enterprise, record.day, 1, "success");
+        }
       }
+    } catch (err) {
+      console.error("[Sync] 28-day enterprise fallback failed:", err);
     }
-  } catch (err) {
-    console.error("[Sync] 28-day enterprise fallback failed:", err);
   }
 
   // Org 28-day fallback — only for orgs without existing data

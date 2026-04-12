@@ -1,6 +1,49 @@
 import { NextResponse } from "next/server";
-import { getDashboardConfig } from "@/lib/config/dashboard-config";
+import {
+  getDashboardConfig,
+  isEnterpriseEnabled,
+  getEffectiveBillingEnabled,
+  isBillingSubEnabled,
+  isCopilotSubEnabled,
+  getResolvedOrgs,
+} from "@/lib/config/dashboard-config";
 
 export async function GET() {
-  return NextResponse.json(getDashboardConfig());
+  const config = getDashboardConfig();
+  const enterpriseMode = isEnterpriseEnabled();
+
+  // Compute effective page visibility
+  const copilotEnabled = config.metrics.copilot.enabled;
+  const userMetrics = copilotEnabled && isCopilotSubEnabled("userMetrics");
+  const billingEnabled = getEffectiveBillingEnabled();
+
+  const securityEnabled =
+    config.metrics.codeScanning?.enabled ||
+    config.metrics.dependabot?.enabled ||
+    config.metrics.secretScanning?.enabled;
+
+  const pageVisibility = {
+    overview: copilotEnabled,
+    codeGeneration: userMetrics,
+    chatModes: userMetrics,
+    models: userMetrics,
+    cli: userMetrics,
+    pullRequests: copilotEnabled,
+    teams: userMetrics && isCopilotSubEnabled("teams"),
+    users: userMetrics,
+    seats: copilotEnabled && isCopilotSubEnabled("seats"),
+    ideLanguages: userMetrics,
+    security: securityEnabled,
+    billing: billingEnabled,
+    billingUsage: billingEnabled && isBillingSubEnabled("meteredUsage"),
+    billingPremium: billingEnabled && isBillingSubEnabled("premiumRequests"),
+  };
+
+  return NextResponse.json({
+    ...config,
+    enterpriseMode,
+    effectiveBilling: billingEnabled,
+    resolvedOrgs: getResolvedOrgs(),
+    pageVisibility,
+  });
 }

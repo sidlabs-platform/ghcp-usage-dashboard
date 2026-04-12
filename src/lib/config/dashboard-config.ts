@@ -3,6 +3,26 @@ import path from "path";
 
 // --- Types ---
 
+export interface CopilotMetricConfig {
+  enabled: boolean;
+  /** Fetch enterprise-level aggregate data. When false, GITHUB_ENTERPRISE is not required. */
+  enterprise?: boolean;
+  /** Fetch user-level daily metrics. When false, pages depending on user data are hidden. */
+  userMetrics?: boolean;
+  /** Sync Copilot seat assignments. */
+  seats?: boolean;
+  /** Sync team memberships. */
+  teams?: boolean;
+}
+
+export interface BillingMetricConfig {
+  enabled: boolean;
+  /** Sync metered usage (summarized + detailed) reports. */
+  meteredUsage?: boolean;
+  /** Sync premium request reports. */
+  premiumRequests?: boolean;
+}
+
 export interface MetricConfig {
   enabled: boolean;
 }
@@ -12,14 +32,22 @@ export interface SecurityConfig {
   backfillDays: number;
 }
 
+export interface OrganizationsConfig {
+  /** If non-empty, only these orgs are synced (must be a subset of GITHUB_ORGS). */
+  include?: string[];
+  /** These orgs are excluded from GITHUB_ORGS. */
+  exclude?: string[];
+}
+
 export interface DashboardConfig {
   metrics: {
-    copilot: MetricConfig;
+    copilot: CopilotMetricConfig;
     codeScanning: MetricConfig;
     dependabot: MetricConfig;
     secretScanning: MetricConfig;
-    billing: MetricConfig;
+    billing: BillingMetricConfig;
   };
+  organizations?: OrganizationsConfig;
   security: SecurityConfig;
 }
 
@@ -34,12 +62,13 @@ export type MetricCategory =
 
 const DEFAULT_CONFIG: DashboardConfig = {
   metrics: {
-    copilot: { enabled: true },
+    copilot: { enabled: true, enterprise: true, userMetrics: true, seats: true, teams: true },
     codeScanning: { enabled: true },
     dependabot: { enabled: true },
     secretScanning: { enabled: true },
-    billing: { enabled: false },
+    billing: { enabled: false, meteredUsage: true, premiumRequests: true },
   },
+  organizations: { include: [], exclude: [] },
   security: {
     syncIntervalMinutes: 60,
     backfillDays: 90,
@@ -65,10 +94,12 @@ export function getDashboardConfig(): DashboardConfig {
 
   try {
     const raw = fs.readFileSync(configPath, "utf-8");
-    const parsed = JSON.parse(raw) as DashboardConfig;
-    cachedConfig = parsed;
+    const parsed = JSON.parse(raw) as Partial<DashboardConfig>;
+    // Deep-merge with defaults for backward compatibility
+    const merged = deepMergeConfig(DEFAULT_CONFIG, parsed);
+    cachedConfig = merged;
     cacheTimestamp = now;
-    return parsed;
+    return merged;
   } catch (err) {
     console.warn(
       "Failed to read dashboard-config.json, using defaults:",
@@ -87,4 +118,93 @@ export function isMetricEnabled(category: MetricCategory): boolean {
 
 export function getSecurityConfig(): SecurityConfig {
   return getDashboardConfig().security;
+}
+
+// --- Enterprise helpers ---
+
+/** Returns true when enterprise mode is effectively enabled (config + env var present). */
+export function isEnterpriseEnabled(): boolean {
+  const config = getDashboardConfig();
+  if (!(config.metrics.copilot.enterprise ?? true)) return false;
+  if (!process.env.GITHUB_ENTERPRISE) {
+    if (config.metrics.copilot.enterprise === true) {
+      console.warn("[Config] copilot.enterprise=true but GITHUB_ENTERPRISE env var is missing — treating as disabled");
+    }
+    return false;
+  }
+  return true;
+}
+
+// --- Copilot sub-toggle helpers ---
+
+export function isCopilotSubEnabled(sub: "enterprise" | "userMetrics" | "seats" | "teams"): boolean {
+  const config = getDashboardConfig();
+  if (!config.metrics.copilot.enabled) return false;
+  if (sub === "enterprise") return isEnterpriseEnabled();
+  return config.metrics.copilot[sub] ?? true;
+}
+
+// --- Billing helpers ---
+
+/** Effective billing state: force-disabled when enterprise is off. */
+export function getEffectiveBillingEnabled(): boolean {
+  if (!isEnterpriseEnabled()) return false;
+  return isMetricEnabled("billing");
+}
+
+export function isBillingSubEnabled(sub: "meteredUsage" | "premiumRequests"): boolean {
+  if (!getEffectiveBillingEnabled()) return false;
+  const config = getDashboardConfig();
+  return (config.metrics.billing as BillingMetricConfig)[sub] ?? true;
+}
+
+// --- Organization helpers ---
+
+/** Resolve effective org list: GITHUB_ORGS filtered by config include/exclude. */
+export function getResolvedOrgs(): string[] {
+  const envOrgs = process.env.GITHUB_ORGS;
+  let orgs = envOrgs ? envOrgs.split(",").map((o) => o.trim()).filter(Boolean) : [];
+
+  const config = getDashboardConfig();
+  const orgConfig = config.organizations ?? {};
+
+  const include = orgConfig.include ?? [];
+  const exclude = orgConfig.exclude ?? [];
+
+  if (include.length > 0) {
+    const includeSet = new Set(include.map((o) => o.toLowerCase()));
+    orgs = orgs.filter((o) => includeSet.has(o.toLowerCase()));
+  }
+
+  if (exclude.length > 0) {
+    const excludeSet = new Set(exclude.map((o) => o.toLowerCase()));
+    orgs = orgs.filter((o) => !excludeSet.has(o.toLowerCase()));
+  }
+
+  return orgs;
+}
+
+// --- Deep merge utility ---
+
+function deepMergeConfig(defaults: DashboardConfig, overrides: Partial<DashboardConfig>): DashboardConfig {
+  const result = { ...defaults };
+
+  if (overrides.metrics) {
+    result.metrics = { ...defaults.metrics };
+    for (const key of Object.keys(overrides.metrics) as (keyof typeof overrides.metrics)[]) {
+      if (overrides.metrics[key] && typeof overrides.metrics[key] === "object") {
+        result.metrics[key] = { ...defaults.metrics[key], ...overrides.metrics[key] } as any;
+      }
+    }
+  }
+
+  if (overrides.organizations) {
+    result.organizations = { ...defaults.organizations, ...overrides.organizations };
+  }
+
+  if (overrides.security) {
+    result.security = { ...defaults.security, ...overrides.security };
+  }
+
+  return result;
 }

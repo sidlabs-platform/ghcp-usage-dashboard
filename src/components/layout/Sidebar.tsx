@@ -24,46 +24,44 @@ import {
 import { useState, useEffect } from "react";
 
 const navItems = [
-  { href: "/dashboard", label: "Overview", icon: LayoutDashboard },
-  { href: "/dashboard/security", label: "Security", icon: ShieldCheck },
-  { href: "/dashboard/code-generation", label: "Code Generation", icon: Code2 },
-  { href: "/dashboard/chat-modes", label: "Copilot Features", icon: Sparkles },
-  { href: "/dashboard/models", label: "Model Statistics", icon: Brain },
-  { href: "/dashboard/cli", label: "CLI Analytics", icon: Terminal },
-  { href: "/dashboard/pull-requests", label: "Pull Requests", icon: GitPullRequest },
-  { href: "/dashboard/teams", label: "Team Analytics", icon: Users },
-  { href: "/dashboard/users", label: "User Explorer", icon: UserSearch },
-  { href: "/dashboard/seats", label: "Seat Management", icon: CreditCard },
-  { href: "/dashboard/ide-languages", label: "IDE & Languages", icon: Monitor },
-  { href: "/dashboard/billing", label: "Billing", icon: Receipt, billing: true },
-  { href: "/dashboard/billing-usage", label: "Metered Usage", icon: DollarSign, billing: true },
-  { href: "/dashboard/billing-premium", label: "Premium Requests", icon: Zap, billing: true },
+  { href: "/dashboard", label: "Overview", icon: LayoutDashboard, visKey: "overview" as const },
+  { href: "/dashboard/security", label: "Security", icon: ShieldCheck, visKey: "security" as const },
+  { href: "/dashboard/code-generation", label: "Code Generation", icon: Code2, visKey: "codeGeneration" as const },
+  { href: "/dashboard/chat-modes", label: "Copilot Features", icon: Sparkles, visKey: "chatModes" as const },
+  { href: "/dashboard/models", label: "Model Statistics", icon: Brain, visKey: "models" as const },
+  { href: "/dashboard/cli", label: "CLI Analytics", icon: Terminal, visKey: "cli" as const },
+  { href: "/dashboard/pull-requests", label: "Pull Requests", icon: GitPullRequest, visKey: "pullRequests" as const },
+  { href: "/dashboard/teams", label: "Team Analytics", icon: Users, visKey: "teams" as const },
+  { href: "/dashboard/users", label: "User Explorer", icon: UserSearch, visKey: "users" as const },
+  { href: "/dashboard/seats", label: "Seat Management", icon: CreditCard, visKey: "seats" as const },
+  { href: "/dashboard/ide-languages", label: "IDE & Languages", icon: Monitor, visKey: "ideLanguages" as const },
+  { href: "/dashboard/billing", label: "Billing", icon: Receipt, visKey: "billing" as const },
+  { href: "/dashboard/billing-usage", label: "Metered Usage", icon: DollarSign, visKey: "billingUsage" as const },
+  { href: "/dashboard/billing-premium", label: "Premium Requests", icon: Zap, visKey: "billingPremium" as const },
 ];
+
+type PageVisibility = Record<string, boolean>;
 
 export function Sidebar() {
   const pathname = usePathname();
   const [collapsed, setCollapsed] = useState(false);
-  const [securityEnabled, setSecurityEnabled] = useState(true);
-  const [billingEnabled, setBillingEnabled] = useState(false);
+  const [pageVisibility, setPageVisibility] = useState<PageVisibility>({});
 
   useEffect(() => {
     fetch("/api/config")
       .then((r) => r.json())
       .then((config) => {
-        const enabled =
-          config?.metrics?.codeScanning?.enabled ||
-          config?.metrics?.dependabot?.enabled ||
-          config?.metrics?.secretScanning?.enabled;
-        setSecurityEnabled(enabled);
-        setBillingEnabled(config?.metrics?.billing?.enabled ?? false);
+        if (config?.pageVisibility) {
+          setPageVisibility(config.pageVisibility);
+        }
       })
-      .catch(() => {}); // Default to showing if config unavailable
+      .catch(() => {}); // Default to showing all if config unavailable
   }, []);
 
   const visibleNavItems = navItems.filter((item) => {
-    if (item.href === "/dashboard/security" && !securityEnabled) return false;
-    if ('billing' in item && item.billing && !billingEnabled) return false;
-    return true;
+    // If pageVisibility hasn't loaded yet, show everything
+    if (Object.keys(pageVisibility).length === 0) return true;
+    return pageVisibility[item.visKey] !== false;
   });
 
   return (

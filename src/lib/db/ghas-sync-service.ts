@@ -15,20 +15,18 @@ import {
   updateGhasSyncState,
 } from "./ghas-repo";
 import { getDb } from "./database";
-import { isMetricEnabled, getSecurityConfig } from "@/lib/config/dashboard-config";
+import { isMetricEnabled, getSecurityConfig, isEnterpriseEnabled, getResolvedOrgs } from "@/lib/config/dashboard-config";
 
 // ── Helpers ───────────────────────────────────────────────────────────
 
-function getEnterprise(): string {
-  const ent = process.env.GITHUB_ENTERPRISE;
-  if (!ent) throw new Error("GITHUB_ENTERPRISE environment variable is required");
-  return ent;
+/** Returns the enterprise slug, or null when enterprise mode is disabled. */
+function getEnterprise(): string | null {
+  if (!isEnterpriseEnabled()) return null;
+  return process.env.GITHUB_ENTERPRISE || null;
 }
 
 function getOrgs(): string[] {
-  const orgs = process.env.GITHUB_ORGS;
-  if (!orgs) return [];
-  return orgs.split(",").map((o) => o.trim()).filter(Boolean);
+  return getResolvedOrgs();
 }
 
 // ── Progress type ─────────────────────────────────────────────────────
@@ -169,16 +167,18 @@ export async function fullGhasSync(
   const results: Record<string, { alertsFetched: number; isIncremental: boolean }> = {};
   let errors = 0;
 
-  // Sync enterprise-level
-  for (const category of categories) {
-    try {
-      const key = `enterprise:${enterprise}:${category}`;
-      results[key] = await syncCategory("enterprise", enterprise, category, onProgress);
-    } catch (err) {
-      errors++;
-      console.error(`[GHAS Sync] Enterprise ${category} failed:`, err);
+  // Sync enterprise-level (only when enterprise mode is on)
+  if (enterprise) {
+    for (const category of categories) {
+      try {
+        const key = `enterprise:${enterprise}:${category}`;
+        results[key] = await syncCategory("enterprise", enterprise, category, onProgress);
+      } catch (err) {
+        errors++;
+        console.error(`[GHAS Sync] Enterprise ${category} failed:`, err);
+      }
+      await new Promise((r) => setTimeout(r, 2000));
     }
-    await new Promise((r) => setTimeout(r, 2000));
   }
 
   // Sync org-level

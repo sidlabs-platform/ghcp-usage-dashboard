@@ -1,7 +1,11 @@
 {
   "metrics": {
     "copilot": {
-      "enabled": true
+      "enabled": true,
+      "enterprise": true,
+      "userMetrics": true,
+      "seats": true,
+      "teams": true
     },
     "codeScanning": {
       "enabled": true
@@ -13,8 +17,14 @@
       "enabled": true
     },
     "billing": {
-      "enabled": false
+      "enabled": true,
+      "meteredUsage": true,
+      "premiumRequests": true
     }
+  },
+  "organizations": {
+    "include": [],
+    "exclude": []
   },
   "security": {
     "syncIntervalMinutes": 60,

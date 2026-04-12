@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDependabotDaily, computeMTTR } from "@/lib/db/ghas-repo";
 import { computeFixRate, computeTrendDirection, getSeverityDistribution, getTopEcosystems, formatMTTR } from "@/lib/aggregation/ghas-aggregation";
-import { isMetricEnabled } from "@/lib/config/dashboard-config";
+import { isMetricEnabled, isEnterpriseEnabled, getResolvedOrgs } from "@/lib/config/dashboard-config";
 import { getDateRange } from "@/lib/utils";
 
 export async function GET(request: NextRequest) {
@@ -13,9 +13,14 @@ export async function GET(request: NextRequest) {
     const params = request.nextUrl.searchParams;
     const days = parseInt(params.get("days") || "28", 10);
     const { start, end } = getDateRange(days);
-    // Resolve scope: defaults to enterprise, supports ?scope=org&scopeId=my-org
-    const scope = params.get("scope") || "enterprise";
-    const scopeId = params.get("scopeId") || process.env.GITHUB_ENTERPRISE || "";
+    // Resolve scope: defaults to enterprise when available, otherwise first org
+    const scope = params.get("scope") || (isEnterpriseEnabled() ? "enterprise" : "org");
+    let scopeId = params.get("scopeId") || "";
+    if (!scopeId) {
+      scopeId = isEnterpriseEnabled()
+        ? (process.env.GITHUB_ENTERPRISE || "")
+        : (getResolvedOrgs()[0] || "");
+    }
 
     const daily = getDependabotDaily(scope, scopeId, start, end);
     const fixRate = computeFixRate(daily);
