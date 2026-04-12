@@ -65,7 +65,10 @@ export default function PullRequestsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const fetchData = useCallback(() => {
+  const kpiRef = useRef<HTMLDivElement>(null);
+  const chartsRef = useRef<HTMLDivElement>(null);
+
+  const fetchData= useCallback(() => {
     setLoading(true);
     const params = new URLSearchParams({ days: String(days) });
     if (selectedOrgs.length > 0) params.set("orgs", selectedOrgs.join(","));
@@ -135,9 +138,6 @@ export default function PullRequestsPage() {
   const copilotReviewedPct = data.totals.merged > 0
     ? Number(((data.totals.mergedReviewedByCopilot / data.totals.merged) * 100).toFixed(1))
     : 0;
-
-  const kpiRef = useRef<HTMLDivElement>(null);
-  const chartsRef = useRef<HTMLDivElement>(null);
 
   return (
     <div>

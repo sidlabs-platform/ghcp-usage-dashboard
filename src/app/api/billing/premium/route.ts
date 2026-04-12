@@ -5,6 +5,8 @@ import {
   getPremiumRequestsPaginated,
   getPremiumFilterOptions,
 } from "@/lib/db/billing-repo";
+import type { PremiumFilters } from "@/lib/db/billing-repo";
+import { resolveFilteredUsers } from "@/lib/db/teams-repo";
 import { withCache } from "@/lib/cache/with-cache";
 import { withTimeout } from "@/lib/api/timeout";
 import { CACHE_TTL } from "@/lib/cache/memory-cache";
@@ -25,7 +27,14 @@ async function handler(request: NextRequest) {
     const sortDir = (params.get("sortDir") === "asc" ? "asc" : "desc") as "asc" | "desc";
     const search = params.get("search") || undefined;
 
-    const filters = {
+    // Parse scope filter (teams/orgs)
+    const teamsParam = params.get("teams");
+    const orgsParam = params.get("orgs");
+    const selectedTeams = teamsParam ? teamsParam.split(",").filter(Boolean) : [];
+    const selectedOrgs = orgsParam ? orgsParam.split(",").filter(Boolean) : [];
+    const hasScope = selectedTeams.length > 0 || selectedOrgs.length > 0;
+
+    const filters: PremiumFilters = {
       username: params.get("username") || undefined,
       organization: params.get("organization")?.split(",").filter(Boolean),
       model: params.get("model")?.split(",").filter(Boolean),
@@ -33,6 +42,11 @@ async function handler(request: NextRequest) {
         : params.get("exceedsQuota") === "false" ? false
         : undefined,
     };
+
+    if (hasScope) {
+      filters.allowedLogins = resolveFilteredUsers(selectedTeams, selectedOrgs);
+      if (selectedOrgs.length > 0) filters.scopeOrgs = selectedOrgs;
+    }
 
     const { records, total } = getPremiumRequestsPaginated(
       start, end, page, pageSize, sort, sortDir, search, filters,

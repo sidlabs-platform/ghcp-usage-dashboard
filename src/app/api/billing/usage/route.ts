@@ -5,6 +5,8 @@ import {
   getUsageRecordsPaginated,
   getUsageFilterOptions,
 } from "@/lib/db/billing-repo";
+import type { BillingFilters } from "@/lib/db/billing-repo";
+import { resolveFilteredUsers } from "@/lib/db/teams-repo";
 import { withCache } from "@/lib/cache/with-cache";
 import { withTimeout } from "@/lib/api/timeout";
 import { CACHE_TTL } from "@/lib/cache/memory-cache";
@@ -26,7 +28,14 @@ async function handler(request: NextRequest) {
     const sortDir = (params.get("sortDir") === "asc" ? "asc" : "desc") as "asc" | "desc";
     const search = params.get("search") || undefined;
 
-    const filters = {
+    // Parse scope filter (teams/orgs)
+    const teamsParam = params.get("teams");
+    const orgsParam = params.get("orgs");
+    const selectedTeams = teamsParam ? teamsParam.split(",").filter(Boolean) : [];
+    const selectedOrgs = orgsParam ? orgsParam.split(",").filter(Boolean) : [];
+    const hasScope = selectedTeams.length > 0 || selectedOrgs.length > 0;
+
+    const filters: BillingFilters = {
       product: params.get("product")?.split(",").filter(Boolean),
       sku: params.get("sku")?.split(",").filter(Boolean),
       organization: params.get("organization")?.split(",").filter(Boolean),
@@ -34,6 +43,11 @@ async function handler(request: NextRequest) {
       chargeScope: (params.get("chargeScope") as ChargeScope) || undefined,
       costCenter: params.get("costCenter") || undefined,
     };
+
+    if (hasScope) {
+      filters.allowedLogins = resolveFilteredUsers(selectedTeams, selectedOrgs);
+      if (selectedOrgs.length > 0) filters.scopeOrgs = selectedOrgs;
+    }
 
     const { records, total } = getUsageRecordsPaginated(
       start, end, page, pageSize, sort, sortDir, search, filters,

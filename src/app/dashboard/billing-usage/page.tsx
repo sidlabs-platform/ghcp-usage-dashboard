@@ -5,12 +5,21 @@ import dynamic from "next/dynamic";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { ChartSkeleton } from "@/components/states/ChartSkeleton";
 import { useDateRange } from "@/contexts/DateRangeContext";
+import { useScope } from "@/contexts/ScopeContext";
 import { DollarSign, Search, Filter, Building2, Users, ChevronDown, X } from "lucide-react";
 import { ExportMenu } from "@/components/ui/ExportMenu";
-import type { BillingUsageRecord, ChargeScope } from "@/lib/types/billing";
+import type { BillingUsageRecord, ChargeScope, BillingCostCenterBreakdown, BillingRepositoryBreakdown } from "@/lib/types/billing";
 
 const BillingCostTrendChart = dynamic(
   () => import("@/components/charts/BillingCostTrendChart").then(m => ({ default: m.BillingCostTrendChart })),
+  { ssr: false, loading: () => <ChartSkeleton /> }
+);
+const BillingCostCenterChart = dynamic(
+  () => import("@/components/charts/BillingCostCenterChart").then(m => ({ default: m.BillingCostCenterChart })),
+  { ssr: false, loading: () => <ChartSkeleton /> }
+);
+const BillingRepoBreakdownChart = dynamic(
+  () => import("@/components/charts/BillingRepoBreakdownChart").then(m => ({ default: m.BillingRepoBreakdownChart })),
   { ssr: false, loading: () => <ChartSkeleton /> }
 );
 
@@ -40,6 +49,7 @@ const fmtCurrency = (v: number) =>
 
 export default function MeteredUsagePage() {
   const { days } = useDateRange();
+  const { hasFilter, buildScopeParams, selectedEntTeams, selectedOrgTeams, selectedOrgs: scopeOrgs } = useScope();
   const [records, setRecords] = useState<BillingUsageRecord[]>([]);
   const [pagination, setPagination] = useState<PaginationInfo>({ page: 1, pageSize: 50, totalItems: 0, totalPages: 0 });
   const [filterOptions, setFilterOptions] = useState<FilterOptions>({ products: [], skus: [], organizations: [], costCenters: [] });
@@ -50,6 +60,7 @@ export default function MeteredUsagePage() {
   const [search, setSearch] = useState("");
   const [selectedProducts, setSelectedProducts] = useState<string[]>([]);
   const [selectedOrgs, setSelectedOrgs] = useState<string[]>([]);
+  const [selectedCostCenter, setSelectedCostCenter] = useState("");
   const [chargeScope, setChargeScope] = useState<ChargeScope | "">("");
   const [sort, setSort] = useState("date");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
@@ -57,9 +68,13 @@ export default function MeteredUsagePage() {
 
   // Trend data
   const [trendData, setTrendData] = useState<{ day: string; total_net: number; user_net: number; org_net: number }[]>([]);
+  // Insight data
+  const [costCenterData, setCostCenterData] = useState<BillingCostCenterBreakdown[]>([]);
+  const [repoData, setRepoData] = useState<BillingRepositoryBreakdown[]>([]);
 
   const tableRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<HTMLDivElement>(null);
+  const insightsRef = useRef<HTMLDivElement>(null);
 
   const buildParams = useCallback(() => {
     const p = new URLSearchParams();
@@ -71,9 +86,13 @@ export default function MeteredUsagePage() {
     if (search) p.set("search", search);
     if (selectedProducts.length) p.set("product", selectedProducts.join(","));
     if (selectedOrgs.length) p.set("organization", selectedOrgs.join(","));
+    if (selectedCostCenter) p.set("costCenter", selectedCostCenter);
     if (chargeScope) p.set("chargeScope", chargeScope);
+    // Merge scope params
+    const scopeParams = buildScopeParams();
+    scopeParams.forEach((v, k) => p.set(k, v));
     return p;
-  }, [days, page, sort, sortDir, search, selectedProducts, selectedOrgs, chargeScope]);
+  }, [days, page, sort, sortDir, search, selectedProducts, selectedOrgs, selectedCostCenter, chargeScope, buildScopeParams]);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -85,11 +104,33 @@ export default function MeteredUsagePage() {
       if (chargeScope) trendParams.set("chargeScope", chargeScope);
       if (selectedProducts.length) trendParams.set("product", selectedProducts.join(","));
       if (selectedOrgs.length) trendParams.set("organization", selectedOrgs.join(","));
+      if (selectedCostCenter) trendParams.set("costCenter", selectedCostCenter);
       if (search) trendParams.set("username", search);
+      // Merge scope params into trend/insight requests
+      const scopeParams = buildScopeParams();
+      scopeParams.forEach((v, k) => trendParams.set(k, v));
 
-      const [usageRes, trendRes] = await Promise.all([
+      const costCenterParams = new URLSearchParams();
+      costCenterParams.set("days", String(days));
+      costCenterParams.set("groupBy", "costCenter");
+      scopeParams.forEach((v, k) => costCenterParams.set(k, v));
+      if (selectedProducts.length) costCenterParams.set("product", selectedProducts.join(","));
+      if (selectedOrgs.length) costCenterParams.set("organization", selectedOrgs.join(","));
+      if (chargeScope) costCenterParams.set("chargeScope", chargeScope);
+
+      const repoParams = new URLSearchParams();
+      repoParams.set("days", String(days));
+      repoParams.set("groupBy", "repository");
+      scopeParams.forEach((v, k) => repoParams.set(k, v));
+      if (selectedProducts.length) repoParams.set("product", selectedProducts.join(","));
+      if (selectedOrgs.length) repoParams.set("organization", selectedOrgs.join(","));
+      if (chargeScope) repoParams.set("chargeScope", chargeScope);
+
+      const [usageRes, trendRes, ccRes, repoRes] = await Promise.all([
         fetch(`/api/billing/usage?${params.toString()}`),
         fetch(`/api/billing/usage/summary?${trendParams.toString()}`),
+        fetch(`/api/billing/usage/summary?${costCenterParams.toString()}`),
+        fetch(`/api/billing/usage/summary?${repoParams.toString()}`),
       ]);
       const usageData = await usageRes.json();
       if (usageData.enabled === false) { setEnabled(false); return; }
@@ -111,17 +152,23 @@ export default function MeteredUsagePage() {
         }
         setTrendData(Array.from(dayMap.values()).sort((a, b) => a.day.localeCompare(b.day)));
       }
+
+      const ccJson = await ccRes.json();
+      setCostCenterData(ccJson.data || []);
+
+      const repoJson = await repoRes.json();
+      setRepoData(repoJson.data || []);
     } catch (err) {
       console.error("Failed to load metered usage:", err);
     } finally {
       setLoading(false);
     }
-  }, [buildParams, days, chargeScope, selectedProducts, selectedOrgs, search]);
+  }, [buildParams, days, chargeScope, selectedProducts, selectedOrgs, selectedCostCenter, search, buildScopeParams]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
-  // Reset page when filters change
-  useEffect(() => { setPage(1); }, [search, selectedProducts, selectedOrgs, chargeScope, sort, sortDir]);
+  // Reset page when filters change (including scope)
+  useEffect(() => { setPage(1); }, [search, selectedProducts, selectedOrgs, selectedCostCenter, chargeScope, sort, sortDir, hasFilter, selectedEntTeams, selectedOrgTeams, scopeOrgs]);
 
   const handleSort = (col: string) => {
     if (sort === col) setSortDir(d => d === "asc" ? "desc" : "asc");
@@ -180,17 +227,32 @@ export default function MeteredUsagePage() {
             columns: csvColumns,
             dataExtractor: (json) => json.records,
             filename: `metered-usage-${days}d`,
-            metadata: { reportName: "Metered Usage Report", dateRange: `Last ${days} days` },
+            metadata: {
+              reportName: "Metered Usage Report",
+              dateRange: `Last ${days} days`,
+              ...(hasFilter && { teams: [...selectedEntTeams, ...selectedOrgTeams].join(", "), orgs: scopeOrgs.join(", ") }),
+            },
           }}
           pdf={{
-            sectionRefs: [chartRef, tableRef],
+            sectionRefs: [chartRef, insightsRef, tableRef],
             title: "Metered Usage Report",
             filename: `metered-usage-${days}d`,
-            metadata: { reportName: "Metered Usage Report", dateRange: `Last ${days} days` },
+            metadata: {
+              reportName: "Metered Usage Report",
+              dateRange: `Last ${days} days`,
+              ...(hasFilter && { teams: [...selectedEntTeams, ...selectedOrgTeams].join(", "), orgs: scopeOrgs.join(", ") }),
+            },
           }}
           isReady={!loading && records.length > 0}
         />
       </PageHeader>
+
+      {/* Active scope filter indicator */}
+      {hasFilter && (
+        <div className="rounded-lg border border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-950/30 px-4 py-2 text-sm text-blue-700 dark:text-blue-400">
+          📊 Showing filtered results: <strong>{[...selectedEntTeams, ...selectedOrgTeams, ...scopeOrgs].join(", ")}</strong>
+        </div>
+      )}
 
       {/* Filter Bar */}
       <div className="rounded-xl border bg-[hsl(var(--card))] p-4">
@@ -227,6 +289,18 @@ export default function MeteredUsagePage() {
             {filterOptions.organizations.map(o => <option key={o} value={o}>{o}</option>)}
           </select>
 
+          {/* Cost Center filter */}
+          {filterOptions.costCenters.length > 0 && (
+            <select
+              className="rounded-lg border bg-transparent px-3 py-2 text-sm"
+              value={selectedCostCenter}
+              onChange={(e) => setSelectedCostCenter(e.target.value)}
+            >
+              <option value="">All Cost Centers</option>
+              {filterOptions.costCenters.map(cc => <option key={cc} value={cc}>{cc}</option>)}
+            </select>
+          )}
+
           {/* Charge Scope toggle */}
           <div className="flex rounded-lg border overflow-hidden">
             {[
@@ -249,9 +323,9 @@ export default function MeteredUsagePage() {
           </div>
 
           {/* Clear filters */}
-          {(search || selectedProducts.length || selectedOrgs.length || chargeScope) && (
+          {(search || selectedProducts.length || selectedOrgs.length || selectedCostCenter || chargeScope) && (
             <button
-              onClick={() => { setSearch(""); setSelectedProducts([]); setSelectedOrgs([]); setChargeScope(""); }}
+              onClick={() => { setSearch(""); setSelectedProducts([]); setSelectedOrgs([]); setSelectedCostCenter(""); setChargeScope(""); }}
               className="text-xs text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] flex items-center gap-1"
             >
               <X className="h-3 w-3" /> Clear
@@ -351,6 +425,26 @@ export default function MeteredUsagePage() {
           </div>
         )}
       </div>
+
+      {/* Insight Charts: Cost Center & Repository Breakdown */}
+      {(costCenterData.length > 0 || repoData.length > 0) && (
+        <div ref={insightsRef} className="grid gap-6 lg:grid-cols-2">
+          {costCenterData.length > 0 && (
+            <div className="rounded-xl border bg-[hsl(var(--card))] p-6">
+              <h3 className="text-lg font-semibold mb-1">Cost by Cost Center</h3>
+              <p className="text-sm text-[hsl(var(--muted-foreground))] mb-4">Spending distribution across cost centers</p>
+              <BillingCostCenterChart data={costCenterData} />
+            </div>
+          )}
+          {repoData.length > 0 && (
+            <div className="rounded-xl border bg-[hsl(var(--card))] p-6">
+              <h3 className="text-lg font-semibold mb-1">Top Repositories by Cost</h3>
+              <p className="text-sm text-[hsl(var(--muted-foreground))] mb-4">Highest-spending repositories</p>
+              <BillingRepoBreakdownChart data={repoData} limit={15} />
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Org-Level Charges Info */}
       <div className="rounded-xl border border-emerald-200 dark:border-emerald-900 bg-emerald-50/50 dark:bg-emerald-950/20 p-6">

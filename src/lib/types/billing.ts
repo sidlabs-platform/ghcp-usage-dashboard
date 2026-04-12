@@ -163,6 +163,31 @@ export interface PremiumRequestModelSummary {
   unique_users: number;
 }
 
+// ── Cost Center / Repository / Premium Daily Breakdown ────────────────
+
+export interface BillingCostCenterBreakdown {
+  cost_center_name: string;
+  total_gross: number;
+  total_discount: number;
+  total_net: number;
+  record_count: number;
+}
+
+export interface BillingRepositoryBreakdown {
+  repository: string;
+  organization: string;
+  total_gross: number;
+  total_discount: number;
+  total_net: number;
+}
+
+export interface PremiumDailyTrend {
+  day: string;
+  total_requests: number;
+  total_net: number;
+  unique_users: number;
+}
+
 // ── CSV Row shapes (raw from downloaded report) ───────────────────────
 
 export interface UsageCSVRow {

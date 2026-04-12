@@ -78,7 +78,11 @@ export default function CLIPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const fetchData = useCallback(() => {
+  const kpiRef = useRef<HTMLDivElement>(null);
+  const chartsRef = useRef<HTMLDivElement>(null);
+  const tableRef = useRef<HTMLDivElement>(null);
+
+  const fetchData= useCallback(() => {
     setLoading(true);
     const params = new URLSearchParams({ days: String(days) });
     const scopeParams = buildScopeParams();
@@ -127,10 +131,6 @@ export default function CLIPage() {
     outputTokens: d.outputTokens,
     avgPerRequest: d.avgPerRequest,
   }));
-
-  const kpiRef = useRef<HTMLDivElement>(null);
-  const chartsRef = useRef<HTMLDivElement>(null);
-  const tableRef = useRef<HTMLDivElement>(null);
 
   return (
     <div>

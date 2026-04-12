@@ -123,14 +123,10 @@ async function waitForReport(
  * Download the CSV content from a report's download URL.
  */
 async function downloadReportCSV(downloadUrl: string): Promise<string> {
-  const token = process.env.GITHUB_TOKEN;
-  if (!token) throw new Error("GITHUB_TOKEN environment variable is required");
-
+  // download_urls are pre-signed cloud storage URLs (Azure/S3).
+  // Sending an Authorization header to a pre-signed URL causes a 403.
   const resp = await fetch(downloadUrl, {
-    headers: {
-      Authorization: `Bearer ${token}`,
-      Accept: "text/csv",
-    },
+    headers: { Accept: "text/csv" },
     cache: "no-store",
   });
 
@@ -297,7 +293,8 @@ async function fetchAndParseReport<T>(
     onProgress?.(`Downloading CSV from report ${report.id}...`);
     const csv = await downloadReportCSV(url);
     const records = parser(csv);
-    allRecords.push(...records);
+    // Avoid spread to prevent stack overflow with large datasets
+    for (const r of records) allRecords.push(r);
   }
 
   onProgress?.(

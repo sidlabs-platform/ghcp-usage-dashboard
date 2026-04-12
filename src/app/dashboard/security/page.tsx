@@ -66,7 +66,12 @@ export default function SecurityPage() {
   const [syncing, setSyncing] = useState(false);
   const [syncStatus, setSyncStatus] = useState<string | null>(null);
 
-  const fetchData = useCallback(async () => {
+  const kpiRef = useRef<HTMLDivElement>(null);
+  const csRef = useRef<HTMLElement>(null);
+  const depRef = useRef<HTMLElement>(null);
+  const ssRef = useRef<HTMLElement>(null);
+
+  const fetchData= useCallback(async () => {
     setLoading(true);
     try {
       // When an org is selected, use scope=org&scopeId=<org>
@@ -142,11 +147,6 @@ export default function SecurityPage() {
   }
 
   const summary = overview?.summary;
-
-  const kpiRef = useRef<HTMLDivElement>(null);
-  const csRef = useRef<HTMLElement>(null);
-  const depRef = useRef<HTMLElement>(null);
-  const ssRef = useRef<HTMLElement>(null);
 
   return (
     <div className="space-y-8">

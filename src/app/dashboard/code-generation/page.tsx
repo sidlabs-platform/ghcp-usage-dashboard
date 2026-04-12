@@ -43,7 +43,10 @@ export default function CodeGenerationPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const fetchData = useCallback(() => {
+  const kpiRef = useRef<HTMLDivElement>(null);
+  const chartsRef = useRef<HTMLDivElement>(null);
+
+  const fetchData= useCallback(() => {
     setLoading(true);
     const params = new URLSearchParams({ days: String(days) });
     const scopeParams = buildScopeParams();
@@ -69,9 +72,6 @@ export default function CodeGenerationPage() {
   if (!data) return <EmptyState />;
 
   const { kpis, dailyTrend, acceptanceRate, languageBreakdown, featureBreakdown } = data;
-
-  const kpiRef = useRef<HTMLDivElement>(null);
-  const chartsRef = useRef<HTMLDivElement>(null);
 
   return (
     <div>

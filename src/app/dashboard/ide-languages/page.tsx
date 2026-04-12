@@ -86,7 +86,11 @@ export default function IDELanguagesPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const fetchData = useCallback(() => {
+  const kpiRef = useRef<HTMLDivElement>(null);
+  const chartsRef = useRef<HTMLDivElement>(null);
+  const trendRef = useRef<HTMLDivElement>(null);
+
+  const fetchData= useCallback(() => {
     setLoading(true);
     const params = new URLSearchParams({ days: String(days) });
     const scopeParams = buildScopeParams();
@@ -133,11 +137,7 @@ export default function IDELanguagesPage() {
   const topIDE = data.ideDistribution.length > 0 ? data.ideDistribution[0].name : "N/A";
   const topLanguage = data.languageDistribution.length > 0 ? data.languageDistribution[0].name : "N/A";
 
-  const kpiRef = useRef<HTMLDivElement>(null);
-  const chartsRef = useRef<HTMLDivElement>(null);
-  const trendRef = useRef<HTMLDivElement>(null);
-
-  // Donut data for IDE distribution by interactions
+  // Donut datafor IDE distribution by interactions
   const ideDonutData = data.ideDistribution.map((ide) => ({
     name: ide.name,
     value: ide.interactions,

@@ -10,10 +10,13 @@ import type {
   BillingProductBreakdown,
   BillingOrgBreakdown,
   BillingUserBreakdown,
+  BillingCostCenterBreakdown,
+  BillingRepositoryBreakdown,
   BillingReportType,
   ChargeScope,
   PremiumRequestUserSummary,
   PremiumRequestModelSummary,
+  PremiumDailyTrend,
 } from "@/lib/types/billing";
 
 // ── Filter Interfaces ─────────────────────────────────────────────────
@@ -25,6 +28,10 @@ export interface BillingFilters {
   username?: string;
   chargeScope?: ChargeScope;
   costCenter?: string;
+  /** Scope filter: resolved user logins from team/org selection */
+  allowedLogins?: string[];
+  /** Scope filter: selected organization slugs for org-level charges */
+  scopeOrgs?: string[];
 }
 
 export interface PremiumFilters {
@@ -32,6 +39,10 @@ export interface PremiumFilters {
   organization?: string[];
   model?: string[];
   exceedsQuota?: boolean;
+  /** Scope filter: resolved user logins from team/org selection */
+  allowedLogins?: string[];
+  /** Scope filter: selected organization slugs for org-level charges */
+  scopeOrgs?: string[];
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────
@@ -50,7 +61,18 @@ function appendBillingFilters(
     clauses.push(`sku IN (${filters.sku.map(() => "?").join(",")})`);
     params.push(...filters.sku);
   }
-  if (filters.organization?.length) {
+  // Organization filter: intersect with scopeOrgs when both are present
+  if (filters.organization?.length && filters.scopeOrgs?.length) {
+    const intersection = filters.organization.filter(o => filters.scopeOrgs!.includes(o));
+    if (intersection.length === 0) {
+      clauses.push("1 = 0");
+      return;
+    }
+    clauses.push(
+      `organization IN (${intersection.map(() => "?").join(",")})`
+    );
+    params.push(...intersection);
+  } else if (filters.organization?.length) {
     clauses.push(
       `organization IN (${filters.organization.map(() => "?").join(",")})`
     );
@@ -68,6 +90,34 @@ function appendBillingFilters(
     clauses.push(`cost_center_name = ?`);
     params.push(filters.costCenter);
   }
+  // Scope filter: team/org filtering via resolved logins + org slugs
+  // Skip scopeOrgs in the OR clause if page-level org filter already intersected above
+  const scopeOrgsHandled = filters.organization?.length && filters.scopeOrgs?.length;
+  if (filters.allowedLogins !== undefined || (filters.scopeOrgs?.length && !scopeOrgsHandled)) {
+    // Short-circuit: if scope is active but resolved to nothing, match nothing
+    const hasLogins = filters.allowedLogins && filters.allowedLogins.length > 0;
+    const hasOrgs = filters.scopeOrgs && filters.scopeOrgs.length > 0 && !scopeOrgsHandled;
+    if (!hasLogins && !hasOrgs) {
+      clauses.push("1 = 0");
+      return;
+    }
+    const scopeParts: string[] = [];
+    if (hasLogins) {
+      scopeParts.push(
+        `username IN (${filters.allowedLogins!.map(() => "?").join(",")})`
+      );
+      params.push(...filters.allowedLogins!);
+    }
+    if (hasOrgs) {
+      scopeParts.push(
+        `organization IN (${filters.scopeOrgs!.map(() => "?").join(",")})`
+      );
+      params.push(...filters.scopeOrgs!);
+    }
+    if (scopeParts.length > 0) {
+      clauses.push(`(${scopeParts.join(" OR ")})`);
+    }
+  }
 }
 
 function appendPremiumFilters(
@@ -80,7 +130,18 @@ function appendPremiumFilters(
     clauses.push(`username = ?`);
     params.push(filters.username);
   }
-  if (filters.organization?.length) {
+  // Organization filter: intersect with scopeOrgs when both are present
+  if (filters.organization?.length && filters.scopeOrgs?.length) {
+    const intersection = filters.organization.filter(o => filters.scopeOrgs!.includes(o));
+    if (intersection.length === 0) {
+      clauses.push("1 = 0");
+      return;
+    }
+    clauses.push(
+      `organization IN (${intersection.map(() => "?").join(",")})`
+    );
+    params.push(...intersection);
+  } else if (filters.organization?.length) {
     clauses.push(
       `organization IN (${filters.organization.map(() => "?").join(",")})`
     );
@@ -93,6 +154,32 @@ function appendPremiumFilters(
   if (filters.exceedsQuota !== undefined) {
     clauses.push(`exceeds_quota = ?`);
     params.push(filters.exceedsQuota ? "TRUE" : "FALSE");
+  }
+  // Scope filter: team/org filtering via resolved logins + org slugs
+  const scopeOrgsHandled = filters.organization?.length && filters.scopeOrgs?.length;
+  if (filters.allowedLogins !== undefined || (filters.scopeOrgs?.length && !scopeOrgsHandled)) {
+    const hasLogins = filters.allowedLogins && filters.allowedLogins.length > 0;
+    const hasOrgs = filters.scopeOrgs && filters.scopeOrgs.length > 0 && !scopeOrgsHandled;
+    if (!hasLogins && !hasOrgs) {
+      clauses.push("1 = 0");
+      return;
+    }
+    const scopeParts: string[] = [];
+    if (hasLogins) {
+      scopeParts.push(
+        `username IN (${filters.allowedLogins!.map(() => "?").join(",")})`
+      );
+      params.push(...filters.allowedLogins!);
+    }
+    if (hasOrgs) {
+      scopeParts.push(
+        `organization IN (${filters.scopeOrgs!.map(() => "?").join(",")})`
+      );
+      params.push(...filters.scopeOrgs!);
+    }
+    if (scopeParts.length > 0) {
+      clauses.push(`(${scopeParts.join(" OR ")})`);
+    }
   }
 }
 
@@ -212,11 +299,16 @@ export function upsertPremiumRequests(
 
 export function getOverviewKPIs(
   start: string,
-  end: string
+  end: string,
+  filters?: BillingFilters
 ): BillingOverviewKPIs {
   const db = getDb();
 
   // Metered usage totals
+  const usageClauses: string[] = ["date >= ?", "date <= ?"];
+  const usageParams: unknown[] = [start, end];
+  appendBillingFilters(usageClauses, usageParams, filters);
+
   const usage = db
     .prepare(
       `
@@ -229,12 +321,22 @@ export function getOverviewKPIs(
       COALESCE(SUM(CASE WHEN charge_scope = 'user' THEN net_amount ELSE 0 END), 0) AS userChargesNet,
       COALESCE(SUM(CASE WHEN charge_scope = 'org'  THEN net_amount ELSE 0 END), 0) AS orgChargesNet
     FROM billing_usage_records
-    WHERE date >= ? AND date <= ?
+    ${buildWhereClause(usageClauses)}
   `
     )
-    .get(start, end) as BillingOverviewKPIs;
+    .get(...usageParams) as BillingOverviewKPIs;
 
   // Premium request totals (always user-level)
+  const premClauses: string[] = ["date >= ?", "date <= ?"];
+  const premParams: unknown[] = [start, end];
+  // Apply only scope filters to premium
+  if (filters?.allowedLogins?.length || filters?.scopeOrgs?.length) {
+    appendPremiumFilters(premClauses, premParams, {
+      allowedLogins: filters.allowedLogins,
+      scopeOrgs: filters.scopeOrgs,
+    });
+  }
+
   const premium = db
     .prepare(
       `
@@ -243,10 +345,10 @@ export function getOverviewKPIs(
       COALESCE(SUM(gross_amount), 0)     AS premGross,
       COALESCE(SUM(discount_amount), 0)  AS premDiscount
     FROM billing_premium_requests
-    WHERE date >= ? AND date <= ?
+    ${buildWhereClause(premClauses)}
   `
     )
-    .get(start, end) as { premNet: number; premGross: number; premDiscount: number } | undefined;
+    .get(...premParams) as { premNet: number; premGross: number; premDiscount: number } | undefined;
 
   const pn = premium?.premNet ?? 0;
   const pg = premium?.premGross ?? 0;
@@ -548,6 +650,93 @@ export function getPremiumModelSummary(
   `
     )
     .all(...params) as PremiumRequestModelSummary[];
+}
+
+// ── Cost Center / Repository / Premium Daily Breakdowns ───────────────
+
+export function getCostCenterBreakdown(
+  start: string,
+  end: string,
+  filters?: BillingFilters
+): BillingCostCenterBreakdown[] {
+  const db = getDb();
+  const clauses: string[] = ["date >= ?", "date <= ?", "cost_center_name != ''"];
+  const params: unknown[] = [start, end];
+  appendBillingFilters(clauses, params, filters);
+
+  return db
+    .prepare(
+      `
+    SELECT
+      cost_center_name,
+      COALESCE(SUM(gross_amount), 0)     AS total_gross,
+      COALESCE(SUM(discount_amount), 0)  AS total_discount,
+      COALESCE(SUM(net_amount), 0)       AS total_net,
+      COUNT(*)                           AS record_count
+    FROM billing_usage_records
+    ${buildWhereClause(clauses)}
+    GROUP BY cost_center_name
+    ORDER BY total_net DESC
+  `
+    )
+    .all(...params) as BillingCostCenterBreakdown[];
+}
+
+export function getRepositoryBreakdown(
+  start: string,
+  end: string,
+  filters?: BillingFilters,
+  limit: number = 20
+): BillingRepositoryBreakdown[] {
+  const db = getDb();
+  const clauses: string[] = ["date >= ?", "date <= ?", "repository != ''"];
+  const params: unknown[] = [start, end];
+  appendBillingFilters(clauses, params, filters);
+
+  return db
+    .prepare(
+      `
+    SELECT
+      repository,
+      organization,
+      COALESCE(SUM(gross_amount), 0)     AS total_gross,
+      COALESCE(SUM(discount_amount), 0)  AS total_discount,
+      COALESCE(SUM(net_amount), 0)       AS total_net
+    FROM billing_usage_records
+    ${buildWhereClause(clauses)}
+    GROUP BY repository, organization
+    ORDER BY total_net DESC
+    LIMIT ?
+  `
+    )
+    .all(...params, limit) as BillingRepositoryBreakdown[];
+}
+
+export function getPremiumDailyTrend(
+  start: string,
+  end: string,
+  filters?: PremiumFilters
+): PremiumDailyTrend[] {
+  const db = getDb();
+  const clauses: string[] = ["date >= ?", "date <= ?"];
+  const params: unknown[] = [start, end];
+  appendPremiumFilters(clauses, params, filters);
+
+  return db
+    .prepare(
+      `
+    SELECT
+      date AS day,
+      COALESCE(SUM(quantity), 0)   AS total_requests,
+      COALESCE(SUM(net_amount), 0) AS total_net,
+      COUNT(DISTINCT username)     AS unique_users
+    FROM billing_premium_requests
+    ${buildWhereClause(clauses)}
+    GROUP BY date
+    ORDER BY date
+  `
+    )
+    .all(...params) as PremiumDailyTrend[];
 }
 
 // ── Aggregate Operations ──────────────────────────────────────────────

@@ -4,7 +4,10 @@ import { getDateRange } from "@/lib/utils";
 import {
   getPremiumUserSummary,
   getPremiumModelSummary,
+  getPremiumDailyTrend,
 } from "@/lib/db/billing-repo";
+import type { PremiumFilters } from "@/lib/db/billing-repo";
+import { resolveFilteredUsers } from "@/lib/db/teams-repo";
 import { withCache } from "@/lib/cache/with-cache";
 import { withTimeout } from "@/lib/api/timeout";
 import { CACHE_TTL } from "@/lib/cache/memory-cache";
@@ -19,7 +22,14 @@ async function handler(request: NextRequest) {
     const days = parseInt(params.get("days") || "28", 10);
     const { start, end } = getDateRange(days);
 
-    const filters = {
+    // Parse scope filter (teams/orgs)
+    const teamsParam = params.get("teams");
+    const orgsParam = params.get("orgs");
+    const selectedTeams = teamsParam ? teamsParam.split(",").filter(Boolean) : [];
+    const selectedOrgs = orgsParam ? orgsParam.split(",").filter(Boolean) : [];
+    const hasScope = selectedTeams.length > 0 || selectedOrgs.length > 0;
+
+    const filters: PremiumFilters = {
       username: params.get("username") || undefined,
       organization: params.get("organization")?.split(",").filter(Boolean),
       model: params.get("model")?.split(",").filter(Boolean),
@@ -28,8 +38,14 @@ async function handler(request: NextRequest) {
         : undefined,
     };
 
+    if (hasScope) {
+      filters.allowedLogins = resolveFilteredUsers(selectedTeams, selectedOrgs);
+      if (selectedOrgs.length > 0) filters.scopeOrgs = selectedOrgs;
+    }
+
     const userSummary = getPremiumUserSummary(start, end, filters);
     const modelSummary = getPremiumModelSummary(start, end, filters);
+    const dailyTrend = getPremiumDailyTrend(start, end, filters);
 
     // Compute KPIs from user summary
     const totalRequests = userSummary.reduce((sum, u) => sum + u.total_requests, 0);
@@ -52,6 +68,7 @@ async function handler(request: NextRequest) {
       },
       userSummary,
       modelSummary,
+      dailyTrend,
       daysLoaded: days,
     }, {
       headers: { "Cache-Control": "private, max-age=300, stale-while-revalidate=60" },

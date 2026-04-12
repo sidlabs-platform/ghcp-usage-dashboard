@@ -6,9 +6,10 @@ import { PageHeader } from "@/components/layout/PageHeader";
 import { MetricCard } from "@/components/cards/MetricCard";
 import { ChartSkeleton } from "@/components/states/ChartSkeleton";
 import { useDateRange } from "@/contexts/DateRangeContext";
+import { useScope } from "@/contexts/ScopeContext";
 import { Zap, Users, Brain, AlertTriangle, Search, X } from "lucide-react";
 import { ExportMenu } from "@/components/ui/ExportMenu";
-import type { BillingPremiumRequestRecord, PremiumRequestUserSummary, PremiumRequestModelSummary } from "@/lib/types/billing";
+import type { BillingPremiumRequestRecord, PremiumRequestUserSummary, PremiumRequestModelSummary, PremiumDailyTrend } from "@/lib/types/billing";
 
 const PremiumModelUsageChart = dynamic(
   () => import("@/components/charts/PremiumModelUsageChart").then(m => ({ default: m.PremiumModelUsageChart })),
@@ -16,6 +17,10 @@ const PremiumModelUsageChart = dynamic(
 );
 const PremiumQuotaChart = dynamic(
   () => import("@/components/charts/PremiumQuotaChart").then(m => ({ default: m.PremiumQuotaChart })),
+  { ssr: false, loading: () => <ChartSkeleton /> }
+);
+const PremiumDailyTrendChart = dynamic(
+  () => import("@/components/charts/PremiumDailyTrendChart").then(m => ({ default: m.PremiumDailyTrendChart })),
   { ssr: false, loading: () => <ChartSkeleton /> }
 );
 
@@ -48,9 +53,11 @@ const fmtCurrency = (v: number) =>
 
 export default function PremiumRequestsPage() {
   const { days } = useDateRange();
+  const { hasFilter, buildScopeParams, selectedEntTeams, selectedOrgTeams, selectedOrgs: scopeOrgs } = useScope();
   const [kpis, setKpis] = useState<PremiumKPIs | null>(null);
   const [userSummary, setUserSummary] = useState<PremiumRequestUserSummary[]>([]);
   const [modelSummary, setModelSummary] = useState<PremiumRequestModelSummary[]>([]);
+  const [dailyTrend, setDailyTrend] = useState<PremiumDailyTrend[]>([]);
   const [records, setRecords] = useState<BillingPremiumRequestRecord[]>([]);
   const [pagination, setPagination] = useState<PaginationInfo>({ page: 1, pageSize: 50, totalItems: 0, totalPages: 0 });
   const [filterOptions, setFilterOptions] = useState<FilterOptions>({ models: [], organizations: [], users: [] });
@@ -68,6 +75,7 @@ export default function PremiumRequestsPage() {
 
   const kpiRef = useRef<HTMLDivElement>(null);
   const chartsRef = useRef<HTMLDivElement>(null);
+  const trendRef = useRef<HTMLDivElement>(null);
   const tableRef = useRef<HTMLDivElement>(null);
 
   const buildParams = useCallback(() => {
@@ -81,8 +89,11 @@ export default function PremiumRequestsPage() {
     if (selectedModel.length) p.set("model", selectedModel.join(","));
     if (selectedOrg.length) p.set("organization", selectedOrg.join(","));
     if (exceedsQuota) p.set("exceedsQuota", exceedsQuota);
+    // Merge scope params
+    const scopeParams = buildScopeParams();
+    scopeParams.forEach((v, k) => p.set(k, v));
     return p;
-  }, [days, page, sort, sortDir, search, selectedModel, selectedOrg, exceedsQuota]);
+  }, [days, page, sort, sortDir, search, selectedModel, selectedOrg, exceedsQuota, buildScopeParams]);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -93,6 +104,9 @@ export default function PremiumRequestsPage() {
       if (selectedModel.length) summaryParams.set("model", selectedModel.join(","));
       if (selectedOrg.length) summaryParams.set("organization", selectedOrg.join(","));
       if (exceedsQuota) summaryParams.set("exceedsQuota", exceedsQuota);
+      // Merge scope params into summary
+      const scopeParams = buildScopeParams();
+      scopeParams.forEach((v, k) => summaryParams.set(k, v));
 
       const [detailRes, summaryRes] = await Promise.all([
         fetch(`/api/billing/premium?${params.toString()}`),
@@ -111,16 +125,17 @@ export default function PremiumRequestsPage() {
         setKpis(summaryData.kpis || null);
         setUserSummary(summaryData.userSummary || []);
         setModelSummary(summaryData.modelSummary || []);
+        setDailyTrend(summaryData.dailyTrend || []);
       }
     } catch (err) {
       console.error("Failed to load premium requests:", err);
     } finally {
       setLoading(false);
     }
-  }, [buildParams, days, selectedModel, selectedOrg, exceedsQuota]);
+  }, [buildParams, days, selectedModel, selectedOrg, exceedsQuota, buildScopeParams]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
-  useEffect(() => { setPage(1); }, [search, selectedModel, selectedOrg, exceedsQuota, sort, sortDir]);
+  useEffect(() => { setPage(1); }, [search, selectedModel, selectedOrg, exceedsQuota, sort, sortDir, hasFilter, selectedEntTeams, selectedOrgTeams, scopeOrgs]);
 
   const handleSort = (col: string) => {
     if (sort === col) setSortDir(d => d === "asc" ? "desc" : "asc");
@@ -190,24 +205,41 @@ export default function PremiumRequestsPage() {
             columns: csvColumns,
             dataExtractor: (json) => json.records,
             filename: `premium-requests-${days}d`,
-            metadata: { reportName: "Premium Requests Report", dateRange: `Last ${days} days` },
+            metadata: {
+              reportName: "Premium Requests Report",
+              dateRange: `Last ${days} days`,
+              ...(hasFilter && { teams: [...selectedEntTeams, ...selectedOrgTeams].join(", "), orgs: scopeOrgs.join(", ") }),
+            },
           }}
           pdf={{
-            sectionRefs: [kpiRef, chartsRef, tableRef],
+            sectionRefs: [kpiRef, trendRef, chartsRef, tableRef],
             title: "Premium Requests Report",
             filename: `premium-requests-${days}d`,
-            metadata: { reportName: "Premium Requests Report", dateRange: `Last ${days} days` },
+            metadata: {
+              reportName: "Premium Requests Report",
+              dateRange: `Last ${days} days`,
+              ...(hasFilter && { teams: [...selectedEntTeams, ...selectedOrgTeams].join(", "), orgs: scopeOrgs.join(", ") }),
+            },
           }}
           isReady={!!hasData}
         />
       </PageHeader>
 
+      {/* Active scope filter indicator */}
+      {hasFilter && (
+        <div className="rounded-lg border border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-950/30 px-4 py-2 text-sm text-blue-700 dark:text-blue-400">
+          📊 Showing filtered results: <strong>{[...selectedEntTeams, ...selectedOrgTeams, ...scopeOrgs].join(", ")}</strong>
+        </div>
+      )}
+
       {!hasData && !loading && (
         <div className="text-center py-16 text-[hsl(var(--muted-foreground))]">
           <Zap className="h-16 w-16 mx-auto mb-4 opacity-40" />
-          <p className="text-xl font-semibold mb-2">No premium request data</p>
+          <p className="text-xl font-semibold mb-2">No premium request data {hasFilter ? "for this filter" : ""}</p>
           <p className="text-sm max-w-md mx-auto">
-            Premium request data will appear after a billing sync. Premium request reporting is available from October 2025 onward.
+            {hasFilter
+              ? "Try adjusting your team/org filter or date range."
+              : "Premium request data will appear after a billing sync. Premium request reporting is available from October 2025 onward."}
           </p>
         </div>
       )}
@@ -243,6 +275,19 @@ export default function PremiumRequestsPage() {
               subtitle="Net premium request cost"
             />
           </div>
+
+          {/* Daily Trend */}
+          {dailyTrend.length > 0 && (
+            <div ref={trendRef} className="rounded-xl border bg-[hsl(var(--card))] p-6">
+              <h3 className="text-lg font-semibold mb-1">Daily Trend</h3>
+              <p className="text-sm text-[hsl(var(--muted-foreground))] mb-4">
+                <span className="text-purple-500">● Requests</span>{" · "}
+                <span className="text-amber-500">● Cost</span>{" · "}
+                <span className="text-emerald-500" style={{ borderBottom: "1px dashed" }}>Active Users</span>
+              </p>
+              <PremiumDailyTrendChart data={dailyTrend} />
+            </div>
+          )}
 
           {/* Charts */}
           <div ref={chartsRef} className="grid gap-6 lg:grid-cols-2">

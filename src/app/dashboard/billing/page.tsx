@@ -6,9 +6,10 @@ import { PageHeader } from "@/components/layout/PageHeader";
 import { MetricCard } from "@/components/cards/MetricCard";
 import { ChartSkeleton } from "@/components/states/ChartSkeleton";
 import { useDateRange } from "@/contexts/DateRangeContext";
+import { useScope } from "@/contexts/ScopeContext";
 import { Receipt, DollarSign, TrendingDown, Building2, Users, Package } from "lucide-react";
 import { ExportMenu } from "@/components/ui/ExportMenu";
-import type { BillingOverviewKPIs, BillingProductBreakdown, BillingOrgBreakdown } from "@/lib/types/billing";
+import type { BillingOverviewKPIs, BillingProductBreakdown, BillingOrgBreakdown, BillingUserBreakdown, BillingCostCenterBreakdown } from "@/lib/types/billing";
 
 const BillingCostTrendChart = dynamic(
   () => import("@/components/charts/BillingCostTrendChart").then(m => ({ default: m.BillingCostTrendChart })),
@@ -26,6 +27,14 @@ const BillingChargeScopeChart = dynamic(
   () => import("@/components/charts/BillingChargeScopeChart").then(m => ({ default: m.BillingChargeScopeChart })),
   { ssr: false, loading: () => <ChartSkeleton /> }
 );
+const BillingUserBreakdownChart = dynamic(
+  () => import("@/components/charts/BillingUserBreakdownChart").then(m => ({ default: m.BillingUserBreakdownChart })),
+  { ssr: false, loading: () => <ChartSkeleton /> }
+);
+const BillingCostCenterChart = dynamic(
+  () => import("@/components/charts/BillingCostCenterChart").then(m => ({ default: m.BillingCostCenterChart })),
+  { ssr: false, loading: () => <ChartSkeleton /> }
+);
 
 interface DailyTrend {
   day: string;
@@ -41,21 +50,29 @@ const fmtCurrency = (v: number) =>
 
 export default function BillingOverviewPage() {
   const { days } = useDateRange();
+  const { hasFilter, buildScopeParams, selectedEntTeams, selectedOrgTeams, selectedOrgs: scopeOrgs } = useScope();
   const [kpis, setKpis] = useState<BillingOverviewKPIs | null>(null);
   const [dailyTrend, setDailyTrend] = useState<DailyTrend[]>([]);
   const [productBreakdown, setProductBreakdown] = useState<BillingProductBreakdown[]>([]);
   const [orgBreakdown, setOrgBreakdown] = useState<BillingOrgBreakdown[]>([]);
+  const [userBreakdown, setUserBreakdown] = useState<BillingUserBreakdown[]>([]);
+  const [costCenterBreakdown, setCostCenterBreakdown] = useState<BillingCostCenterBreakdown[]>([]);
   const [loading, setLoading] = useState(true);
   const [enabled, setEnabled] = useState(true);
 
   const kpiRef = useRef<HTMLDivElement>(null);
   const chartsRef = useRef<HTMLDivElement>(null);
   const breakdownRef = useRef<HTMLDivElement>(null);
+  const insightsRef = useRef<HTMLDivElement>(null);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await fetch(`/api/billing/overview?days=${days}`);
+      const params = new URLSearchParams({ days: String(days) });
+      const scopeParams = buildScopeParams();
+      scopeParams.forEach((v, k) => params.set(k, v));
+
+      const res = await fetch(`/api/billing/overview?${params.toString()}`);
       const data = await res.json();
       if (data.enabled === false) {
         setEnabled(false);
@@ -65,12 +82,14 @@ export default function BillingOverviewPage() {
       setDailyTrend(data.dailyTrend || []);
       setProductBreakdown(data.productBreakdown || []);
       setOrgBreakdown(data.orgBreakdown || []);
+      setUserBreakdown(data.userBreakdown || []);
+      setCostCenterBreakdown(data.costCenterBreakdown || []);
     } catch (err) {
       console.error("Failed to load billing overview:", err);
     } finally {
       setLoading(false);
     }
-  }, [days]);
+  }, [days, buildScopeParams]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
@@ -103,29 +122,43 @@ export default function BillingOverviewPage() {
 
   const hasData = kpis && (kpis.totalNet > 0 || kpis.totalGross > 0);
 
+  const scopeLabel = hasFilter
+    ? `Filtered: ${[...selectedEntTeams, ...selectedOrgTeams, ...scopeOrgs].join(", ")}`
+    : undefined;
+
   return (
     <div className="space-y-8">
       <PageHeader title="Billing" description="Enterprise billing overview — metered usage and cost analytics">
         <ExportMenu
           pdf={{
-            sectionRefs: [kpiRef, chartsRef, breakdownRef],
+            sectionRefs: [kpiRef, chartsRef, breakdownRef, insightsRef],
             title: "Billing Overview",
             filename: `billing-overview-${days}d`,
             metadata: {
               reportName: "Billing Overview",
               dateRange: `Last ${days} days`,
+              ...(hasFilter && { teams: [...selectedEntTeams, ...selectedOrgTeams].join(", "), orgs: scopeOrgs.join(", ") }),
             },
           }}
           isReady={!!hasData}
         />
       </PageHeader>
 
+      {/* Active scope filter indicator */}
+      {hasFilter && (
+        <div className="rounded-lg border border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-950/30 px-4 py-2 text-sm text-blue-700 dark:text-blue-400">
+          📊 Showing filtered results: <strong>{scopeLabel}</strong>
+        </div>
+      )}
+
       {!hasData && (
         <div className="text-center py-16 text-[hsl(var(--muted-foreground))]">
           <Receipt className="h-16 w-16 mx-auto mb-4 opacity-40" />
-          <p className="text-xl font-semibold mb-2">No billing data yet</p>
+          <p className="text-xl font-semibold mb-2">No billing data {hasFilter ? "for this filter" : "yet"}</p>
           <p className="text-sm mb-4 max-w-md mx-auto">
-            Billing data will appear after a sync. Trigger a sync from the header to fetch billing reports from GitHub.
+            {hasFilter
+              ? "Try adjusting your team/org filter or date range."
+              : "Billing data will appear after a sync. Trigger a sync from the header to fetch billing reports from GitHub."}
           </p>
         </div>
       )}
@@ -206,6 +239,27 @@ export default function BillingOverviewPage() {
               <p className="text-sm text-[hsl(var(--muted-foreground))] mb-4">Top organizations by net cost</p>
               <BillingOrgBreakdownChart data={orgBreakdown} />
             </div>
+          </div>
+
+          {/* New Insights: Top Users & Cost Centers */}
+          <div ref={insightsRef} className="grid gap-6 lg:grid-cols-2">
+            {/* Top Users/Spenders */}
+            {userBreakdown.length > 0 && (
+              <div className="rounded-xl border bg-[hsl(var(--card))] p-6">
+                <h3 className="text-lg font-semibold mb-1">Top Spenders</h3>
+                <p className="text-sm text-[hsl(var(--muted-foreground))] mb-4">Users with highest net cost</p>
+                <BillingUserBreakdownChart data={userBreakdown} limit={15} />
+              </div>
+            )}
+
+            {/* Cost Center Breakdown */}
+            {costCenterBreakdown.length > 0 && (
+              <div className="rounded-xl border bg-[hsl(var(--card))] p-6">
+                <h3 className="text-lg font-semibold mb-1">Cost by Cost Center</h3>
+                <p className="text-sm text-[hsl(var(--muted-foreground))] mb-4">Spending distribution across cost centers</p>
+                <BillingCostCenterChart data={costCenterBreakdown} />
+              </div>
+            )}
           </div>
 
           {/* Charge Scope Legend */}

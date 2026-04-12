@@ -33,7 +33,12 @@ export default function ModelsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const fetchData = useCallback(() => {
+  const kpiRef = useRef<HTMLDivElement>(null);
+  const chartsRef = useRef<HTMLDivElement>(null);
+  const featureRef = useRef<HTMLDivElement>(null);
+  const langRef = useRef<HTMLDivElement>(null);
+
+  const fetchData= useCallback(() => {
     setLoading(true);
     const params = new URLSearchParams({ days: String(days) });
     const scopeParams = buildScopeParams();
@@ -81,12 +86,7 @@ export default function ModelsPage() {
   const { kpis, modelBreakdown, modelByFeature, modelTrend, modelByLanguage } = data;
   const topModels = modelBreakdown.slice(0, 8).map((m) => m.model);
 
-  const kpiRef = useRef<HTMLDivElement>(null);
-  const chartsRef = useRef<HTMLDivElement>(null);
-  const featureRef = useRef<HTMLDivElement>(null);
-  const langRef = useRef<HTMLDivElement>(null);
-
-  // Top languages per model (top 3 models, top 5 languages each)
+  // Top languagesper model (top 3 models, top 5 languages each)
   const topModelNames = modelBreakdown.slice(0, 5).map((m) => m.model);
   const topLangByModel = topModelNames.map((model) => ({
     model,

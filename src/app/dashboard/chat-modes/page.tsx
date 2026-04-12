@@ -104,7 +104,12 @@ export default function CopilotFeaturesPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const fetchData = useCallback(() => {
+  const kpiRef = useRef<HTMLDivElement>(null);
+  const chartsRef = useRef<HTMLDivElement>(null);
+  const adoptionRef = useRef<HTMLDivElement>(null);
+  const tableRef = useRef<HTMLDivElement>(null);
+
+  const fetchData= useCallback(() => {
     setLoading(true);
     const params = new URLSearchParams({ days: String(days) });
     const scopeParams = buildScopeParams();
@@ -164,12 +169,7 @@ export default function CopilotFeaturesPage() {
 
   const { kpis, featureDistribution, adoptionTrend, dailyTrend } = data;
 
-  const kpiRef = useRef<HTMLDivElement>(null);
-  const chartsRef = useRef<HTMLDivElement>(null);
-  const adoptionRef = useRef<HTMLDivElement>(null);
-  const tableRef = useRef<HTMLDivElement>(null);
-
-  // Bar chart data (horizontal): top 10 features by interactions+codeGen
+  // Bar chart data(horizontal): top 10 features by interactions+codeGen
   const barData = featureDistribution.slice(0, 10).map((f) => ({
     name: featureLabel(f.feature),
     interactions: f.interactions,

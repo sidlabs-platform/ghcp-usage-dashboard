@@ -65,6 +65,10 @@ export default function DashboardOverview() {
   const [securityData, setSecurityData] = useState<any>(null);
   const [securityEnabled, setSecurityEnabled] = useState(false);
 
+  const kpiRef = useRef<HTMLDivElement>(null);
+  const chartsRef = useRef<HTMLDivElement>(null);
+  const securityRef = useRef<HTMLDivElement>(null);
+
   // Fetch config once
   useEffect(() => {
     fetch("/api/config")
@@ -150,11 +154,7 @@ export default function DashboardOverview() {
   const { kpis, activeUsersTrend, acceptanceRateTrend, chatModes, featureUsage, cliVsIde } = data;
   const isFiltered = data.filtered || hasFilter;
 
-  const kpiRef = useRef<HTMLDivElement>(null);
-  const chartsRef = useRef<HTMLDivElement>(null);
-  const securityRef = useRef<HTMLDivElement>(null);
-
-  const chatModeDonutData = [
+  const chatModeDonutData= [
     { name: "Ask", value: chatModes.ask, color: CHART_COLORS.ask },
     { name: "Edit", value: chatModes.edit, color: CHART_COLORS.edit },
     { name: "Plan", value: chatModes.plan, color: CHART_COLORS.plan },
