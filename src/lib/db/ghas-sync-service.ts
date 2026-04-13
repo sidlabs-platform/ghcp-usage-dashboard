@@ -13,9 +13,13 @@ import {
   recomputeSecretScanningDaily,
   getGhasSyncState,
   updateGhasSyncState,
+  updateAlertAutofixStatuses,
+  promoteAutofixCommitted,
+  getOpenCodeScanningAlerts,
 } from "./ghas-repo";
 import { getDb } from "./database";
-import { isMetricEnabled, getSecurityConfig, isEnterpriseEnabled, getResolvedOrgs } from "@/lib/config/dashboard-config";
+import { isMetricEnabled, getSecurityConfig, isEnterpriseEnabled, getResolvedOrgs, isCodeScanningAutofixEnabled } from "@/lib/config/dashboard-config";
+import type { AutofixStatusResponse } from "@/lib/github/code-scanning-client";
 
 // ── Helpers ───────────────────────────────────────────────────────────
 
@@ -27,6 +31,84 @@ function getEnterprise(): string | null {
 
 function getOrgs(): string[] {
   return getResolvedOrgs();
+}
+
+/**
+ * Map GitHub autofix API status to our internal status.
+ * "success" / "outdated" → "available"; anything else → "none"
+ */
+function mapAutofixStatus(resp: AutofixStatusResponse | null): string {
+  if (!resp) return "none";
+  if (resp.status === "success" || resp.status === "outdated") return "available";
+  return "none";
+}
+
+const AUTOFIX_CONCURRENCY = 10;
+
+/**
+ * Enrich open code scanning alerts with autofix status.
+ * Makes one API call per open alert (concurrency-limited).
+ */
+async function enrichAutofixStatuses(
+  scope: string,
+  scopeId: string,
+  onProgress?: (p: GhasSyncProgress) => void,
+): Promise<number> {
+  const openAlerts = getOpenCodeScanningAlerts(scope, scopeId);
+  if (openAlerts.length === 0) return 0;
+
+  onProgress?.({
+    phase: "ghas-sync",
+    category: "code_scanning_autofix",
+    current: 0,
+    total: openAlerts.length,
+    message: `Fetching autofix status for ${openAlerts.length} open alerts in ${scope}/${scopeId}`,
+  });
+
+  const updates: { alertNumber: number; repoFullName: string; autofixStatus: string }[] = [];
+  let completed = 0;
+
+  // Process in batches with concurrency limit
+  for (let i = 0; i < openAlerts.length; i += AUTOFIX_CONCURRENCY) {
+    const batch = openAlerts.slice(i, i + AUTOFIX_CONCURRENCY);
+    const results = await Promise.allSettled(
+      batch.map(async (alert) => {
+        const parts = alert.repo_full_name.split("/");
+        if (parts.length < 2) return null;
+        const [owner, repo] = parts;
+        const resp = await codeScanningClient.getAlertAutofixStatus(owner, repo, alert.alert_number);
+        return {
+          alertNumber: alert.alert_number,
+          repoFullName: alert.repo_full_name,
+          autofixStatus: mapAutofixStatus(resp),
+        };
+      }),
+    );
+
+    for (const r of results) {
+      if (r.status === "fulfilled" && r.value) {
+        updates.push(r.value);
+      } else if (r.status === "rejected") {
+        const msg = r.reason instanceof Error ? r.reason.message : String(r.reason);
+        console.warn(`[Autofix] API error during enrichment: ${msg}`);
+      }
+    }
+
+    completed += batch.length;
+    onProgress?.({
+      phase: "ghas-sync",
+      category: "code_scanning_autofix",
+      current: Math.min(completed, openAlerts.length),
+      total: openAlerts.length,
+      message: `Autofix status: ${completed}/${openAlerts.length} alerts checked`,
+    });
+  }
+
+  if (updates.length > 0) {
+    updateAlertAutofixStatuses(scope, scopeId, updates);
+  }
+
+  return updates.filter(u => u.autofixStatus !== "none").length;
 }
 
 // ── Progress type ─────────────────────────────────────────────────────
@@ -98,6 +180,14 @@ async function syncCategory(
         ? await codeScanningClient.getEnterpriseAlerts(scopeId, cutoffDate)
         : await codeScanningClient.getOrgAlerts(scopeId, cutoffDate);
       upsertCodeScanningAlerts(scope, scopeId, alerts);
+
+      // Enrich with autofix status if enabled (optional, per-alert API calls)
+      if (isCodeScanningAutofixEnabled()) {
+        await enrichAutofixStatuses(scope, scopeId, onProgress);
+        // Promote fixed alerts that had autofix available → committed
+        promoteAutofixCommitted(scope, scopeId);
+      }
+
       recomputeCodeScanningDaily(scope, scopeId);
     } else if (category === "dependabot") {
       alerts = scope === "enterprise"

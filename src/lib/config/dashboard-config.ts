@@ -27,6 +27,12 @@ export interface MetricConfig {
   enabled: boolean;
 }
 
+export interface CodeScanningMetricConfig {
+  enabled: boolean;
+  /** Fetch per-alert autofix status from GitHub API. Requires 1 API call per open alert. Default: false */
+  autofix?: boolean;
+}
+
 export interface SecurityConfig {
   syncIntervalMinutes: number;
   backfillDays: number;
@@ -49,7 +55,7 @@ export interface OrganizationsConfig {
 export interface DashboardConfig {
   metrics: {
     copilot: CopilotMetricConfig;
-    codeScanning: MetricConfig;
+    codeScanning: CodeScanningMetricConfig;
     dependabot: MetricConfig;
     secretScanning: MetricConfig;
     billing: BillingMetricConfig;
@@ -71,7 +77,7 @@ export type MetricCategory =
 const DEFAULT_CONFIG: DashboardConfig = {
   metrics: {
     copilot: { enabled: true, enterprise: true, userMetrics: true, seats: true, teams: true },
-    codeScanning: { enabled: true },
+    codeScanning: { enabled: true, autofix: false },
     dependabot: { enabled: true },
     secretScanning: { enabled: true },
     billing: { enabled: false, meteredUsage: true, premiumRequests: true },
@@ -134,6 +140,13 @@ export function getSecurityConfig(): SecurityConfig {
 
 export function getAutoSyncConfig(): AutoSyncConfig {
   return getDashboardConfig().autoSync ?? { enabled: false, utcTime: "03:00" };
+}
+
+/** Returns true when code scanning autofix enrichment is enabled in config. */
+export function isCodeScanningAutofixEnabled(): boolean {
+  const config = getDashboardConfig();
+  if (!config.metrics.codeScanning.enabled) return false;
+  return config.metrics.codeScanning.autofix ?? false;
 }
 
 // --- Enterprise helpers ---

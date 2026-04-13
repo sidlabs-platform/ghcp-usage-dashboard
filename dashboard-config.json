@@ -8,7 +8,8 @@
       "teams": true
     },
     "codeScanning": {
-      "enabled": true
+      "enabled": true,
+      "autofix": false
     },
     "dependabot": {
       "enabled": true

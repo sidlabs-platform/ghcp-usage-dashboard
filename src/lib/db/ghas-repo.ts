@@ -20,11 +20,26 @@ export function upsertCodeScanningAlerts(
   alerts: CodeScanningAlert[]
 ): void {
   const db = getDb();
+  // Use ON CONFLICT to preserve existing autofix_status when the list API doesn't provide it
   const stmt = db.prepare(`
-    INSERT OR REPLACE INTO ghas_code_scanning_alerts
+    INSERT INTO ghas_code_scanning_alerts
       (scope, scope_id, alert_number, repo_full_name, state, severity, rule_id, tool_name,
        created_at, updated_at, fixed_at, dismissed_at, dismissed_reason, autofix_status)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(scope, scope_id, alert_number, repo_full_name) DO UPDATE SET
+      state = excluded.state,
+      severity = excluded.severity,
+      rule_id = excluded.rule_id,
+      tool_name = excluded.tool_name,
+      created_at = excluded.created_at,
+      updated_at = excluded.updated_at,
+      fixed_at = excluded.fixed_at,
+      dismissed_at = excluded.dismissed_at,
+      dismissed_reason = excluded.dismissed_reason,
+      autofix_status = CASE
+        WHEN excluded.autofix_status != 'none' THEN excluded.autofix_status
+        ELSE ghas_code_scanning_alerts.autofix_status
+      END
   `);
   const tx = db.transaction(() => {
     for (const a of alerts) {
@@ -47,6 +62,58 @@ export function upsertCodeScanningAlerts(
     }
   });
   tx();
+}
+
+/**
+ * Batch-update autofix_status for code scanning alerts from API responses.
+ */
+export function updateAlertAutofixStatuses(
+  scope: string,
+  scopeId: string,
+  updates: { alertNumber: number; repoFullName: string; autofixStatus: string }[]
+): void {
+  const db = getDb();
+  const stmt = db.prepare(`
+    UPDATE ghas_code_scanning_alerts
+    SET autofix_status = ?
+    WHERE scope = ? AND scope_id = ? AND alert_number = ? AND repo_full_name = ?
+  `);
+  const tx = db.transaction(() => {
+    for (const u of updates) {
+      stmt.run(u.autofixStatus, scope, scopeId, u.alertNumber, u.repoFullName);
+    }
+  });
+  tx();
+}
+
+/**
+ * Promote autofix_status from "available" to "committed" for alerts that have been fixed.
+ * This is a heuristic: if an alert was fixed and had autofix available, we assume the autofix was applied.
+ */
+export function promoteAutofixCommitted(scope: string, scopeId: string): number {
+  const db = getDb();
+  const result = db.prepare(`
+    UPDATE ghas_code_scanning_alerts
+    SET autofix_status = 'committed'
+    WHERE scope = ? AND scope_id = ?
+      AND state = 'fixed'
+      AND autofix_status = 'available'
+  `).run(scope, scopeId);
+  return result.changes;
+}
+
+/**
+ * Get open code scanning alerts for a given scope, for autofix enrichment.
+ */
+export function getOpenCodeScanningAlerts(
+  scope: string,
+  scopeId: string,
+): { alert_number: number; repo_full_name: string; state: string }[] {
+  const db = getDb();
+  return db.prepare(
+    `SELECT alert_number, repo_full_name, state FROM ghas_code_scanning_alerts
+     WHERE scope = ? AND scope_id = ? AND state = 'open'`
+  ).all(scope, scopeId) as { alert_number: number; repo_full_name: string; state: string }[];
 }
 
 export function upsertDependabotAlerts(
