@@ -64,6 +64,14 @@ async function adaptiveRateDelay(): Promise<void> {
   }
 }
 
+/** Typed error carrying the HTTP status code from a failed GitHub API call. */
+export class GitHubApiError extends Error {
+  constructor(public readonly status: number, path: string, body: string) {
+    super(`GitHub API error ${status} on ${path}: ${body}`);
+    this.name = "GitHubApiError";
+  }
+}
+
 export async function githubFetch<T>(path: string, retries = 3): Promise<T> {
   const url = path.startsWith("http") ? path : `${GITHUB_API_BASE}${path}`;
 
@@ -89,7 +97,7 @@ export async function githubFetch<T>(path: string, retries = 3): Promise<T> {
     }
 
     const body = await resp.text().catch(() => "");
-    throw new Error(`GitHub API error ${resp.status} on ${path}: ${body}`);
+    throw new GitHubApiError(resp.status, path, body);
   }
 
   throw new Error(`GitHub API failed after ${retries} retries on ${path}`);
