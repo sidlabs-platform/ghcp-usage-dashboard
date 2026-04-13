@@ -18,6 +18,7 @@ let timer: ReturnType<typeof setTimeout> | null = null;
 let lastAutoSyncAt: string | null = null;
 let nextAutoSyncAt: string | null = null;
 let running = false;
+let stopped = false;
 
 /** Parse "HH:MM" into { hour, minute }. Returns null on invalid input. */
 function parseUtcTime(utcTime: string): { hour: number; minute: number } | null {
@@ -50,58 +51,66 @@ function msUntilNextRun(hour: number, minute: number): number {
 
 /** Execute one auto-sync cycle, then schedule the next. */
 async function executeAutoSync(): Promise<void> {
-  const config = getAutoSyncConfig();
-  if (!config.enabled) {
-    console.log("[AutoSync] Disabled in config — stopping scheduler");
-    nextAutoSyncAt = null;
-    return;
-  }
-
-  if (!acquireSyncLock()) {
-    console.log("[AutoSync] Sync already in progress — skipping this cycle");
-    scheduleNext();
-    return;
-  }
-
-  // Heartbeat the lock every 5 minutes to prevent expiry during long syncs
-  const heartbeat = setInterval(() => {
-    try { heartbeatSyncLock(); } catch { /* ignore */ }
-  }, 5 * 60 * 1000);
-
-  running = true;
-  console.log("[AutoSync] Starting incremental sync...");
+  let lockAcquired = false;
+  let heartbeat: ReturnType<typeof setInterval> | null = null;
 
   try {
-    const result = await incrementalSync((p) => {
-      console.log(`[AutoSync] ${p.message}`);
-    });
-    console.log(`[AutoSync] Incremental sync complete: ${result.daysSynced} days synced, ${result.daysSkipped} skipped`);
+    if (stopped) return;
 
-    // Refresh summary tables
-    try {
-      const summaryEnd = new Date();
-      summaryEnd.setDate(summaryEnd.getDate() - 1);
-      const summaryStart = new Date(summaryEnd);
-      summaryStart.setDate(summaryStart.getDate() - BACKFILL_RANGE + 1);
-      refreshAllSummaries(
-        summaryStart.toISOString().split("T")[0],
-        summaryEnd.toISOString().split("T")[0],
-      );
-    } catch (err) {
-      console.error("[AutoSync] Failed to refresh summary tables:", err);
+    const config = getAutoSyncConfig();
+    if (!config.enabled) {
+      console.log("[AutoSync] Disabled in config — stopping scheduler");
+      nextAutoSyncAt = null;
+      return;
     }
 
-    cache.invalidateAll();
-    lastAutoSyncAt = new Date().toISOString();
-  } catch (err) {
-    console.error("[AutoSync] Incremental sync failed:", err);
-  } finally {
-    clearInterval(heartbeat);
-    releaseSyncLock();
-    running = false;
-  }
+    if (!acquireSyncLock()) {
+      console.log("[AutoSync] Sync already in progress — skipping this cycle");
+      return;
+    }
+    lockAcquired = true;
 
-  scheduleNext();
+    // Heartbeat the lock every 5 minutes to prevent expiry during long syncs
+    heartbeat = setInterval(() => {
+      try { heartbeatSyncLock(); } catch { /* ignore */ }
+    }, 5 * 60 * 1000);
+
+    running = true;
+    console.log("[AutoSync] Starting incremental sync...");
+
+    try {
+      const result = await incrementalSync((p) => {
+        console.log(`[AutoSync] ${p.message}`);
+      });
+      console.log(`[AutoSync] Incremental sync complete: ${result.daysSynced} days synced, ${result.daysSkipped} skipped`);
+
+      // Refresh summary tables
+      try {
+        const summaryEnd = new Date();
+        summaryEnd.setDate(summaryEnd.getDate() - 1);
+        const summaryStart = new Date(summaryEnd);
+        summaryStart.setDate(summaryStart.getDate() - BACKFILL_RANGE + 1);
+        refreshAllSummaries(
+          summaryStart.toISOString().split("T")[0],
+          summaryEnd.toISOString().split("T")[0],
+        );
+      } catch (err) {
+        console.error("[AutoSync] Failed to refresh summary tables:", err);
+      }
+
+      cache.invalidateAll();
+      lastAutoSyncAt = new Date().toISOString();
+    } catch (err) {
+      console.error("[AutoSync] Incremental sync failed:", err);
+    }
+  } catch (err) {
+    console.error("[AutoSync] Unexpected error:", err);
+  } finally {
+    if (heartbeat) clearInterval(heartbeat);
+    if (lockAcquired) releaseSyncLock();
+    running = false;
+    if (!stopped) scheduleNext();
+  }
 }
 
 /** Schedule the next auto-sync run. */
@@ -109,6 +118,11 @@ function scheduleNext(): void {
   if (timer) {
     clearTimeout(timer);
     timer = null;
+  }
+
+  if (stopped) {
+    nextAutoSyncAt = null;
+    return;
   }
 
   const config = getAutoSyncConfig();
@@ -130,13 +144,16 @@ function scheduleNext(): void {
   console.log(`[AutoSync] Next run scheduled at ${nextAutoSyncAt} (in ${Math.round(delayMs / 60000)} minutes)`);
 
   timer = setTimeout(() => {
-    void executeAutoSync();
+    executeAutoSync().catch((err) => {
+      console.error("[AutoSync] Unexpected error in scheduled run:", err);
+    });
   }, delayMs);
 }
 
 /** Start the auto-sync scheduler. Safe to call multiple times. */
 export function startAutoSync(): void {
   stopAutoSync();
+  stopped = false;
 
   const config = getAutoSyncConfig();
   if (!config.enabled) {
@@ -150,6 +167,7 @@ export function startAutoSync(): void {
 
 /** Stop the auto-sync scheduler. */
 export function stopAutoSync(): void {
+  stopped = true;
   if (timer) {
     clearTimeout(timer);
     timer = null;
