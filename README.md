@@ -18,7 +18,6 @@ A comprehensive dashboard for visualizing GitHub Copilot usage metrics, GHAS sec
 - [Filtering & Scope](#filtering--scope)
 - [Exporting Data](#exporting-data)
 - [Architecture](#architecture)
-- [GitHub Enterprise Server (GHES) Support](#github-enterprise-server-ghes-support)
 - [Production Deployment](#production-deployment)
 - [Troubleshooting](#troubleshooting)
 - [License](#license)
@@ -466,17 +465,6 @@ The GitHub API does not provide native team-level Copilot metrics. This dashboar
 2. Fetching team membership via the Teams API
 3. Cross-referencing and aggregating metrics per team
 
----
-
-## GitHub Enterprise Server (GHES) Support
-
-To use this dashboard with a GHES installation, set the `GITHUB_API_BASE` environment variable:
-
-```env
-GITHUB_API_BASE=https://github.example.com/api/v3
-```
-
-All API calls will be routed to your GHES instance instead of `github.com`.
 
 ---
 
