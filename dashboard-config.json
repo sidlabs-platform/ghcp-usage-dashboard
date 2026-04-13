@@ -29,5 +29,9 @@
   "security": {
     "syncIntervalMinutes": 60,
     "backfillDays": 90
+  },
+  "autoSync": {
+    "enabled": false,
+    "utcTime": "03:00"
   }
 }

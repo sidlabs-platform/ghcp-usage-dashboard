@@ -1,6 +1,6 @@
 "use client";
 
-import { Sun, Moon, RefreshCw, CheckCircle2 } from "lucide-react";
+import { Sun, Moon, RefreshCw, CheckCircle2, Clock } from "lucide-react";
 import { useEffect, useState, useCallback } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
@@ -14,6 +14,7 @@ export function Header() {
   const [dark, setDark] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [syncStatus, setSyncStatus] = useState<string | null>(null);
+  const [autoSyncInfo, setAutoSyncInfo] = useState<{ enabled: boolean; utcTime: string; nextRunAt: string | null } | null>(null);
   const { days: selectedDays, setDays: setSelectedDays } = useDateRange();
 
   useEffect(() => {
@@ -28,6 +29,7 @@ export function Header() {
     fetch("/api/sync")
       .then((res) => res.json())
       .then((data) => {
+        if (data.autoSync) setAutoSyncInfo(data.autoSync);
         if (data.syncInProgress) {
           setSyncing(true);
           pollSyncStatus();
@@ -90,6 +92,12 @@ export function Header() {
             {!syncing && <CheckCircle2 className="h-3 w-3 mr-1" />}
             {syncing && <RefreshCw className="h-3 w-3 mr-1 animate-spin" />}
             {syncStatus}
+          </Badge>
+        )}
+        {autoSyncInfo?.enabled && (
+          <Badge variant="outline" className="text-xs">
+            <Clock className="h-3 w-3 mr-1" />
+            Auto-sync {autoSyncInfo.utcTime} UTC
           </Badge>
         )}
       </div>

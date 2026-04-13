@@ -32,6 +32,13 @@ export interface SecurityConfig {
   backfillDays: number;
 }
 
+export interface AutoSyncConfig {
+  /** Enable automatic daily incremental sync. Default: false */
+  enabled: boolean;
+  /** UTC time to run the sync in "HH:MM" format. Default: "03:00" */
+  utcTime: string;
+}
+
 export interface OrganizationsConfig {
   /** If non-empty, only these orgs are synced (must be a subset of GITHUB_ORGS). */
   include?: string[];
@@ -49,6 +56,7 @@ export interface DashboardConfig {
   };
   organizations?: OrganizationsConfig;
   security: SecurityConfig;
+  autoSync?: AutoSyncConfig;
 }
 
 export type MetricCategory =
@@ -72,6 +80,10 @@ const DEFAULT_CONFIG: DashboardConfig = {
   security: {
     syncIntervalMinutes: 60,
     backfillDays: 90,
+  },
+  autoSync: {
+    enabled: false,
+    utcTime: "03:00",
   },
 };
 
@@ -118,6 +130,10 @@ export function isMetricEnabled(category: MetricCategory): boolean {
 
 export function getSecurityConfig(): SecurityConfig {
   return getDashboardConfig().security;
+}
+
+export function getAutoSyncConfig(): AutoSyncConfig {
+  return getDashboardConfig().autoSync ?? { enabled: false, utcTime: "03:00" };
 }
 
 // --- Enterprise helpers ---
@@ -204,6 +220,10 @@ function deepMergeConfig(defaults: DashboardConfig, overrides: Partial<Dashboard
 
   if (overrides.security) {
     result.security = { ...defaults.security, ...overrides.security };
+  }
+
+  if (overrides.autoSync) {
+    result.autoSync = { ...(defaults.autoSync ?? { enabled: false, utcTime: "03:00" }), ...overrides.autoSync };
   }
 
   return result;
