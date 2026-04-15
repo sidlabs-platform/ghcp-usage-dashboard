@@ -6,6 +6,7 @@ export interface ChatModeSums {
   plan: number;
   agent: number;
   custom: number;
+  unknown: number;
 }
 
 export interface AdoptionStats {
@@ -52,12 +53,13 @@ export function getChatModeSums(
       COALESCE(SUM(chat_panel_edit_mode), 0) as edit,
       COALESCE(SUM(chat_panel_plan_mode), 0) as plan,
       COALESCE(SUM(chat_panel_agent_mode), 0) as agent,
-      COALESCE(SUM(chat_panel_custom_mode), 0) as custom
+      COALESCE(SUM(chat_panel_custom_mode), 0) as custom,
+      COALESCE(SUM(chat_panel_unknown_mode), 0) as unknown
     FROM user_daily_metrics
     WHERE day >= ? AND day <= ? ${filter.clause}
   `;
-  const row = db.prepare(sql).get(startDay, endDay, ...filter.params) as ChatModeSums;
-  return row;
+  const row = db.prepare(sql).get(startDay, endDay, ...filter.params) as ChatModeSums | undefined;
+  return row ?? { ask: 0, edit: 0, plan: 0, agent: 0, custom: 0, unknown: 0 };
 }
 
 export function getAdoptionStats(

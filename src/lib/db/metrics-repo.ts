@@ -1,7 +1,31 @@
 // Metrics repository — CRUD for enterprise/org/user daily metrics in SQLite
 
 import { getDb } from "./database";
-import type { DayTotal, UserDayRecord } from "@/lib/types/metrics";
+import type { DayTotal, UserDayRecord, TotalsByFeature } from "@/lib/types/metrics";
+
+// Chat mode feature names as they appear in totals_by_feature
+const CHAT_MODE_FEATURES: Record<string, keyof ReturnType<typeof extractChatModeCounts>> = {
+  chat_panel_ask_mode: "ask",
+  chat_panel_edit_mode: "edit",
+  chat_panel_plan_mode: "plan",
+  chat_panel_agent_mode: "agent",
+  chat_panel_custom_mode: "custom",
+  chat_panel_unknown_mode: "unknown",
+};
+
+/** Extract chat mode interaction counts from totals_by_feature entries */
+export function extractChatModeCounts(features: TotalsByFeature[]): {
+  ask: number; edit: number; plan: number; agent: number; custom: number; unknown: number;
+} {
+  const counts = { ask: 0, edit: 0, plan: 0, agent: 0, custom: 0, unknown: 0 };
+  for (const f of features) {
+    const mode = CHAT_MODE_FEATURES[f.feature];
+    if (mode) {
+      counts[mode] += f.user_initiated_interaction_count || 0;
+    }
+  }
+  return counts;
+}
 
 // ── Row-mapping helpers (structured columns → TypeScript objects) ─────
 
@@ -371,6 +395,7 @@ function weightedMedian(
 
 export function upsertUserDayMetrics(record: UserDayRecord): void {
   const db = getDb();
+  const chatModes = extractChatModeCounts(record.totals_by_feature || []);
   db.prepare(`
     INSERT OR REPLACE INTO user_daily_metrics (
       day, enterprise_id, user_id, user_login,
@@ -389,9 +414,12 @@ export function upsertUserDayMetrics(record: UserDayRecord): void {
     record.user_initiated_interaction_count,
     record.loc_suggested_to_add_sum, record.loc_suggested_to_delete_sum,
     record.loc_added_sum, record.loc_deleted_sum,
-    record.chat_panel_agent_mode || 0, record.chat_panel_ask_mode || 0,
-    record.chat_panel_custom_mode || 0, record.chat_panel_edit_mode || 0,
-    record.chat_panel_plan_mode || 0, record.chat_panel_unknown_mode || 0,
+    chatModes.agent || record.chat_panel_agent_mode || 0,
+    chatModes.ask || record.chat_panel_ask_mode || 0,
+    chatModes.custom || record.chat_panel_custom_mode || 0,
+    chatModes.edit || record.chat_panel_edit_mode || 0,
+    chatModes.plan || record.chat_panel_plan_mode || 0,
+    chatModes.unknown || record.chat_panel_unknown_mode || 0,
     record.used_agent ? 1 : 0, record.used_chat ? 1 : 0, record.used_cli ? 1 : 0,
     record.used_copilot_code_review_active ? 1 : 0, record.used_copilot_code_review_passive ? 1 : 0,
     record.used_copilot_coding_agent ? 1 : 0,
@@ -427,15 +455,19 @@ export function batchUpsertUserDayMetrics(records: UserDayRecord[]): number {
 
   const tx = db.transaction(() => {
     for (const r of records) {
+      const cm = extractChatModeCounts(r.totals_by_feature || []);
       stmt.run(
         r.day, r.enterprise_id, r.user_id, r.user_login,
         r.code_generation_activity_count, r.code_acceptance_activity_count,
         r.user_initiated_interaction_count,
         r.loc_suggested_to_add_sum, r.loc_suggested_to_delete_sum,
         r.loc_added_sum, r.loc_deleted_sum,
-        r.chat_panel_agent_mode || 0, r.chat_panel_ask_mode || 0,
-        r.chat_panel_custom_mode || 0, r.chat_panel_edit_mode || 0,
-        r.chat_panel_plan_mode || 0, r.chat_panel_unknown_mode || 0,
+        cm.agent || r.chat_panel_agent_mode || 0,
+        cm.ask || r.chat_panel_ask_mode || 0,
+        cm.custom || r.chat_panel_custom_mode || 0,
+        cm.edit || r.chat_panel_edit_mode || 0,
+        cm.plan || r.chat_panel_plan_mode || 0,
+        cm.unknown || r.chat_panel_unknown_mode || 0,
         r.used_agent ? 1 : 0, r.used_chat ? 1 : 0, r.used_cli ? 1 : 0,
         r.used_copilot_code_review_active ? 1 : 0, r.used_copilot_code_review_passive ? 1 : 0,
         r.used_copilot_coding_agent ? 1 : 0,

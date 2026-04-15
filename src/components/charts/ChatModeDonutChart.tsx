@@ -45,31 +45,37 @@ export function ChatModeDonutChart({ data }: ChatModeDonutChartProps) {
         <CardTitle>Chat Mode Breakdown</CardTitle>
       </CardHeader>
       <CardContent>
-        <ResponsiveContainer width="100%" height={300}>
-          <PieChart>
-            <Pie
-              data={data}
-              cx="50%"
-              cy="50%"
-              innerRadius={65}
-              outerRadius={110}
-              paddingAngle={2}
-              dataKey="value"
-              label={renderLabel}
-              labelLine={false}
-            >
-              {data.map((entry, index) => (
-                <Cell key={`cell-${index}`} fill={entry.color} />
-              ))}
-            </Pie>
-            <Tooltip
-              formatter={(value: number, name: string) => [
-                value.toLocaleString(),
-                name,
-              ]}
-            />
-          </PieChart>
-        </ResponsiveContainer>
+        {data.length === 0 ? (
+          <div className="flex items-center justify-center h-[300px] text-sm text-[hsl(var(--muted-foreground))]">
+            No chat mode data available for this period
+          </div>
+        ) : (
+          <ResponsiveContainer width="100%" height={300}>
+            <PieChart>
+              <Pie
+                data={data}
+                cx="50%"
+                cy="50%"
+                innerRadius={65}
+                outerRadius={110}
+                paddingAngle={2}
+                dataKey="value"
+                label={renderLabel}
+                labelLine={false}
+              >
+                {data.map((entry, index) => (
+                  <Cell key={`cell-${index}`} fill={entry.color} />
+                ))}
+              </Pie>
+              <Tooltip
+                formatter={(value: number, name: string) => [
+                  value.toLocaleString(),
+                  name,
+                ]}
+              />
+            </PieChart>
+          </ResponsiveContainer>
+        )}
       </CardContent>
     </Card>
   );

@@ -48,7 +48,7 @@ interface OverviewData {
   };
   activeUsersTrend: { day: string; daily: number; weekly: number; monthly: number }[];
   acceptanceRateTrend: { day: string; suggested: number; accepted: number; rate: number }[];
-  chatModes: { ask: number; edit: number; plan: number; agent: number; custom: number };
+  chatModes: { ask: number; edit: number; plan: number; agent: number; custom: number; unknown: number };
   featureUsage: { day: string; completions: number; chat: number; agent: number; cli: number }[];
   cliVsIde: { day: string; ideUsers: number; cliUsers: number }[];
   dataAsOf: string;
@@ -160,6 +160,7 @@ export default function DashboardOverview() {
     { name: "Plan", value: chatModes.plan, color: CHART_COLORS.plan },
     { name: "Agent", value: chatModes.agent, color: CHART_COLORS.agent },
     { name: "Custom", value: chatModes.custom, color: CHART_COLORS.custom },
+    { name: "Unknown", value: chatModes.unknown, color: CHART_COLORS.unknown },
   ].filter((d) => d.value > 0);
 
   return (
