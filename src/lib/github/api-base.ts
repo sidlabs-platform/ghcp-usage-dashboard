@@ -1,65 +1,157 @@
 // Shared GitHub API fetch utilities with auth, retry, and pagination
 
+import {
+  isAppAuthConfigured,
+  getInstallationToken,
+  validateAppAuth,
+  logAuthMode,
+} from "./app-auth";
+
 const GITHUB_API_BASE = process.env.GITHUB_API_BASE || "https://api.github.com";
 const API_VERSION = "2026-03-10";
 
+// ── Auth mode abstraction ─────────────────────────────────────────────
+
+export type AuthMode = "pat" | "app" | "none";
+
+/**
+ * Returns the PAT token, or throws if GITHUB_TOKEN is not set.
+ * Only called when auth mode resolves to "pat".
+ */
 function getToken(): string {
   const token = process.env.GITHUB_TOKEN;
-  if (!token) throw new Error("GITHUB_TOKEN environment variable is required");
+  if (!token) {
+    throw new Error(
+      "GITHUB_TOKEN environment variable is required for this endpoint. " +
+      "Set it in .env.local or configure GitHub App auth for org-level access."
+    );
+  }
   return token;
 }
 
-function headers(): Record<string, string> {
-  return {
+/**
+ * Resolve auth mode from a URL path.
+ * - Non-GitHub absolute URLs (pre-signed Azure/S3) → "none"
+ * - Paths starting with `/enterprises/` → "pat" (always)
+ * - All other GitHub API paths → "app" if configured, else "pat"
+ */
+export function resolveAuthMode(path: string): AuthMode {
+  // Absolute non-GitHub URLs (e.g., pre-signed download links) need no auth
+  if (path.startsWith("http")) {
+    const isGitHub =
+      path.startsWith(GITHUB_API_BASE) ||
+      path.startsWith("https://api.github.com");
+    if (!isGitHub) return "none";
+    // Extract pathname from absolute GitHub URL
+    try {
+      const url = new URL(path);
+      path = url.pathname;
+    } catch {
+      // If URL parsing fails, fall through to path-based detection
+    }
+  }
+
+  // Enterprise endpoints → always PAT
+  if (path.startsWith("/enterprises/")) return "pat";
+
+  // Everything else (/orgs/, /repos/, /app/, etc.) → App auth if configured
+  return isAppAuthConfigured() ? "app" : "pat";
+}
+
+async function headersForAuth(mode: AuthMode): Promise<Record<string, string>> {
+  const base: Record<string, string> = {
     Accept: "application/vnd.github+json",
-    Authorization: `Bearer ${getToken()}`,
     "X-GitHub-Api-Version": API_VERSION,
   };
+
+  switch (mode) {
+    case "pat":
+      base.Authorization = `Bearer ${getToken()}`;
+      break;
+    case "app":
+      base.Authorization = `Bearer ${await getInstallationToken()}`;
+      break;
+    case "none":
+      // No Authorization header (pre-signed URLs, etc.)
+      break;
+  }
+
+  return base;
+}
+
+// Startup logging — fires once
+let authModeLogged = false;
+let authValidated = false;
+let validationPromise: Promise<void> | null = null;
+
+async function ensureAuthReady(mode: AuthMode): Promise<void> {
+  if (!authModeLogged) {
+    logAuthMode();
+    authModeLogged = true;
+  }
+  if (!authValidated && mode === "app") {
+    // Mutex: concurrent callers await the same validation promise
+    if (!validationPromise) {
+      validationPromise = validateAppAuth()
+        .then(() => { authValidated = true; })
+        .finally(() => { validationPromise = null; });
+    }
+    await validationPromise;
+  }
 }
 
 async function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-// ── Adaptive rate-limit tracking ──────────────────────────────────────
+// ── Adaptive rate-limit tracking (per auth context) ───────────────────
 
 interface RateLimitState {
   remaining: number;
   resetAt: number; // Unix timestamp in ms
 }
 
-let rateLimitState: RateLimitState = {
-  remaining: 5000,
-  resetAt: Date.now() + 3600_000,
-};
+const rateLimitStates = new Map<AuthMode, RateLimitState>();
 
-function updateRateLimit(resp: Response): void {
+function getRateLimitState(mode: AuthMode): RateLimitState {
+  let state = rateLimitStates.get(mode);
+  if (!state) {
+    state = { remaining: 5000, resetAt: Date.now() + 3600_000 };
+    rateLimitStates.set(mode, state);
+  }
+  return state;
+}
+
+function updateRateLimit(resp: Response, mode: AuthMode): void {
+  const state = getRateLimitState(mode);
   const remaining = resp.headers.get("x-ratelimit-remaining");
   const reset = resp.headers.get("x-ratelimit-reset");
   if (remaining !== null) {
-    rateLimitState.remaining = parseInt(remaining, 10);
+    state.remaining = parseInt(remaining, 10);
   }
   if (reset !== null) {
-    rateLimitState.resetAt = parseInt(reset, 10) * 1000;
+    state.resetAt = parseInt(reset, 10) * 1000;
   }
 }
 
 /**
- * Adaptive delay based on remaining rate limit quota.
+ * Adaptive delay based on remaining rate limit quota for a specific auth context.
  * - > 1000 remaining: no delay
  * - 100–1000 remaining: 200ms delay
  * - < 100 remaining: wait until reset
  */
-async function adaptiveRateDelay(): Promise<void> {
-  if (rateLimitState.remaining > 1000) return;
-  if (rateLimitState.remaining > 100) {
+async function adaptiveRateDelay(mode: AuthMode): Promise<void> {
+  if (mode === "none") return; // No rate limits for pre-signed URLs
+  const state = getRateLimitState(mode);
+  if (state.remaining > 1000) return;
+  if (state.remaining > 100) {
     await sleep(200);
     return;
   }
   // Low quota: wait until reset
-  const waitMs = Math.max(0, rateLimitState.resetAt - Date.now() + 1000);
+  const waitMs = Math.max(0, state.resetAt - Date.now() + 1000);
   if (waitMs > 0 && waitMs < 3600_000) {
-    console.warn(`[Rate Limit] Only ${rateLimitState.remaining} requests remaining, waiting ${Math.round(waitMs / 1000)}s until reset`);
+    console.warn(`[Rate Limit] (${mode}) Only ${state.remaining} requests remaining, waiting ${Math.round(waitMs / 1000)}s until reset`);
     await sleep(waitMs);
   }
 }
@@ -72,13 +164,16 @@ export class GitHubApiError extends Error {
   }
 }
 
-export async function githubFetch<T>(path: string, retries = 3): Promise<T> {
+export async function githubFetch<T>(path: string, retries = 3, authMode?: AuthMode): Promise<T> {
+  const mode = authMode ?? resolveAuthMode(path);
+  await ensureAuthReady(mode);
   const url = path.startsWith("http") ? path : `${GITHUB_API_BASE}${path}`;
 
   for (let attempt = 0; attempt < retries; attempt++) {
-    await adaptiveRateDelay();
-    const resp = await fetch(url, { headers: headers(), cache: "no-store" });
-    updateRateLimit(resp);
+    await adaptiveRateDelay(mode);
+    const hdrs = await headersForAuth(mode);
+    const resp = await fetch(url, { headers: hdrs, cache: "no-store" });
+    updateRateLimit(resp, mode);
 
     if (resp.ok) {
       return resp.json() as Promise<T>;
@@ -103,17 +198,20 @@ export async function githubFetch<T>(path: string, retries = 3): Promise<T> {
   throw new Error(`GitHub API failed after ${retries} retries on ${path}`);
 }
 
-export async function githubFetchPaginated<T>(path: string, perPage = 100): Promise<T[]> {
+export async function githubFetchPaginated<T>(path: string, perPage = 100, authMode?: AuthMode): Promise<T[]> {
+  const mode = authMode ?? resolveAuthMode(path);
+  await ensureAuthReady(mode);
   const all: T[] = [];
   let page = 1;
 
   while (true) {
     const separator = path.includes("?") ? "&" : "?";
     const url = `${path}${separator}per_page=${perPage}&page=${page}`;
-    await adaptiveRateDelay();
+    await adaptiveRateDelay(mode);
+    const hdrs = await headersForAuth(mode);
     const resp = await fetch(
       url.startsWith("http") ? url : `${GITHUB_API_BASE}${url}`,
-      { headers: headers(), cache: "no-store" }
+      { headers: hdrs, cache: "no-store" }
     );
 
     if (!resp.ok) {
@@ -121,7 +219,7 @@ export async function githubFetchPaginated<T>(path: string, perPage = 100): Prom
       throw new Error(`GitHub API error ${resp.status} on ${url}`);
     }
 
-    updateRateLimit(resp);
+    updateRateLimit(resp, mode);
 
     const data = await resp.json();
     const items = Array.isArray(data) ? data : data.seats || data.members || [];
@@ -191,7 +289,10 @@ export async function githubFetchPaginatedWithCutoff<
   path: string,
   cutoffDate: string | null = null,
   perPage = 100,
+  authMode?: AuthMode,
 ): Promise<T[]> {
+  const mode = authMode ?? resolveAuthMode(path);
+  await ensureAuthReady(mode);
   const all: T[] = [];
   let page = 1;
   const MAX_PAGES = 500;
@@ -200,8 +301,9 @@ export async function githubFetchPaginatedWithCutoff<
     const separator = path.includes("?") ? "&" : "?";
     const url = `${path}${separator}per_page=${perPage}&page=${page}`;
     const fullUrl = url.startsWith("http") ? url : `${GITHUB_API_BASE}${url}`;
-    await adaptiveRateDelay();
-    const resp = await fetch(fullUrl, { headers: headers(), cache: "no-store" });
+    await adaptiveRateDelay(mode);
+    const hdrs = await headersForAuth(mode);
+    const resp = await fetch(fullUrl, { headers: hdrs, cache: "no-store" });
 
     if (!resp.ok) {
       if (resp.status === 204) break;
@@ -219,7 +321,7 @@ export async function githubFetchPaginatedWithCutoff<
     }
 
     const batch: T[] = await resp.json();
-    updateRateLimit(resp);
+    updateRateLimit(resp, mode);
     if (!batch || batch.length === 0) break;
 
     if (cutoffDate) {
@@ -249,7 +351,10 @@ export async function githubFetchCursorPaginatedWithCutoff<
   path: string,
   cutoffDate: string | null = null,
   perPage = 100,
+  authMode?: AuthMode,
 ): Promise<T[]> {
+  const mode = authMode ?? resolveAuthMode(path);
+  await ensureAuthReady(mode);
   const all: T[] = [];
   let after: string | null = null;
   const MAX_ITERATIONS = 500;
@@ -259,8 +364,9 @@ export async function githubFetchCursorPaginatedWithCutoff<
     const cursorParam: string = after ? `&after=${after}` : "";
     const url: string = `${path}${separator}per_page=${perPage}${cursorParam}`;
     const fullUrl: string = url.startsWith("http") ? url : `${GITHUB_API_BASE}${url}`;
-    await adaptiveRateDelay();
-    const resp: Response = await fetch(fullUrl, { headers: headers(), cache: "no-store" });
+    await adaptiveRateDelay(mode);
+    const hdrs = await headersForAuth(mode);
+    const resp: Response = await fetch(fullUrl, { headers: hdrs, cache: "no-store" });
 
     if (!resp.ok) {
       if (resp.status === 204) break;
@@ -278,7 +384,7 @@ export async function githubFetchCursorPaginatedWithCutoff<
     }
 
     const batch: T[] = await resp.json();
-    updateRateLimit(resp);
+    updateRateLimit(resp, mode);
     if (!batch || batch.length === 0) break;
 
     if (cutoffDate) {

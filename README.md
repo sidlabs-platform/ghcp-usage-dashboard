@@ -107,11 +107,14 @@ Set these in `.env.local` at the project root.
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `GITHUB_TOKEN` | **Yes** | — | GitHub Personal Access Token (see [Prerequisites](#prerequisites) for scopes) |
+| `GITHUB_TOKEN` | **Yes**\*\* | — | GitHub Personal Access Token (see [Prerequisites](#prerequisites) for scopes). \*\*Optional when GitHub App auth is configured and enterprise mode is disabled. |
 | `GITHUB_ENTERPRISE` | **Yes**\* | — | Your enterprise slug (as shown in `github.com/enterprises/<slug>`). \*Not required if you disable enterprise mode in `dashboard-config.json`. |
 | `GITHUB_ORGS` | No | — | Comma-separated list of organization slugs to track. If empty, the dashboard discovers orgs from the enterprise. |
 | `BACKFILL_DAYS` | No | `90` | Number of days to backfill on first sync (max: 365) |
 | `GITHUB_API_BASE` | No | `https://api.github.com` | Base URL for the GitHub API. Set this for GHES installations (e.g., `https://github.example.com/api/v3`). |
+| `GITHUB_APP_ID` | No | — | GitHub App ID (numeric). Required for GitHub App authentication. |
+| `GITHUB_APP_PRIVATE_KEY` | No | — | GitHub App private key in PEM format. Use literal `\n` for newlines in env vars. |
+| `GITHUB_APP_INSTALLATION_ID` | No | — | GitHub App installation ID (numeric). Found in your App's installation settings. |
 
 ### Example `.env.local`
 
@@ -121,6 +124,33 @@ GITHUB_ENTERPRISE=my-company
 GITHUB_ORGS=frontend-team,backend-team,platform
 BACKFILL_DAYS=90
 ```
+
+### GitHub App Authentication
+
+Instead of (or in addition to) a PAT, you can authenticate with a [GitHub App](https://docs.github.com/en/apps/creating-github-apps). This is recommended for org-level access because App tokens have their own rate limit pool (5,000 req/hr) separate from PAT limits, and provide better auditability.
+
+**How it works:**
+
+- When all 3 `GITHUB_APP_*` env vars are set, the dashboard uses the App's installation token for **org-level** and **repo-level** API calls (`/orgs/...`, `/repos/...`).
+- **Enterprise-level** endpoints (`/enterprises/...`) always use the PAT — GitHub Apps cannot access enterprise admin APIs.
+- When no App is configured, the PAT is used for everything (existing behavior).
+- If enterprise mode is disabled and App auth is configured, `GITHUB_TOKEN` is optional.
+
+**Setup:**
+
+1. [Create a GitHub App](https://docs.github.com/en/apps/creating-github-apps/setting-up-a-github-app/creating-a-github-app) with the following permissions:
+   - **Organization permissions**: Copilot Metrics (read), Members (read)
+   - **Repository permissions**: Code scanning alerts (read), Dependabot alerts (read), Secret scanning alerts (read)
+2. Generate a private key and install the App on your organization(s).
+3. Add the env vars:
+
+```env
+GITHUB_APP_ID=123456
+GITHUB_APP_PRIVATE_KEY="-----BEGIN RSA PRIVATE KEY-----\nMIIE...\n-----END RSA PRIVATE KEY-----"
+GITHUB_APP_INSTALLATION_ID=78901234
+```
+
+> **Note:** In `.env.local`, use literal `\n` for newlines in the PEM key. The dashboard normalizes them automatically.
 
 ---
 
