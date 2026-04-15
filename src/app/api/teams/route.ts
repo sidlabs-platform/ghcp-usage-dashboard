@@ -92,14 +92,15 @@ function fromLiveData(
   selectedSlugs: string[], selectedOrgs: string[],
   sort: string, sortDir: string,
   page: number, pageSize: number,
+  enterpriseSlugs?: string[],
 ): { teams: TeamResult[]; total: number } {
-  let teamsWithMembers = getAllTeamsWithMembers();
+  let teamsWithMembers = getAllTeamsWithMembers(enterpriseSlugs);
   if (selectedSlugs.length > 0) {
     const slugSet = new Set(selectedSlugs);
     teamsWithMembers = teamsWithMembers.filter((t) => slugSet.has(t.team_slug));
   }
 
-  const userRecords = getAllUserMetrics(start, end);
+  const userRecords = getAllUserMetrics(start, end, enterpriseSlugs);
 
   let summaries = teamsWithMembers.map((team) => {
     const summary = computeTeamSummary(team.team_slug, team.team_name, team.members, userRecords);
@@ -154,6 +155,10 @@ async function handler(request: NextRequest) {
     const selectedSlugs = teamsParam ? teamsParam.split(",").filter(Boolean) : [];
     const selectedOrgs = orgsParam ? orgsParam.split(",").filter(Boolean) : [];
 
+    const enterprisesParam = params.get("enterprises");
+    const selectedEnterprises = enterprisesParam ? enterprisesParam.split(",").filter(Boolean) : [];
+    const enterpriseSlugs = selectedEnterprises.length > 0 ? selectedEnterprises : undefined;
+
     const page = Math.max(1, parseInt(params.get("page") || "1", 10));
     const pageSize = Math.min(Math.max(1, parseInt(params.get("pageSize") || "50", 10)), 200);
     const sort = params.get("sort") || "total_members";
@@ -163,7 +168,7 @@ async function handler(request: NextRequest) {
 
     // Try pre-aggregated cache first; fall back to live computation
     const cached = fromCache(db, start, end, selectedSlugs, selectedOrgs, sort, sortDir, page, pageSize);
-    const result = cached ?? fromLiveData(start, end, selectedSlugs, selectedOrgs, sort, sortDir, page, pageSize);
+    const result = cached ?? fromLiveData(start, end, selectedSlugs, selectedOrgs, sort, sortDir, page, pageSize, enterpriseSlugs);
 
     return NextResponse.json({
       teams: result.teams,

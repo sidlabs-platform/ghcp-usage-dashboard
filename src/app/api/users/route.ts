@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { resolveFilteredUsers } from "@/lib/db/teams-repo";
+import { parseScopeFilter } from "@/lib/api/scope-filter";
 import { getUserSummariesPaginated } from "@/lib/db/aggregation-queries";
 import { getDateRange } from "@/lib/utils";
 import { withCache } from "@/lib/cache/with-cache";
@@ -18,17 +18,11 @@ async function handler(request: NextRequest) {
     const sortDir = (params.get("sortDir") === "asc" ? "asc" : "desc") as "asc" | "desc";
     const search = params.get("search") || undefined;
 
-    const teamsParam = params.get("teams");
-    const orgsParam = params.get("orgs");
-    const selectedTeams = teamsParam ? teamsParam.split(",").filter(Boolean) : [];
-    const selectedOrgs = orgsParam ? orgsParam.split(",").filter(Boolean) : [];
-    const hasFilter = selectedTeams.length > 0 || selectedOrgs.length > 0;
+    const filter = parseScopeFilter(params);
+    const { enterpriseSlugs } = filter;
+    const allowedLogins = filter.allowedLogins ? Array.from(filter.allowedLogins) : undefined;
 
-    const allowedLogins = hasFilter
-      ? resolveFilteredUsers(selectedTeams, selectedOrgs)
-      : undefined;
-
-    const result = getUserSummariesPaginated(start, end, page, pageSize, sort, sortDir, search, allowedLogins);
+    const result = getUserSummariesPaginated(start, end, page, pageSize, sort, sortDir, search, allowedLogins, enterpriseSlugs);
 
     return NextResponse.json({
       users: result.users,

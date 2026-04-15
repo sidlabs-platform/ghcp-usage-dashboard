@@ -25,25 +25,28 @@ async function handler(request: NextRequest) {
     const days = parseInt(params.get("days") || "28", 10);
     const { start, end } = getDateRange(days);
 
-    // Parse scope filter (teams/orgs)
+    // Parse scope filter (teams/orgs/enterprises)
     const teamsParam = params.get("teams");
     const orgsParam = params.get("orgs");
+    const enterprisesParam = params.get("enterprises");
     const selectedTeams = teamsParam ? teamsParam.split(",").filter(Boolean) : [];
     const selectedOrgs = orgsParam ? orgsParam.split(",").filter(Boolean) : [];
+    const selectedEnterprises = enterprisesParam ? enterprisesParam.split(",").filter(Boolean) : [];
+    const enterpriseSlugs = selectedEnterprises.length > 0 ? selectedEnterprises : undefined;
     const hasScope = selectedTeams.length > 0 || selectedOrgs.length > 0;
 
     const filters: BillingFilters = {};
     if (hasScope) {
-      filters.allowedLogins = resolveFilteredUsers(selectedTeams, selectedOrgs);
+      filters.allowedLogins = resolveFilteredUsers(selectedTeams, selectedOrgs, enterpriseSlugs);
       if (selectedOrgs.length > 0) filters.scopeOrgs = selectedOrgs;
     }
 
-    const kpis = getOverviewKPIs(start, end, filters);
-    const dailyAggregates = getDailyAggregates(start, end, filters);
-    const productBreakdown = getProductBreakdown(start, end, filters);
-    const orgBreakdown = getOrgBreakdown(start, end, filters);
-    const userBreakdown = getUserBreakdown(start, end, filters);
-    const costCenterBreakdown = getCostCenterBreakdown(start, end, filters);
+    const kpis = getOverviewKPIs(start, end, filters, enterpriseSlugs);
+    const dailyAggregates = getDailyAggregates(start, end, filters, enterpriseSlugs);
+    const productBreakdown = getProductBreakdown(start, end, filters, enterpriseSlugs);
+    const orgBreakdown = getOrgBreakdown(start, end, filters, enterpriseSlugs);
+    const userBreakdown = getUserBreakdown(start, end, filters, enterpriseSlugs);
+    const costCenterBreakdown = getCostCenterBreakdown(start, end, filters, enterpriseSlugs);
 
     // Build daily cost trend (aggregate across products per day)
     const dailyMap = new Map<string, { day: string; total_net: number; user_net: number; org_net: number }>();

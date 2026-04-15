@@ -10,6 +10,7 @@
 CREATE TABLE IF NOT EXISTS ghas_code_scanning_alerts (
   scope TEXT NOT NULL,            -- 'enterprise' or 'org'
   scope_id TEXT NOT NULL,         -- enterprise slug or org slug
+  enterprise_slug TEXT NOT NULL DEFAULT '',
   alert_number INTEGER NOT NULL,
   repo_full_name TEXT,            -- e.g. 'org/repo'
   state TEXT NOT NULL,            -- 'open', 'dismissed', 'fixed'
@@ -34,6 +35,7 @@ CREATE INDEX IF NOT EXISTS idx_code_scanning_state
 CREATE TABLE IF NOT EXISTS ghas_dependabot_alerts (
   scope TEXT NOT NULL,
   scope_id TEXT NOT NULL,
+  enterprise_slug TEXT NOT NULL DEFAULT '',
   alert_number INTEGER NOT NULL,
   repo_full_name TEXT,
   state TEXT NOT NULL,            -- 'open', 'dismissed', 'fixed', 'auto_dismissed'
@@ -58,6 +60,7 @@ CREATE INDEX IF NOT EXISTS idx_dependabot_state
 CREATE TABLE IF NOT EXISTS ghas_secret_scanning_alerts (
   scope TEXT NOT NULL,
   scope_id TEXT NOT NULL,
+  enterprise_slug TEXT NOT NULL DEFAULT '',
   alert_number INTEGER NOT NULL,
   repo_full_name TEXT,
   state TEXT NOT NULL,            -- 'open', 'resolved'
@@ -84,6 +87,7 @@ CREATE TABLE IF NOT EXISTS ghas_code_scanning_daily (
   day TEXT NOT NULL,
   scope TEXT NOT NULL,
   scope_id TEXT NOT NULL,
+  enterprise_slug TEXT NOT NULL DEFAULT '',
   opened INTEGER DEFAULT 0,
   fixed INTEGER DEFAULT 0,
   dismissed INTEGER DEFAULT 0,
@@ -106,6 +110,7 @@ CREATE TABLE IF NOT EXISTS ghas_dependabot_daily (
   day TEXT NOT NULL,
   scope TEXT NOT NULL,
   scope_id TEXT NOT NULL,
+  enterprise_slug TEXT NOT NULL DEFAULT '',
   opened INTEGER DEFAULT 0,
   fixed INTEGER DEFAULT 0,
   dismissed INTEGER DEFAULT 0,
@@ -127,6 +132,7 @@ CREATE TABLE IF NOT EXISTS ghas_secret_scanning_daily (
   day TEXT NOT NULL,
   scope TEXT NOT NULL,
   scope_id TEXT NOT NULL,
+  enterprise_slug TEXT NOT NULL DEFAULT '',
   opened INTEGER DEFAULT 0,
   resolved INTEGER DEFAULT 0,
   total_open INTEGER DEFAULT 0,
@@ -145,6 +151,7 @@ CREATE INDEX IF NOT EXISTS idx_secret_scanning_daily_day
 CREATE TABLE IF NOT EXISTS ghas_sync_state (
   scope TEXT NOT NULL,
   scope_id TEXT NOT NULL,
+  enterprise_slug TEXT NOT NULL DEFAULT '',
   metric_type TEXT NOT NULL,      -- 'code_scanning', 'dependabot', 'secret_scanning'
   last_synced_at TEXT NOT NULL,
   last_alert_updated_at TEXT,     -- latest alert updated_at seen during sync
@@ -153,3 +160,12 @@ CREATE TABLE IF NOT EXISTS ghas_sync_state (
   error_message TEXT,
   PRIMARY KEY (scope, scope_id, metric_type)
 );
+
+-- Indexes for enterprise_slug filtering
+CREATE INDEX IF NOT EXISTS idx_ghas_code_scanning_alerts_slug ON ghas_code_scanning_alerts(enterprise_slug);
+CREATE INDEX IF NOT EXISTS idx_ghas_dependabot_alerts_slug ON ghas_dependabot_alerts(enterprise_slug);
+CREATE INDEX IF NOT EXISTS idx_ghas_secret_scanning_alerts_slug ON ghas_secret_scanning_alerts(enterprise_slug);
+CREATE INDEX IF NOT EXISTS idx_ghas_code_scanning_daily_slug ON ghas_code_scanning_daily(enterprise_slug, day);
+CREATE INDEX IF NOT EXISTS idx_ghas_dependabot_daily_slug ON ghas_dependabot_daily(enterprise_slug, day);
+CREATE INDEX IF NOT EXISTS idx_ghas_secret_scanning_daily_slug ON ghas_secret_scanning_daily(enterprise_slug, day);
+CREATE INDEX IF NOT EXISTS idx_ghas_sync_state_slug ON ghas_sync_state(enterprise_slug);

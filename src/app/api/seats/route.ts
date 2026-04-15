@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSeatsPaginated, getSeatStats } from "@/lib/db/seats-repo";
-import { resolveFilteredUsers } from "@/lib/db/teams-repo";
+import { parseScopeFilter } from "@/lib/api/scope-filter";
 import { withCache } from "@/lib/cache/with-cache";
 import { withTimeout } from "@/lib/api/timeout";
 import { CACHE_TTL } from "@/lib/cache/memory-cache";
@@ -8,24 +8,18 @@ import { CACHE_TTL } from "@/lib/cache/memory-cache";
 async function handler(request: NextRequest) {
   try {
     const params = request.nextUrl.searchParams;
-    const teamsParam = params.get("teams");
-    const orgsParam = params.get("orgs");
-    const selectedTeams = teamsParam ? teamsParam.split(",").filter(Boolean) : [];
-    const selectedOrgs = orgsParam ? orgsParam.split(",").filter(Boolean) : [];
-    const hasFilter = selectedTeams.length > 0 || selectedOrgs.length > 0;
+    const filter = parseScopeFilter(params);
+    const { enterpriseSlugs } = filter;
+    const hasFilter = filter.selectedTeams.length > 0 || filter.selectedOrgs.length > 0;
 
     const page = Math.max(1, parseInt(params.get("page") || "1", 10));
     const pageSize = Math.min(Math.max(1, parseInt(params.get("pageSize") || "50", 10)), 200);
     const sort = params.get("sort") || "_lastActivity";
     const sortDir = (params.get("sortDir") === "asc" ? "asc" : "desc") as "asc" | "desc";
 
-    const stats = getSeatStats();
+    const stats = getSeatStats(enterpriseSlugs);
 
-    const allowedLogins = hasFilter
-      ? new Set(resolveFilteredUsers(selectedTeams, selectedOrgs))
-      : undefined;
-
-    const result = getSeatsPaginated(page, pageSize, sort, sortDir, allowedLogins);
+    const result = getSeatsPaginated(page, pageSize, sort, sortDir, filter.allowedLogins, enterpriseSlugs);
 
     const utilization = stats.total > 0
       ? Number(((stats.active30d / stats.total) * 100).toFixed(1))

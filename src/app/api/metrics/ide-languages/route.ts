@@ -10,13 +10,13 @@ export async function GET(request: Request) {
     const { start, end } = getDateRange(days);
 
     const scopeFilter = parseScopeFilter(searchParams);
-    const eid = scopeFilter.hasFilter ? null : resolveEnterpriseId();
+    const eid = scopeFilter.hasFilter ? null : resolveEnterpriseId(scopeFilter.enterpriseSlugs);
 
-    let records = eid ? getEnterpriseMetrics(eid, start, end) : [];
+    let records = eid ? getEnterpriseMetrics(start, end, scopeFilter.enterpriseSlugs) : [];
 
     // Fallback or filtered: build from user-level data
     if (records.length === 0 || scopeFilter.hasFilter) {
-      const userRecords = filterByScope(getAllUserMetrics(start, end), scopeFilter);
+      const userRecords = filterByScope(getAllUserMetrics(start, end, scopeFilter.enterpriseSlugs), scopeFilter);
       // Group by day and aggregate totals_by_ide and totals_by_language_feature
       const dayMap = new Map<string, { totals_by_ide: Record<string, unknown>[]; totals_by_language_feature: Record<string, unknown>[] }>();
       for (const u of userRecords) {

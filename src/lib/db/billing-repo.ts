@@ -187,7 +187,13 @@ function buildWhereClause(clauses: string[]): string {
   return clauses.length ? " WHERE " + clauses.join(" AND ") : "";
 }
 
-// ── Sort Column Whitelists ────────────────────────────────────────────
+function buildEnterpriseFilter(slugs?: string[]): { clause: string; params: string[] } {
+  if (!slugs || slugs.length === 0) return { clause: "", params: [] };
+  const placeholders = slugs.map(() => "?").join(",");
+  return { clause: ` AND enterprise_slug IN (${placeholders})`, params: slugs };
+}
+
+// ── Sort Column Whitelists────────────────────────────────────────────
 
 const USAGE_SORT_COLUMNS = new Set([
   "date",
@@ -227,18 +233,19 @@ const PREMIUM_SORT_COLUMNS = new Set([
 
 // ── Upsert Operations ────────────────────────────────────────────────
 
-export function upsertUsageRecords(records: BillingUsageRecord[]): void {
+export function upsertUsageRecords(enterpriseSlug: string, records: BillingUsageRecord[]): void {
   const db = getDb();
   const stmt = db.prepare(`
     INSERT OR REPLACE INTO billing_usage_records
-      (date, product, sku, quantity, unit_type, applied_cost_per_quantity,
+      (enterprise_slug, date, product, sku, quantity, unit_type, applied_cost_per_quantity,
        gross_amount, discount_amount, net_amount, organization, repository,
        username, workflow_path, cost_center_name, charge_scope)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
   const tx = db.transaction(() => {
     for (const r of records) {
       stmt.run(
+        enterpriseSlug,
         r.date,
         r.product,
         r.sku,
@@ -261,19 +268,21 @@ export function upsertUsageRecords(records: BillingUsageRecord[]): void {
 }
 
 export function upsertPremiumRequests(
+  enterpriseSlug: string,
   records: BillingPremiumRequestRecord[]
 ): void {
   const db = getDb();
   const stmt = db.prepare(`
     INSERT OR REPLACE INTO billing_premium_requests
-      (date, product, sku, quantity, unit_type, applied_cost_per_quantity,
+      (enterprise_slug, date, product, sku, quantity, unit_type, applied_cost_per_quantity,
        gross_amount, discount_amount, net_amount, username, organization,
        model, exceeds_quota, total_monthly_quota, charge_scope)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
   const tx = db.transaction(() => {
     for (const r of records) {
       stmt.run(
+        enterpriseSlug,
         r.date,
         r.product,
         r.sku,
@@ -300,13 +309,16 @@ export function upsertPremiumRequests(
 export function getOverviewKPIs(
   start: string,
   end: string,
-  filters?: BillingFilters
+  filters?: BillingFilters,
+  enterpriseSlugs?: string[]
 ): BillingOverviewKPIs {
   const db = getDb();
 
   // Metered usage totals
   const usageClauses: string[] = ["date >= ?", "date <= ?"];
   const usageParams: unknown[] = [start, end];
+  const { clause: entClause, params: entParams } = buildEnterpriseFilter(enterpriseSlugs);
+  if (entClause) { usageClauses.push(entClause.replace(/^\s*AND\s+/, "")); usageParams.push(...entParams); }
   appendBillingFilters(usageClauses, usageParams, filters);
 
   const usage = db
@@ -329,6 +341,7 @@ export function getOverviewKPIs(
   // Premium request totals (always user-level)
   const premClauses: string[] = ["date >= ?", "date <= ?"];
   const premParams: unknown[] = [start, end];
+  if (entClause) { premClauses.push(entClause.replace(/^\s*AND\s+/, "")); premParams.push(...entParams); }
   // Apply only scope filters to premium
   if (filters?.allowedLogins?.length || filters?.scopeOrgs?.length) {
     appendPremiumFilters(premClauses, premParams, {
@@ -368,11 +381,14 @@ export function getOverviewKPIs(
 export function getDailyAggregates(
   start: string,
   end: string,
-  filters?: BillingFilters
+  filters?: BillingFilters,
+  enterpriseSlugs?: string[]
 ): BillingDailyAggregate[] {
   const db = getDb();
   const clauses: string[] = ["date >= ?", "date <= ?"];
   const params: unknown[] = [start, end];
+  const { clause: entClause, params: entParams } = buildEnterpriseFilter(enterpriseSlugs);
+  if (entClause) { clauses.push(entClause.replace(/^\s*AND\s+/, "")); params.push(...entParams); }
   appendBillingFilters(clauses, params, filters);
 
   return db
@@ -399,11 +415,14 @@ export function getDailyAggregates(
 export function getProductBreakdown(
   start: string,
   end: string,
-  filters?: BillingFilters
+  filters?: BillingFilters,
+  enterpriseSlugs?: string[]
 ): BillingProductBreakdown[] {
   const db = getDb();
   const clauses: string[] = ["date >= ?", "date <= ?"];
   const params: unknown[] = [start, end];
+  const { clause: entClause, params: entParams } = buildEnterpriseFilter(enterpriseSlugs);
+  if (entClause) { clauses.push(entClause.replace(/^\s*AND\s+/, "")); params.push(...entParams); }
   appendBillingFilters(clauses, params, filters);
 
   return db
@@ -428,7 +447,8 @@ export function getProductBreakdown(
 export function getOrgBreakdown(
   start: string,
   end: string,
-  filters?: BillingFilters
+  filters?: BillingFilters,
+  enterpriseSlugs?: string[]
 ): BillingOrgBreakdown[] {
   const db = getDb();
   const clauses: string[] = [
@@ -437,6 +457,8 @@ export function getOrgBreakdown(
     "organization != ''",
   ];
   const params: unknown[] = [start, end];
+  const { clause: entClause, params: entParams } = buildEnterpriseFilter(enterpriseSlugs);
+  if (entClause) { clauses.push(entClause.replace(/^\s*AND\s+/, "")); params.push(...entParams); }
   appendBillingFilters(clauses, params, filters);
 
   return db
@@ -459,11 +481,14 @@ export function getOrgBreakdown(
 export function getUserBreakdown(
   start: string,
   end: string,
-  filters?: BillingFilters
+  filters?: BillingFilters,
+  enterpriseSlugs?: string[]
 ): BillingUserBreakdown[] {
   const db = getDb();
   const clauses: string[] = ["date >= ?", "date <= ?", "username != ''"];
   const params: unknown[] = [start, end];
+  const { clause: entClause, params: entParams } = buildEnterpriseFilter(enterpriseSlugs);
+  if (entClause) { clauses.push(entClause.replace(/^\s*AND\s+/, "")); params.push(...entParams); }
   appendBillingFilters(clauses, params, filters);
 
   return db
@@ -494,11 +519,14 @@ export function getUsageRecordsPaginated(
   sort: string,
   sortDir: "asc" | "desc",
   search?: string,
-  filters?: BillingFilters
+  filters?: BillingFilters,
+  enterpriseSlugs?: string[]
 ): { records: BillingUsageRecord[]; total: number } {
   const db = getDb();
   const clauses: string[] = ["date >= ?", "date <= ?"];
   const params: unknown[] = [start, end];
+  const { clause: entClause, params: entParams } = buildEnterpriseFilter(enterpriseSlugs);
+  if (entClause) { clauses.push(entClause.replace(/^\s*AND\s+/, "")); params.push(...entParams); }
   appendBillingFilters(clauses, params, filters);
 
   if (search) {
@@ -545,11 +573,14 @@ export function getPremiumRequestsPaginated(
   sort: string,
   sortDir: "asc" | "desc",
   search?: string,
-  filters?: PremiumFilters
+  filters?: PremiumFilters,
+  enterpriseSlugs?: string[]
 ): { records: BillingPremiumRequestRecord[]; total: number } {
   const db = getDb();
   const clauses: string[] = ["date >= ?", "date <= ?"];
   const params: unknown[] = [start, end];
+  const { clause: entClause, params: entParams } = buildEnterpriseFilter(enterpriseSlugs);
+  if (entClause) { clauses.push(entClause.replace(/^\s*AND\s+/, "")); params.push(...entParams); }
   appendPremiumFilters(clauses, params, filters);
 
   if (search) {
@@ -593,11 +624,14 @@ export function getPremiumRequestsPaginated(
 export function getPremiumUserSummary(
   start: string,
   end: string,
-  filters?: PremiumFilters
+  filters?: PremiumFilters,
+  enterpriseSlugs?: string[]
 ): PremiumRequestUserSummary[] {
   const db = getDb();
   const clauses: string[] = ["date >= ?", "date <= ?"];
   const params: unknown[] = [start, end];
+  const { clause: entClause, params: entParams } = buildEnterpriseFilter(enterpriseSlugs);
+  if (entClause) { clauses.push(entClause.replace(/^\s*AND\s+/, "")); params.push(...entParams); }
   appendPremiumFilters(clauses, params, filters);
 
   return db
@@ -628,11 +662,14 @@ export function getPremiumUserSummary(
 export function getPremiumModelSummary(
   start: string,
   end: string,
-  filters?: PremiumFilters
+  filters?: PremiumFilters,
+  enterpriseSlugs?: string[]
 ): PremiumRequestModelSummary[] {
   const db = getDb();
   const clauses: string[] = ["date >= ?", "date <= ?"];
   const params: unknown[] = [start, end];
+  const { clause: entClause, params: entParams } = buildEnterpriseFilter(enterpriseSlugs);
+  if (entClause) { clauses.push(entClause.replace(/^\s*AND\s+/, "")); params.push(...entParams); }
   appendPremiumFilters(clauses, params, filters);
 
   return db
@@ -657,11 +694,14 @@ export function getPremiumModelSummary(
 export function getCostCenterBreakdown(
   start: string,
   end: string,
-  filters?: BillingFilters
+  filters?: BillingFilters,
+  enterpriseSlugs?: string[]
 ): BillingCostCenterBreakdown[] {
   const db = getDb();
   const clauses: string[] = ["date >= ?", "date <= ?", "cost_center_name != ''"];
   const params: unknown[] = [start, end];
+  const { clause: entClause, params: entParams } = buildEnterpriseFilter(enterpriseSlugs);
+  if (entClause) { clauses.push(entClause.replace(/^\s*AND\s+/, "")); params.push(...entParams); }
   appendBillingFilters(clauses, params, filters);
 
   return db
@@ -686,11 +726,14 @@ export function getRepositoryBreakdown(
   start: string,
   end: string,
   filters?: BillingFilters,
-  limit: number = 20
+  limit: number = 20,
+  enterpriseSlugs?: string[]
 ): BillingRepositoryBreakdown[] {
   const db = getDb();
   const clauses: string[] = ["date >= ?", "date <= ?", "repository != ''"];
   const params: unknown[] = [start, end];
+  const { clause: entClause, params: entParams } = buildEnterpriseFilter(enterpriseSlugs);
+  if (entClause) { clauses.push(entClause.replace(/^\s*AND\s+/, "")); params.push(...entParams); }
   appendBillingFilters(clauses, params, filters);
 
   return db
@@ -715,11 +758,14 @@ export function getRepositoryBreakdown(
 export function getPremiumDailyTrend(
   start: string,
   end: string,
-  filters?: PremiumFilters
+  filters?: PremiumFilters,
+  enterpriseSlugs?: string[]
 ): PremiumDailyTrend[] {
   const db = getDb();
   const clauses: string[] = ["date >= ?", "date <= ?"];
   const params: unknown[] = [start, end];
+  const { clause: entClause, params: entParams } = buildEnterpriseFilter(enterpriseSlugs);
+  if (entClause) { clauses.push(entClause.replace(/^\s*AND\s+/, "")); params.push(...entParams); }
   appendPremiumFilters(clauses, params, filters);
 
   return db
@@ -741,15 +787,22 @@ export function getPremiumDailyTrend(
 
 // ── Aggregate Operations ──────────────────────────────────────────────
 
-export function refreshBillingDailyAggregates(): void {
+export function refreshBillingDailyAggregates(enterpriseSlug?: string): void {
   const db = getDb();
   const tx = db.transaction(() => {
-    db.prepare(`DELETE FROM billing_daily_aggregate`).run();
+    if (enterpriseSlug !== undefined) {
+      db.prepare(`DELETE FROM billing_daily_aggregate WHERE enterprise_slug = ?`).run(enterpriseSlug);
+    } else {
+      db.prepare(`DELETE FROM billing_daily_aggregate`).run();
+    }
+    const whereClause = enterpriseSlug !== undefined ? `WHERE enterprise_slug = ?` : "";
+    const whereParams = enterpriseSlug !== undefined ? [enterpriseSlug] : [];
     db.prepare(
       `
       INSERT INTO billing_daily_aggregate
-        (day, product, charge_scope, total_quantity, total_gross, total_discount, total_net, record_count)
+        (enterprise_slug, day, product, charge_scope, total_quantity, total_gross, total_discount, total_net, record_count)
       SELECT
+        enterprise_slug,
         date,
         product,
         charge_scope,
@@ -759,9 +812,10 @@ export function refreshBillingDailyAggregates(): void {
         COALESCE(SUM(net_amount), 0),
         COUNT(*)
       FROM billing_usage_records
-      GROUP BY date, product, charge_scope
+      ${whereClause}
+      GROUP BY enterprise_slug, date, product, charge_scope
     `
-    ).run();
+    ).run(...whereParams);
   });
   tx();
 }
@@ -769,15 +823,17 @@ export function refreshBillingDailyAggregates(): void {
 // ── Sync State ────────────────────────────────────────────────────────
 
 export function getBillingSyncState(
-  reportType: BillingReportType
+  reportType: BillingReportType,
+  enterpriseSlug?: string
 ): BillingSyncState | null {
   const db = getDb();
+  const slug = enterpriseSlug ?? "";
   const row = db
     .prepare(
       `SELECT report_type, last_synced_at, last_report_start, last_report_end, status, error_message
-       FROM billing_sync_state WHERE report_type = ?`
+       FROM billing_sync_state WHERE report_type = ? AND enterprise_slug = ?`
     )
-    .get(reportType) as BillingSyncState | undefined;
+    .get(reportType, slug) as BillingSyncState | undefined;
   return row ?? null;
 }
 
@@ -787,15 +843,17 @@ export function updateBillingSyncState(
   lastReportStart: string,
   lastReportEnd: string,
   status: string,
-  errorMessage?: string
+  errorMessage?: string,
+  enterpriseSlug?: string
 ): void {
   const db = getDb();
+  const slug = enterpriseSlug ?? "";
   db.prepare(
     `
     INSERT INTO billing_sync_state
-      (report_type, last_synced_at, last_report_start, last_report_end, status, error_message)
-    VALUES (?, ?, ?, ?, ?, ?)
-    ON CONFLICT(report_type) DO UPDATE SET
+      (enterprise_slug, report_type, last_synced_at, last_report_start, last_report_end, status, error_message)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(enterprise_slug, report_type) DO UPDATE SET
       last_synced_at   = excluded.last_synced_at,
       last_report_start = excluded.last_report_start,
       last_report_end   = excluded.last_report_end,
@@ -803,6 +861,7 @@ export function updateBillingSyncState(
       error_message     = excluded.error_message
   `
   ).run(
+    slug,
     reportType,
     lastSyncedAt,
     lastReportStart,
@@ -816,7 +875,8 @@ export function updateBillingSyncState(
 
 export function getUsageFilterOptions(
   start: string,
-  end: string
+  end: string,
+  enterpriseSlugs?: string[]
 ): {
   products: string[];
   skus: string[];
@@ -824,8 +884,9 @@ export function getUsageFilterOptions(
   costCenters: string[];
 } {
   const db = getDb();
-  const where = "WHERE date >= ? AND date <= ?";
-  const params = [start, end];
+  const entFilter = buildEnterpriseFilter(enterpriseSlugs);
+  const where = `WHERE date >= ? AND date <= ?${entFilter.clause}`;
+  const params = [start, end, ...entFilter.params];
 
   const products = (
     db
@@ -864,15 +925,17 @@ export function getUsageFilterOptions(
 
 export function getPremiumFilterOptions(
   start: string,
-  end: string
+  end: string,
+  enterpriseSlugs?: string[]
 ): {
   models: string[];
   organizations: string[];
   users: string[];
 } {
   const db = getDb();
-  const where = "WHERE date >= ? AND date <= ?";
-  const params = [start, end];
+  const entFilter = buildEnterpriseFilter(enterpriseSlugs);
+  const where = `WHERE date >= ? AND date <= ?${entFilter.clause}`;
+  const params = [start, end, ...entFilter.params];
 
   const models = (
     db

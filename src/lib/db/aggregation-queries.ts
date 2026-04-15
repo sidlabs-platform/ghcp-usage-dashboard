@@ -40,13 +40,21 @@ function buildLoginFilter(allowedLogins: string[]): { clause: string; params: st
   return { clause: `AND user_login IN (${placeholders})`, params: allowedLogins };
 }
 
+function buildEnterpriseFilter(slugs?: string[]): { clause: string; params: string[] } {
+  if (!slugs || slugs.length === 0) return { clause: "", params: [] };
+  const placeholders = slugs.map(() => "?").join(",");
+  return { clause: ` AND enterprise_slug IN (${placeholders})`, params: slugs };
+}
+
 export function getChatModeSums(
   startDay: string,
   endDay: string,
   allowedLogins?: string[],
+  enterpriseSlugs?: string[],
 ): ChatModeSums {
   const db = getDb();
   const filter = buildLoginFilter(allowedLogins ?? []);
+  const ef = buildEnterpriseFilter(enterpriseSlugs);
   const sql = `
     SELECT
       COALESCE(SUM(chat_panel_ask_mode), 0) as ask,
@@ -56,9 +64,9 @@ export function getChatModeSums(
       COALESCE(SUM(chat_panel_custom_mode), 0) as custom,
       COALESCE(SUM(chat_panel_unknown_mode), 0) as unknown
     FROM user_daily_metrics
-    WHERE day >= ? AND day <= ? ${filter.clause}
+    WHERE day >= ? AND day <= ? ${filter.clause}${ef.clause}
   `;
-  const row = db.prepare(sql).get(startDay, endDay, ...filter.params) as ChatModeSums | undefined;
+  const row = db.prepare(sql).get(startDay, endDay, ...filter.params, ...ef.params) as ChatModeSums | undefined;
   return row ?? { ask: 0, edit: 0, plan: 0, agent: 0, custom: 0, unknown: 0 };
 }
 
@@ -66,9 +74,11 @@ export function getAdoptionStats(
   startDay: string,
   endDay: string,
   allowedLogins?: string[],
+  enterpriseSlugs?: string[],
 ): AdoptionStats {
   const db = getDb();
   const filter = buildLoginFilter(allowedLogins ?? []);
+  const ef = buildEnterpriseFilter(enterpriseSlugs);
   const sql = `
     SELECT
       COUNT(DISTINCT user_login) as totalUsers,
@@ -77,9 +87,9 @@ export function getAdoptionStats(
       COUNT(DISTINCT CASE WHEN used_copilot_code_review_active = 1 THEN user_login END) as codeReviewUsers,
       COUNT(DISTINCT CASE WHEN used_cli = 1 THEN user_login END) as cliUsers
     FROM user_daily_metrics
-    WHERE day >= ? AND day <= ? ${filter.clause}
+    WHERE day >= ? AND day <= ? ${filter.clause}${ef.clause}
   `;
-  const row = db.prepare(sql).get(startDay, endDay, ...filter.params) as AdoptionStats;
+  const row = db.prepare(sql).get(startDay, endDay, ...filter.params, ...ef.params) as AdoptionStats;
   return row;
 }
 
@@ -87,9 +97,11 @@ export function getUserSummaries(
   startDay: string,
   endDay: string,
   allowedLogins?: string[],
+  enterpriseSlugs?: string[],
 ): UserSummary[] {
   const db = getDb();
   const filter = buildLoginFilter(allowedLogins ?? []);
+  const ef = buildEnterpriseFilter(enterpriseSlugs);
   const sql = `
     SELECT
       user_login as login,
@@ -106,10 +118,10 @@ export function getUserSummaries(
       MAX(used_copilot_code_review_passive) as usedCodeReviewPassive,
       MAX(used_copilot_coding_agent) as usedCodingAgent
     FROM user_daily_metrics
-    WHERE day >= ? AND day <= ? ${filter.clause}
+    WHERE day >= ? AND day <= ? ${filter.clause}${ef.clause}
     GROUP BY user_login
   `;
-  const rows = db.prepare(sql).all(startDay, endDay, ...filter.params) as Array<{
+  const rows = db.prepare(sql).all(startDay, endDay, ...filter.params, ...ef.params) as Array<{
     login: string;
     activeDays: number;
     locAdded: number;
@@ -157,9 +169,11 @@ export function getUserSummariesPaginated(
   sortDir: "asc" | "desc",
   search?: string,
   allowedLogins?: string[],
+  enterpriseSlugs?: string[],
 ): PaginatedUserSummaries {
   const db = getDb();
   const filter = buildLoginFilter(allowedLogins ?? []);
+  const ef = buildEnterpriseFilter(enterpriseSlugs);
   const searchClause = search ? `AND user_login LIKE ?` : "";
   const searchParam = search ? [`%${search}%`] : [];
 
@@ -177,9 +191,9 @@ export function getUserSummariesPaginated(
 
   const baseSql = `
     FROM user_daily_metrics
-    WHERE day >= ? AND day <= ? ${filter.clause} ${searchClause}
+    WHERE day >= ? AND day <= ? ${filter.clause} ${searchClause}${ef.clause}
   `;
-  const baseParams = [startDay, endDay, ...filter.params, ...searchParam];
+  const baseParams = [startDay, endDay, ...filter.params, ...searchParam, ...ef.params];
 
   // Count total distinct users (subquery ensures count matches GROUP BY result set)
   const countSql = `

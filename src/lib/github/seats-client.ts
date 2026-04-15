@@ -4,10 +4,11 @@ import { githubFetch, githubFetchPaginated } from "./api-base";
 import type { CopilotSeat, CopilotSeatsResponse } from "@/lib/types/seats";
 
 export class SeatsClient {
-  async getOrgSeats(org: string): Promise<{ totalSeats: number; seats: CopilotSeat[] }> {
+  async getOrgSeats(org: string, enterpriseSlug?: string): Promise<{ totalSeats: number; seats: CopilotSeat[] }> {
     // First call to get total_seats count
     const first = await githubFetch<CopilotSeatsResponse>(
-      `/orgs/${org}/copilot/billing/seats?per_page=100`
+      `/orgs/${org}/copilot/billing/seats?per_page=100`,
+      3, undefined, enterpriseSlug
     );
 
     if (!first) return { totalSeats: 0, seats: [] };
@@ -20,7 +21,8 @@ export class SeatsClient {
       const maxPages = 100;
       while (allSeats.length < first.total_seats && page <= maxPages) {
         const resp = await githubFetch<CopilotSeatsResponse>(
-          `/orgs/${org}/copilot/billing/seats?per_page=100&page=${page}`
+          `/orgs/${org}/copilot/billing/seats?per_page=100&page=${page}`,
+          3, undefined, enterpriseSlug
         );
         if (!resp?.seats?.length) break;
         allSeats.push(...resp.seats);
@@ -31,9 +33,10 @@ export class SeatsClient {
     return { totalSeats: first.total_seats, seats: allSeats };
   }
 
-  async getEnterpriseSeats(enterprise: string): Promise<{ totalSeats: number; seats: CopilotSeat[] }> {
+  async getEnterpriseSeats(enterprise: string, enterpriseSlug?: string): Promise<{ totalSeats: number; seats: CopilotSeat[] }> {
     const first = await githubFetch<CopilotSeatsResponse>(
-      `/enterprises/${enterprise}/copilot/billing/seats?per_page=100`
+      `/enterprises/${enterprise}/copilot/billing/seats?per_page=100`,
+      3, undefined, enterpriseSlug
     );
 
     if (!first) return { totalSeats: 0, seats: [] };
@@ -45,7 +48,8 @@ export class SeatsClient {
       const maxPages = 100;
       while (allSeats.length < first.total_seats && page <= maxPages) {
         const resp = await githubFetch<CopilotSeatsResponse>(
-          `/enterprises/${enterprise}/copilot/billing/seats?per_page=100&page=${page}`
+          `/enterprises/${enterprise}/copilot/billing/seats?per_page=100&page=${page}`,
+          3, undefined, enterpriseSlug
         );
         if (!resp?.seats?.length) break;
         allSeats.push(...resp.seats);

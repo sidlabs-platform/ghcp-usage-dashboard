@@ -4,6 +4,7 @@ import { fullGhasSync } from "@/lib/db/ghas-sync-service";
 import { getSyncStatus, acquireSyncLock, releaseSyncLock, isSyncLocked, clearEmptySyncEntries } from "@/lib/db/metrics-repo";
 import { isMetricEnabled } from "@/lib/config/dashboard-config";
 import { getAutoSyncStatus } from "@/lib/sync/auto-sync-scheduler";
+import { getClientEnterpriseList } from "@/lib/config/enterprise-config";
 
 export async function POST(request: Request) {
   const { searchParams } = new URL(request.url);
@@ -70,5 +71,6 @@ export async function GET() {
     syncInProgress: isSyncLocked(),
     status: getSyncStatus(),
     autoSync: getAutoSyncStatus(),
+    enterprises: getClientEnterpriseList(),
   });
 }

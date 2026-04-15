@@ -14,13 +14,17 @@ export async function GET(request: Request) {
     const selectedOrgs = orgsParam ? orgsParam.split(",").filter(Boolean) : [];
     const hasOrgFilter = selectedOrgs.length > 0;
 
-    const eid = hasOrgFilter ? null : resolveEnterpriseId();
+    const enterprisesParam = searchParams.get("enterprises");
+    const selectedEnterprises = enterprisesParam ? enterprisesParam.split(",").filter(Boolean) : [];
+    const enterpriseSlugs = selectedEnterprises.length > 0 ? selectedEnterprises : undefined;
+
+    const eid = hasOrgFilter ? null : resolveEnterpriseId(enterpriseSlugs);
 
     // Try enterprise metrics first, fall back to org metrics
-    let records = eid ? getEnterpriseMetrics(eid, start, end) : [];
+    let records = eid ? getEnterpriseMetrics(start, end, enterpriseSlugs) : [];
     let dataSource = "enterprise";
     if (records.length === 0 || hasOrgFilter) {
-      records = hasOrgFilter ? getFilteredOrgMetrics(selectedOrgs, start, end) : getAllOrgMetrics(start, end);
+      records = hasOrgFilter ? getFilteredOrgMetrics(selectedOrgs, start, end, enterpriseSlugs) : getAllOrgMetrics(start, end, enterpriseSlugs);
       dataSource = hasOrgFilter ? "org-filtered" : "org";
     }
 

@@ -7,6 +7,7 @@ import {
   isCopilotSubEnabled,
   getResolvedOrgs,
 } from "@/lib/config/dashboard-config";
+import { getClientEnterpriseList, isMultiEnterprise } from "@/lib/config/enterprise-config";
 
 export async function GET() {
   const config = getDashboardConfig();
@@ -42,6 +43,8 @@ export async function GET() {
   return NextResponse.json({
     ...config,
     enterpriseMode,
+    multiEnterprise: isMultiEnterprise(),
+    enterprises: getClientEnterpriseList(),
     effectiveBilling: billingEnabled,
     resolvedOrgs: getResolvedOrgs(),
     pageVisibility,

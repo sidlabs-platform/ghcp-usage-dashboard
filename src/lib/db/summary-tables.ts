@@ -6,17 +6,24 @@ import { getDb } from "./database";
  * Refresh user_period_summary for a given date range.
  * Aggregates user_daily_metrics into per-user rollups.
  */
-export function refreshUserSummary(periodStart: string, periodEnd: string): number {
+export function refreshUserSummary(periodStart: string, periodEnd: string, enterpriseSlug?: string): number {
   const db = getDb();
   const now = new Date().toISOString();
 
   // Delete existing entries for this period
-  db.prepare(`DELETE FROM user_period_summary WHERE period_start = ? AND period_end = ?`).run(periodStart, periodEnd);
+  if (enterpriseSlug !== undefined) {
+    db.prepare(`DELETE FROM user_period_summary WHERE period_start = ? AND period_end = ? AND enterprise_slug = ?`).run(periodStart, periodEnd, enterpriseSlug);
+  } else {
+    db.prepare(`DELETE FROM user_period_summary WHERE period_start = ? AND period_end = ?`).run(periodStart, periodEnd);
+  }
+
+  const enterpriseFilter = enterpriseSlug !== undefined ? `AND enterprise_slug = ?` : "";
+  const extraParams = enterpriseSlug !== undefined ? [enterpriseSlug] : [];
 
   // Insert aggregated data directly from SQL
   const result = db.prepare(`
     INSERT INTO user_period_summary (
-      user_login, period_start, period_end,
+      enterprise_slug, user_login, period_start, period_end,
       active_days, loc_added, loc_deleted, interactions,
       code_gen, code_accept, acceptance_rate,
       used_agent, used_chat, used_cli,
@@ -24,6 +31,7 @@ export function refreshUserSummary(periodStart: string, periodEnd: string): numb
       computed_at
     )
     SELECT
+      enterprise_slug,
       user_login,
       ? as period_start,
       ? as period_end,
@@ -46,9 +54,9 @@ export function refreshUserSummary(periodStart: string, periodEnd: string): numb
       MAX(used_copilot_coding_agent) as used_coding_agent,
       ? as computed_at
     FROM user_daily_metrics
-    WHERE day >= ? AND day <= ?
-    GROUP BY user_login
-  `).run(periodStart, periodEnd, now, periodStart, periodEnd);
+    WHERE day >= ? AND day <= ? ${enterpriseFilter}
+    GROUP BY enterprise_slug, user_login
+  `).run(periodStart, periodEnd, now, periodStart, periodEnd, ...extraParams);
 
   return result.changes;
 }
@@ -57,19 +65,30 @@ export function refreshUserSummary(periodStart: string, periodEnd: string): numb
  * Refresh daily_aggregate_cache for a single day.
  * Aggregates all user records for that day into a single row.
  */
-export function refreshDailyAggregate(day: string): void {
+export function refreshDailyAggregate(day: string, enterpriseSlug?: string): void {
   const db = getDb();
   const now = new Date().toISOString();
 
+  const enterpriseFilter = enterpriseSlug !== undefined ? `AND enterprise_slug = ?` : "";
+  const extraParams = enterpriseSlug !== undefined ? [enterpriseSlug] : [];
+
+  // Delete existing entries for this day (scoped by enterprise when provided)
+  if (enterpriseSlug !== undefined) {
+    db.prepare(`DELETE FROM daily_aggregate_cache WHERE day = ? AND enterprise_slug = ?`).run(day, enterpriseSlug);
+  } else {
+    db.prepare(`DELETE FROM daily_aggregate_cache WHERE day = ?`).run(day);
+  }
+
   db.prepare(`
-    INSERT OR REPLACE INTO daily_aggregate_cache (
-      day, total_users, active_users,
+    INSERT INTO daily_aggregate_cache (
+      enterprise_slug, day, total_users, active_users,
       loc_added, loc_deleted, code_gen, code_accept, interactions,
       agent_users, chat_users, cli_users, coding_agent_users, code_review_users,
       completion_loc_suggested, completion_loc_accepted, agent_loc_added,
       computed_at
     )
     SELECT
+      enterprise_slug,
       ? as day,
       COUNT(DISTINCT user_login) as total_users,
       COUNT(DISTINCT user_login) as active_users,
@@ -88,21 +107,24 @@ export function refreshDailyAggregate(day: string): void {
       0,
       ? as computed_at
     FROM user_daily_metrics
-    WHERE day = ?
-  `).run(day, now, day);
+    WHERE day = ? ${enterpriseFilter}
+    GROUP BY enterprise_slug
+  `).run(day, now, day, ...extraParams);
 }
 
 /**
  * Refresh daily_aggregate_cache for all days in a range.
  */
-export function refreshDailyAggregateRange(startDay: string, endDay: string): number {
+export function refreshDailyAggregateRange(startDay: string, endDay: string, enterpriseSlug?: string): number {
   const db = getDb();
+  const enterpriseFilter = enterpriseSlug !== undefined ? ` AND enterprise_slug = ?` : "";
+  const extraParams = enterpriseSlug !== undefined ? [enterpriseSlug] : [];
   const days = db.prepare(`
-    SELECT DISTINCT day FROM user_daily_metrics WHERE day >= ? AND day <= ? ORDER BY day
-  `).all(startDay, endDay) as { day: string }[];
+    SELECT DISTINCT day FROM user_daily_metrics WHERE day >= ? AND day <= ?${enterpriseFilter} ORDER BY day
+  `).all(startDay, endDay, ...extraParams) as { day: string }[];
 
   for (const { day } of days) {
-    refreshDailyAggregate(day);
+    refreshDailyAggregate(day, enterpriseSlug);
   }
   return days.length;
 }
@@ -111,23 +133,30 @@ export function refreshDailyAggregateRange(startDay: string, endDay: string): nu
  * Refresh team_summary_cache for all teams in a given date range.
  * Uses SQL aggregation with JOINs instead of loading all user records into memory.
  */
-export function refreshTeamSummary(periodStart: string, periodEnd: string): number {
+export function refreshTeamSummary(periodStart: string, periodEnd: string, enterpriseSlug?: string): number {
   const db = getDb();
   const now = new Date().toISOString();
 
+  const enterpriseFilter = enterpriseSlug !== undefined ? ` AND enterprise_slug = ?` : "";
+  const extraParams = enterpriseSlug !== undefined ? [enterpriseSlug] : [];
+
   // Delete existing entries for this period
-  db.prepare(`DELETE FROM team_summary_cache WHERE period_start = ? AND period_end = ?`).run(periodStart, periodEnd);
+  if (enterpriseSlug !== undefined) {
+    db.prepare(`DELETE FROM team_summary_cache WHERE period_start = ? AND period_end = ? AND enterprise_slug = ?`).run(periodStart, periodEnd, enterpriseSlug);
+  } else {
+    db.prepare(`DELETE FROM team_summary_cache WHERE period_start = ? AND period_end = ?`).run(periodStart, periodEnd);
+  }
 
   // Count total days in the period for avg calculation
   const dayCountRow = db.prepare(`
-    SELECT COUNT(DISTINCT day) as cnt FROM user_daily_metrics WHERE day >= ? AND day <= ?
-  `).get(periodStart, periodEnd) as { cnt: number };
+    SELECT COUNT(DISTINCT day) as cnt FROM user_daily_metrics WHERE day >= ? AND day <= ?${enterpriseFilter}
+  `).get(periodStart, periodEnd, ...extraParams) as { cnt: number };
   const totalDays = dayCountRow?.cnt || 1;
 
   // Insert team summaries using a single SQL query with JOIN
   const result = db.prepare(`
     INSERT INTO team_summary_cache (
-      team_slug, source, org_slug, team_name,
+      enterprise_slug, team_slug, source, org_slug, team_name,
       period_start, period_end,
       total_members, active_members, avg_daily_active_users,
       total_loc_added, total_interactions, overall_acceptance_rate,
@@ -135,6 +164,7 @@ export function refreshTeamSummary(periodStart: string, periodEnd: string): numb
       computed_at
     )
     SELECT
+      COALESCE(m.enterprise_slug, '') as enterprise_slug,
       t.team_slug,
       t.source,
       t.org_slug,
@@ -165,6 +195,7 @@ export function refreshTeamSummary(periodStart: string, periodEnd: string): numb
       SELECT
         tm.team_slug,
         tm.source,
+        u.enterprise_slug,
         COUNT(DISTINCT u.user_login) as active_members,
         COUNT(DISTINCT u.day || ':' || u.user_login) as total_active_days,
         COALESCE(SUM(u.loc_added_sum), 0) as total_loc_added,
@@ -176,10 +207,10 @@ export function refreshTeamSummary(periodStart: string, periodEnd: string): numb
         COUNT(DISTINCT CASE WHEN u.used_cli = 1 THEN u.user_login END) as cli_users,
         COUNT(DISTINCT CASE WHEN u.used_copilot_code_review_active = 1 THEN u.user_login END) as code_review_users
       FROM team_memberships tm
-      INNER JOIN user_daily_metrics u ON tm.user_login = u.user_login AND u.day >= ? AND u.day <= ?
-      GROUP BY tm.team_slug, tm.source
+      INNER JOIN user_daily_metrics u ON tm.user_login = u.user_login AND u.day >= ? AND u.day <= ?${enterpriseFilter}
+      GROUP BY tm.team_slug, tm.source, u.enterprise_slug
     ) m ON t.team_slug = m.team_slug AND t.source = m.source
-  `).run(periodStart, periodEnd, totalDays, now, periodStart, periodEnd);
+  `).run(periodStart, periodEnd, totalDays, now, periodStart, periodEnd, ...extraParams);
 
   return result.changes;
 }
@@ -188,15 +219,15 @@ export function refreshTeamSummary(periodStart: string, periodEnd: string): numb
  * Refresh all summary tables after a sync completes.
  * Called from sync-service.ts at the end of fullSync().
  */
-export function refreshAllSummaries(startDay: string, endDay: string): void {
+export function refreshAllSummaries(startDay: string, endDay: string, enterpriseSlug?: string): void {
   console.log(`[Summary] Refreshing summary tables for ${startDay} to ${endDay}...`);
 
-  const userCount = refreshUserSummary(startDay, endDay);
+  const userCount = refreshUserSummary(startDay, endDay, enterpriseSlug);
   console.log(`[Summary] Refreshed ${userCount} user summaries`);
 
-  const dayCount = refreshDailyAggregateRange(startDay, endDay);
+  const dayCount = refreshDailyAggregateRange(startDay, endDay, enterpriseSlug);
   console.log(`[Summary] Refreshed ${dayCount} daily aggregates`);
 
-  const teamCount = refreshTeamSummary(startDay, endDay);
+  const teamCount = refreshTeamSummary(startDay, endDay, enterpriseSlug);
   console.log(`[Summary] Refreshed ${teamCount} team summaries`);
 }

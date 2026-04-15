@@ -12,9 +12,16 @@ import type {
   SecurityOverview,
 } from "@/lib/types/ghas";
 
-// ── Alert Cache Operations ────────────────────────────────────────────
+function buildEnterpriseFilter(slugs?: string[], prefix: "WHERE" | "AND" = "AND"): { clause: string; params: string[] } {
+  if (!slugs || slugs.length === 0) return { clause: "", params: [] };
+  const placeholders = slugs.map(() => "?").join(",");
+  return { clause: ` ${prefix} enterprise_slug IN (${placeholders})`, params: [...slugs] };
+}
+
+// ── Alert Cache Operations────────────────────────────────────────────
 
 export function upsertCodeScanningAlerts(
+  enterpriseSlug: string,
   scope: string,
   scopeId: string,
   alerts: CodeScanningAlert[]
@@ -23,9 +30,9 @@ export function upsertCodeScanningAlerts(
   // Use ON CONFLICT to preserve existing autofix_status when the list API doesn't provide it
   const stmt = db.prepare(`
     INSERT INTO ghas_code_scanning_alerts
-      (scope, scope_id, alert_number, repo_full_name, state, severity, rule_id, tool_name,
+      (enterprise_slug, scope, scope_id, alert_number, repo_full_name, state, severity, rule_id, tool_name,
        created_at, updated_at, fixed_at, dismissed_at, dismissed_reason, autofix_status)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(scope, scope_id, alert_number, repo_full_name) DO UPDATE SET
       state = excluded.state,
       severity = excluded.severity,
@@ -44,6 +51,7 @@ export function upsertCodeScanningAlerts(
   const tx = db.transaction(() => {
     for (const a of alerts) {
       stmt.run(
+        enterpriseSlug,
         scope,
         scopeId,
         a.number,
@@ -68,6 +76,7 @@ export function upsertCodeScanningAlerts(
  * Batch-update autofix_status for code scanning alerts from API responses.
  */
 export function updateAlertAutofixStatuses(
+  enterpriseSlug: string,
   scope: string,
   scopeId: string,
   updates: { alertNumber: number; repoFullName: string; autofixStatus: string }[]
@@ -76,11 +85,11 @@ export function updateAlertAutofixStatuses(
   const stmt = db.prepare(`
     UPDATE ghas_code_scanning_alerts
     SET autofix_status = ?
-    WHERE scope = ? AND scope_id = ? AND alert_number = ? AND repo_full_name = ?
+    WHERE scope = ? AND scope_id = ? AND alert_number = ? AND repo_full_name = ? AND enterprise_slug = ?
   `);
   const tx = db.transaction(() => {
     for (const u of updates) {
-      stmt.run(u.autofixStatus, scope, scopeId, u.alertNumber, u.repoFullName);
+      stmt.run(u.autofixStatus, scope, scopeId, u.alertNumber, u.repoFullName, enterpriseSlug);
     }
   });
   tx();
@@ -90,15 +99,15 @@ export function updateAlertAutofixStatuses(
  * Promote autofix_status from "available" to "committed" for alerts that have been fixed.
  * This is a heuristic: if an alert was fixed and had autofix available, we assume the autofix was applied.
  */
-export function promoteAutofixCommitted(scope: string, scopeId: string): number {
+export function promoteAutofixCommitted(enterpriseSlug: string, scope: string, scopeId: string): number {
   const db = getDb();
   const result = db.prepare(`
     UPDATE ghas_code_scanning_alerts
     SET autofix_status = 'committed'
-    WHERE scope = ? AND scope_id = ?
+    WHERE scope = ? AND scope_id = ? AND enterprise_slug = ?
       AND state = 'fixed'
       AND autofix_status = 'available'
-  `).run(scope, scopeId);
+  `).run(scope, scopeId, enterpriseSlug);
   return result.changes;
 }
 
@@ -108,15 +117,18 @@ export function promoteAutofixCommitted(scope: string, scopeId: string): number 
 export function getOpenCodeScanningAlerts(
   scope: string,
   scopeId: string,
+  enterpriseSlugs?: string[],
 ): { alert_number: number; repo_full_name: string; state: string }[] {
   const db = getDb();
+  const ef = buildEnterpriseFilter(enterpriseSlugs);
   return db.prepare(
     `SELECT alert_number, repo_full_name, state FROM ghas_code_scanning_alerts
-     WHERE scope = ? AND scope_id = ? AND state = 'open'`
-  ).all(scope, scopeId) as { alert_number: number; repo_full_name: string; state: string }[];
+     WHERE scope = ? AND scope_id = ? AND state = 'open'${ef.clause}`
+  ).all(scope, scopeId, ...ef.params) as { alert_number: number; repo_full_name: string; state: string }[];
 }
 
 export function upsertDependabotAlerts(
+  enterpriseSlug: string,
   scope: string,
   scopeId: string,
   alerts: DependabotAlert[]
@@ -124,13 +136,14 @@ export function upsertDependabotAlerts(
   const db = getDb();
   const stmt = db.prepare(`
     INSERT OR REPLACE INTO ghas_dependabot_alerts
-      (scope, scope_id, alert_number, repo_full_name, state, severity, ecosystem, package_name,
+      (enterprise_slug, scope, scope_id, alert_number, repo_full_name, state, severity, ecosystem, package_name,
        created_at, updated_at, fixed_at, dismissed_at, dismissed_reason, auto_dismissed_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
   const tx = db.transaction(() => {
     for (const a of alerts) {
       stmt.run(
+        enterpriseSlug,
         scope,
         scopeId,
         a.number,
@@ -152,6 +165,7 @@ export function upsertDependabotAlerts(
 }
 
 export function upsertSecretScanningAlerts(
+  enterpriseSlug: string,
   scope: string,
   scopeId: string,
   alerts: SecretScanningAlert[]
@@ -159,13 +173,14 @@ export function upsertSecretScanningAlerts(
   const db = getDb();
   const stmt = db.prepare(`
     INSERT OR REPLACE INTO ghas_secret_scanning_alerts
-      (scope, scope_id, alert_number, repo_full_name, state, secret_type, secret_type_display_name,
+      (enterprise_slug, scope, scope_id, alert_number, repo_full_name, state, secret_type, secret_type_display_name,
        created_at, updated_at, resolved_at, resolution)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
   const tx = db.transaction(() => {
     for (const a of alerts) {
       stmt.run(
+        enterpriseSlug,
         scope,
         scopeId,
         a.number,
@@ -185,28 +200,28 @@ export function upsertSecretScanningAlerts(
 
 // ── Daily Aggregate Recomputation (from alert cache) ──────────────────
 
-export function recomputeCodeScanningDaily(scope: string, scopeId: string): void {
+export function recomputeCodeScanningDaily(enterpriseSlug: string, scope: string, scopeId: string): void {
   const db = getDb();
 
-  db.prepare(`DELETE FROM ghas_code_scanning_daily WHERE scope = ? AND scope_id = ?`).run(scope, scopeId);
+  db.prepare(`DELETE FROM ghas_code_scanning_daily WHERE scope = ? AND scope_id = ? AND enterprise_slug = ?`).run(scope, scopeId, enterpriseSlug);
 
   const openedByDay = db.prepare(`
     SELECT date(created_at) as day, COUNT(*) as cnt
-    FROM ghas_code_scanning_alerts WHERE scope = ? AND scope_id = ?
+    FROM ghas_code_scanning_alerts WHERE scope = ? AND scope_id = ? AND enterprise_slug = ?
     GROUP BY date(created_at)
-  `).all(scope, scopeId) as { day: string; cnt: number }[];
+  `).all(scope, scopeId, enterpriseSlug) as { day: string; cnt: number }[];
 
   const fixedByDay = db.prepare(`
     SELECT date(fixed_at) as day, COUNT(*) as cnt
-    FROM ghas_code_scanning_alerts WHERE scope = ? AND scope_id = ? AND fixed_at IS NOT NULL
+    FROM ghas_code_scanning_alerts WHERE scope = ? AND scope_id = ? AND enterprise_slug = ? AND fixed_at IS NOT NULL
     GROUP BY date(fixed_at)
-  `).all(scope, scopeId) as { day: string; cnt: number }[];
+  `).all(scope, scopeId, enterpriseSlug) as { day: string; cnt: number }[];
 
   const dismissedByDay = db.prepare(`
     SELECT date(dismissed_at) as day, COUNT(*) as cnt
-    FROM ghas_code_scanning_alerts WHERE scope = ? AND scope_id = ? AND dismissed_at IS NOT NULL
+    FROM ghas_code_scanning_alerts WHERE scope = ? AND scope_id = ? AND enterprise_slug = ? AND dismissed_at IS NOT NULL
     GROUP BY date(dismissed_at)
-  `).all(scope, scopeId) as { day: string; cnt: number }[];
+  `).all(scope, scopeId, enterpriseSlug) as { day: string; cnt: number }[];
 
   const allDays = new Set<string>();
   for (const r of openedByDay) allDays.add(r.day);
@@ -223,7 +238,7 @@ export function recomputeCodeScanningDaily(scope: string, scopeId: string): void
   const severityByDayStmt = db.prepare(`
     SELECT COALESCE(severity, 'low') as severity, COUNT(*) as cnt
     FROM ghas_code_scanning_alerts
-    WHERE scope = ? AND scope_id = ?
+    WHERE scope = ? AND scope_id = ? AND enterprise_slug = ?
       AND date(created_at) <= ?
       AND (fixed_at IS NULL OR date(fixed_at) > ?)
       AND (dismissed_at IS NULL OR date(dismissed_at) > ?)
@@ -236,17 +251,17 @@ export function recomputeCodeScanningDaily(scope: string, scopeId: string): void
       SUM(CASE WHEN autofix_status IN ('available', 'committed') THEN 1 ELSE 0 END) as available,
       SUM(CASE WHEN autofix_status = 'committed' THEN 1 ELSE 0 END) as committed
     FROM ghas_code_scanning_alerts
-    WHERE scope = ? AND scope_id = ?
+    WHERE scope = ? AND scope_id = ? AND enterprise_slug = ?
       AND date(created_at) <= ?
   `);
 
   const sortedDays = Array.from(allDays).sort();
   const insertStmt = db.prepare(`
     INSERT OR REPLACE INTO ghas_code_scanning_daily
-      (day, scope, scope_id, opened, fixed, dismissed, reopened, total_open,
+      (day, enterprise_slug, scope, scope_id, opened, fixed, dismissed, reopened, total_open,
        severity_critical, severity_high, severity_medium, severity_low,
        autofix_available, autofix_committed)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
 
   let runningOpen = 0;
@@ -258,15 +273,15 @@ export function recomputeCodeScanningDaily(scope: string, scopeId: string): void
       runningOpen += opened - fixed - dismissed;
 
       // Severity snapshot for this day
-      const sevRows = severityByDayStmt.all(scope, scopeId, day, day, day) as { severity: string; cnt: number }[];
+      const sevRows = severityByDayStmt.all(scope, scopeId, enterpriseSlug, day, day, day) as { severity: string; cnt: number }[];
       const sevMap: Record<string, number> = {};
       for (const r of sevRows) sevMap[r.severity] = r.cnt;
 
       // Autofix snapshot
-      const autofix = autofixByDayStmt.get(scope, scopeId, day) as { available: number; committed: number } | undefined;
+      const autofix = autofixByDayStmt.get(scope, scopeId, enterpriseSlug, day) as { available: number; committed: number } | undefined;
 
       insertStmt.run(
-        day, scope, scopeId, opened, fixed, dismissed, 0, Math.max(0, runningOpen),
+        day, enterpriseSlug, scope, scopeId, opened, fixed, dismissed, 0, Math.max(0, runningOpen),
         sevMap["critical"] || 0, sevMap["high"] || 0, sevMap["medium"] || 0, sevMap["low"] || 0,
         autofix?.available || 0, autofix?.committed || 0
       );
@@ -275,34 +290,34 @@ export function recomputeCodeScanningDaily(scope: string, scopeId: string): void
   tx();
 }
 
-export function recomputeDependabotDaily(scope: string, scopeId: string): void {
+export function recomputeDependabotDaily(enterpriseSlug: string, scope: string, scopeId: string): void {
   const db = getDb();
 
-  db.prepare(`DELETE FROM ghas_dependabot_daily WHERE scope = ? AND scope_id = ?`).run(scope, scopeId);
+  db.prepare(`DELETE FROM ghas_dependabot_daily WHERE scope = ? AND scope_id = ? AND enterprise_slug = ?`).run(scope, scopeId, enterpriseSlug);
 
   const openedByDay = db.prepare(`
     SELECT date(created_at) as day, COUNT(*) as cnt
-    FROM ghas_dependabot_alerts WHERE scope = ? AND scope_id = ?
+    FROM ghas_dependabot_alerts WHERE scope = ? AND scope_id = ? AND enterprise_slug = ?
     GROUP BY date(created_at)
-  `).all(scope, scopeId) as { day: string; cnt: number }[];
+  `).all(scope, scopeId, enterpriseSlug) as { day: string; cnt: number }[];
 
   const fixedByDay = db.prepare(`
     SELECT date(fixed_at) as day, COUNT(*) as cnt
-    FROM ghas_dependabot_alerts WHERE scope = ? AND scope_id = ? AND fixed_at IS NOT NULL
+    FROM ghas_dependabot_alerts WHERE scope = ? AND scope_id = ? AND enterprise_slug = ? AND fixed_at IS NOT NULL
     GROUP BY date(fixed_at)
-  `).all(scope, scopeId) as { day: string; cnt: number }[];
+  `).all(scope, scopeId, enterpriseSlug) as { day: string; cnt: number }[];
 
   const dismissedByDay = db.prepare(`
     SELECT date(dismissed_at) as day, COUNT(*) as cnt
-    FROM ghas_dependabot_alerts WHERE scope = ? AND scope_id = ? AND dismissed_at IS NOT NULL
+    FROM ghas_dependabot_alerts WHERE scope = ? AND scope_id = ? AND enterprise_slug = ? AND dismissed_at IS NOT NULL
     GROUP BY date(dismissed_at)
-  `).all(scope, scopeId) as { day: string; cnt: number }[];
+  `).all(scope, scopeId, enterpriseSlug) as { day: string; cnt: number }[];
 
   const autoDismissedByDay = db.prepare(`
     SELECT date(auto_dismissed_at) as day, COUNT(*) as cnt
-    FROM ghas_dependabot_alerts WHERE scope = ? AND scope_id = ? AND auto_dismissed_at IS NOT NULL
+    FROM ghas_dependabot_alerts WHERE scope = ? AND scope_id = ? AND enterprise_slug = ? AND auto_dismissed_at IS NOT NULL
     GROUP BY date(auto_dismissed_at)
-  `).all(scope, scopeId) as { day: string; cnt: number }[];
+  `).all(scope, scopeId, enterpriseSlug) as { day: string; cnt: number }[];
 
   const allDays = new Set<string>();
   for (const r of openedByDay) allDays.add(r.day);
@@ -321,7 +336,7 @@ export function recomputeDependabotDaily(scope: string, scopeId: string): void {
   const severityByDayStmt = db.prepare(`
     SELECT COALESCE(severity, 'low') as severity, COUNT(*) as cnt
     FROM ghas_dependabot_alerts
-    WHERE scope = ? AND scope_id = ?
+    WHERE scope = ? AND scope_id = ? AND enterprise_slug = ?
       AND date(created_at) <= ?
       AND (fixed_at IS NULL OR date(fixed_at) > ?)
       AND (dismissed_at IS NULL OR date(dismissed_at) > ?)
@@ -333,7 +348,7 @@ export function recomputeDependabotDaily(scope: string, scopeId: string): void {
   const ecosystemByDayStmt = db.prepare(`
     SELECT COALESCE(ecosystem, 'unknown') as ecosystem, COUNT(*) as cnt
     FROM ghas_dependabot_alerts
-    WHERE scope = ? AND scope_id = ?
+    WHERE scope = ? AND scope_id = ? AND enterprise_slug = ?
       AND date(created_at) <= ?
       AND (fixed_at IS NULL OR date(fixed_at) > ?)
       AND (dismissed_at IS NULL OR date(dismissed_at) > ?)
@@ -344,9 +359,9 @@ export function recomputeDependabotDaily(scope: string, scopeId: string): void {
   const sortedDays = Array.from(allDays).sort();
   const insertStmt = db.prepare(`
     INSERT OR REPLACE INTO ghas_dependabot_daily
-      (day, scope, scope_id, opened, fixed, dismissed, auto_dismissed, total_open,
+      (day, enterprise_slug, scope, scope_id, opened, fixed, dismissed, auto_dismissed, total_open,
        severity_critical, severity_high, severity_medium, severity_low, ecosystem_counts)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
 
   let runningOpen = 0;
@@ -359,17 +374,17 @@ export function recomputeDependabotDaily(scope: string, scopeId: string): void {
       runningOpen += opened - fixed - dismissed - autoDismissed;
 
       // Severity snapshot for this day
-      const sevRows = severityByDayStmt.all(scope, scopeId, day, day, day, day) as { severity: string; cnt: number }[];
+      const sevRows = severityByDayStmt.all(scope, scopeId, enterpriseSlug, day, day, day, day) as { severity: string; cnt: number }[];
       const sevMap: Record<string, number> = {};
       for (const r of sevRows) sevMap[r.severity] = r.cnt;
 
       // Ecosystem snapshot for this day
-      const ecoRows = ecosystemByDayStmt.all(scope, scopeId, day, day, day, day) as { ecosystem: string; cnt: number }[];
+      const ecoRows = ecosystemByDayStmt.all(scope, scopeId, enterpriseSlug, day, day, day, day) as { ecosystem: string; cnt: number }[];
       const ecoMap: Record<string, number> = {};
       for (const r of ecoRows) ecoMap[r.ecosystem] = r.cnt;
 
       insertStmt.run(
-        day, scope, scopeId, opened, fixed, dismissed, autoDismissed, Math.max(0, runningOpen),
+        day, enterpriseSlug, scope, scopeId, opened, fixed, dismissed, autoDismissed, Math.max(0, runningOpen),
         sevMap["critical"] || 0, sevMap["high"] || 0, sevMap["medium"] || 0, sevMap["low"] || 0,
         JSON.stringify(ecoMap)
       );
@@ -378,22 +393,22 @@ export function recomputeDependabotDaily(scope: string, scopeId: string): void {
   tx();
 }
 
-export function recomputeSecretScanningDaily(scope: string, scopeId: string): void {
+export function recomputeSecretScanningDaily(enterpriseSlug: string, scope: string, scopeId: string): void {
   const db = getDb();
 
-  db.prepare(`DELETE FROM ghas_secret_scanning_daily WHERE scope = ? AND scope_id = ?`).run(scope, scopeId);
+  db.prepare(`DELETE FROM ghas_secret_scanning_daily WHERE scope = ? AND scope_id = ? AND enterprise_slug = ?`).run(scope, scopeId, enterpriseSlug);
 
   const openedByDay = db.prepare(`
     SELECT date(created_at) as day, COUNT(*) as cnt
-    FROM ghas_secret_scanning_alerts WHERE scope = ? AND scope_id = ?
+    FROM ghas_secret_scanning_alerts WHERE scope = ? AND scope_id = ? AND enterprise_slug = ?
     GROUP BY date(created_at)
-  `).all(scope, scopeId) as { day: string; cnt: number }[];
+  `).all(scope, scopeId, enterpriseSlug) as { day: string; cnt: number }[];
 
   const resolvedByDay = db.prepare(`
     SELECT date(resolved_at) as day, COUNT(*) as cnt
-    FROM ghas_secret_scanning_alerts WHERE scope = ? AND scope_id = ? AND resolved_at IS NOT NULL
+    FROM ghas_secret_scanning_alerts WHERE scope = ? AND scope_id = ? AND enterprise_slug = ? AND resolved_at IS NOT NULL
     GROUP BY date(resolved_at)
-  `).all(scope, scopeId) as { day: string; cnt: number }[];
+  `).all(scope, scopeId, enterpriseSlug) as { day: string; cnt: number }[];
 
   const allDays = new Set<string>();
   for (const r of openedByDay) allDays.add(r.day);
@@ -408,15 +423,15 @@ export function recomputeSecretScanningDaily(scope: string, scopeId: string): vo
   const resolutionByDayStmt = db.prepare(`
     SELECT COALESCE(resolution, 'unknown') as resolution, COUNT(*) as cnt
     FROM ghas_secret_scanning_alerts
-    WHERE scope = ? AND scope_id = ? AND state = 'resolved' AND date(resolved_at) <= ?
+    WHERE scope = ? AND scope_id = ? AND enterprise_slug = ? AND state = 'resolved' AND date(resolved_at) <= ?
     GROUP BY COALESCE(resolution, 'unknown')
   `);
 
   const sortedDays = Array.from(allDays).sort();
   const insertStmt = db.prepare(`
     INSERT OR REPLACE INTO ghas_secret_scanning_daily
-      (day, scope, scope_id, opened, resolved, total_open, resolution_counts)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
+      (day, enterprise_slug, scope, scope_id, opened, resolved, total_open, resolution_counts)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
   `);
 
   let runningOpen = 0;
@@ -427,12 +442,12 @@ export function recomputeSecretScanningDaily(scope: string, scopeId: string): vo
       runningOpen += opened - resolved;
 
       // Resolution breakdown up to this day
-      const resRows = resolutionByDayStmt.all(scope, scopeId, day) as { resolution: string; cnt: number }[];
+      const resRows = resolutionByDayStmt.all(scope, scopeId, enterpriseSlug, day) as { resolution: string; cnt: number }[];
       const resMap: Record<string, number> = {};
       for (const r of resRows) resMap[r.resolution] = r.cnt;
 
       insertStmt.run(
-        day, scope, scopeId, opened, resolved, Math.max(0, runningOpen),
+        day, enterpriseSlug, scope, scopeId, opened, resolved, Math.max(0, runningOpen),
         JSON.stringify(resMap)
       );
     }
@@ -443,25 +458,27 @@ export function recomputeSecretScanningDaily(scope: string, scopeId: string): vo
 // ── Query Operations ──────────────────────────────────────────────────
 
 export function getCodeScanningDaily(
-  scope: string, scopeId: string, startDay: string, endDay: string
+  scope: string, scopeId: string, startDay: string, endDay: string, enterpriseSlugs?: string[]
 ): CodeScanningDaily[] {
   const db = getDb();
+  const ef = buildEnterpriseFilter(enterpriseSlugs);
   return db.prepare(`
     SELECT * FROM ghas_code_scanning_daily
-    WHERE scope = ? AND scope_id = ? AND day >= ? AND day <= ?
+    WHERE scope = ? AND scope_id = ? AND day >= ? AND day <= ?${ef.clause}
     ORDER BY day ASC
-  `).all(scope, scopeId, startDay, endDay) as CodeScanningDaily[];
+  `).all(scope, scopeId, startDay, endDay, ...ef.params) as CodeScanningDaily[];
 }
 
 export function getDependabotDaily(
-  scope: string, scopeId: string, startDay: string, endDay: string
+  scope: string, scopeId: string, startDay: string, endDay: string, enterpriseSlugs?: string[]
 ): DependabotDaily[] {
   const db = getDb();
+  const ef = buildEnterpriseFilter(enterpriseSlugs);
   const rows = db.prepare(`
     SELECT * FROM ghas_dependabot_daily
-    WHERE scope = ? AND scope_id = ? AND day >= ? AND day <= ?
+    WHERE scope = ? AND scope_id = ? AND day >= ? AND day <= ?${ef.clause}
     ORDER BY day ASC
-  `).all(scope, scopeId, startDay, endDay) as Record<string, unknown>[];
+  `).all(scope, scopeId, startDay, endDay, ...ef.params) as Record<string, unknown>[];
 
   return rows.map((row) => ({
     day: row.day as string,
@@ -481,14 +498,15 @@ export function getDependabotDaily(
 }
 
 export function getSecretScanningDaily(
-  scope: string, scopeId: string, startDay: string, endDay: string
+  scope: string, scopeId: string, startDay: string, endDay: string, enterpriseSlugs?: string[]
 ): SecretScanningDaily[] {
   const db = getDb();
+  const ef = buildEnterpriseFilter(enterpriseSlugs);
   const rows = db.prepare(`
     SELECT * FROM ghas_secret_scanning_daily
-    WHERE scope = ? AND scope_id = ? AND day >= ? AND day <= ?
+    WHERE scope = ? AND scope_id = ? AND day >= ? AND day <= ?${ef.clause}
     ORDER BY day ASC
-  `).all(scope, scopeId, startDay, endDay) as Record<string, unknown>[];
+  `).all(scope, scopeId, startDay, endDay, ...ef.params) as Record<string, unknown>[];
 
   return rows.map((row) => ({
     day: row.day as string,
@@ -503,89 +521,90 @@ export function getSecretScanningDaily(
 
 // ── Security Overview ─────────────────────────────────────────────────
 
-export function getSecurityOverview(scope: string, scopeId: string): SecurityOverview {
+export function getSecurityOverview(scope: string, scopeId: string, enterpriseSlugs?: string[]): SecurityOverview {
   const db = getDb();
+  const ef = buildEnterpriseFilter(enterpriseSlugs);
   const thirtyDaysAgo = new Date();
   thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
   const since30d = thirtyDaysAgo.toISOString();
 
   // Code scanning overview
   const csTotal = db.prepare(
-    `SELECT COUNT(*) as cnt FROM ghas_code_scanning_alerts WHERE scope = ? AND scope_id = ? AND state = 'open'`
-  ).get(scope, scopeId) as { cnt: number };
+    `SELECT COUNT(*) as cnt FROM ghas_code_scanning_alerts WHERE scope = ? AND scope_id = ? AND state = 'open'${ef.clause}`
+  ).get(scope, scopeId, ...ef.params) as { cnt: number };
   const csCritical = db.prepare(
-    `SELECT COUNT(*) as cnt FROM ghas_code_scanning_alerts WHERE scope = ? AND scope_id = ? AND state = 'open' AND severity = 'critical'`
-  ).get(scope, scopeId) as { cnt: number };
+    `SELECT COUNT(*) as cnt FROM ghas_code_scanning_alerts WHERE scope = ? AND scope_id = ? AND state = 'open' AND severity = 'critical'${ef.clause}`
+  ).get(scope, scopeId, ...ef.params) as { cnt: number };
   const csHigh = db.prepare(
-    `SELECT COUNT(*) as cnt FROM ghas_code_scanning_alerts WHERE scope = ? AND scope_id = ? AND state = 'open' AND severity = 'high'`
-  ).get(scope, scopeId) as { cnt: number };
+    `SELECT COUNT(*) as cnt FROM ghas_code_scanning_alerts WHERE scope = ? AND scope_id = ? AND state = 'open' AND severity = 'high'${ef.clause}`
+  ).get(scope, scopeId, ...ef.params) as { cnt: number };
   const csFixed30 = db.prepare(
-    `SELECT COUNT(*) as cnt FROM ghas_code_scanning_alerts WHERE scope = ? AND scope_id = ? AND state = 'fixed' AND fixed_at >= ?`
-  ).get(scope, scopeId, since30d) as { cnt: number };
+    `SELECT COUNT(*) as cnt FROM ghas_code_scanning_alerts WHERE scope = ? AND scope_id = ? AND state = 'fixed' AND fixed_at >= ?${ef.clause}`
+  ).get(scope, scopeId, since30d, ...ef.params) as { cnt: number };
   const csOpened30 = db.prepare(
-    `SELECT COUNT(*) as cnt FROM ghas_code_scanning_alerts WHERE scope = ? AND scope_id = ? AND created_at >= ?`
-  ).get(scope, scopeId, since30d) as { cnt: number };
+    `SELECT COUNT(*) as cnt FROM ghas_code_scanning_alerts WHERE scope = ? AND scope_id = ? AND created_at >= ?${ef.clause}`
+  ).get(scope, scopeId, since30d, ...ef.params) as { cnt: number };
   const csAutofix = db.prepare(
-    `SELECT SUM(CASE WHEN autofix_status IN ('available','committed') THEN 1 ELSE 0 END) as avail, SUM(CASE WHEN autofix_status = 'committed' THEN 1 ELSE 0 END) as committed FROM ghas_code_scanning_alerts WHERE scope = ? AND scope_id = ?`
-  ).get(scope, scopeId) as { avail: number | null; committed: number | null };
+    `SELECT SUM(CASE WHEN autofix_status IN ('available','committed') THEN 1 ELSE 0 END) as avail, SUM(CASE WHEN autofix_status = 'committed' THEN 1 ELSE 0 END) as committed FROM ghas_code_scanning_alerts WHERE scope = ? AND scope_id = ?${ef.clause}`
+  ).get(scope, scopeId, ...ef.params) as { avail: number | null; committed: number | null };
 
   const hasCs = csTotal.cnt > 0 || csFixed30.cnt > 0 || csOpened30.cnt > 0;
   const csTotalFixed = db.prepare(
-    `SELECT COUNT(*) as cnt FROM ghas_code_scanning_alerts WHERE scope = ? AND scope_id = ? AND state = 'fixed'`
-  ).get(scope, scopeId) as { cnt: number };
+    `SELECT COUNT(*) as cnt FROM ghas_code_scanning_alerts WHERE scope = ? AND scope_id = ? AND state = 'fixed'${ef.clause}`
+  ).get(scope, scopeId, ...ef.params) as { cnt: number };
   const csTotalAll = db.prepare(
-    `SELECT COUNT(*) as cnt FROM ghas_code_scanning_alerts WHERE scope = ? AND scope_id = ?`
-  ).get(scope, scopeId) as { cnt: number };
+    `SELECT COUNT(*) as cnt FROM ghas_code_scanning_alerts WHERE scope = ? AND scope_id = ?${ef.clause}`
+  ).get(scope, scopeId, ...ef.params) as { cnt: number };
   const csFixRate = csTotalAll.cnt > 0 ? Math.round((csTotalFixed.cnt / csTotalAll.cnt) * 100) / 100 : 0;
 
   // Dependabot overview
   const depTotal = db.prepare(
-    `SELECT COUNT(*) as cnt FROM ghas_dependabot_alerts WHERE scope = ? AND scope_id = ? AND state = 'open'`
-  ).get(scope, scopeId) as { cnt: number };
+    `SELECT COUNT(*) as cnt FROM ghas_dependabot_alerts WHERE scope = ? AND scope_id = ? AND state = 'open'${ef.clause}`
+  ).get(scope, scopeId, ...ef.params) as { cnt: number };
   const depCritical = db.prepare(
-    `SELECT COUNT(*) as cnt FROM ghas_dependabot_alerts WHERE scope = ? AND scope_id = ? AND state = 'open' AND severity = 'critical'`
-  ).get(scope, scopeId) as { cnt: number };
+    `SELECT COUNT(*) as cnt FROM ghas_dependabot_alerts WHERE scope = ? AND scope_id = ? AND state = 'open' AND severity = 'critical'${ef.clause}`
+  ).get(scope, scopeId, ...ef.params) as { cnt: number };
   const depHigh = db.prepare(
-    `SELECT COUNT(*) as cnt FROM ghas_dependabot_alerts WHERE scope = ? AND scope_id = ? AND state = 'open' AND severity = 'high'`
-  ).get(scope, scopeId) as { cnt: number };
+    `SELECT COUNT(*) as cnt FROM ghas_dependabot_alerts WHERE scope = ? AND scope_id = ? AND state = 'open' AND severity = 'high'${ef.clause}`
+  ).get(scope, scopeId, ...ef.params) as { cnt: number };
   const depFixed30 = db.prepare(
-    `SELECT COUNT(*) as cnt FROM ghas_dependabot_alerts WHERE scope = ? AND scope_id = ? AND state = 'fixed' AND fixed_at >= ?`
-  ).get(scope, scopeId, since30d) as { cnt: number };
+    `SELECT COUNT(*) as cnt FROM ghas_dependabot_alerts WHERE scope = ? AND scope_id = ? AND state = 'fixed' AND fixed_at >= ?${ef.clause}`
+  ).get(scope, scopeId, since30d, ...ef.params) as { cnt: number };
   const depOpened30 = db.prepare(
-    `SELECT COUNT(*) as cnt FROM ghas_dependabot_alerts WHERE scope = ? AND scope_id = ? AND created_at >= ?`
-  ).get(scope, scopeId, since30d) as { cnt: number };
+    `SELECT COUNT(*) as cnt FROM ghas_dependabot_alerts WHERE scope = ? AND scope_id = ? AND created_at >= ?${ef.clause}`
+  ).get(scope, scopeId, since30d, ...ef.params) as { cnt: number };
   const depTotalFixed = db.prepare(
-    `SELECT COUNT(*) as cnt FROM ghas_dependabot_alerts WHERE scope = ? AND scope_id = ? AND state = 'fixed'`
-  ).get(scope, scopeId) as { cnt: number };
+    `SELECT COUNT(*) as cnt FROM ghas_dependabot_alerts WHERE scope = ? AND scope_id = ? AND state = 'fixed'${ef.clause}`
+  ).get(scope, scopeId, ...ef.params) as { cnt: number };
   const depTotalAll = db.prepare(
-    `SELECT COUNT(*) as cnt FROM ghas_dependabot_alerts WHERE scope = ? AND scope_id = ?`
-  ).get(scope, scopeId) as { cnt: number };
+    `SELECT COUNT(*) as cnt FROM ghas_dependabot_alerts WHERE scope = ? AND scope_id = ?${ef.clause}`
+  ).get(scope, scopeId, ...ef.params) as { cnt: number };
   const depFixRate = depTotalAll.cnt > 0 ? Math.round((depTotalFixed.cnt / depTotalAll.cnt) * 100) / 100 : 0;
 
   const topEcosystems = db.prepare(`
     SELECT ecosystem, COUNT(*) as count
-    FROM ghas_dependabot_alerts WHERE scope = ? AND scope_id = ? AND state = 'open'
+    FROM ghas_dependabot_alerts WHERE scope = ? AND scope_id = ? AND state = 'open'${ef.clause}
     GROUP BY ecosystem ORDER BY count DESC LIMIT 5
-  `).all(scope, scopeId) as { ecosystem: string; count: number }[];
+  `).all(scope, scopeId, ...ef.params) as { ecosystem: string; count: number }[];
 
   const hasDep = depTotal.cnt > 0 || depFixed30.cnt > 0 || depOpened30.cnt > 0;
 
   // Secret scanning overview
   const ssTotal = db.prepare(
-    `SELECT COUNT(*) as cnt FROM ghas_secret_scanning_alerts WHERE scope = ? AND scope_id = ? AND state = 'open'`
-  ).get(scope, scopeId) as { cnt: number };
+    `SELECT COUNT(*) as cnt FROM ghas_secret_scanning_alerts WHERE scope = ? AND scope_id = ? AND state = 'open'${ef.clause}`
+  ).get(scope, scopeId, ...ef.params) as { cnt: number };
   const ssResolved30 = db.prepare(
-    `SELECT COUNT(*) as cnt FROM ghas_secret_scanning_alerts WHERE scope = ? AND scope_id = ? AND state = 'resolved' AND resolved_at >= ?`
-  ).get(scope, scopeId, since30d) as { cnt: number };
+    `SELECT COUNT(*) as cnt FROM ghas_secret_scanning_alerts WHERE scope = ? AND scope_id = ? AND state = 'resolved' AND resolved_at >= ?${ef.clause}`
+  ).get(scope, scopeId, since30d, ...ef.params) as { cnt: number };
   const ssOpened30 = db.prepare(
-    `SELECT COUNT(*) as cnt FROM ghas_secret_scanning_alerts WHERE scope = ? AND scope_id = ? AND created_at >= ?`
-  ).get(scope, scopeId, since30d) as { cnt: number };
+    `SELECT COUNT(*) as cnt FROM ghas_secret_scanning_alerts WHERE scope = ? AND scope_id = ? AND created_at >= ?${ef.clause}`
+  ).get(scope, scopeId, since30d, ...ef.params) as { cnt: number };
 
   const resolutionBreakdown = db.prepare(`
     SELECT COALESCE(resolution, 'unknown') as resolution, COUNT(*) as cnt
-    FROM ghas_secret_scanning_alerts WHERE scope = ? AND scope_id = ? AND state = 'resolved'
+    FROM ghas_secret_scanning_alerts WHERE scope = ? AND scope_id = ? AND state = 'resolved'${ef.clause}
     GROUP BY COALESCE(resolution, 'unknown')
-  `).all(scope, scopeId) as { resolution: string; cnt: number }[];
+  `).all(scope, scopeId, ...ef.params) as { resolution: string; cnt: number }[];
 
   const resBreakdownMap: Record<string, number> = {};
   for (const r of resolutionBreakdown) resBreakdownMap[r.resolution] = r.cnt;
@@ -593,9 +612,9 @@ export function getSecurityOverview(scope: string, scopeId: string): SecurityOve
   const hasSs = ssTotal.cnt > 0 || ssResolved30.cnt > 0 || ssOpened30.cnt > 0;
 
   // Compute MTTR for each
-  const csMttr = computeMTTR(scope, scopeId, "code_scanning");
-  const depMttr = computeMTTR(scope, scopeId, "dependabot");
-  const ssMttr = computeMTTR(scope, scopeId, "secret_scanning");
+  const csMttr = computeMTTR(scope, scopeId, "code_scanning", enterpriseSlugs);
+  const depMttr = computeMTTR(scope, scopeId, "dependabot", enterpriseSlugs);
+  const ssMttr = computeMTTR(scope, scopeId, "secret_scanning", enterpriseSlugs);
 
   return {
     codeScanning: hasCs
@@ -638,16 +657,18 @@ export function getSecurityOverview(scope: string, scopeId: string): SecurityOve
 // ── Sync State Operations ─────────────────────────────────────────────
 
 export function getGhasSyncState(
-  scope: string, scopeId: string, metricType: string
+  scope: string, scopeId: string, metricType: string, enterpriseSlugs?: string[]
 ): GhasSyncState | null {
   const db = getDb();
+  const ef = buildEnterpriseFilter(enterpriseSlugs);
   const row = db.prepare(
-    `SELECT * FROM ghas_sync_state WHERE scope = ? AND scope_id = ? AND metric_type = ?`
-  ).get(scope, scopeId, metricType);
+    `SELECT * FROM ghas_sync_state WHERE scope = ? AND scope_id = ? AND metric_type = ?${ef.clause}`
+  ).get(scope, scopeId, metricType, ...ef.params);
   return row ? (row as GhasSyncState) : null;
 }
 
 export function updateGhasSyncState(
+  enterpriseSlug: string,
   scope: string,
   scopeId: string,
   metricType: string,
@@ -660,16 +681,17 @@ export function updateGhasSyncState(
   const db = getDb();
   db.prepare(`
     INSERT OR REPLACE INTO ghas_sync_state
-      (scope, scope_id, metric_type, last_synced_at, last_alert_updated_at, total_alerts, status, error_message)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(scope, scopeId, metricType, lastSyncedAt, lastAlertUpdatedAt, totalAlerts, status, errorMessage);
+      (enterprise_slug, scope, scope_id, metric_type, last_synced_at, last_alert_updated_at, total_alerts, status, error_message)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(enterpriseSlug, scope, scopeId, metricType, lastSyncedAt, lastAlertUpdatedAt, totalAlerts, status, errorMessage);
 }
 
-export function getAllGhasSyncStates(): GhasSyncState[] {
+export function getAllGhasSyncStates(enterpriseSlugs?: string[]): GhasSyncState[] {
   const db = getDb();
+  const ef = buildEnterpriseFilter(enterpriseSlugs, "WHERE");
   return db.prepare(
-    `SELECT * FROM ghas_sync_state ORDER BY scope, scope_id, metric_type`
-  ).all() as GhasSyncState[];
+    `SELECT * FROM ghas_sync_state${ef.clause} ORDER BY scope, scope_id, metric_type`
+  ).all(...ef.params) as GhasSyncState[];
 }
 
 // ── MTTR Computation ──────────────────────────────────────────────────
@@ -677,25 +699,27 @@ export function getAllGhasSyncStates(): GhasSyncState[] {
 export function computeMTTR(
   scope: string,
   scopeId: string,
-  metricType: "code_scanning" | "dependabot" | "secret_scanning"
+  metricType: "code_scanning" | "dependabot" | "secret_scanning",
+  enterpriseSlugs?: string[]
 ): number | null {
   const db = getDb();
+  const ef = buildEnterpriseFilter(enterpriseSlugs);
   let query: string;
 
   if (metricType === "code_scanning") {
     query = `SELECT AVG(julianday(fixed_at) - julianday(created_at)) as avg_days
              FROM ghas_code_scanning_alerts
-             WHERE scope = ? AND scope_id = ? AND state = 'fixed' AND fixed_at IS NOT NULL`;
+             WHERE scope = ? AND scope_id = ? AND state = 'fixed' AND fixed_at IS NOT NULL${ef.clause}`;
   } else if (metricType === "dependabot") {
     query = `SELECT AVG(julianday(fixed_at) - julianday(created_at)) as avg_days
              FROM ghas_dependabot_alerts
-             WHERE scope = ? AND scope_id = ? AND state = 'fixed' AND fixed_at IS NOT NULL`;
+             WHERE scope = ? AND scope_id = ? AND state = 'fixed' AND fixed_at IS NOT NULL${ef.clause}`;
   } else {
     query = `SELECT AVG(julianday(resolved_at) - julianday(created_at)) as avg_days
              FROM ghas_secret_scanning_alerts
-             WHERE scope = ? AND scope_id = ? AND state = 'resolved' AND resolved_at IS NOT NULL`;
+             WHERE scope = ? AND scope_id = ? AND state = 'resolved' AND resolved_at IS NOT NULL${ef.clause}`;
   }
 
-  const row = db.prepare(query).get(scope, scopeId) as { avg_days: number | null };
+  const row = db.prepare(query).get(scope, scopeId, ...ef.params) as { avg_days: number | null };
   return row?.avg_days ? Math.round(row.avg_days * 10) / 10 : null;
 }

@@ -3,15 +3,22 @@
 import { getDb } from "./database";
 import type { CopilotSeat } from "@/lib/types/seats";
 
-export function upsertSeat(orgSlug: string, seat: CopilotSeat): void {
+function buildEnterpriseFilter(slugs?: string[], prefix = "WHERE"): { clause: string; params: string[] } {
+  if (!slugs || slugs.length === 0) return { clause: "", params: [] };
+  const placeholders = slugs.map(() => "?").join(",");
+  return { clause: ` ${prefix} enterprise_slug IN (${placeholders})`, params: slugs };
+}
+
+export function upsertSeat(enterpriseSlug: string, orgSlug: string, seat: CopilotSeat): void {
   const db = getDb();
   db.prepare(`
     INSERT OR REPLACE INTO copilot_seats (
-      org_slug, user_login, user_id, plan_type, last_activity_at, last_activity_editor,
+      enterprise_slug, org_slug, user_login, user_id, plan_type, last_activity_at, last_activity_editor,
       last_authenticated_at, assigning_team_slug, assigning_team_name,
       pending_cancellation_date, created_at, updated_at, avatar_url
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
+    enterpriseSlug,
     orgSlug,
     seat.assignee.login,
     seat.assignee.id,
@@ -28,20 +35,20 @@ export function upsertSeat(orgSlug: string, seat: CopilotSeat): void {
   );
 }
 
-export function upsertSeats(orgSlug: string, seats: CopilotSeat[]): void {
+export function upsertSeats(enterpriseSlug: string, orgSlug: string, seats: CopilotSeat[]): void {
   const db = getDb();
   const stmt = db.prepare(`
     INSERT OR REPLACE INTO copilot_seats (
-      org_slug, user_login, user_id, plan_type, last_activity_at, last_activity_editor,
+      enterprise_slug, org_slug, user_login, user_id, plan_type, last_activity_at, last_activity_editor,
       last_authenticated_at, assigning_team_slug, assigning_team_name,
       pending_cancellation_date, created_at, updated_at, avatar_url
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
 
   const tx = db.transaction(() => {
     for (const seat of seats) {
       stmt.run(
-        orgSlug, seat.assignee.login, seat.assignee.id, seat.plan_type,
+        enterpriseSlug, orgSlug, seat.assignee.login, seat.assignee.id, seat.plan_type,
         seat.last_activity_at, seat.last_activity_editor, seat.last_authenticated_at,
         seat.assigning_team?.slug || null, seat.assigning_team?.name || null,
         seat.pending_cancellation_date, seat.created_at, seat.updated_at,
@@ -67,14 +74,16 @@ export interface SeatRow {
   avatar_url: string | null;
 }
 
-export function getAllSeats(): SeatRow[] {
+export function getAllSeats(enterpriseSlugs?: string[]): SeatRow[] {
   const db = getDb();
-  return db.prepare(`SELECT * FROM copilot_seats ORDER BY org_slug, user_login`).all() as SeatRow[];
+  const ef = buildEnterpriseFilter(enterpriseSlugs);
+  return db.prepare(`SELECT * FROM copilot_seats${ef.clause} ORDER BY org_slug, user_login`).all(...ef.params) as SeatRow[];
 }
 
-export function getSeatsByOrg(orgSlug: string): SeatRow[] {
+export function getSeatsByOrg(orgSlug: string, enterpriseSlugs?: string[]): SeatRow[] {
   const db = getDb();
-  return db.prepare(`SELECT * FROM copilot_seats WHERE org_slug = ? ORDER BY user_login`).all(orgSlug) as SeatRow[];
+  const ef = buildEnterpriseFilter(enterpriseSlugs, "AND");
+  return db.prepare(`SELECT * FROM copilot_seats WHERE org_slug = ?${ef.clause} ORDER BY user_login`).all(orgSlug, ...ef.params) as SeatRow[];
 }
 
 export interface PaginatedSeats {
@@ -88,6 +97,7 @@ export function getSeatsPaginated(
   sortField: string,
   sortDir: "asc" | "desc",
   allowedLogins?: Set<string>,
+  enterpriseSlugs?: string[],
 ): PaginatedSeats {
   const db = getDb();
 
@@ -105,40 +115,45 @@ export function getSeatsPaginated(
   if (allowedLogins && allowedLogins.size > 0) {
     const loginsArray = Array.from(allowedLogins);
     const placeholders = loginsArray.map(() => "?").join(",");
+    const ef = buildEnterpriseFilter(enterpriseSlugs, "AND");
 
     const countRow = db.prepare(
-      `SELECT COUNT(*) as total FROM copilot_seats WHERE user_login IN (${placeholders})`
-    ).get(...loginsArray) as { total: number };
+      `SELECT COUNT(*) as total FROM copilot_seats WHERE user_login IN (${placeholders})${ef.clause}`
+    ).get(...loginsArray, ...ef.params) as { total: number };
 
     const seats = db.prepare(`
       SELECT * FROM copilot_seats
-      WHERE user_login IN (${placeholders})
+      WHERE user_login IN (${placeholders})${ef.clause}
       ORDER BY ${sqlSort} ${sqlDir}
       LIMIT ? OFFSET ?
-    `).all(...loginsArray, pageSize, offset) as SeatRow[];
+    `).all(...loginsArray, ...ef.params, pageSize, offset) as SeatRow[];
 
     return { seats, total: countRow.total };
   }
 
-  const countRow = db.prepare(`SELECT COUNT(*) as total FROM copilot_seats`).get() as { total: number };
+  const ef = buildEnterpriseFilter(enterpriseSlugs);
+  const countRow = db.prepare(`SELECT COUNT(*) as total FROM copilot_seats${ef.clause}`).get(...ef.params) as { total: number };
   const seats = db.prepare(`
-    SELECT * FROM copilot_seats
+    SELECT * FROM copilot_seats${ef.clause}
     ORDER BY ${sqlSort} ${sqlDir}
     LIMIT ? OFFSET ?
-  `).all(pageSize, offset) as SeatRow[];
+  `).all(...ef.params, pageSize, offset) as SeatRow[];
 
   return { seats, total: countRow.total };
 }
 
-export function getSeatStats(): { total: number; active30d: number; inactive30d: number; pendingCancellation: number } {
+export function getSeatStats(enterpriseSlugs?: string[]): { total: number; active30d: number; inactive30d: number; pendingCancellation: number } {
   const db = getDb();
   const thirtyDaysAgo = new Date();
   thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
   const cutoff = thirtyDaysAgo.toISOString();
 
-  const total = (db.prepare(`SELECT COUNT(*) as c FROM copilot_seats`).get() as { c: number }).c;
-  const active30d = (db.prepare(`SELECT COUNT(*) as c FROM copilot_seats WHERE last_activity_at >= ?`).get(cutoff) as { c: number }).c;
-  const pendingCancellation = (db.prepare(`SELECT COUNT(*) as c FROM copilot_seats WHERE pending_cancellation_date IS NOT NULL`).get() as { c: number }).c;
+  const efW = buildEnterpriseFilter(enterpriseSlugs);
+  const efA = buildEnterpriseFilter(enterpriseSlugs, "AND");
+
+  const total = (db.prepare(`SELECT COUNT(*) as c FROM copilot_seats${efW.clause}`).get(...efW.params) as { c: number }).c;
+  const active30d = (db.prepare(`SELECT COUNT(*) as c FROM copilot_seats WHERE last_activity_at >= ?${efA.clause}`).get(cutoff, ...efA.params) as { c: number }).c;
+  const pendingCancellation = (db.prepare(`SELECT COUNT(*) as c FROM copilot_seats WHERE pending_cancellation_date IS NOT NULL${efA.clause}`).get(...efA.params) as { c: number }).c;
 
   return {
     total,

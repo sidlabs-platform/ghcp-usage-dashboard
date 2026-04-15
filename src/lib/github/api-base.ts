@@ -5,6 +5,8 @@ import {
   getInstallationToken,
   validateAppAuth,
   logAuthMode,
+  isAppAuthConfiguredForEnterprise,
+  getInstallationTokenForEnterprise,
 } from "./app-auth";
 
 const GITHUB_API_BASE = process.env.GITHUB_API_BASE || "https://api.github.com";
@@ -35,7 +37,7 @@ function getToken(): string {
  * - Paths starting with `/enterprises/` → "pat" (always)
  * - All other GitHub API paths → "app" if configured, else "pat"
  */
-export function resolveAuthMode(path: string): AuthMode {
+export function resolveAuthMode(path: string, enterpriseSlug?: string): AuthMode {
   // Absolute non-GitHub URLs (e.g., pre-signed download links) need no auth
   if (path.startsWith("http")) {
     const isGitHub =
@@ -54,11 +56,16 @@ export function resolveAuthMode(path: string): AuthMode {
   // Enterprise endpoints → always PAT
   if (path.startsWith("/enterprises/")) return "pat";
 
+  // If enterpriseSlug provided, check if that enterprise has App auth
+  if (enterpriseSlug) {
+    return isAppAuthConfiguredForEnterprise(enterpriseSlug) ? "app" : "pat";
+  }
+
   // Everything else (/orgs/, /repos/, /app/, etc.) → App auth if configured
   return isAppAuthConfigured() ? "app" : "pat";
 }
 
-async function headersForAuth(mode: AuthMode): Promise<Record<string, string>> {
+async function headersForAuth(mode: AuthMode, enterpriseSlug?: string): Promise<Record<string, string>> {
   const base: Record<string, string> = {
     Accept: "application/vnd.github+json",
     "X-GitHub-Api-Version": API_VERSION,
@@ -66,10 +73,23 @@ async function headersForAuth(mode: AuthMode): Promise<Record<string, string>> {
 
   switch (mode) {
     case "pat":
-      base.Authorization = `Bearer ${getToken()}`;
+      if (enterpriseSlug) {
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        const { getEnterpriseAuth } = require("@/lib/config/enterprise-config") as {
+          getEnterpriseAuth: (slug: string) => { token: string };
+        };
+        const auth = getEnterpriseAuth(enterpriseSlug);
+        base.Authorization = `Bearer ${auth.token}`;
+      } else {
+        base.Authorization = `Bearer ${getToken()}`;
+      }
       break;
     case "app":
-      base.Authorization = `Bearer ${await getInstallationToken()}`;
+      if (enterpriseSlug) {
+        base.Authorization = `Bearer ${await getInstallationTokenForEnterprise(enterpriseSlug)}`;
+      } else {
+        base.Authorization = `Bearer ${await getInstallationToken()}`;
+      }
       break;
     case "none":
       // No Authorization header (pre-signed URLs, etc.)
@@ -111,19 +131,24 @@ interface RateLimitState {
   resetAt: number; // Unix timestamp in ms
 }
 
-const rateLimitStates = new Map<AuthMode, RateLimitState>();
+const rateLimitStates = new Map<string, RateLimitState>();
 
-function getRateLimitState(mode: AuthMode): RateLimitState {
-  let state = rateLimitStates.get(mode);
+function rateLimitKey(mode: AuthMode, enterpriseSlug?: string): string {
+  return `${enterpriseSlug ?? "default"}:${mode}`;
+}
+
+function getRateLimitState(mode: AuthMode, enterpriseSlug?: string): RateLimitState {
+  const key = rateLimitKey(mode, enterpriseSlug);
+  let state = rateLimitStates.get(key);
   if (!state) {
     state = { remaining: 5000, resetAt: Date.now() + 3600_000 };
-    rateLimitStates.set(mode, state);
+    rateLimitStates.set(key, state);
   }
   return state;
 }
 
-function updateRateLimit(resp: Response, mode: AuthMode): void {
-  const state = getRateLimitState(mode);
+function updateRateLimit(resp: Response, mode: AuthMode, enterpriseSlug?: string): void {
+  const state = getRateLimitState(mode, enterpriseSlug);
   const remaining = resp.headers.get("x-ratelimit-remaining");
   const reset = resp.headers.get("x-ratelimit-reset");
   if (remaining !== null) {
@@ -140,9 +165,9 @@ function updateRateLimit(resp: Response, mode: AuthMode): void {
  * - 100–1000 remaining: 200ms delay
  * - < 100 remaining: wait until reset
  */
-async function adaptiveRateDelay(mode: AuthMode): Promise<void> {
+async function adaptiveRateDelay(mode: AuthMode, enterpriseSlug?: string): Promise<void> {
   if (mode === "none") return; // No rate limits for pre-signed URLs
-  const state = getRateLimitState(mode);
+  const state = getRateLimitState(mode, enterpriseSlug);
   if (state.remaining > 1000) return;
   if (state.remaining > 100) {
     await sleep(200);
@@ -151,7 +176,8 @@ async function adaptiveRateDelay(mode: AuthMode): Promise<void> {
   // Low quota: wait until reset
   const waitMs = Math.max(0, state.resetAt - Date.now() + 1000);
   if (waitMs > 0 && waitMs < 3600_000) {
-    console.warn(`[Rate Limit] (${mode}) Only ${state.remaining} requests remaining, waiting ${Math.round(waitMs / 1000)}s until reset`);
+    const label = enterpriseSlug ? `${enterpriseSlug}:${mode}` : mode;
+    console.warn(`[Rate Limit] (${label}) Only ${state.remaining} requests remaining, waiting ${Math.round(waitMs / 1000)}s until reset`);
     await sleep(waitMs);
   }
 }
@@ -164,16 +190,16 @@ export class GitHubApiError extends Error {
   }
 }
 
-export async function githubFetch<T>(path: string, retries = 3, authMode?: AuthMode): Promise<T> {
-  const mode = authMode ?? resolveAuthMode(path);
+export async function githubFetch<T>(path: string, retries = 3, authMode?: AuthMode, enterpriseSlug?: string): Promise<T> {
+  const mode = authMode ?? resolveAuthMode(path, enterpriseSlug);
   await ensureAuthReady(mode);
   const url = path.startsWith("http") ? path : `${GITHUB_API_BASE}${path}`;
 
   for (let attempt = 0; attempt < retries; attempt++) {
-    await adaptiveRateDelay(mode);
-    const hdrs = await headersForAuth(mode);
+    await adaptiveRateDelay(mode, enterpriseSlug);
+    const hdrs = await headersForAuth(mode, enterpriseSlug);
     const resp = await fetch(url, { headers: hdrs, cache: "no-store" });
-    updateRateLimit(resp, mode);
+    updateRateLimit(resp, mode, enterpriseSlug);
 
     if (resp.ok) {
       return resp.json() as Promise<T>;
@@ -198,8 +224,8 @@ export async function githubFetch<T>(path: string, retries = 3, authMode?: AuthM
   throw new Error(`GitHub API failed after ${retries} retries on ${path}`);
 }
 
-export async function githubFetchPaginated<T>(path: string, perPage = 100, authMode?: AuthMode): Promise<T[]> {
-  const mode = authMode ?? resolveAuthMode(path);
+export async function githubFetchPaginated<T>(path: string, perPage = 100, authMode?: AuthMode, enterpriseSlug?: string): Promise<T[]> {
+  const mode = authMode ?? resolveAuthMode(path, enterpriseSlug);
   await ensureAuthReady(mode);
   const all: T[] = [];
   let page = 1;
@@ -207,8 +233,8 @@ export async function githubFetchPaginated<T>(path: string, perPage = 100, authM
   while (true) {
     const separator = path.includes("?") ? "&" : "?";
     const url = `${path}${separator}per_page=${perPage}&page=${page}`;
-    await adaptiveRateDelay(mode);
-    const hdrs = await headersForAuth(mode);
+    await adaptiveRateDelay(mode, enterpriseSlug);
+    const hdrs = await headersForAuth(mode, enterpriseSlug);
     const resp = await fetch(
       url.startsWith("http") ? url : `${GITHUB_API_BASE}${url}`,
       { headers: hdrs, cache: "no-store" }
@@ -219,7 +245,7 @@ export async function githubFetchPaginated<T>(path: string, perPage = 100, authM
       throw new Error(`GitHub API error ${resp.status} on ${url}`);
     }
 
-    updateRateLimit(resp, mode);
+    updateRateLimit(resp, mode, enterpriseSlug);
 
     const data = await resp.json();
     const items = Array.isArray(data) ? data : data.seats || data.members || [];
@@ -290,8 +316,9 @@ export async function githubFetchPaginatedWithCutoff<
   cutoffDate: string | null = null,
   perPage = 100,
   authMode?: AuthMode,
+  enterpriseSlug?: string,
 ): Promise<T[]> {
-  const mode = authMode ?? resolveAuthMode(path);
+  const mode = authMode ?? resolveAuthMode(path, enterpriseSlug);
   await ensureAuthReady(mode);
   const all: T[] = [];
   let page = 1;
@@ -301,8 +328,8 @@ export async function githubFetchPaginatedWithCutoff<
     const separator = path.includes("?") ? "&" : "?";
     const url = `${path}${separator}per_page=${perPage}&page=${page}`;
     const fullUrl = url.startsWith("http") ? url : `${GITHUB_API_BASE}${url}`;
-    await adaptiveRateDelay(mode);
-    const hdrs = await headersForAuth(mode);
+    await adaptiveRateDelay(mode, enterpriseSlug);
+    const hdrs = await headersForAuth(mode, enterpriseSlug);
     const resp = await fetch(fullUrl, { headers: hdrs, cache: "no-store" });
 
     if (!resp.ok) {
@@ -321,7 +348,7 @@ export async function githubFetchPaginatedWithCutoff<
     }
 
     const batch: T[] = await resp.json();
-    updateRateLimit(resp, mode);
+    updateRateLimit(resp, mode, enterpriseSlug);
     if (!batch || batch.length === 0) break;
 
     if (cutoffDate) {
@@ -352,8 +379,9 @@ export async function githubFetchCursorPaginatedWithCutoff<
   cutoffDate: string | null = null,
   perPage = 100,
   authMode?: AuthMode,
+  enterpriseSlug?: string,
 ): Promise<T[]> {
-  const mode = authMode ?? resolveAuthMode(path);
+  const mode = authMode ?? resolveAuthMode(path, enterpriseSlug);
   await ensureAuthReady(mode);
   const all: T[] = [];
   let after: string | null = null;
@@ -364,8 +392,8 @@ export async function githubFetchCursorPaginatedWithCutoff<
     const cursorParam: string = after ? `&after=${after}` : "";
     const url: string = `${path}${separator}per_page=${perPage}${cursorParam}`;
     const fullUrl: string = url.startsWith("http") ? url : `${GITHUB_API_BASE}${url}`;
-    await adaptiveRateDelay(mode);
-    const hdrs = await headersForAuth(mode);
+    await adaptiveRateDelay(mode, enterpriseSlug);
+    const hdrs = await headersForAuth(mode, enterpriseSlug);
     const resp: Response = await fetch(fullUrl, { headers: hdrs, cache: "no-store" });
 
     if (!resp.ok) {
@@ -384,7 +412,7 @@ export async function githubFetchCursorPaginatedWithCutoff<
     }
 
     const batch: T[] = await resp.json();
-    updateRateLimit(resp, mode);
+    updateRateLimit(resp, mode, enterpriseSlug);
     if (!batch || batch.length === 0) break;
 
     if (cutoffDate) {

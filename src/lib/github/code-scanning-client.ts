@@ -14,42 +14,43 @@ class CodeScanningClient {
   async getOrgAlerts(
     org: string,
     cutoffDate?: string | null,
+    enterpriseSlug?: string,
   ): Promise<CodeScanningAlert[]> {
     const path = `/orgs/${org}/code-scanning/alerts?sort=updated&direction=desc`;
     return githubFetchPaginatedWithCutoff<CodeScanningAlert>(
       path,
       cutoffDate ?? null,
+      100, undefined, enterpriseSlug,
     );
   }
 
   async getEnterpriseAlerts(
     enterprise: string,
     cutoffDate?: string | null,
+    enterpriseSlug?: string,
   ): Promise<CodeScanningAlert[]> {
     const path = `/enterprises/${enterprise}/code-scanning/alerts?sort=updated&direction=desc`;
     return githubFetchPaginatedWithCutoff<CodeScanningAlert>(
       path,
       cutoffDate ?? null,
+      100, undefined, enterpriseSlug,
     );
   }
 
-  /**
-   * Fetch autofix status for a specific code scanning alert.
-   * Returns null if autofix is not available (404).
-   * Throws on non-404 errors so callers can track failures.
-   */
   async getAlertAutofixStatus(
     owner: string,
     repo: string,
     alertNumber: number,
+    enterpriseSlug?: string,
   ): Promise<AutofixStatusResponse | null> {
     try {
       return await githubFetch<AutofixStatusResponse>(
         `/repos/${owner}/${repo}/code-scanning/alerts/${alertNumber}/autofix`,
+        3, undefined, enterpriseSlug,
       );
     } catch (err) {
       if (err instanceof GitHubApiError && err.status === 404) {
-        return null; // No autofix available — expected
+        return null;
       }
       throw err;
     }

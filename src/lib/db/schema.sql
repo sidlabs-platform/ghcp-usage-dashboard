@@ -5,6 +5,7 @@
 CREATE TABLE IF NOT EXISTS enterprise_daily_metrics (
   day TEXT NOT NULL,
   enterprise_id TEXT NOT NULL,
+  enterprise_slug TEXT NOT NULL DEFAULT '',
   daily_active_users INTEGER DEFAULT 0,
   weekly_active_users INTEGER DEFAULT 0,
   monthly_active_users INTEGER DEFAULT 0,
@@ -36,6 +37,7 @@ CREATE TABLE IF NOT EXISTS org_daily_metrics (
   day TEXT NOT NULL,
   org_slug TEXT NOT NULL,
   enterprise_id TEXT,
+  enterprise_slug TEXT NOT NULL DEFAULT '',
   daily_active_users INTEGER DEFAULT 0,
   weekly_active_users INTEGER DEFAULT 0,
   monthly_active_users INTEGER DEFAULT 0,
@@ -66,6 +68,7 @@ CREATE INDEX IF NOT EXISTS idx_org_metrics_day ON org_daily_metrics(day);
 CREATE TABLE IF NOT EXISTS user_daily_metrics (
   day TEXT NOT NULL,
   enterprise_id TEXT NOT NULL,
+  enterprise_slug TEXT NOT NULL DEFAULT '',
   user_id INTEGER NOT NULL,
   user_login TEXT NOT NULL,
   code_generation_activity_count INTEGER DEFAULT 0,
@@ -104,6 +107,7 @@ CREATE INDEX IF NOT EXISTS idx_user_metrics_enterprise_day ON user_daily_metrics
 
 -- Copilot seat assignments (current snapshot)
 CREATE TABLE IF NOT EXISTS copilot_seats (
+  enterprise_slug TEXT NOT NULL DEFAULT '',
   org_slug TEXT NOT NULL,
   user_login TEXT NOT NULL,
   user_id INTEGER NOT NULL,
@@ -124,6 +128,7 @@ CREATE INDEX IF NOT EXISTS idx_seats_team ON copilot_seats(assigning_team_slug);
 
 -- Team membership cache
 CREATE TABLE IF NOT EXISTS team_memberships (
+  enterprise_slug TEXT NOT NULL DEFAULT '',
   team_slug TEXT NOT NULL,
   team_name TEXT NOT NULL,
   source TEXT NOT NULL,  -- 'org' or 'enterprise'
@@ -138,6 +143,7 @@ CREATE INDEX IF NOT EXISTS idx_team_members_team ON team_memberships(team_slug);
 
 -- Sync log to track what's been fetched
 CREATE TABLE IF NOT EXISTS sync_log (
+  enterprise_slug TEXT NOT NULL DEFAULT '',
   scope TEXT NOT NULL,       -- 'enterprise', 'org', 'users', 'seats', 'teams'
   scope_id TEXT NOT NULL,    -- enterprise slug, org slug, etc.
   day TEXT,                  -- NULL for non-day-based syncs (seats, teams)
@@ -167,3 +173,20 @@ CREATE INDEX IF NOT EXISTS idx_seats_org ON copilot_seats(org_slug);
 -- Scalability indexes for large-scale queries
 CREATE INDEX IF NOT EXISTS idx_user_metrics_login_day ON user_daily_metrics(user_login, day);
 CREATE INDEX IF NOT EXISTS idx_copilot_seats_user ON copilot_seats(user_login);
+
+-- Enterprise registry for multi-enterprise support
+CREATE TABLE IF NOT EXISTS enterprise_registry (
+  slug TEXT PRIMARY KEY,
+  enterprise_id TEXT,
+  display_name TEXT NOT NULL,
+  last_synced_at TEXT,
+  created_at TEXT DEFAULT (datetime('now'))
+);
+
+-- Indexes for enterprise_slug filtering
+CREATE INDEX IF NOT EXISTS idx_enterprise_daily_metrics_slug ON enterprise_daily_metrics(enterprise_slug, day);
+CREATE INDEX IF NOT EXISTS idx_org_daily_metrics_slug ON org_daily_metrics(enterprise_slug, day, org_slug);
+CREATE INDEX IF NOT EXISTS idx_user_daily_metrics_slug ON user_daily_metrics(enterprise_slug, day, user_login);
+CREATE INDEX IF NOT EXISTS idx_copilot_seats_slug ON copilot_seats(enterprise_slug, org_slug, user_login);
+CREATE INDEX IF NOT EXISTS idx_team_memberships_slug ON team_memberships(enterprise_slug, team_slug, user_login);
+CREATE INDEX IF NOT EXISTS idx_sync_log_slug ON sync_log(enterprise_slug, scope, scope_id, day);

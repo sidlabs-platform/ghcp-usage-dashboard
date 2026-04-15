@@ -187,15 +187,18 @@ function FilterDropdown({
 export function ScopeFilter({ orgOnly = false }: ScopeFilterProps) {
   const {
     filterOptions,
+    selectedEnterprises,
     selectedEntTeams,
     selectedOrgTeams,
     selectedOrgs,
+    setSelectedEnterprises,
     setSelectedEntTeams,
     setSelectedOrgTeams,
     setSelectedOrgs,
+    isMultiEnterprise,
   } = useScope();
 
-  const { enterpriseTeams, orgTeams, orgs } = filterOptions;
+  const { enterprises, enterpriseTeams, orgTeams, orgs } = filterOptions;
 
   // Determine current mode based on selections
   const mode: ScopeMode =
@@ -213,17 +216,38 @@ export function ScopeFilter({ orgOnly = false }: ScopeFilterProps) {
   const orgTeamItems = orgTeams.map((t) => ({
     value: t.slug, label: t.name, extra: `${t.memberCount}`,
   }));
+  const enterpriseItems = enterprises.map((e) => ({
+    value: e.slug, label: e.displayName,
+  }));
 
   const clearAll = () => {
+    setSelectedEnterprises([]);
     setSelectedEntTeams([]);
     setSelectedOrgTeams([]);
     setSelectedOrgs([]);
   };
 
-  const hasAnyFilter = selectedEntTeams.length > 0 || selectedOrgTeams.length > 0 || selectedOrgs.length > 0;
+  const hasAnyFilter = selectedEnterprises.length > 0 || selectedEntTeams.length > 0 || selectedOrgTeams.length > 0 || selectedOrgs.length > 0;
 
   return (
     <div className="flex flex-wrap items-center gap-3 mb-6">
+      {/* Enterprise selector — only shown when multiple enterprises configured */}
+      {isMultiEnterprise && (
+        <FilterDropdown
+          label="Enterprise"
+          icon={<Building2 className="h-4 w-4 text-[hsl(var(--muted-foreground))]" />}
+          items={enterpriseItems}
+          selected={selectedEnterprises}
+          onChange={setSelectedEnterprises}
+          placeholder="All Enterprises"
+        />
+      )}
+
+      {/* Separator between enterprise and team/org filters */}
+      {isMultiEnterprise && (entItems.length > 0 || orgItems.length > 0) && (
+        <span className="text-xs text-[hsl(var(--muted-foreground))] font-medium px-1">|</span>
+      )}
+
       {/* Enterprise Teams — hidden in orgOnly mode */}
       {!orgOnly && entItems.length > 0 && (
         <FilterDropdown

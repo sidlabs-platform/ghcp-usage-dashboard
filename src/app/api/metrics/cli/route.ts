@@ -10,11 +10,11 @@ export async function GET(request: Request) {
     const { start, end } = getDateRange(days);
 
     const scopeFilter = parseScopeFilter(searchParams);
-    const eid = scopeFilter.hasFilter ? null : resolveEnterpriseId();
+    const eid = scopeFilter.hasFilter ? null : resolveEnterpriseId(scopeFilter.enterpriseSlugs);
 
-    const enterpriseRecords = eid ? getEnterpriseMetrics(eid, start, end) : [];
-    const aggregated = enterpriseRecords.length === 0 && !scopeFilter.hasFilter ? getAggregatedDailySummary(start, end) : [];
-    const userRecords = filterByScope(getAllUserMetrics(start, end), scopeFilter);
+    const enterpriseRecords = eid ? getEnterpriseMetrics(start, end, scopeFilter.enterpriseSlugs) : [];
+    const aggregated = enterpriseRecords.length === 0 && !scopeFilter.hasFilter ? getAggregatedDailySummary(start, end, scopeFilter.enterpriseSlugs) : [];
+    const userRecords = filterByScope(getAllUserMetrics(start, end, scopeFilter.enterpriseSlugs), scopeFilter);
 
     // Daily CLI users and IDE users trend
     // When filtered, build from user-level data instead of enterprise/aggregated

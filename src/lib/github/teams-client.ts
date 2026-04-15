@@ -12,21 +12,21 @@ import type {
 export class TeamsClient {
   // ── Organization teams ─────────────────────────────────────────────
 
-  async getOrgTeams(org: string): Promise<GitHubTeam[]> {
-    return githubFetchPaginated<GitHubTeam>(`/orgs/${org}/teams`);
+  async getOrgTeams(org: string, enterpriseSlug?: string): Promise<GitHubTeam[]> {
+    return githubFetchPaginated<GitHubTeam>(`/orgs/${org}/teams`, 100, undefined, enterpriseSlug);
   }
 
-  async getOrgTeamMembers(org: string, teamSlug: string): Promise<GitHubTeamMember[]> {
-    return githubFetchPaginated<GitHubTeamMember>(`/orgs/${org}/teams/${teamSlug}/members`);
+  async getOrgTeamMembers(org: string, teamSlug: string, enterpriseSlug?: string): Promise<GitHubTeamMember[]> {
+    return githubFetchPaginated<GitHubTeamMember>(`/orgs/${org}/teams/${teamSlug}/members`, 100, undefined, enterpriseSlug);
   }
 
-  async getOrgTeamsWithMembers(org: string): Promise<TeamWithMembers[]> {
-    const teams = await this.getOrgTeams(org);
+  async getOrgTeamsWithMembers(org: string, enterpriseSlug?: string): Promise<TeamWithMembers[]> {
+    const teams = await this.getOrgTeams(org, enterpriseSlug);
     const results: TeamWithMembers[] = [];
 
     for (const team of teams) {
       try {
-        const members = await this.getOrgTeamMembers(org, team.slug);
+        const members = await this.getOrgTeamMembers(org, team.slug, enterpriseSlug);
         results.push({
           slug: team.slug,
           name: team.name,
@@ -45,9 +45,9 @@ export class TeamsClient {
 
   // ── Enterprise teams (public preview) ──────────────────────────────
 
-  async getEnterpriseTeams(enterprise: string): Promise<EnterpriseTeam[]> {
+  async getEnterpriseTeams(enterprise: string, enterpriseSlug?: string): Promise<EnterpriseTeam[]> {
     try {
-      return await githubFetchPaginated<EnterpriseTeam>(`/enterprises/${enterprise}/teams`);
+      return await githubFetchPaginated<EnterpriseTeam>(`/enterprises/${enterprise}/teams`, 100, undefined, enterpriseSlug);
     } catch (err) {
       console.warn("Enterprise Teams API not available (may require public preview access):", err);
       return [];
@@ -56,11 +56,12 @@ export class TeamsClient {
 
   async getEnterpriseTeamMembers(
     enterprise: string,
-    teamSlug: string
+    teamSlug: string,
+    enterpriseSlug?: string
   ): Promise<EnterpriseTeamMembership[]> {
     try {
       return await githubFetchPaginated<EnterpriseTeamMembership>(
-        `/enterprises/${enterprise}/teams/${teamSlug}/memberships`
+        `/enterprises/${enterprise}/teams/${teamSlug}/memberships`, 100, undefined, enterpriseSlug
       );
     } catch (err) {
       console.warn(`Failed to fetch enterprise team members for ${teamSlug}:`, err);
@@ -68,12 +69,12 @@ export class TeamsClient {
     }
   }
 
-  async getEnterpriseTeamsWithMembers(enterprise: string): Promise<TeamWithMembers[]> {
-    const teams = await this.getEnterpriseTeams(enterprise);
+  async getEnterpriseTeamsWithMembers(enterprise: string, enterpriseSlug?: string): Promise<TeamWithMembers[]> {
+    const teams = await this.getEnterpriseTeams(enterprise, enterpriseSlug);
     const results: TeamWithMembers[] = [];
 
     for (const team of teams) {
-      const members = await this.getEnterpriseTeamMembers(enterprise, team.slug);
+      const members = await this.getEnterpriseTeamMembers(enterprise, team.slug, enterpriseSlug);
       results.push({
         slug: team.slug,
         name: team.name,

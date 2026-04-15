@@ -3,6 +3,7 @@
 
 -- Per-user rollup for a given date range
 CREATE TABLE IF NOT EXISTS user_period_summary (
+  enterprise_slug TEXT NOT NULL DEFAULT '',
   user_login TEXT NOT NULL,
   period_start TEXT NOT NULL,
   period_end TEXT NOT NULL,
@@ -27,6 +28,7 @@ CREATE INDEX IF NOT EXISTS idx_user_summary_period ON user_period_summary(period
 
 -- Daily aggregate cache (enterprise-wide totals per day)
 CREATE TABLE IF NOT EXISTS daily_aggregate_cache (
+  enterprise_slug TEXT NOT NULL DEFAULT '',
   day TEXT NOT NULL PRIMARY KEY,
   total_users INTEGER DEFAULT 0,
   active_users INTEGER DEFAULT 0,
@@ -48,6 +50,7 @@ CREATE TABLE IF NOT EXISTS daily_aggregate_cache (
 
 -- Per-team summary cache
 CREATE TABLE IF NOT EXISTS team_summary_cache (
+  enterprise_slug TEXT NOT NULL DEFAULT '',
   team_slug TEXT NOT NULL,
   source TEXT NOT NULL,
   org_slug TEXT,
@@ -69,3 +72,8 @@ CREATE TABLE IF NOT EXISTS team_summary_cache (
 );
 
 CREATE INDEX IF NOT EXISTS idx_team_summary_period ON team_summary_cache(period_start, period_end);
+
+-- Indexes for enterprise_slug filtering
+CREATE INDEX IF NOT EXISTS idx_user_summary_slug ON user_period_summary(enterprise_slug, user_login);
+CREATE INDEX IF NOT EXISTS idx_daily_agg_cache_slug ON daily_aggregate_cache(enterprise_slug, day);
+CREATE INDEX IF NOT EXISTS idx_team_summary_slug ON team_summary_cache(enterprise_slug, team_slug);

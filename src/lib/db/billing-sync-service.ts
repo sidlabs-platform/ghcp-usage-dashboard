@@ -2,7 +2,7 @@
 // Supports incremental sync via per-report-type sync state tracking
 
 import { billingClient } from "@/lib/github/billing-client";
-import { isMetricEnabled, getEffectiveBillingEnabled, isBillingSubEnabled } from "@/lib/config/dashboard-config";
+import { getEffectiveBillingEnabled, isBillingSubEnabled } from "@/lib/config/dashboard-config";
 import {
   upsertUsageRecords,
   upsertPremiumRequests,
@@ -13,12 +13,6 @@ import {
 import type { BillingReportType } from "@/lib/types/billing";
 
 // ── Helpers ───────────────────────────────────────────────────────────
-
-function getEnterprise(): string {
-  const ent = process.env.GITHUB_ENTERPRISE;
-  if (!ent) throw new Error("GITHUB_ENTERPRISE environment variable is required");
-  return ent;
-}
 
 function todayStr(): string {
   return new Date().toISOString().split("T")[0];
@@ -39,6 +33,7 @@ const PERMISSION_ERROR_MSG =
 export interface BillingSyncProgress {
   phase: string;
   reportType?: string;
+  enterpriseSlug?: string;
   current: number;
   total: number;
   message: string;
@@ -52,6 +47,7 @@ export interface BillingSyncProgress {
 
 function getDateRange(
   reportType: BillingReportType,
+  enterpriseSlug: string,
 ): { startDate: string; endDate: string } | null {
   const today = todayStr();
 
@@ -59,7 +55,7 @@ function getDateRange(
   const nextDay = (dateStr: string) => subtractDays(dateStr, -1);
 
   // Only trust sync state if the last sync succeeded
-  const syncState = getBillingSyncState(reportType);
+  const syncState = getBillingSyncState(reportType, enterpriseSlug);
   const lastEnd = syncState?.status === "ok" ? syncState.last_report_end : null;
 
   if (reportType === "summarized") {
@@ -93,11 +89,11 @@ function getDateRange(
 // ── Sync individual report types ──────────────────────────────────────
 
 async function syncUsageReport(
-  enterprise: string,
+  enterpriseSlug: string,
   reportType: "detailed" | "summarized",
   onProgress?: (p: BillingSyncProgress) => void,
 ): Promise<number> {
-  const range = getDateRange(reportType);
+  const range = getDateRange(reportType, enterpriseSlug);
   if (!range) {
     console.log(`[Billing Sync] ${reportType}: no date range to sync (already covered)`);
     return 0;
@@ -107,15 +103,16 @@ async function syncUsageReport(
   onProgress?.({
     phase: "billing-sync",
     reportType,
+    enterpriseSlug,
     current: 0,
     total: 1,
     message: `Syncing ${reportType} usage report: ${startDate} → ${endDate}`,
   });
 
-  updateBillingSyncState(reportType, new Date().toISOString(), startDate, endDate, "syncing");
+  updateBillingSyncState(reportType, new Date().toISOString(), startDate, endDate, "syncing", undefined, enterpriseSlug);
 
   const records = await billingClient.fetchUsageReport(
-    enterprise,
+    enterpriseSlug,
     reportType,
     startDate,
     endDate,
@@ -123,20 +120,23 @@ async function syncUsageReport(
       onProgress?.({
         phase: "billing-sync",
         reportType,
+        enterpriseSlug,
         current: 0,
         total: 1,
         message: msg,
       }),
+    enterpriseSlug,
   );
 
-  upsertUsageRecords(records);
+  upsertUsageRecords(enterpriseSlug, records);
 
-  updateBillingSyncState(reportType, new Date().toISOString(), startDate, endDate, "ok");
+  updateBillingSyncState(reportType, new Date().toISOString(), startDate, endDate, "ok", undefined, enterpriseSlug);
 
   console.log(`[Billing Sync] ${reportType}: upserted ${records.length} usage records`);
   onProgress?.({
     phase: "billing-sync",
     reportType,
+    enterpriseSlug,
     current: 1,
     total: 1,
     message: `${reportType}: synced ${records.length} usage records`,
@@ -146,11 +146,11 @@ async function syncUsageReport(
 }
 
 async function syncPremiumRequestReport(
-  enterprise: string,
+  enterpriseSlug: string,
   onProgress?: (p: BillingSyncProgress) => void,
 ): Promise<number> {
   const reportType: BillingReportType = "premium_request";
-  const range = getDateRange(reportType);
+  const range = getDateRange(reportType, enterpriseSlug);
   if (!range) {
     console.log(`[Billing Sync] premium_request: no date range to sync`);
     return 0;
@@ -160,35 +160,39 @@ async function syncPremiumRequestReport(
   onProgress?.({
     phase: "billing-sync",
     reportType,
+    enterpriseSlug,
     current: 0,
     total: 1,
     message: `Syncing premium request report: ${startDate} → ${endDate}`,
   });
 
-  updateBillingSyncState(reportType, new Date().toISOString(), startDate, endDate, "syncing");
+  updateBillingSyncState(reportType, new Date().toISOString(), startDate, endDate, "syncing", undefined, enterpriseSlug);
 
   const records = await billingClient.fetchPremiumRequestReport(
-    enterprise,
+    enterpriseSlug,
     startDate,
     endDate,
     (msg) =>
       onProgress?.({
         phase: "billing-sync",
         reportType,
+        enterpriseSlug,
         current: 0,
         total: 1,
         message: msg,
       }),
+    enterpriseSlug,
   );
 
-  upsertPremiumRequests(records);
+  upsertPremiumRequests(enterpriseSlug, records);
 
-  updateBillingSyncState(reportType, new Date().toISOString(), startDate, endDate, "ok");
+  updateBillingSyncState(reportType, new Date().toISOString(), startDate, endDate, "ok", undefined, enterpriseSlug);
 
   console.log(`[Billing Sync] premium_request: upserted ${records.length} records`);
   onProgress?.({
     phase: "billing-sync",
     reportType,
+    enterpriseSlug,
     current: 1,
     total: 1,
     message: `premium_request: synced ${records.length} records`,
@@ -200,6 +204,7 @@ async function syncPremiumRequestReport(
 // ── Main entry point ──────────────────────────────────────────────────
 
 export async function syncBilling(
+  enterpriseSlug: string,
   onProgress?: (p: BillingSyncProgress) => void,
 ): Promise<{ usageRecords: number; premiumRecords: number; errors: string[] }> {
   if (!getEffectiveBillingEnabled()) {
@@ -207,7 +212,6 @@ export async function syncBilling(
     return { usageRecords: 0, premiumRecords: 0, errors: [] };
   }
 
-  const enterprise = getEnterprise();
   const errors: string[] = [];
   let usageRecords = 0;
   let premiumRecords = 0;
@@ -225,17 +229,18 @@ export async function syncBilling(
       onProgress?.({
         phase: "billing-sync",
         reportType: "summarized",
+        enterpriseSlug,
         current: step,
         total: totalSteps,
         message: "Starting summarized usage sync...",
       });
-      usageRecords += await syncUsageReport(enterprise, "summarized", onProgress);
+      usageRecords += await syncUsageReport(enterpriseSlug, "summarized", onProgress);
     } catch (err) {
       const msg = formatError("summarized", err);
       errors.push(msg);
       console.error(`[Billing Sync] ${msg}`);
-      const prev = getBillingSyncState("summarized");
-      updateBillingSyncState("summarized", new Date().toISOString(), prev?.last_report_start ?? "", prev?.last_report_end ?? "", "error", msg);
+      const prev = getBillingSyncState("summarized", enterpriseSlug);
+      updateBillingSyncState("summarized", new Date().toISOString(), prev?.last_report_start ?? "", prev?.last_report_end ?? "", "error", msg, enterpriseSlug);
     }
 
     // ── Detailed usage ──────────────────────────────────────────────────
@@ -244,17 +249,18 @@ export async function syncBilling(
       onProgress?.({
         phase: "billing-sync",
         reportType: "detailed",
+        enterpriseSlug,
         current: step,
         total: totalSteps,
         message: "Starting detailed usage sync...",
       });
-      usageRecords += await syncUsageReport(enterprise, "detailed", onProgress);
+      usageRecords += await syncUsageReport(enterpriseSlug, "detailed", onProgress);
     } catch (err) {
       const msg = formatError("detailed", err);
       errors.push(msg);
       console.error(`[Billing Sync] ${msg}`);
-      const prev = getBillingSyncState("detailed");
-      updateBillingSyncState("detailed", new Date().toISOString(), prev?.last_report_start ?? "", prev?.last_report_end ?? "", "error", msg);
+      const prev = getBillingSyncState("detailed", enterpriseSlug);
+      updateBillingSyncState("detailed", new Date().toISOString(), prev?.last_report_start ?? "", prev?.last_report_end ?? "", "error", msg, enterpriseSlug);
     }
   }
 
@@ -265,17 +271,18 @@ export async function syncBilling(
       onProgress?.({
         phase: "billing-sync",
         reportType: "premium_request",
+        enterpriseSlug,
         current: step,
         total: totalSteps,
         message: "Starting premium request sync...",
       });
-      premiumRecords += await syncPremiumRequestReport(enterprise, onProgress);
+      premiumRecords += await syncPremiumRequestReport(enterpriseSlug, onProgress);
     } catch (err) {
       const msg = formatError("premium_request", err);
       errors.push(msg);
       console.error(`[Billing Sync] ${msg}`);
-      const prev = getBillingSyncState("premium_request");
-      updateBillingSyncState("premium_request", new Date().toISOString(), prev?.last_report_start ?? "", prev?.last_report_end ?? "", "error", msg);
+      const prev = getBillingSyncState("premium_request", enterpriseSlug);
+      updateBillingSyncState("premium_request", new Date().toISOString(), prev?.last_report_start ?? "", prev?.last_report_end ?? "", "error", msg, enterpriseSlug);
     }
   }
 
@@ -284,11 +291,12 @@ export async function syncBilling(
     step++;
     onProgress?.({
       phase: "billing-sync",
+      enterpriseSlug,
       current: step,
       total: totalSteps,
       message: "Refreshing daily aggregates...",
     });
-    refreshBillingDailyAggregates();
+    refreshBillingDailyAggregates(enterpriseSlug);
     console.log("[Billing Sync] Daily aggregates refreshed");
   } catch (err) {
     const msg = `Failed to refresh daily aggregates: ${err instanceof Error ? err.message : String(err)}`;
@@ -298,6 +306,7 @@ export async function syncBilling(
 
   onProgress?.({
     phase: "billing-sync",
+    enterpriseSlug,
     current: totalSteps,
     total: totalSteps,
     message: `Billing sync complete: ${usageRecords} usage records, ${premiumRecords} premium records, ${errors.length} errors`,

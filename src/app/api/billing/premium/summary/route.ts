@@ -22,11 +22,14 @@ async function handler(request: NextRequest) {
     const days = parseInt(params.get("days") || "28", 10);
     const { start, end } = getDateRange(days);
 
-    // Parse scope filter (teams/orgs)
+    // Parse scope filter (teams/orgs/enterprises)
     const teamsParam = params.get("teams");
     const orgsParam = params.get("orgs");
+    const enterprisesParam = params.get("enterprises");
     const selectedTeams = teamsParam ? teamsParam.split(",").filter(Boolean) : [];
     const selectedOrgs = orgsParam ? orgsParam.split(",").filter(Boolean) : [];
+    const selectedEnterprises = enterprisesParam ? enterprisesParam.split(",").filter(Boolean) : [];
+    const enterpriseSlugs = selectedEnterprises.length > 0 ? selectedEnterprises : undefined;
     const hasScope = selectedTeams.length > 0 || selectedOrgs.length > 0;
 
     const filters: PremiumFilters = {
@@ -39,13 +42,13 @@ async function handler(request: NextRequest) {
     };
 
     if (hasScope) {
-      filters.allowedLogins = resolveFilteredUsers(selectedTeams, selectedOrgs);
+      filters.allowedLogins = resolveFilteredUsers(selectedTeams, selectedOrgs, enterpriseSlugs);
       if (selectedOrgs.length > 0) filters.scopeOrgs = selectedOrgs;
     }
 
-    const userSummary = getPremiumUserSummary(start, end, filters);
-    const modelSummary = getPremiumModelSummary(start, end, filters);
-    const dailyTrend = getPremiumDailyTrend(start, end, filters);
+    const userSummary = getPremiumUserSummary(start, end, filters, enterpriseSlugs);
+    const modelSummary = getPremiumModelSummary(start, end, filters, enterpriseSlugs);
+    const dailyTrend = getPremiumDailyTrend(start, end, filters, enterpriseSlugs);
 
     // Compute KPIs from user summary
     const totalRequests = userSummary.reduce((sum, u) => sum + u.total_requests, 0);

@@ -27,11 +27,14 @@ async function handler(request: NextRequest) {
     const sortDir = (params.get("sortDir") === "asc" ? "asc" : "desc") as "asc" | "desc";
     const search = params.get("search") || undefined;
 
-    // Parse scope filter (teams/orgs)
+    // Parse scope filter (teams/orgs/enterprises)
     const teamsParam = params.get("teams");
     const orgsParam = params.get("orgs");
+    const enterprisesParam = params.get("enterprises");
     const selectedTeams = teamsParam ? teamsParam.split(",").filter(Boolean) : [];
     const selectedOrgs = orgsParam ? orgsParam.split(",").filter(Boolean) : [];
+    const selectedEnterprises = enterprisesParam ? enterprisesParam.split(",").filter(Boolean) : [];
+    const enterpriseSlugs = selectedEnterprises.length > 0 ? selectedEnterprises : undefined;
     const hasScope = selectedTeams.length > 0 || selectedOrgs.length > 0;
 
     const filters: PremiumFilters = {
@@ -44,15 +47,15 @@ async function handler(request: NextRequest) {
     };
 
     if (hasScope) {
-      filters.allowedLogins = resolveFilteredUsers(selectedTeams, selectedOrgs);
+      filters.allowedLogins = resolveFilteredUsers(selectedTeams, selectedOrgs, enterpriseSlugs);
       if (selectedOrgs.length > 0) filters.scopeOrgs = selectedOrgs;
     }
 
     const { records, total } = getPremiumRequestsPaginated(
-      start, end, page, pageSize, sort, sortDir, search, filters,
+      start, end, page, pageSize, sort, sortDir, search, filters, enterpriseSlugs,
     );
 
-    const filterOptions = getPremiumFilterOptions(start, end);
+    const filterOptions = getPremiumFilterOptions(start, end, enterpriseSlugs);
 
     return NextResponse.json({
       enabled: true,

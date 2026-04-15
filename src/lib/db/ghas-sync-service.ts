@@ -18,20 +18,11 @@ import {
   getOpenCodeScanningAlerts,
 } from "./ghas-repo";
 import { getDb } from "./database";
-import { isMetricEnabled, getSecurityConfig, isEnterpriseEnabled, getResolvedOrgs, isCodeScanningAutofixEnabled } from "@/lib/config/dashboard-config";
+import { isMetricEnabled, getSecurityConfig, isEnterpriseEnabled, isCodeScanningAutofixEnabled } from "@/lib/config/dashboard-config";
+import { getConfiguredEnterprises, getResolvedOrgsForEnterprise } from "@/lib/config/enterprise-config";
 import type { AutofixStatusResponse } from "@/lib/github/code-scanning-client";
 
 // ── Helpers ───────────────────────────────────────────────────────────
-
-/** Returns the enterprise slug, or null when enterprise mode is disabled. */
-function getEnterprise(): string | null {
-  if (!isEnterpriseEnabled()) return null;
-  return process.env.GITHUB_ENTERPRISE || null;
-}
-
-function getOrgs(): string[] {
-  return getResolvedOrgs();
-}
 
 /**
  * Map GitHub autofix API status to our internal status.
@@ -50,16 +41,18 @@ const AUTOFIX_CONCURRENCY = 10;
  * Makes one API call per open alert (concurrency-limited).
  */
 async function enrichAutofixStatuses(
+  enterpriseSlug: string,
   scope: string,
   scopeId: string,
   onProgress?: (p: GhasSyncProgress) => void,
 ): Promise<number> {
-  const openAlerts = getOpenCodeScanningAlerts(scope, scopeId);
+  const openAlerts = getOpenCodeScanningAlerts(scope, scopeId, [enterpriseSlug]);
   if (openAlerts.length === 0) return 0;
 
   onProgress?.({
     phase: "ghas-sync",
     category: "code_scanning_autofix",
+    enterpriseSlug,
     current: 0,
     total: openAlerts.length,
     message: `Fetching autofix status for ${openAlerts.length} open alerts in ${scope}/${scopeId}`,
@@ -76,7 +69,7 @@ async function enrichAutofixStatuses(
         const parts = alert.repo_full_name.split("/");
         if (parts.length < 2) return null;
         const [owner, repo] = parts;
-        const resp = await codeScanningClient.getAlertAutofixStatus(owner, repo, alert.alert_number);
+        const resp = await codeScanningClient.getAlertAutofixStatus(owner, repo, alert.alert_number, enterpriseSlug);
         return {
           alertNumber: alert.alert_number,
           repoFullName: alert.repo_full_name,
@@ -98,6 +91,7 @@ async function enrichAutofixStatuses(
     onProgress?.({
       phase: "ghas-sync",
       category: "code_scanning_autofix",
+      enterpriseSlug,
       current: Math.min(completed, openAlerts.length),
       total: openAlerts.length,
       message: `Autofix status: ${completed}/${openAlerts.length} alerts checked`,
@@ -105,7 +99,7 @@ async function enrichAutofixStatuses(
   }
 
   if (updates.length > 0) {
-    updateAlertAutofixStatuses(scope, scopeId, updates);
+    updateAlertAutofixStatuses(enterpriseSlug, scope, scopeId, updates);
   }
 
   return updates.filter(u => u.autofixStatus !== "none").length;
@@ -116,6 +110,7 @@ async function enrichAutofixStatuses(
 export interface GhasSyncProgress {
   phase: string;
   category?: string;
+  enterpriseSlug?: string;
   current: number;
   total: number;
   message: string;
@@ -124,6 +119,7 @@ export interface GhasSyncProgress {
 // ── Sync a single category for a single scope ────────────────────────
 
 async function syncCategory(
+  enterpriseSlug: string,
   scope: "enterprise" | "org",
   scopeId: string,
   category: "code_scanning" | "dependabot" | "secret_scanning",
@@ -138,7 +134,7 @@ async function syncCategory(
   }
 
   // Determine cutoff from previous sync state
-  const syncState = getGhasSyncState(scope, scopeId, category);
+  const syncState = getGhasSyncState(scope, scopeId, category, [enterpriseSlug]);
   let cutoffDate = syncState?.last_alert_updated_at || null;
   const isIncremental = !!cutoffDate;
 
@@ -160,6 +156,7 @@ async function syncCategory(
   onProgress?.({
     phase: "ghas-sync",
     category,
+    enterpriseSlug,
     current: 0,
     total: 1,
     message: `${isIncremental ? "Incremental" : "Full"} sync: ${category} for ${scope}/${scopeId}`,
@@ -167,7 +164,7 @@ async function syncCategory(
 
   // Mark syncing
   updateGhasSyncState(
-    scope, scopeId, category,
+    enterpriseSlug, scope, scopeId, category,
     new Date().toISOString(), cutoffDate,
     syncState?.total_alerts || 0, "syncing"
   );
@@ -177,30 +174,30 @@ async function syncCategory(
 
     if (category === "code_scanning") {
       alerts = scope === "enterprise"
-        ? await codeScanningClient.getEnterpriseAlerts(scopeId, cutoffDate)
-        : await codeScanningClient.getOrgAlerts(scopeId, cutoffDate);
-      upsertCodeScanningAlerts(scope, scopeId, alerts);
+        ? await codeScanningClient.getEnterpriseAlerts(scopeId, cutoffDate, enterpriseSlug)
+        : await codeScanningClient.getOrgAlerts(scopeId, cutoffDate, enterpriseSlug);
+      upsertCodeScanningAlerts(enterpriseSlug, scope, scopeId, alerts);
 
       // Enrich with autofix status if enabled (optional, per-alert API calls)
       if (isCodeScanningAutofixEnabled()) {
-        await enrichAutofixStatuses(scope, scopeId, onProgress);
+        await enrichAutofixStatuses(enterpriseSlug, scope, scopeId, onProgress);
         // Promote fixed alerts that had autofix available → committed
-        promoteAutofixCommitted(scope, scopeId);
+        promoteAutofixCommitted(enterpriseSlug, scope, scopeId);
       }
 
-      recomputeCodeScanningDaily(scope, scopeId);
+      recomputeCodeScanningDaily(enterpriseSlug, scope, scopeId);
     } else if (category === "dependabot") {
       alerts = scope === "enterprise"
-        ? await dependabotClient.getEnterpriseAlerts(scopeId, cutoffDate)
-        : await dependabotClient.getOrgAlerts(scopeId, cutoffDate);
-      upsertDependabotAlerts(scope, scopeId, alerts);
-      recomputeDependabotDaily(scope, scopeId);
+        ? await dependabotClient.getEnterpriseAlerts(scopeId, cutoffDate, enterpriseSlug)
+        : await dependabotClient.getOrgAlerts(scopeId, cutoffDate, enterpriseSlug);
+      upsertDependabotAlerts(enterpriseSlug, scope, scopeId, alerts);
+      recomputeDependabotDaily(enterpriseSlug, scope, scopeId);
     } else {
       alerts = scope === "enterprise"
-        ? await secretScanningClient.getEnterpriseAlerts(scopeId, cutoffDate)
-        : await secretScanningClient.getOrgAlerts(scopeId, cutoffDate);
-      upsertSecretScanningAlerts(scope, scopeId, alerts);
-      recomputeSecretScanningDaily(scope, scopeId);
+        ? await secretScanningClient.getEnterpriseAlerts(scopeId, cutoffDate, enterpriseSlug)
+        : await secretScanningClient.getOrgAlerts(scopeId, cutoffDate, enterpriseSlug);
+      upsertSecretScanningAlerts(enterpriseSlug, scope, scopeId, alerts);
+      recomputeSecretScanningDaily(enterpriseSlug, scope, scopeId);
     }
 
     // Find latest updated_at from fetched alerts
@@ -216,7 +213,7 @@ async function syncCategory(
     const totalAlerts = (db.prepare(`SELECT COUNT(*) as cnt FROM ${table} WHERE scope = ? AND scope_id = ?`).get(scope, scopeId) as { cnt: number }).cnt;
 
     updateGhasSyncState(
-      scope, scopeId, category,
+      enterpriseSlug, scope, scopeId, category,
       new Date().toISOString(), latestUpdatedAt,
       totalAlerts,
       "ok"
@@ -225,6 +222,7 @@ async function syncCategory(
     onProgress?.({
       phase: "ghas-sync",
       category,
+      enterpriseSlug,
       current: 1,
       total: 1,
       message: `Synced ${alerts.length} ${category} alerts for ${scope}/${scopeId}`,
@@ -235,7 +233,7 @@ async function syncCategory(
     const msg = err instanceof Error ? err.message : String(err);
     console.error(`[GHAS Sync] Failed ${category} for ${scope}/${scopeId}:`, msg);
     updateGhasSyncState(
-      scope, scopeId, category,
+      enterpriseSlug, scope, scopeId, category,
       new Date().toISOString(), cutoffDate,
       syncState?.total_alerts || 0, "error", msg
     );
@@ -245,27 +243,27 @@ async function syncCategory(
 
 // ── Full GHAS sync (all categories, all scopes) ──────────────────────
 
-export async function fullGhasSync(
-  onProgress?: (p: GhasSyncProgress) => void
+async function syncGhasForEnterprise(
+  enterpriseSlug: string,
+  onProgress?: (p: GhasSyncProgress) => void,
 ): Promise<{
-  categories: Record<string, { alertsFetched: number; isIncremental: boolean }>;
+  results: Record<string, { alertsFetched: number; isIncremental: boolean }>;
   errors: number;
 }> {
-  const enterprise = getEnterprise();
-  const orgs = getOrgs();
+  const orgs = getResolvedOrgsForEnterprise(enterpriseSlug);
   const categories = ["code_scanning", "dependabot", "secret_scanning"] as const;
   const results: Record<string, { alertsFetched: number; isIncremental: boolean }> = {};
   let errors = 0;
 
   // Sync enterprise-level (only when enterprise mode is on)
-  if (enterprise) {
+  if (isEnterpriseEnabled()) {
     for (const category of categories) {
       try {
-        const key = `enterprise:${enterprise}:${category}`;
-        results[key] = await syncCategory("enterprise", enterprise, category, onProgress);
+        const key = `enterprise:${enterpriseSlug}:${category}`;
+        results[key] = await syncCategory(enterpriseSlug, "enterprise", enterpriseSlug, category, onProgress);
       } catch (err) {
         errors++;
-        console.error(`[GHAS Sync] Enterprise ${category} failed:`, err);
+        console.error(`[GHAS Sync] Enterprise ${enterpriseSlug} ${category} failed:`, err);
       }
       await new Promise((r) => setTimeout(r, 2000));
     }
@@ -276,7 +274,7 @@ export async function fullGhasSync(
     for (const category of categories) {
       try {
         const key = `org:${org}:${category}`;
-        results[key] = await syncCategory("org", org, category, onProgress);
+        results[key] = await syncCategory(enterpriseSlug, "org", org, category, onProgress);
       } catch (err) {
         errors++;
         console.error(`[GHAS Sync] Org ${org} ${category} failed:`, err);
@@ -285,7 +283,30 @@ export async function fullGhasSync(
     }
   }
 
-  return { categories: results, errors };
+  return { results, errors };
+}
+
+export async function fullGhasSync(
+  onProgress?: (p: GhasSyncProgress) => void,
+  enterpriseSlug?: string,
+): Promise<{
+  categories: Record<string, { alertsFetched: number; isIncremental: boolean }>;
+  errors: number;
+}> {
+  const allResults: Record<string, { alertsFetched: number; isIncremental: boolean }> = {};
+  let totalErrors = 0;
+
+  const slugs = enterpriseSlug
+    ? [enterpriseSlug]
+    : getConfiguredEnterprises().map(e => e.slug);
+
+  for (const slug of slugs) {
+    const { results, errors } = await syncGhasForEnterprise(slug, onProgress);
+    Object.assign(allResults, results);
+    totalErrors += errors;
+  }
+
+  return { categories: allResults, errors: totalErrors };
 }
 
 // ── Incremental GHAS sync ─────────────────────────────────────────────
@@ -293,10 +314,11 @@ export async function fullGhasSync(
 // prior sync state exists, so this delegates to fullGhasSync.
 
 export async function incrementalGhasSync(
-  onProgress?: (p: GhasSyncProgress) => void
+  onProgress?: (p: GhasSyncProgress) => void,
+  enterpriseSlug?: string,
 ): Promise<{
   categories: Record<string, { alertsFetched: number; isIncremental: boolean }>;
   errors: number;
 }> {
-  return fullGhasSync(onProgress);
+  return fullGhasSync(onProgress, enterpriseSlug);
 }

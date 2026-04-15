@@ -1,5 +1,6 @@
 import fs from "fs";
 import path from "path";
+import type { EnterpriseConfig } from "./enterprise-config";
 
 // --- Types ---
 
@@ -53,6 +54,8 @@ export interface OrganizationsConfig {
 }
 
 export interface DashboardConfig {
+  /** Multi-enterprise configuration. When present, overrides legacy GITHUB_ENTERPRISE env var. */
+  enterprises?: EnterpriseConfig[];
   metrics: {
     copilot: CopilotMetricConfig;
     codeScanning: CodeScanningMetricConfig;

@@ -3,36 +3,52 @@ import { getDb } from "@/lib/db/database";
 import { withCache } from "@/lib/cache/with-cache";
 import { withTimeout } from "@/lib/api/timeout";
 import { CACHE_TTL } from "@/lib/cache/memory-cache";
+import { getClientEnterpriseList } from "@/lib/config/enterprise-config";
 
-async function handler(_request: NextRequest) {
+async function handler(request: NextRequest) {
   try {
     const db = getDb();
+    const params = request.nextUrl.searchParams;
+    const enterprisesParam = params.get("enterprises");
+    const selectedEnterprises = enterprisesParam ? enterprisesParam.split(",").filter(Boolean) : [];
+
+    // Build enterprise filter clause for SQL queries
+    let entFilter = "";
+    const entParams: string[] = [];
+    if (selectedEnterprises.length > 0) {
+      entFilter = ` AND enterprise_slug IN (${selectedEnterprises.map(() => "?").join(",")})`;
+      entParams.push(...selectedEnterprises);
+    }
 
     // Enterprise teams (source = 'enterprise')
     const entTeams = db.prepare(`
-      SELECT team_slug as slug, team_name as name, COUNT(DISTINCT user_login) as memberCount
-      FROM team_memberships WHERE source = 'enterprise'
-      GROUP BY team_slug ORDER BY team_name ASC
-    `).all() as { slug: string; name: string; memberCount: number }[];
+      SELECT team_slug as slug, team_name as name, enterprise_slug as enterpriseSlug, COUNT(DISTINCT user_login) as memberCount
+      FROM team_memberships WHERE source = 'enterprise'${entFilter}
+      GROUP BY team_slug, enterprise_slug ORDER BY team_name ASC
+    `).all(...entParams) as { slug: string; name: string; enterpriseSlug: string; memberCount: number }[];
 
     // Org teams (source = 'org'), grouped by org
     const orgTeams = db.prepare(`
-      SELECT team_slug as slug, team_name as name, org_slug as orgSlug, COUNT(DISTINCT user_login) as memberCount
-      FROM team_memberships WHERE source = 'org'
-      GROUP BY team_slug ORDER BY team_name ASC
-    `).all() as { slug: string; name: string; orgSlug: string; memberCount: number }[];
+      SELECT team_slug as slug, team_name as name, org_slug as orgSlug, enterprise_slug as enterpriseSlug, COUNT(DISTINCT user_login) as memberCount
+      FROM team_memberships WHERE source = 'org'${entFilter}
+      GROUP BY team_slug, enterprise_slug ORDER BY team_name ASC
+    `).all(...entParams) as { slug: string; name: string; orgSlug: string; enterpriseSlug: string; memberCount: number }[];
 
     // Distinct orgs
     const orgs = db.prepare(`
-      SELECT DISTINCT org_slug as slug FROM team_memberships WHERE source = 'org' AND org_slug IS NOT NULL
+      SELECT DISTINCT org_slug as slug, enterprise_slug as enterpriseSlug FROM team_memberships WHERE source = 'org' AND org_slug IS NOT NULL${entFilter}
       UNION
-      SELECT DISTINCT org_slug as slug FROM copilot_seats WHERE org_slug IS NOT NULL
-    `).all() as { slug: string }[];
+      SELECT DISTINCT org_slug as slug, enterprise_slug as enterpriseSlug FROM copilot_seats WHERE org_slug IS NOT NULL${entFilter}
+    `).all(...entParams, ...entParams) as { slug: string; enterpriseSlug: string }[];
+
+    // Client-safe enterprise list
+    const enterprises = getClientEnterpriseList();
 
     return NextResponse.json({
+      enterprises,
       enterpriseTeams: entTeams,
       orgTeams,
-      orgs: orgs.map((o) => ({ slug: o.slug, name: o.slug })),
+      orgs: orgs.map((o) => ({ slug: o.slug, name: o.slug, enterpriseSlug: o.enterpriseSlug })),
     }, {
       headers: { "Cache-Control": "private, max-age=600, stale-while-revalidate=120" },
     });

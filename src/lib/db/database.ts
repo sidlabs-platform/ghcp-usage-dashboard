@@ -46,6 +46,30 @@ export function getDb(): Database.Database {
   // Add columns introduced after initial schema (safe if already present)
   const migrations = [
     "ALTER TABLE user_daily_metrics ADD COLUMN used_copilot_coding_agent INTEGER DEFAULT 0",
+    // Multi-enterprise support: add enterprise_slug to all tables
+    "ALTER TABLE enterprise_daily_metrics ADD COLUMN enterprise_slug TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE org_daily_metrics ADD COLUMN enterprise_slug TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE user_daily_metrics ADD COLUMN enterprise_slug TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE copilot_seats ADD COLUMN enterprise_slug TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE team_memberships ADD COLUMN enterprise_slug TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE sync_log ADD COLUMN enterprise_slug TEXT NOT NULL DEFAULT ''",
+    // GHAS tables
+    "ALTER TABLE ghas_code_scanning_alerts ADD COLUMN enterprise_slug TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE ghas_dependabot_alerts ADD COLUMN enterprise_slug TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE ghas_secret_scanning_alerts ADD COLUMN enterprise_slug TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE ghas_code_scanning_daily ADD COLUMN enterprise_slug TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE ghas_dependabot_daily ADD COLUMN enterprise_slug TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE ghas_secret_scanning_daily ADD COLUMN enterprise_slug TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE ghas_sync_state ADD COLUMN enterprise_slug TEXT NOT NULL DEFAULT ''",
+    // Billing tables
+    "ALTER TABLE billing_usage_records ADD COLUMN enterprise_slug TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE billing_premium_requests ADD COLUMN enterprise_slug TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE billing_daily_aggregate ADD COLUMN enterprise_slug TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE billing_sync_state ADD COLUMN enterprise_slug TEXT NOT NULL DEFAULT ''",
+    // Summary tables
+    "ALTER TABLE user_period_summary ADD COLUMN enterprise_slug TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE daily_aggregate_cache ADD COLUMN enterprise_slug TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE team_summary_cache ADD COLUMN enterprise_slug TEXT NOT NULL DEFAULT ''",
   ];
   for (const sql of migrations) {
     try { _db.exec(sql); } catch { /* column already exists */ }

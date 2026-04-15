@@ -10,7 +10,7 @@ export async function GET(request: Request) {
     const { start, end } = getDateRange(days);
 
     const scopeFilter = parseScopeFilter(searchParams);
-    const userRecords = filterByScope(getAllUserMetrics(start, end), scopeFilter);
+    const userRecords = filterByScope(getAllUserMetrics(start, end, scopeFilter.enterpriseSlugs), scopeFilter);
 
     // ── Feature breakdown from totals_by_feature ──────────────────────
     // dailyTrend: { day, [feature]: interaction_count }

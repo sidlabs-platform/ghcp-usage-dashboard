@@ -123,7 +123,14 @@ GITHUB_TOKEN=ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 GITHUB_ENTERPRISE=my-company
 GITHUB_ORGS=frontend-team,backend-team,platform
 BACKFILL_DAYS=90
+
+# Optional: GitHub App auth (see "GitHub App Authentication" below)
+# GITHUB_APP_ID=123456
+# GITHUB_APP_PRIVATE_KEY="-----BEGIN RSA PRIVATE KEY-----\nMIIE...\n-----END RSA PRIVATE KEY-----"
+# GITHUB_APP_INSTALLATION_ID=78901234
 ```
+
+> See `.env.local.example` for the full annotated template with all available variables.
 
 ### GitHub App Authentication
 

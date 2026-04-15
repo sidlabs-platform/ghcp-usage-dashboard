@@ -13,6 +13,7 @@ import type {
   PremiumRequestCSVRow,
 } from "@/lib/types/billing";
 import { deriveChargeScope } from "@/lib/types/billing";
+import { getEnterpriseAuth } from "@/lib/config/enterprise-config";
 
 // ── API Calls ─────────────────────────────────────────────────────────
 
@@ -30,11 +31,18 @@ async function createReport(
   reportType: BillingReportType,
   startDate: string,
   endDate: string,
+  enterpriseSlug?: string,
 ): Promise<BillingReportExport> {
   const url = `${GITHUB_API_BASE}${billingPath(enterprise)}`;
-  // Enterprise billing → always PAT
-  const token = process.env.GITHUB_TOKEN;
-  if (!token) throw new Error("GITHUB_TOKEN is required for billing reports (enterprise endpoint)");
+  // Enterprise billing → always PAT. Resolve per-enterprise token if slug provided.
+  let token: string | undefined;
+  if (enterpriseSlug) {
+    const auth = getEnterpriseAuth(enterpriseSlug);
+    token = auth.token;
+  } else {
+    token = process.env.GITHUB_TOKEN;
+  }
+  if (!token) throw new Error("GitHub token is required for billing reports (enterprise endpoint)");
 
   const resp = await fetch(url, {
     method: "POST",
@@ -69,9 +77,11 @@ async function createReport(
 async function getReport(
   enterprise: string,
   reportId: string,
+  enterpriseSlug?: string,
 ): Promise<BillingReportExport> {
   return githubFetch<BillingReportExport>(
     billingPath(enterprise, `/${reportId}`),
+    3, undefined, enterpriseSlug
   );
 }
 
@@ -80,9 +90,11 @@ async function getReport(
  */
 async function listReports(
   enterprise: string,
+  enterpriseSlug?: string,
 ): Promise<BillingReportExport[]> {
   const resp = await githubFetch<BillingReportListResponse>(
     billingPath(enterprise),
+    3, undefined, enterpriseSlug
   );
   return resp.usage_report_exports;
 }
@@ -97,12 +109,13 @@ async function waitForReport(
   reportId: string,
   timeoutMs = 5 * 60 * 1000,
   onProgress?: (msg: string) => void,
+  enterpriseSlug?: string,
 ): Promise<BillingReportExport> {
   const start = Date.now();
   let delayMs = 2000;
 
   while (Date.now() - start < timeoutMs) {
-    const report = await getReport(enterprise, reportId);
+    const report = await getReport(enterprise, reportId, enterpriseSlug);
 
     if (report.status === "completed") return report;
     if (report.status === "failed") {
@@ -273,9 +286,10 @@ async function fetchAndParseReport<T>(
   endDate: string,
   parser: (csv: string) => T[],
   onProgress?: (msg: string) => void,
+  enterpriseSlug?: string,
 ): Promise<T[]> {
   onProgress?.(`Creating ${reportType} report for ${startDate} to ${endDate}...`);
-  const report = await createReport(enterprise, reportType, startDate, endDate);
+  const report = await createReport(enterprise, reportType, startDate, endDate, enterpriseSlug);
 
   onProgress?.(`Report ${report.id} created, waiting for completion...`);
   const completed = await waitForReport(
@@ -283,6 +297,7 @@ async function fetchAndParseReport<T>(
     report.id,
     undefined,
     onProgress,
+    enterpriseSlug,
   );
 
   if (!completed.download_urls || completed.download_urls.length === 0) {
@@ -311,6 +326,7 @@ async function fetchUsageReport(
   startDate: string,
   endDate: string,
   onProgress?: (msg: string) => void,
+  enterpriseSlug?: string,
 ): Promise<BillingUsageRecord[]> {
   return fetchAndParseReport(
     enterprise,
@@ -319,6 +335,7 @@ async function fetchUsageReport(
     endDate,
     parseUsageCSV,
     onProgress,
+    enterpriseSlug,
   );
 }
 
@@ -327,6 +344,7 @@ async function fetchPremiumRequestReport(
   startDate: string,
   endDate: string,
   onProgress?: (msg: string) => void,
+  enterpriseSlug?: string,
 ): Promise<BillingPremiumRequestRecord[]> {
   return fetchAndParseReport(
     enterprise,
@@ -335,6 +353,7 @@ async function fetchPremiumRequestReport(
     endDate,
     parsePremiumRequestCSV,
     onProgress,
+    enterpriseSlug,
   );
 }
 

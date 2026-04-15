@@ -37,7 +37,7 @@ export async function GET(request: NextRequest) {
     const scopeFilter = parseScopeFilter(params);
 
     // Use user-level data — it always has totals_by_feature
-    const userRecords = filterByScope(getAllUserMetrics(startDay, endDay), scopeFilter);
+    const userRecords = filterByScope(getAllUserMetrics(startDay, endDay, scopeFilter.enterpriseSlugs), scopeFilter);
 
     // Group by day
     const byDay = new Map<string, typeof userRecords>();

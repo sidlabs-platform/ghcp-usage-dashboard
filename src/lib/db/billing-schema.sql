@@ -8,6 +8,7 @@
 
 CREATE TABLE IF NOT EXISTS billing_usage_records (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
+  enterprise_slug TEXT NOT NULL DEFAULT '',
   date TEXT NOT NULL,
   product TEXT NOT NULL,
   sku TEXT NOT NULL,
@@ -44,6 +45,7 @@ CREATE INDEX IF NOT EXISTS idx_billing_usage_date_product ON billing_usage_recor
 
 CREATE TABLE IF NOT EXISTS billing_premium_requests (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
+  enterprise_slug TEXT NOT NULL DEFAULT '',
   date TEXT NOT NULL,
   product TEXT NOT NULL,
   sku TEXT NOT NULL,
@@ -78,6 +80,7 @@ CREATE INDEX IF NOT EXISTS idx_billing_premium_org ON billing_premium_requests(o
 -- ============================================================================
 
 CREATE TABLE IF NOT EXISTS billing_daily_aggregate (
+  enterprise_slug TEXT NOT NULL DEFAULT '',
   day TEXT NOT NULL,
   product TEXT NOT NULL,
   charge_scope TEXT NOT NULL DEFAULT 'org',
@@ -96,6 +99,7 @@ CREATE INDEX IF NOT EXISTS idx_billing_daily_agg_day ON billing_daily_aggregate(
 -- ============================================================================
 
 CREATE TABLE IF NOT EXISTS billing_sync_state (
+  enterprise_slug TEXT NOT NULL DEFAULT '',
   report_type TEXT PRIMARY KEY,    -- 'detailed', 'summarized', 'premium_request'
   last_synced_at TEXT,
   last_report_start TEXT,
@@ -103,3 +107,9 @@ CREATE TABLE IF NOT EXISTS billing_sync_state (
   status TEXT DEFAULT 'pending',   -- 'pending', 'syncing', 'ok', 'error'
   error_message TEXT
 );
+
+-- Indexes for enterprise_slug filtering
+CREATE INDEX IF NOT EXISTS idx_billing_usage_slug ON billing_usage_records(enterprise_slug, date);
+CREATE INDEX IF NOT EXISTS idx_billing_premium_slug ON billing_premium_requests(enterprise_slug, date);
+CREATE INDEX IF NOT EXISTS idx_billing_daily_agg_slug ON billing_daily_aggregate(enterprise_slug, day);
+CREATE INDEX IF NOT EXISTS idx_billing_sync_state_slug ON billing_sync_state(enterprise_slug);

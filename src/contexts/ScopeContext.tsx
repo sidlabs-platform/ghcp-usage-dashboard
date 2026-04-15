@@ -3,45 +3,59 @@
 import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 
+export interface EnterpriseInfo {
+  slug: string;
+  displayName: string;
+}
+
 export interface ScopeFilterOptions {
-  enterpriseTeams: { slug: string; name: string; memberCount: number }[];
-  orgTeams: { slug: string; name: string; orgSlug: string; memberCount: number }[];
-  orgs: { slug: string; name: string }[];
+  enterprises: EnterpriseInfo[];
+  enterpriseTeams: { slug: string; name: string; enterpriseSlug?: string; memberCount: number }[];
+  orgTeams: { slug: string; name: string; orgSlug: string; enterpriseSlug?: string; memberCount: number }[];
+  orgs: { slug: string; name: string; enterpriseSlug?: string }[];
 }
 
 interface ScopeContextType {
   filterOptions: ScopeFilterOptions;
+  selectedEnterprises: string[];
   selectedEntTeams: string[];
   selectedOrgTeams: string[];
   selectedOrgs: string[];
+  setSelectedEnterprises: (slugs: string[]) => void;
   setSelectedEntTeams: (slugs: string[]) => void;
   setSelectedOrgTeams: (slugs: string[]) => void;
   setSelectedOrgs: (slugs: string[]) => void;
   clearAll: () => void;
   hasFilter: boolean;
-  /** Build URLSearchParams with teams= and orgs= for API calls */
+  isMultiEnterprise: boolean;
+  /** Build URLSearchParams with enterprises=, teams=, and orgs= for API calls */
   buildScopeParams: () => URLSearchParams;
 }
 
 const ScopeContext = createContext<ScopeContextType>({
-  filterOptions: { enterpriseTeams: [], orgTeams: [], orgs: [] },
+  filterOptions: { enterprises: [], enterpriseTeams: [], orgTeams: [], orgs: [] },
+  selectedEnterprises: [],
   selectedEntTeams: [],
   selectedOrgTeams: [],
   selectedOrgs: [],
+  setSelectedEnterprises: () => {},
   setSelectedEntTeams: () => {},
   setSelectedOrgTeams: () => {},
   setSelectedOrgs: () => {},
   clearAll: () => {},
   hasFilter: false,
+  isMultiEnterprise: false,
   buildScopeParams: () => new URLSearchParams(),
 });
 
 export function ScopeProvider({ children }: { children: ReactNode }) {
   const [filterOptions, setFilterOptions] = useState<ScopeFilterOptions>({
+    enterprises: [],
     enterpriseTeams: [],
     orgTeams: [],
     orgs: [],
   });
+  const [selectedEnterprises, setSelectedEnterprises] = useState<string[]>([]);
   const [selectedEntTeams, setSelectedEntTeams] = useState<string[]>([]);
   const [selectedOrgTeams, setSelectedOrgTeams] = useState<string[]>([]);
   const [selectedOrgs, setSelectedOrgs] = useState<string[]>([]);
@@ -58,38 +72,54 @@ export function ScopeProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (filterData && !filterData.error) {
-      setFilterOptions(filterData);
+      setFilterOptions({
+        enterprises: filterData.enterprises || [],
+        enterpriseTeams: filterData.enterpriseTeams || [],
+        orgTeams: filterData.orgTeams || [],
+        orgs: filterData.orgs || [],
+      });
     }
   }, [filterData]);
 
   const clearAll = useCallback(() => {
+    setSelectedEnterprises([]);
     setSelectedEntTeams([]);
     setSelectedOrgTeams([]);
     setSelectedOrgs([]);
   }, []);
 
-  const hasFilter = selectedEntTeams.length > 0 || selectedOrgTeams.length > 0 || selectedOrgs.length > 0;
+  const isMultiEnterprise = filterOptions.enterprises.length > 1;
+
+  const hasFilter =
+    selectedEnterprises.length > 0 ||
+    selectedEntTeams.length > 0 ||
+    selectedOrgTeams.length > 0 ||
+    selectedOrgs.length > 0;
 
   const buildScopeParams = useCallback(() => {
     const params = new URLSearchParams();
+    if (selectedEnterprises.length > 0) params.set("enterprises", selectedEnterprises.join(","));
     const allTeams = [...selectedEntTeams, ...selectedOrgTeams];
     if (allTeams.length > 0) params.set("teams", allTeams.join(","));
     if (selectedOrgs.length > 0) params.set("orgs", selectedOrgs.join(","));
     return params;
-  }, [selectedEntTeams, selectedOrgTeams, selectedOrgs]);
+  }, [selectedEnterprises, selectedEntTeams, selectedOrgTeams, selectedOrgs]);
 
   return (
     <ScopeContext.Provider
       value={{
         filterOptions,
+        selectedEnterprises,
         selectedEntTeams,
         selectedOrgTeams,
         selectedOrgs,
+        setSelectedEnterprises,
         setSelectedEntTeams,
         setSelectedOrgTeams,
         setSelectedOrgs,
         clearAll,
         hasFilter,
+        isMultiEnterprise,
         buildScopeParams,
       }}
     >

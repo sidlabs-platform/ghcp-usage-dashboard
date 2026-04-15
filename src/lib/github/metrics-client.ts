@@ -33,9 +33,10 @@ export class MetricsClient {
 
   // ── Enterprise aggregate (1-day) ───────────────────────────────────
 
-  async getEnterpriseDailyReport(enterprise: string, day: string): Promise<DayTotal[]> {
+  async getEnterpriseDailyReport(enterprise: string, day: string, enterpriseSlug?: string): Promise<DayTotal[]> {
     const report = await githubFetch<ReportResponse>(
-      `/enterprises/${enterprise}/copilot/metrics/reports/enterprise-1-day?day=${day}`
+      `/enterprises/${enterprise}/copilot/metrics/reports/enterprise-1-day?day=${day}`,
+      3, undefined, enterpriseSlug
     );
     if (!report?.download_links?.length) {
       console.warn(`[MetricsClient] enterprise-1-day ${day}: no download_links (report keys: ${report ? Object.keys(report).join(", ") : "null"})`);
@@ -57,9 +58,10 @@ export class MetricsClient {
 
   // ── Enterprise aggregate (28-day latest) ───────────────────────────
 
-  async getEnterprise28DayReport(enterprise: string): Promise<DayTotal[]> {
+  async getEnterprise28DayReport(enterprise: string, enterpriseSlug?: string): Promise<DayTotal[]> {
     const report = await githubFetch<ReportResponse>(
-      `/enterprises/${enterprise}/copilot/metrics/reports/enterprise-28-day/latest`
+      `/enterprises/${enterprise}/copilot/metrics/reports/enterprise-28-day/latest`,
+      3, undefined, enterpriseSlug
     );
     if (!report?.download_links?.length) {
       console.warn(`[MetricsClient] enterprise-28-day: no download_links (report keys: ${report ? Object.keys(report).join(", ") : "null"})`);
@@ -79,9 +81,10 @@ export class MetricsClient {
 
   // ── Enterprise user-level (1-day) ──────────────────────────────────
 
-  async getEnterpriseUserDailyReport(enterprise: string, day: string): Promise<UserDayRecord[]> {
+  async getEnterpriseUserDailyReport(enterprise: string, day: string, enterpriseSlug?: string): Promise<UserDayRecord[]> {
     const report = await githubFetch<ReportResponse>(
-      `/enterprises/${enterprise}/copilot/metrics/reports/users-1-day?day=${day}`
+      `/enterprises/${enterprise}/copilot/metrics/reports/users-1-day?day=${day}`,
+      3, undefined, enterpriseSlug
     );
     if (!report?.download_links?.length) return [];
 
@@ -95,9 +98,10 @@ export class MetricsClient {
 
   // ── Enterprise user-level (28-day latest) ──────────────────────────
 
-  async getEnterpriseUser28DayReport(enterprise: string): Promise<UserDayRecord[]> {
+  async getEnterpriseUser28DayReport(enterprise: string, enterpriseSlug?: string): Promise<UserDayRecord[]> {
     const report = await githubFetch<ReportResponse>(
-      `/enterprises/${enterprise}/copilot/metrics/reports/users-28-day/latest`
+      `/enterprises/${enterprise}/copilot/metrics/reports/users-28-day/latest`,
+      3, undefined, enterpriseSlug
     );
     if (!report?.download_links?.length) return [];
 
@@ -111,9 +115,10 @@ export class MetricsClient {
 
   // ── Organization aggregate (1-day) ─────────────────────────────────
 
-  async getOrgDailyReport(org: string, day: string): Promise<DayTotal[]> {
+  async getOrgDailyReport(org: string, day: string, enterpriseSlug?: string): Promise<DayTotal[]> {
     const report = await githubFetch<ReportResponse>(
-      `/orgs/${org}/copilot/metrics/reports/organization-1-day?day=${day}`
+      `/orgs/${org}/copilot/metrics/reports/organization-1-day?day=${day}`,
+      3, undefined, enterpriseSlug
     );
     if (!report?.download_links?.length) {
       console.warn(`[MetricsClient] org-1-day ${org} ${day}: no download_links`);
@@ -131,9 +136,10 @@ export class MetricsClient {
 
   // ── Organization aggregate (28-day latest) ─────────────────────────
 
-  async getOrg28DayReport(org: string): Promise<DayTotal[]> {
+  async getOrg28DayReport(org: string, enterpriseSlug?: string): Promise<DayTotal[]> {
     const report = await githubFetch<ReportResponse>(
-      `/orgs/${org}/copilot/metrics/reports/organization-28-day/latest`
+      `/orgs/${org}/copilot/metrics/reports/organization-28-day/latest`,
+      3, undefined, enterpriseSlug
     );
     if (!report?.download_links?.length) {
       console.warn(`[MetricsClient] org-28-day ${org}: no download_links`);
@@ -153,9 +159,10 @@ export class MetricsClient {
 
   // ── Organization user-level (1-day) ────────────────────────────────
 
-  async getOrgUserDailyReport(org: string, day: string): Promise<UserDayRecord[]> {
+  async getOrgUserDailyReport(org: string, day: string, enterpriseSlug?: string): Promise<UserDayRecord[]> {
     const report = await githubFetch<ReportResponse>(
-      `/orgs/${org}/copilot/metrics/reports/users-1-day?day=${day}`
+      `/orgs/${org}/copilot/metrics/reports/users-1-day?day=${day}`,
+      3, undefined, enterpriseSlug
     );
     if (!report?.download_links?.length) return [];
 

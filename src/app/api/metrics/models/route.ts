@@ -24,7 +24,7 @@ export async function GET(request: NextRequest) {
     const { start: startDay, end: endDay } = getDateRange(days);
 
     const scopeFilter = parseScopeFilter(params);
-    const userRecords = filterByScope(getAllUserMetrics(startDay, endDay), scopeFilter);
+    const userRecords = filterByScope(getAllUserMetrics(startDay, endDay, scopeFilter.enterpriseSlugs), scopeFilter);
 
     // Model breakdown (total interactions per model)
     const modelMap = new Map<string, number>();

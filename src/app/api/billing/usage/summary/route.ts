@@ -27,11 +27,14 @@ async function handler(request: NextRequest) {
     const { start, end } = getDateRange(days);
     const groupBy = params.get("groupBy") || "product";
 
-    // Parse scope filter (teams/orgs)
+    // Parse scope filter (teams/orgs/enterprises)
     const teamsParam = params.get("teams");
     const orgsParam = params.get("orgs");
+    const enterprisesParam = params.get("enterprises");
     const selectedTeams = teamsParam ? teamsParam.split(",").filter(Boolean) : [];
     const selectedOrgs = orgsParam ? orgsParam.split(",").filter(Boolean) : [];
+    const selectedEnterprises = enterprisesParam ? enterprisesParam.split(",").filter(Boolean) : [];
+    const enterpriseSlugs = selectedEnterprises.length > 0 ? selectedEnterprises : undefined;
     const hasScope = selectedTeams.length > 0 || selectedOrgs.length > 0;
 
     const filters: BillingFilters = {
@@ -44,30 +47,30 @@ async function handler(request: NextRequest) {
     };
 
     if (hasScope) {
-      filters.allowedLogins = resolveFilteredUsers(selectedTeams, selectedOrgs);
+      filters.allowedLogins = resolveFilteredUsers(selectedTeams, selectedOrgs, enterpriseSlugs);
       if (selectedOrgs.length > 0) filters.scopeOrgs = selectedOrgs;
     }
 
     let groupedData;
     switch (groupBy) {
       case "organization":
-        groupedData = getOrgBreakdown(start, end, filters);
+        groupedData = getOrgBreakdown(start, end, filters, enterpriseSlugs);
         break;
       case "user":
-        groupedData = getUserBreakdown(start, end, filters);
+        groupedData = getUserBreakdown(start, end, filters, enterpriseSlugs);
         break;
       case "daily":
-        groupedData = getDailyAggregates(start, end, filters);
+        groupedData = getDailyAggregates(start, end, filters, enterpriseSlugs);
         break;
       case "costCenter":
-        groupedData = getCostCenterBreakdown(start, end, filters);
+        groupedData = getCostCenterBreakdown(start, end, filters, enterpriseSlugs);
         break;
       case "repository":
-        groupedData = getRepositoryBreakdown(start, end, filters);
+        groupedData = getRepositoryBreakdown(start, end, filters, undefined, enterpriseSlugs);
         break;
       case "product":
       default:
-        groupedData = getProductBreakdown(start, end, filters);
+        groupedData = getProductBreakdown(start, end, filters, enterpriseSlugs);
         break;
     }
 

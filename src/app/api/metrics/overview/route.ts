@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getEnterpriseMetrics, getAllUserMetrics, getAggregatedDailySummary, resolveEnterpriseId } from "@/lib/db/metrics-repo";
 import { getSeatStats } from "@/lib/db/seats-repo";
-import { resolveFilteredUsers } from "@/lib/db/teams-repo";
+import { parseScopeFilter } from "@/lib/api/scope-filter";
 import { getChatModeSums, getAdoptionStats } from "@/lib/db/aggregation-queries";
 import { getDateRange } from "@/lib/utils";
 import { extractCompletionMetrics, extractAgentMetrics } from "@/lib/aggregation/separate-metrics";
@@ -15,29 +15,25 @@ async function handler(request: NextRequest) {
     const days = parseInt(params.get("days") || "7", 10);
     const { start, end } = getDateRange(days);
 
-    const teamsParam = params.get("teams");
-    const orgsParam = params.get("orgs");
-    const selectedTeams = teamsParam ? teamsParam.split(",").filter(Boolean) : [];
-    const selectedOrgs = orgsParam ? orgsParam.split(",").filter(Boolean) : [];
-    const hasFilter = selectedTeams.length > 0 || selectedOrgs.length > 0;
+    const filter = parseScopeFilter(params);
+    const { enterpriseSlugs } = filter;
+    const hasFilter = filter.selectedTeams.length > 0 || filter.selectedOrgs.length > 0;
 
     // When filters are active, always use user-level aggregation
-    const resolvedId = hasFilter ? null : resolveEnterpriseId();
-    let metrics = resolvedId ? getEnterpriseMetrics(resolvedId, start, end) : [];
+    const resolvedId = hasFilter ? null : resolveEnterpriseId(enterpriseSlugs);
+    let metrics = resolvedId ? getEnterpriseMetrics(start, end, enterpriseSlugs) : [];
 
     const useAggregated = metrics.length === 0;
-    const aggregated = useAggregated && !hasFilter ? getAggregatedDailySummary(start, end) : [];
+    const aggregated = useAggregated && !hasFilter ? getAggregatedDailySummary(start, end, enterpriseSlugs) : [];
 
-    const seatStats = getSeatStats();
-    let userRecords = getAllUserMetrics(start, end);
+    const seatStats = getSeatStats(enterpriseSlugs);
+    let userRecords = getAllUserMetrics(start, end, enterpriseSlugs);
 
     // Apply team/org filter to user records
-    let allowedLogins: Set<string> | null = null;
-    let allowedLoginsArray: string[] | undefined;
-    if (hasFilter) {
-      allowedLoginsArray = resolveFilteredUsers(selectedTeams, selectedOrgs);
-      allowedLogins = new Set(allowedLoginsArray);
-      userRecords = userRecords.filter((r) => allowedLogins!.has(r.user_login));
+    const allowedLoginsSet = filter.allowedLogins;
+    const allowedLoginsArray = allowedLoginsSet ? Array.from(allowedLoginsSet) : undefined;
+    if (allowedLoginsSet) {
+      userRecords = userRecords.filter((r) => allowedLoginsSet.has(r.user_login));
     }
 
     let activeUsersTrend;
@@ -199,10 +195,10 @@ async function handler(request: NextRequest) {
     }
 
     // Chat mode distribution via SQL aggregation
-    const chatModes = getChatModeSums(start, end, allowedLoginsArray);
+    const chatModes = getChatModeSums(start, end, allowedLoginsArray, enterpriseSlugs);
 
     // Adoption stats via SQL aggregation
-    const adoption = getAdoptionStats(start, end, allowedLoginsArray);
+    const adoption = getAdoptionStats(start, end, allowedLoginsArray, enterpriseSlugs);
 
     // KPIs
     const latestTrend = activeUsersTrend[activeUsersTrend.length - 1];
@@ -242,7 +238,7 @@ async function handler(request: NextRequest) {
       dataAsOf: end,
       daysLoaded: totalDays,
       dataSource: hasFilter ? "filtered-users" : (useAggregated ? "user-aggregated" : "enterprise"),
-      filtered: hasFilter,
+      filtered: hasFilter || !!enterpriseSlugs,
     }, {
       headers: { "Cache-Control": "private, max-age=300, stale-while-revalidate=60" },
     });

@@ -8,22 +8,26 @@ class SecretScanningClient {
   async getOrgAlerts(
     org: string,
     cutoffDate?: string | null,
+    enterpriseSlug?: string,
   ): Promise<SecretScanningAlert[]> {
     const path = `/orgs/${org}/secret-scanning/alerts?sort=updated&direction=desc`;
     return githubFetchPaginatedWithCutoff<SecretScanningAlert>(
       path,
       cutoffDate ?? null,
+      100, undefined, enterpriseSlug,
     );
   }
 
   async getEnterpriseAlerts(
     enterprise: string,
     cutoffDate?: string | null,
+    enterpriseSlug?: string,
   ): Promise<SecretScanningAlert[]> {
     const path = `/enterprises/${enterprise}/secret-scanning/alerts?sort=updated&direction=desc`;
     return githubFetchPaginatedWithCutoff<SecretScanningAlert>(
       path,
       cutoffDate ?? null,
+      100, undefined, enterpriseSlug,
     );
   }
 }

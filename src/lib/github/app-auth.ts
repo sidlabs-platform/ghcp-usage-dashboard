@@ -42,6 +42,39 @@ export function isAppAuthConfigured(): boolean {
   return getAppConfig() !== null;
 }
 
+/**
+ * Load App config for a specific enterprise.
+ * Returns null if the enterprise has no App auth configured.
+ */
+export function loadAppConfigForEnterprise(
+  enterpriseSlug: string
+): AppConfig | null {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { getEnterpriseAuth } = require("@/lib/config/enterprise-config") as {
+    getEnterpriseAuth: (slug: string) => {
+      appConfig?: { appId: string; privateKey: string; installationId: string };
+    };
+  };
+  try {
+    const auth = getEnterpriseAuth(enterpriseSlug);
+    if (!auth.appConfig) return null;
+    return {
+      appId: auth.appConfig.appId,
+      privateKey: auth.appConfig.privateKey,
+      installationId: auth.appConfig.installationId,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** Returns true when the given enterprise has App auth configured. */
+export function isAppAuthConfiguredForEnterprise(
+  enterpriseSlug: string
+): boolean {
+  return loadAppConfigForEnterprise(enterpriseSlug) !== null;
+}
+
 // ── JWT Generation ────────────────────────────────────────────────────
 
 async function generateJWT(config: AppConfig): Promise<string> {
@@ -68,6 +101,10 @@ const SAFETY_MARGIN_MS = 2 * 60 * 1000; // Refresh 2 min before expiry
 let cachedToken: CachedToken | null = null;
 let refreshPromise: Promise<string> | null = null;
 let validated = false;
+
+// Per-enterprise token caches
+const tokenCache = new Map<string, CachedToken>();
+const refreshPromises = new Map<string, Promise<string>>();
 
 function isTokenValid(): boolean {
   return cachedToken !== null && Date.now() < cachedToken.expiresAt - SAFETY_MARGIN_MS;
@@ -136,7 +173,43 @@ export async function getInstallationToken(): Promise<string> {
   return refreshPromise;
 }
 
-// ── Startup Validation ────────────────────────────────────────────────
+/**
+ * Get installation token for a specific enterprise.
+ * Caches per enterprise slug with mutex to prevent concurrent minting.
+ */
+export async function getInstallationTokenForEnterprise(
+  enterpriseSlug: string
+): Promise<string> {
+  const config = loadAppConfigForEnterprise(enterpriseSlug);
+  if (!config) {
+    throw new Error(
+      `GitHub App auth not configured for enterprise "${enterpriseSlug}".`
+    );
+  }
+
+  const cached = tokenCache.get(enterpriseSlug);
+  if (cached && Date.now() < cached.expiresAt - SAFETY_MARGIN_MS) {
+    return cached.token;
+  }
+
+  const existing = refreshPromises.get(enterpriseSlug);
+  if (existing) return existing;
+
+  const promise = (async () => {
+    try {
+      const result = await mintInstallationToken(config);
+      tokenCache.set(enterpriseSlug, result);
+      return result.token;
+    } finally {
+      refreshPromises.delete(enterpriseSlug);
+    }
+  })();
+
+  refreshPromises.set(enterpriseSlug, promise);
+  return promise;
+}
+
+// ── Startup Validation────────────────────────────────────────────────
 
 /**
  * Eagerly validate App auth on first use. Attempts to mint a token and throws
