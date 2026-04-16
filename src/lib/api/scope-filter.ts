@@ -21,16 +21,62 @@ export function parseScopeFilter(searchParams: URLSearchParams): ParsedScopeFilt
   const teamsParam = searchParams.get("teams");
   const orgsParam = searchParams.get("orgs");
   const enterprisesParam = searchParams.get("enterprises");
-  const selectedTeams = teamsParam ? teamsParam.split(",").filter(Boolean) : [];
+  const rawTeams = teamsParam ? teamsParam.split(",").filter(Boolean) : [];
   const selectedOrgs = orgsParam ? orgsParam.split(",").filter(Boolean) : [];
   const selectedEnterprises = enterprisesParam ? enterprisesParam.split(",").filter(Boolean) : [];
+
+  // Parse composite team identifiers (enterpriseSlug:teamSlug) for multi-enterprise disambiguation
+  const plainTeams: string[] = [];
+  const compositeTeams: { enterprise: string; team: string }[] = [];
+  for (const t of rawTeams) {
+    const colonIdx = t.indexOf(":");
+    if (colonIdx > 0) {
+      compositeTeams.push({ enterprise: t.substring(0, colonIdx), team: t.substring(colonIdx + 1) });
+    } else {
+      plainTeams.push(t);
+    }
+  }
+
+  const selectedTeams = [...plainTeams, ...compositeTeams.map((c) => c.team)];
   const hasFilter = selectedTeams.length > 0 || selectedOrgs.length > 0 || selectedEnterprises.length > 0;
 
   // Resolve enterprise slugs for SQL filtering (undefined = all)
   const enterpriseSlugs = selectedEnterprises.length > 0 ? selectedEnterprises : undefined;
 
   let allowedLogins: Set<string> | undefined;
-  if (selectedTeams.length > 0 || selectedOrgs.length > 0) {
+
+  if (compositeTeams.length > 0) {
+    // Multi-enterprise: resolve members per-enterprise to avoid cross-enterprise slug collisions
+    allowedLogins = new Set<string>();
+
+    const byEnterprise = new Map<string, string[]>();
+    for (const ct of compositeTeams) {
+      const existing = byEnterprise.get(ct.enterprise);
+      if (existing) existing.push(ct.team);
+      else byEnterprise.set(ct.enterprise, [ct.team]);
+    }
+
+    for (const [entSlug, teamSlugs] of byEnterprise) {
+      for (const login of resolveFilteredUsers(teamSlugs, [], [entSlug])) {
+        allowedLogins.add(login);
+      }
+    }
+
+    // Handle any remaining plain team slugs
+    if (plainTeams.length > 0) {
+      for (const login of resolveFilteredUsers(plainTeams, [], enterpriseSlugs)) {
+        allowedLogins.add(login);
+      }
+    }
+
+    // Handle org filtering alongside composite teams
+    if (selectedOrgs.length > 0) {
+      for (const login of resolveFilteredUsers([], selectedOrgs, enterpriseSlugs)) {
+        allowedLogins.add(login);
+      }
+    }
+  } else if (selectedTeams.length > 0 || selectedOrgs.length > 0) {
+    // Single-enterprise backward-compatible path
     allowedLogins = new Set(resolveFilteredUsers(selectedTeams, selectedOrgs, enterpriseSlugs));
   }
 

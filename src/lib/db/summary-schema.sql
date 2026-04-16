@@ -21,7 +21,7 @@ CREATE TABLE IF NOT EXISTS user_period_summary (
   used_code_review_passive INTEGER DEFAULT 0,
   used_coding_agent INTEGER DEFAULT 0,
   computed_at TEXT NOT NULL,
-  PRIMARY KEY (user_login, period_start, period_end)
+  PRIMARY KEY (enterprise_slug, user_login, period_start, period_end)
 );
 
 CREATE INDEX IF NOT EXISTS idx_user_summary_period ON user_period_summary(period_start, period_end);
@@ -29,7 +29,7 @@ CREATE INDEX IF NOT EXISTS idx_user_summary_period ON user_period_summary(period
 -- Daily aggregate cache (enterprise-wide totals per day)
 CREATE TABLE IF NOT EXISTS daily_aggregate_cache (
   enterprise_slug TEXT NOT NULL DEFAULT '',
-  day TEXT NOT NULL PRIMARY KEY,
+  day TEXT NOT NULL,
   total_users INTEGER DEFAULT 0,
   active_users INTEGER DEFAULT 0,
   loc_added INTEGER DEFAULT 0,
@@ -45,7 +45,8 @@ CREATE TABLE IF NOT EXISTS daily_aggregate_cache (
   completion_loc_suggested INTEGER DEFAULT 0,
   completion_loc_accepted INTEGER DEFAULT 0,
   agent_loc_added INTEGER DEFAULT 0,
-  computed_at TEXT NOT NULL
+  computed_at TEXT NOT NULL,
+  PRIMARY KEY (enterprise_slug, day)
 );
 
 -- Per-team summary cache
@@ -68,7 +69,7 @@ CREATE TABLE IF NOT EXISTS team_summary_cache (
   cli_adoption_rate REAL DEFAULT 0,
   code_review_adoption_rate REAL DEFAULT 0,
   computed_at TEXT NOT NULL,
-  PRIMARY KEY (team_slug, source, period_start, period_end)
+  PRIMARY KEY (enterprise_slug, team_slug, source, period_start, period_end)
 );
 
 CREATE INDEX IF NOT EXISTS idx_team_summary_period ON team_summary_cache(period_start, period_end);

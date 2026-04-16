@@ -210,11 +210,15 @@ export function ScopeFilter({ orgOnly = false }: ScopeFilterProps) {
   const orgDisabled = mode === "enterprise";
 
   const entItems = enterpriseTeams.map((t) => ({
-    value: t.slug, label: t.name, extra: `${t.memberCount}`,
+    value: isMultiEnterprise && t.enterpriseSlug ? `${t.enterpriseSlug}:${t.slug}` : t.slug,
+    label: isMultiEnterprise && t.enterpriseSlug ? `${t.name} (${t.enterpriseSlug})` : t.name,
+    extra: `${t.memberCount}`,
   }));
   const orgItems = orgs.map((o) => ({ value: o.slug, label: o.name }));
   const orgTeamItems = orgTeams.map((t) => ({
-    value: t.slug, label: t.name, extra: `${t.memberCount}`,
+    value: isMultiEnterprise && t.enterpriseSlug ? `${t.enterpriseSlug}:${t.slug}` : t.slug,
+    label: isMultiEnterprise && t.enterpriseSlug ? `${t.name} (${t.enterpriseSlug})` : t.name,
+    extra: `${t.memberCount}`,
   }));
   const enterpriseItems = enterprises.map((e) => ({
     value: e.slug, label: e.displayName,

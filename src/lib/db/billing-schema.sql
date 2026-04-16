@@ -27,9 +27,9 @@ CREATE TABLE IF NOT EXISTS billing_usage_records (
   created_at TEXT DEFAULT (datetime('now'))
 );
 
--- Deduplication index (upsert key)
+-- Deduplication index (upsert key) — includes enterprise_slug for multi-enterprise
 CREATE UNIQUE INDEX IF NOT EXISTS idx_billing_usage_dedup
-  ON billing_usage_records(date, sku, organization, repository, username, workflow_path, cost_center_name);
+  ON billing_usage_records(enterprise_slug, date, sku, organization, repository, username, workflow_path, cost_center_name);
 
 -- Query indexes
 CREATE INDEX IF NOT EXISTS idx_billing_usage_date ON billing_usage_records(date);
@@ -64,9 +64,9 @@ CREATE TABLE IF NOT EXISTS billing_premium_requests (
   created_at TEXT DEFAULT (datetime('now'))
 );
 
--- Deduplication index
+-- Deduplication index — includes enterprise_slug for multi-enterprise
 CREATE UNIQUE INDEX IF NOT EXISTS idx_billing_premium_dedup
-  ON billing_premium_requests(date, sku, username, organization, model);
+  ON billing_premium_requests(enterprise_slug, date, sku, username, organization, model);
 
 -- Query indexes
 CREATE INDEX IF NOT EXISTS idx_billing_premium_date ON billing_premium_requests(date);
@@ -89,7 +89,7 @@ CREATE TABLE IF NOT EXISTS billing_daily_aggregate (
   total_discount REAL DEFAULT 0,
   total_net REAL DEFAULT 0,
   record_count INTEGER DEFAULT 0,
-  PRIMARY KEY (day, product, charge_scope)
+  PRIMARY KEY (enterprise_slug, day, product, charge_scope)
 );
 
 CREATE INDEX IF NOT EXISTS idx_billing_daily_agg_day ON billing_daily_aggregate(day);
@@ -100,12 +100,13 @@ CREATE INDEX IF NOT EXISTS idx_billing_daily_agg_day ON billing_daily_aggregate(
 
 CREATE TABLE IF NOT EXISTS billing_sync_state (
   enterprise_slug TEXT NOT NULL DEFAULT '',
-  report_type TEXT PRIMARY KEY,    -- 'detailed', 'summarized', 'premium_request'
+  report_type TEXT NOT NULL,    -- 'detailed', 'summarized', 'premium_request'
   last_synced_at TEXT,
   last_report_start TEXT,
   last_report_end TEXT,
   status TEXT DEFAULT 'pending',   -- 'pending', 'syncing', 'ok', 'error'
-  error_message TEXT
+  error_message TEXT,
+  PRIMARY KEY (enterprise_slug, report_type)
 );
 
 -- Indexes for enterprise_slug filtering

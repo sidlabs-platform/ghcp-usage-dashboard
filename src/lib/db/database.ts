@@ -75,6 +75,56 @@ export function getDb(): Database.Database {
     try { _db.exec(sql); } catch { /* column already exists */ }
   }
 
+  // Migration: recreate tables that need enterprise_slug in PRIMARY KEY.
+  // All affected tables contain derived/cacheable data rebuilt during sync.
+  // Check if migration is needed by examining billing_sync_state PK definition.
+  const needsPKMigration = (() => {
+    try {
+      const row = _db.prepare(
+        `SELECT sql FROM sqlite_master WHERE type='table' AND name='billing_sync_state'`
+      ).get() as { sql: string } | undefined;
+      // Old schema has `report_type TEXT PRIMARY KEY` (single column)
+      // New schema has `PRIMARY KEY (enterprise_slug, report_type)`
+      return row && !row.sql.includes("PRIMARY KEY (enterprise_slug");
+    } catch { return false; }
+  })();
+
+  if (needsPKMigration) {
+    console.log("[DB Migration] Recreating tables to add enterprise_slug to primary keys...");
+    const tablesToRecreate = [
+      // Billing tables
+      "billing_sync_state",
+      "billing_daily_aggregate",
+      "billing_usage_records",
+      "billing_premium_requests",
+      // Summary tables
+      "daily_aggregate_cache",
+      "user_period_summary",
+      "team_summary_cache",
+      // Main schema tables
+      "copilot_seats",
+      "team_memberships",
+      "sync_log",
+      // GHAS tables
+      "ghas_code_scanning_daily",
+      "ghas_dependabot_daily",
+      "ghas_secret_scanning_daily",
+      "ghas_sync_state",
+    ];
+    // Drop old dedup indexes that need enterprise_slug
+    _db.exec(`DROP INDEX IF EXISTS idx_billing_usage_dedup`);
+    _db.exec(`DROP INDEX IF EXISTS idx_billing_premium_dedup`);
+    for (const table of tablesToRecreate) {
+      _db.exec(`DROP TABLE IF EXISTS ${table}`);
+    }
+    // Re-run all schema files to recreate with correct PKs
+    _db.exec(schema);
+    _db.exec(ghasSchema);
+    _db.exec(summarySchema);
+    _db.exec(billingSchema);
+    console.log("[DB Migration] Tables recreated. Please run a full sync to repopulate data.");
+  }
+
   // Backfill chat_panel_*_mode columns from totals_by_feature JSON for already-synced data.
   // The original sync code assumed these were top-level API fields, but they come from
   // totals_by_feature entries (e.g. feature="chat_panel_ask_mode").

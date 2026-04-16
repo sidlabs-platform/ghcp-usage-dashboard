@@ -99,29 +99,7 @@ CREATE TABLE IF NOT EXISTS ghas_code_scanning_daily (
   severity_low INTEGER DEFAULT 0,
   autofix_available INTEGER DEFAULT 0,
   autofix_committed INTEGER DEFAULT 0,
-  PRIMARY KEY (day, scope, scope_id)
-);
-
-CREATE INDEX IF NOT EXISTS idx_code_scanning_daily_day
-  ON ghas_code_scanning_daily(day);
-
--- Dependabot daily aggregates
-CREATE TABLE IF NOT EXISTS ghas_dependabot_daily (
-  day TEXT NOT NULL,
-  scope TEXT NOT NULL,
-  scope_id TEXT NOT NULL,
-  enterprise_slug TEXT NOT NULL DEFAULT '',
-  opened INTEGER DEFAULT 0,
-  fixed INTEGER DEFAULT 0,
-  dismissed INTEGER DEFAULT 0,
-  auto_dismissed INTEGER DEFAULT 0,
-  total_open INTEGER DEFAULT 0,
-  severity_critical INTEGER DEFAULT 0,
-  severity_high INTEGER DEFAULT 0,
-  severity_medium INTEGER DEFAULT 0,
-  severity_low INTEGER DEFAULT 0,
-  ecosystem_counts TEXT DEFAULT '{}',  -- JSON: {"npm":5,"pip":2}
-  PRIMARY KEY (day, scope, scope_id)
+  PRIMARY KEY (enterprise_slug, day, scope, scope_id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_dependabot_daily_day
@@ -137,7 +115,7 @@ CREATE TABLE IF NOT EXISTS ghas_secret_scanning_daily (
   resolved INTEGER DEFAULT 0,
   total_open INTEGER DEFAULT 0,
   resolution_counts TEXT DEFAULT '{}',  -- JSON: {"revoked":3,"false_positive":1}
-  PRIMARY KEY (day, scope, scope_id)
+  PRIMARY KEY (enterprise_slug, day, scope, scope_id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_secret_scanning_daily_day
@@ -158,7 +136,7 @@ CREATE TABLE IF NOT EXISTS ghas_sync_state (
   total_alerts INTEGER DEFAULT 0,
   status TEXT DEFAULT 'ok',       -- 'ok', 'error', 'syncing'
   error_message TEXT,
-  PRIMARY KEY (scope, scope_id, metric_type)
+  PRIMARY KEY (enterprise_slug, scope, scope_id, metric_type)
 );
 
 -- Indexes for enterprise_slug filtering

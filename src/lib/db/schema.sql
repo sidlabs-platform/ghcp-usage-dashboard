@@ -121,7 +121,7 @@ CREATE TABLE IF NOT EXISTS copilot_seats (
   created_at TEXT,
   updated_at TEXT,
   avatar_url TEXT,
-  PRIMARY KEY (org_slug, user_login)
+  PRIMARY KEY (enterprise_slug, org_slug, user_login)
 );
 
 CREATE INDEX IF NOT EXISTS idx_seats_team ON copilot_seats(assigning_team_slug);
@@ -135,7 +135,7 @@ CREATE TABLE IF NOT EXISTS team_memberships (
   org_slug TEXT,
   user_login TEXT NOT NULL,
   updated_at TEXT NOT NULL,
-  PRIMARY KEY (team_slug, source, user_login)
+  PRIMARY KEY (enterprise_slug, team_slug, source, user_login)
 );
 
 CREATE INDEX IF NOT EXISTS idx_team_members_login ON team_memberships(user_login);
@@ -151,7 +151,7 @@ CREATE TABLE IF NOT EXISTS sync_log (
   record_count INTEGER DEFAULT 0,
   status TEXT DEFAULT 'success',  -- 'success', 'error', 'partial'
   error_message TEXT,
-  PRIMARY KEY (scope, scope_id, day)
+  PRIMARY KEY (enterprise_slug, scope, scope_id, day)
 );
 
 -- Sync lock for preventing concurrent syncs (works across serverless instances)
