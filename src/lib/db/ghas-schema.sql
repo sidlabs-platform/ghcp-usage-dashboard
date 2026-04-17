@@ -102,6 +102,28 @@ CREATE TABLE IF NOT EXISTS ghas_code_scanning_daily (
   PRIMARY KEY (enterprise_slug, day, scope, scope_id)
 );
 
+CREATE INDEX IF NOT EXISTS idx_code_scanning_daily_day
+  ON ghas_code_scanning_daily(day);
+
+-- Dependabot daily aggregates
+CREATE TABLE IF NOT EXISTS ghas_dependabot_daily (
+  day TEXT NOT NULL,
+  scope TEXT NOT NULL,
+  scope_id TEXT NOT NULL,
+  enterprise_slug TEXT NOT NULL DEFAULT '',
+  opened INTEGER DEFAULT 0,
+  fixed INTEGER DEFAULT 0,
+  dismissed INTEGER DEFAULT 0,
+  auto_dismissed INTEGER DEFAULT 0,
+  total_open INTEGER DEFAULT 0,
+  severity_critical INTEGER DEFAULT 0,
+  severity_high INTEGER DEFAULT 0,
+  severity_medium INTEGER DEFAULT 0,
+  severity_low INTEGER DEFAULT 0,
+  ecosystem_counts TEXT DEFAULT '{}',
+  PRIMARY KEY (enterprise_slug, day, scope, scope_id)
+);
+
 CREATE INDEX IF NOT EXISTS idx_dependabot_daily_day
   ON ghas_dependabot_daily(day);
 

@@ -50,7 +50,9 @@ async function handler(request: NextRequest) {
       orgTeams,
       orgs: orgs.map((o) => ({ slug: o.slug, name: o.slug, enterpriseSlug: o.enterpriseSlug })),
     }, {
-      headers: { "Cache-Control": "private, max-age=600, stale-while-revalidate=120" },
+      // No browser cache: server-side withCache() handles caching and is invalidated
+      // after sync. Browser caching here would persist stale empty results across syncs.
+      headers: { "Cache-Control": "no-store" },
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

@@ -46,6 +46,7 @@ export function Sidebar() {
   const pathname = usePathname();
   const [collapsed, setCollapsed] = useState(false);
   const [pageVisibility, setPageVisibility] = useState<PageVisibility>({});
+  const [enterpriseLabel, setEnterpriseLabel] = useState<string>("Enterprise Dashboard");
 
   useEffect(() => {
     fetch("/api/config")
@@ -56,6 +57,20 @@ export function Sidebar() {
         }
       })
       .catch(() => {}); // Default to showing all if config unavailable
+  }, []);
+
+  useEffect(() => {
+    fetch("/api/filters")
+      .then((r) => r.json())
+      .then((data: { enterprises?: { slug: string; displayName: string }[] }) => {
+        const list = data?.enterprises ?? [];
+        if (list.length === 1) {
+          setEnterpriseLabel(list[0].displayName || list[0].slug);
+        } else if (list.length > 1) {
+          setEnterpriseLabel(`${list.length} enterprises`);
+        }
+      })
+      .catch(() => {});
   }, []);
 
   const visibleNavItems = navItems.filter((item) => {
@@ -79,7 +94,7 @@ export function Sidebar() {
         {!collapsed && (
           <div className="flex flex-col">
             <span className="text-sm font-bold">Copilot Metrics</span>
-            <span className="text-[10px] text-[hsl(var(--muted-foreground))]">Enterprise Dashboard</span>
+            <span className="text-[10px] text-[hsl(var(--muted-foreground))]" title={enterpriseLabel}>{enterpriseLabel}</span>
           </div>
         )}
       </div>

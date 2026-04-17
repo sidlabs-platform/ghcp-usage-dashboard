@@ -25,25 +25,17 @@ export function getDb(): Database.Database {
   _db.pragma("journal_mode = WAL");
   _db.pragma("foreign_keys = ON");
 
-  // Run schema migrations
   const schema = fs.readFileSync(SCHEMA_PATH, "utf-8");
-  _db.exec(schema);
-
-  // GHAS schema
   const ghasSchema = fs.readFileSync(GHAS_SCHEMA_PATH, "utf-8");
-  _db.exec(ghasSchema);
-
-  // Summary tables schema
   const summarySchema = fs.readFileSync(SUMMARY_SCHEMA_PATH, "utf-8");
-  _db.exec(summarySchema);
-
-  // Billing schema
   const billingSchema = fs.readFileSync(BILLING_SCHEMA_PATH, "utf-8");
-  _db.exec(billingSchema);
 
-  // Note: Run ANALYZE after bulk inserts (e.g. after sync) to update query planner stats
-
-  // Add columns introduced after initial schema (safe if already present)
+  // Add columns introduced after initial schema (safe if already present).
+  // MUST run BEFORE schema exec: the schema files include CREATE INDEX statements
+  // that reference enterprise_slug. On pre-multi-enterprise DBs, running schema
+  // first would fail ("no such column: enterprise_slug") before these ALTERs
+  // can add the columns. On fresh DBs, the ALTERs fail silently (tables don't
+  // exist yet) and the subsequent schema exec creates them with the column.
   const migrations = [
     "ALTER TABLE user_daily_metrics ADD COLUMN used_copilot_coding_agent INTEGER DEFAULT 0",
     // Multi-enterprise support: add enterprise_slug to all tables
@@ -72,8 +64,15 @@ export function getDb(): Database.Database {
     "ALTER TABLE team_summary_cache ADD COLUMN enterprise_slug TEXT NOT NULL DEFAULT ''",
   ];
   for (const sql of migrations) {
-    try { _db.exec(sql); } catch { /* column already exists */ }
+    try { _db.exec(sql); } catch { /* column already exists or table not yet created */ }
   }
+
+  // Now safe to run schema files (CREATE TABLE IF NOT EXISTS + CREATE INDEX).
+  _db.exec(schema);
+  _db.exec(ghasSchema);
+  _db.exec(summarySchema);
+  _db.exec(billingSchema);
+  // Note: Run ANALYZE after bulk inserts (e.g. after sync) to update query planner stats
 
   // Migration: recreate tables that need enterprise_slug in PRIMARY KEY.
   // All affected tables contain derived/cacheable data rebuilt during sync.
@@ -123,6 +122,68 @@ export function getDb(): Database.Database {
     _db.exec(summarySchema);
     _db.exec(billingSchema);
     console.log("[DB Migration] Tables recreated. Please run a full sync to repopulate data.");
+  }
+
+  // Backfill enterprise_slug on legacy rows (created before multi-enterprise support).
+  // Only safe when the user has exactly one enterprise configured — otherwise we cannot
+  // know which enterprise the legacy row belonged to.
+  try {
+    const legacySlug = process.env.GITHUB_ENTERPRISE;
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const cfg = require("@/lib/config/enterprise-config") as typeof import("@/lib/config/enterprise-config");
+    const configured = cfg.getConfiguredEnterprises();
+    const targetSlug = configured.length === 1 ? configured[0].slug : (legacySlug || null);
+
+    if (targetSlug) {
+      const tablesWithSlug = [
+        "enterprise_daily_metrics",
+        "org_daily_metrics",
+        "user_daily_metrics",
+        "copilot_seats",
+        "team_memberships",
+        "sync_log",
+        "ghas_code_scanning_alerts",
+        "ghas_dependabot_alerts",
+        "ghas_secret_scanning_alerts",
+        "ghas_code_scanning_daily",
+        "ghas_dependabot_daily",
+        "ghas_secret_scanning_daily",
+        "ghas_sync_state",
+        "billing_usage_records",
+        "billing_premium_requests",
+        "billing_daily_aggregate",
+        "billing_sync_state",
+        "user_period_summary",
+        "daily_aggregate_cache",
+        "team_summary_cache",
+      ];
+      let totalUpdated = 0;
+      const backfillTx = _db.transaction(() => {
+        for (const table of tablesWithSlug) {
+          try {
+            const result = _db!.prepare(
+              `UPDATE ${table} SET enterprise_slug = ? WHERE enterprise_slug = '' OR enterprise_slug IS NULL`
+            ).run(targetSlug);
+            totalUpdated += result.changes;
+          } catch { /* table may not exist yet */ }
+        }
+      });
+      backfillTx();
+      if (totalUpdated > 0) {
+        console.log(`[DB Migration] Backfilled enterprise_slug='${targetSlug}' on ${totalUpdated} legacy rows`);
+      }
+
+      // Also seed enterprise_registry for the configured enterprise so UI shows display name
+      try {
+        const displayName = configured[0]?.displayName || targetSlug;
+        _db.prepare(
+          `INSERT INTO enterprise_registry (slug, display_name) VALUES (?, ?)
+           ON CONFLICT(slug) DO UPDATE SET display_name = excluded.display_name`
+        ).run(targetSlug, displayName);
+      } catch { /* registry may not exist */ }
+    }
+  } catch (err) {
+    console.warn("[DB] Enterprise slug backfill skipped:", err instanceof Error ? err.message : err);
   }
 
   // Backfill chat_panel_*_mode columns from totals_by_feature JSON for already-synced data.
