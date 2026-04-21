@@ -2,9 +2,12 @@
 // Uses chained setTimeout (not setInterval) for drift-free scheduling.
 // Respects the existing sync lock to prevent concurrent syncs.
 
-import { getAutoSyncConfig } from "@/lib/config/dashboard-config";
+import { getAutoSyncConfig, isMetricEnabled, getEffectiveBillingEnabled } from "@/lib/config/dashboard-config";
 import { incrementalSync } from "@/lib/db/sync-service";
 import { refreshAllSummaries } from "@/lib/db/summary-tables";
+import { fullGhasSync } from "@/lib/db/ghas-sync-service";
+import { syncBilling } from "@/lib/db/billing-sync-service";
+import { getEnterpriseSlugs } from "@/lib/config/enterprise-config";
 import {
   acquireSyncLock,
   releaseSyncLock,
@@ -96,6 +99,32 @@ async function executeAutoSync(): Promise<void> {
         );
       } catch (err) {
         console.error("[AutoSync] Failed to refresh summary tables:", err);
+      }
+
+      // Run GHAS sync if any security metrics are enabled
+      const ghasEnabled = isMetricEnabled("codeScanning") || isMetricEnabled("dependabot") || isMetricEnabled("secretScanning");
+      if (ghasEnabled) {
+        try {
+          console.log("[AutoSync] Starting GHAS sync...");
+          const ghasResult = await fullGhasSync((p) => console.log(`[AutoSync] [GHAS] ${p.message}`));
+          console.log("[AutoSync] GHAS sync complete:", JSON.stringify(ghasResult));
+        } catch (err) {
+          console.error("[AutoSync] GHAS sync failed:", err);
+        }
+      }
+
+      // Run billing sync for each configured enterprise
+      if (getEffectiveBillingEnabled()) {
+        const slugs = getEnterpriseSlugs();
+        for (const slug of slugs) {
+          try {
+            console.log(`[AutoSync] Starting billing sync for ${slug}...`);
+            const billingResult = await syncBilling(slug, (p) => console.log(`[AutoSync] [Billing] ${p.message}`));
+            console.log(`[AutoSync] Billing sync complete for ${slug}:`, JSON.stringify(billingResult));
+          } catch (err) {
+            console.error(`[AutoSync] Billing sync failed for ${slug}:`, err);
+          }
+        }
       }
 
       cache.invalidateAll();

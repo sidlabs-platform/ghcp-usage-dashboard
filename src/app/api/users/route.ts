@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { parseScopeFilter } from "@/lib/api/scope-filter";
 import { getUserSummariesPaginated } from "@/lib/db/aggregation-queries";
-import { getDateRange } from "@/lib/utils";
+import { getDateRange, parseAndClampDays } from "@/lib/utils";
 import { withCache } from "@/lib/cache/with-cache";
 import { withTimeout } from "@/lib/api/timeout";
 import { CACHE_TTL } from "@/lib/cache/memory-cache";
@@ -9,7 +9,11 @@ import { CACHE_TTL } from "@/lib/cache/memory-cache";
 async function handler(request: NextRequest) {
   try {
     const params = request.nextUrl.searchParams;
-    const days = Number(params.get("days") ?? 7);
+    const daysResult = parseAndClampDays(params.get("days"), 7);
+    if ("error" in daysResult) {
+      return NextResponse.json({ error: daysResult.error }, { status: 400 });
+    }
+    const days = daysResult.days;
     const { start, end } = getDateRange(days);
 
     const page = Math.max(1, parseInt(params.get("page") || "1", 10));

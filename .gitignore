@@ -32,3 +32,6 @@ data/
 .turbo
 
 DayTotal.dll
+
+# TypeScript build info
+tsconfig.tsbuildinfo

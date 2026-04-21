@@ -4,7 +4,7 @@ import { getAllTeamsWithMembers } from "@/lib/db/teams-repo";
 import { getAllUserMetrics } from "@/lib/db/metrics-repo";
 import { computeTeamSummary } from "@/lib/aggregation/team-metrics";
 import { refreshTeamSummary } from "@/lib/db/summary-tables";
-import { getDateRange } from "@/lib/utils";
+import { getDateRange, parseAndClampDays } from "@/lib/utils";
 import { withCache } from "@/lib/cache/with-cache";
 import { withTimeout } from "@/lib/api/timeout";
 import { CACHE_TTL } from "@/lib/cache/memory-cache";
@@ -147,7 +147,11 @@ function fromLiveData(
 async function handler(request: NextRequest) {
   try {
     const params = request.nextUrl.searchParams;
-    const days = Number(params.get("days") ?? 7);
+    const daysResult = parseAndClampDays(params.get("days"), 7);
+    if ("error" in daysResult) {
+      return NextResponse.json({ error: daysResult.error }, { status: 400 });
+    }
+    const days = daysResult.days;
     const { start, end } = getDateRange(days);
 
     const teamsParam = params.get("teams");

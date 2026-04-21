@@ -10,7 +10,7 @@ import {
   getFeatureUsageDaily,
   estimateRowCount,
 } from "@/lib/db/aggregation-queries";
-import { getDateRange } from "@/lib/utils";
+import { getDateRange, parseAndClampDays } from "@/lib/utils";
 import { extractCompletionMetrics, extractAgentMetrics } from "@/lib/aggregation/separate-metrics";
 import { withCache } from "@/lib/cache/with-cache";
 import { withTimeout } from "@/lib/api/timeout";
@@ -19,7 +19,11 @@ import { CACHE_TTL } from "@/lib/cache/memory-cache";
 async function handler(request: NextRequest) {
   try {
     const params = request.nextUrl.searchParams;
-    const days = parseInt(params.get("days") || "7", 10);
+    const daysResult = parseAndClampDays(params.get("days"), 7);
+    if ("error" in daysResult) {
+      return NextResponse.json({ error: daysResult.error }, { status: 400 });
+    }
+    const days = daysResult.days;
     const { start, end } = getDateRange(days);
 
     const filter = parseScopeFilter(params);

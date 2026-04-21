@@ -2,12 +2,16 @@ import { NextRequest, NextResponse } from "next/server";
 import { getCodeScanningDaily, getDependabotDaily, getSecretScanningDaily, getSecurityOverview, computeMTTR } from "@/lib/db/ghas-repo";
 import { computeSecuritySummary, formatMTTR } from "@/lib/aggregation/ghas-aggregation";
 import { isMetricEnabled, isEnterpriseEnabled, getResolvedOrgs } from "@/lib/config/dashboard-config";
-import { getDateRange } from "@/lib/utils";
+import { getDateRange, parseAndClampDays } from "@/lib/utils";
 
 export async function GET(request: NextRequest) {
   try {
     const params = request.nextUrl.searchParams;
-    const days = parseInt(params.get("days") || "28", 10);
+    const daysResult = parseAndClampDays(params.get("days"), 28);
+    if ("error" in daysResult) {
+      return NextResponse.json({ error: daysResult.error }, { status: 400 });
+    }
+    const days = daysResult.days;
     const { start, end } = getDateRange(days);
 
     // Resolve scope: defaults to enterprise when available, otherwise first org

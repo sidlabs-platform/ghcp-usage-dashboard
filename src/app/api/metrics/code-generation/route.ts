@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getDateRange, datesBetween } from "@/lib/utils";
+import { getDateRange, datesBetween, parseAndClampDays } from "@/lib/utils";
 import { parseScopeFilter } from "@/lib/api/scope-filter";
 import {
   getCompletionDailyTrend,
@@ -35,7 +35,11 @@ export interface CodeGenerationResponse {
 export async function GET(request: NextRequest) {
   try {
     const params = request.nextUrl.searchParams;
-    const days = Number(params.get("days") ?? 7);
+    const daysResult = parseAndClampDays(params.get("days"), 7);
+    if ("error" in daysResult) {
+      return NextResponse.json({ error: daysResult.error }, { status: 400 });
+    }
+    const { days } = daysResult;
     const { start: startDay, end: endDay } = getDateRange(days);
 
     const scopeFilter = parseScopeFilter(params);

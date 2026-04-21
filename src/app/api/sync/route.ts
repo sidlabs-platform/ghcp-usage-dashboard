@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { fullSync } from "@/lib/db/sync-service";
 import { fullGhasSync } from "@/lib/db/ghas-sync-service";
-import { getSyncStatus, acquireSyncLock, releaseSyncLock, isSyncLocked, clearEmptySyncEntries } from "@/lib/db/metrics-repo";
+import { getSyncStatus, acquireSyncLock, releaseSyncLock, isSyncLocked, clearEmptySyncEntries, forceReleaseSyncLock, getSyncLockInfo } from "@/lib/db/metrics-repo";
 import { isMetricEnabled } from "@/lib/config/dashboard-config";
 import { getAutoSyncStatus } from "@/lib/sync/auto-sync-scheduler";
 import { getClientEnterpriseList } from "@/lib/config/enterprise-config";
@@ -9,6 +9,7 @@ import { getClientEnterpriseList } from "@/lib/config/enterprise-config";
 export async function POST(request: Request) {
   const { searchParams } = new URL(request.url);
   const resync = searchParams.get("resync") === "true";
+  const forceLock = searchParams.get("forceLock") === "true";
 
   // Clear empty sync entries to allow re-fetching enterprise/org data
   if (resync) {
@@ -16,12 +17,23 @@ export async function POST(request: Request) {
     console.log(`[Sync] Cleared ${cleared} empty sync_log entries for re-sync`);
   }
 
+  // Log current lock state for operator diagnostics
+  const lockInfo = getSyncLockInfo();
+  console.log(`[Sync] Lock state before acquire:`, JSON.stringify(lockInfo));
+
+  // Force-release a stale lock if requested
+  if (forceLock && lockInfo.locked) {
+    const cleared = forceReleaseSyncLock();
+    console.log(`[Sync] Force-released stale lock:`, JSON.stringify(cleared));
+  }
+
   if (!acquireSyncLock()) {
     return NextResponse.json({
       success: true,
-      message: "Sync already in progress. Check GET /api/sync/status for progress.",
+      message: "Sync already in progress. Check GET /api/sync/status for progress. Use ?forceLock=true to force-release a stale lock.",
       inProgress: true,
       status: getSyncStatus(),
+      lockInfo,
     });
   }
 
@@ -70,6 +82,7 @@ export async function GET() {
   return NextResponse.json({
     syncInProgress: isSyncLocked(),
     status: getSyncStatus(),
+    lockInfo: getSyncLockInfo(),
     autoSync: getAutoSyncStatus(),
     enterprises: getClientEnterpriseList(),
   });

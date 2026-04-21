@@ -154,13 +154,16 @@ export function isCodeScanningAutofixEnabled(): boolean {
 
 // --- Enterprise helpers ---
 
+let _enterpriseWarned = false;
+
 /** Returns true when enterprise mode is effectively enabled (config + env var present). */
 export function isEnterpriseEnabled(): boolean {
   const config = getDashboardConfig();
   if (!(config.metrics.copilot.enterprise ?? true)) return false;
   if (!process.env.GITHUB_ENTERPRISE) {
-    if (config.metrics.copilot.enterprise === true) {
+    if (config.metrics.copilot.enterprise === true && !_enterpriseWarned) {
       console.warn("[Config] copilot.enterprise=true but GITHUB_ENTERPRISE env var is missing — treating as disabled");
+      _enterpriseWarned = true;
     }
     return false;
   }

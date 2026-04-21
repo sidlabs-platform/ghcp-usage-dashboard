@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { isMetricEnabled } from "@/lib/config/dashboard-config";
-import { getDateRange } from "@/lib/utils";
+import { getDateRange, parseAndClampDays } from "@/lib/utils";
 import {
   getPremiumUserSummary,
   getPremiumModelSummary,
@@ -19,7 +19,11 @@ async function handler(request: NextRequest) {
     }
 
     const params = request.nextUrl.searchParams;
-    const days = parseInt(params.get("days") || "28", 10);
+    const daysResult = parseAndClampDays(params.get("days"), 28);
+    if ("error" in daysResult) {
+      return NextResponse.json({ error: daysResult.error }, { status: 400 });
+    }
+    const days = daysResult.days;
     const { start, end } = getDateRange(days);
 
     // Parse scope filter (teams/orgs/enterprises)

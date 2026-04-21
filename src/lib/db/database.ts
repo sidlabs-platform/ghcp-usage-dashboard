@@ -113,7 +113,19 @@ export function getDb(): Database.Database {
     // Drop old dedup indexes that need enterprise_slug
     _db.exec(`DROP INDEX IF EXISTS idx_billing_usage_dedup`);
     _db.exec(`DROP INDEX IF EXISTS idx_billing_premium_dedup`);
+    // Validate table names against whitelist before interpolation (security best practice).
+    // NOTE: Never allow user-controlled values into tablesToRecreate.
+    const ALLOWED_MIGRATION_TABLES = new Set([
+      "ghas_code_scanning_alerts", "ghas_dependabot_alerts", "ghas_secret_scanning_alerts",
+      "billing_sync_state", "billing_daily_aggregate", "billing_usage_records", "billing_premium_requests",
+      "daily_aggregate_cache", "user_period_summary", "team_summary_cache",
+      "copilot_seats", "team_memberships", "sync_log",
+      "ghas_code_scanning_daily", "ghas_dependabot_daily", "ghas_secret_scanning_daily", "ghas_sync_state",
+    ]);
     for (const table of tablesToRecreate) {
+      if (!ALLOWED_MIGRATION_TABLES.has(table)) {
+        throw new Error(`[DB Migration] Refusing to drop unknown table: ${table}`);
+      }
       _db.exec(`DROP TABLE IF EXISTS ${table}`);
     }
     // Re-run all schema files to recreate with correct PKs
@@ -157,9 +169,21 @@ export function getDb(): Database.Database {
         "daily_aggregate_cache",
         "team_summary_cache",
       ];
+      // Validate table names against whitelist before interpolation (security best practice)
+      const ALLOWED_BACKFILL_TABLES = new Set([
+        "enterprise_daily_metrics", "org_daily_metrics", "user_daily_metrics",
+        "copilot_seats", "team_memberships", "sync_log",
+        "ghas_code_scanning_alerts", "ghas_dependabot_alerts", "ghas_secret_scanning_alerts",
+        "ghas_code_scanning_daily", "ghas_dependabot_daily", "ghas_secret_scanning_daily", "ghas_sync_state",
+        "billing_usage_records", "billing_premium_requests", "billing_daily_aggregate", "billing_sync_state",
+        "user_period_summary", "daily_aggregate_cache", "team_summary_cache",
+      ]);
       let totalUpdated = 0;
       const backfillTx = _db.transaction(() => {
         for (const table of tablesWithSlug) {
+          if (!ALLOWED_BACKFILL_TABLES.has(table)) {
+            throw new Error(`[DB Migration] Refusing to update unknown table: ${table}`);
+          }
           try {
             const result = _db!.prepare(
               `UPDATE ${table} SET enterprise_slug = ? WHERE enterprise_slug = '' OR enterprise_slug IS NULL`

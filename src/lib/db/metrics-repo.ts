@@ -4,10 +4,11 @@ import { getDb } from "./database";
 import type { DayTotal, UserDayRecord, TotalsByFeature } from "@/lib/types/metrics";
 
 /** Build optional enterprise_slug IN (...) clause for multi-enterprise filtering */
-function buildEnterpriseFilter(slugs?: string[]): { clause: string; params: string[] } {
+function buildEnterpriseFilter(slugs?: string[], alias?: string): { clause: string; params: string[] } {
   if (!slugs || slugs.length === 0) return { clause: "", params: [] };
   const placeholders = slugs.map(() => "?").join(",");
-  return { clause: ` AND enterprise_slug IN (${placeholders})`, params: slugs };
+  const col = alias ? `${alias}.enterprise_slug` : "enterprise_slug";
+  return { clause: ` AND ${col} IN (${placeholders})`, params: slugs };
 }
 
 // Chat mode feature names as they appear in totals_by_feature
@@ -540,7 +541,13 @@ export function getDistinctUsers(enterpriseId: string, startDay: string, endDay:
   return rows.map((r) => r.user_login);
 }
 
-/** Aggregate user-level data into daily summaries (used when enterprise-level data is unavailable) */
+/**
+ * Aggregate user-level data into daily summaries (used when enterprise-level data is unavailable).
+ *
+ * WAU = rolling 7-day distinct user count (users active on day d through d-6).
+ * MAU = rolling 30-day distinct user count (users active on day d through d-29).
+ * These are computed via correlated subqueries against user_daily_metrics.
+ */
 export function getAggregatedDailySummary(startDay: string, endDay: string, enterpriseSlugs?: string[]): {
   day: string;
   daily_active_users: number;
@@ -557,27 +564,38 @@ export function getAggregatedDailySummary(startDay: string, endDay: string, ente
   chat_users: number;
 }[] {
   const db = getDb();
-  const ef = buildEnterpriseFilter(enterpriseSlugs);
+  // Build separate enterprise filters with table aliases for subqueries
+  const efW = buildEnterpriseFilter(enterpriseSlugs, 'w');
+  const efMo = buildEnterpriseFilter(enterpriseSlugs, 'mo');
+  const efM = buildEnterpriseFilter(enterpriseSlugs, 'm');
   return db.prepare(`
     SELECT
-      day,
-      COUNT(DISTINCT user_id) as daily_active_users,
-      COUNT(DISTINCT user_id) as weekly_active_users,
-      COUNT(DISTINCT user_id) as monthly_active_users,
-      SUM(code_generation_activity_count) as code_generation_activity_count,
-      SUM(code_acceptance_activity_count) as code_acceptance_activity_count,
-      SUM(user_initiated_interaction_count) as user_initiated_interaction_count,
-      SUM(loc_suggested_to_add_sum) as loc_suggested_to_add_sum,
-      SUM(loc_added_sum) as loc_added_sum,
-      SUM(loc_deleted_sum) as loc_deleted_sum,
-      SUM(used_cli) as daily_active_cli_users,
-      SUM(used_agent) as agent_users,
-      SUM(used_chat) as chat_users
-    FROM user_daily_metrics
-    WHERE day >= ? AND day <= ?${ef.clause}
-    GROUP BY day
-    ORDER BY day ASC
-  `).all(startDay, endDay, ...ef.params) as {
+      m.day,
+      COUNT(DISTINCT m.user_id) as daily_active_users,
+      -- Rolling 7-day distinct user count (WAU)
+      (SELECT COUNT(DISTINCT w.user_id)
+       FROM user_daily_metrics w
+       WHERE w.day BETWEEN date(m.day, '-6 days') AND m.day${efW.clause}
+      ) as weekly_active_users,
+      -- Rolling 30-day distinct user count (MAU)
+      (SELECT COUNT(DISTINCT mo.user_id)
+       FROM user_daily_metrics mo
+       WHERE mo.day BETWEEN date(m.day, '-29 days') AND m.day${efMo.clause}
+      ) as monthly_active_users,
+      SUM(m.code_generation_activity_count) as code_generation_activity_count,
+      SUM(m.code_acceptance_activity_count) as code_acceptance_activity_count,
+      SUM(m.user_initiated_interaction_count) as user_initiated_interaction_count,
+      SUM(m.loc_suggested_to_add_sum) as loc_suggested_to_add_sum,
+      SUM(m.loc_added_sum) as loc_added_sum,
+      SUM(m.loc_deleted_sum) as loc_deleted_sum,
+      SUM(m.used_cli) as daily_active_cli_users,
+      SUM(m.used_agent) as agent_users,
+      SUM(m.used_chat) as chat_users
+    FROM user_daily_metrics m
+    WHERE m.day >= ? AND m.day <= ?${efM.clause}
+    GROUP BY m.day
+    ORDER BY m.day ASC
+  `).all(...efW.params, ...efMo.params, startDay, endDay, ...efM.params) as {
     day: string;
     daily_active_users: number;
     weekly_active_users: number;
@@ -647,10 +665,30 @@ export function getSyncStatus(enterpriseSlugs?: string[]): { scope: string; scop
 
 // ── Sync lock (database-backed, works across serverless instances) ────
 
+/** Maximum absolute age for a lock before it is considered stale (30 minutes) */
+const LOCK_STALENESS_MS = 30 * 60 * 1000;
+/** Default lock TTL (15 minutes) */
+const LOCK_TTL_MS = 15 * 60 * 1000;
+
+/**
+ * Clean up expired or stale locks.
+ * A lock is removed if its `expires_at` has passed OR if its `acquired_at` is
+ * older than the staleness threshold (30 min), even if the TTL has been
+ * heartbeated. This prevents a hanging sync from holding the lock forever.
+ */
+function cleanStaleLocks(): void {
+  const db = getDb();
+  const now = new Date().toISOString();
+  const stalenessThreshold = new Date(Date.now() - LOCK_STALENESS_MS).toISOString();
+  db.prepare(
+    `DELETE FROM sync_lock WHERE expires_at < ? OR acquired_at < ?`
+  ).run(now, stalenessThreshold);
+}
+
 export function acquireSyncLock(): boolean {
   const db = getDb();
-  // Clean up expired locks first
-  db.prepare(`DELETE FROM sync_lock WHERE expires_at < ?`).run(new Date().toISOString());
+  // Clean up expired and stale locks first
+  cleanStaleLocks();
 
   try {
     db.prepare(`
@@ -658,7 +696,7 @@ export function acquireSyncLock(): boolean {
       VALUES ('global', ?, ?)
     `).run(
       new Date().toISOString(),
-      new Date(Date.now() + 900000).toISOString() // 15 minute expiry
+      new Date(Date.now() + LOCK_TTL_MS).toISOString()
     );
     return true;
   } catch {
@@ -672,22 +710,64 @@ export function releaseSyncLock(): void {
   db.prepare(`DELETE FROM sync_lock WHERE lock_key = 'global'`).run();
 }
 
+/**
+ * Force-release the sync lock regardless of TTL or staleness.
+ * Returns info about the cleared lock for diagnostics, or null if no lock existed.
+ */
+export function forceReleaseSyncLock(): { acquired_at: string; expires_at: string } | null {
+  const db = getDb();
+  const existing = db.prepare(
+    `SELECT acquired_at, expires_at FROM sync_lock WHERE lock_key = 'global'`
+  ).get() as { acquired_at: string; expires_at: string } | undefined;
+  if (existing) {
+    db.prepare(`DELETE FROM sync_lock WHERE lock_key = 'global'`).run();
+    return existing;
+  }
+  return null;
+}
+
 /** Extend the sync lock TTL (call periodically during long syncs) */
 export function heartbeatSyncLock(): void {
   const db = getDb();
   db.prepare(`
-    UPDATE sync_lock SET acquired_at = ?, expires_at = ? WHERE lock_key = 'global'
+    UPDATE sync_lock SET expires_at = ? WHERE lock_key = 'global'
   `).run(
-    new Date().toISOString(),
-    new Date(Date.now() + 900000).toISOString(), // extend 15 minutes
+    new Date(Date.now() + LOCK_TTL_MS).toISOString()
   );
 }
 
+/**
+ * Check whether the sync lock is currently held.
+ * Also returns diagnostic info about the lock if it exists.
+ */
 export function isSyncLocked(): boolean {
   const db = getDb();
-  db.prepare(`DELETE FROM sync_lock WHERE expires_at < ?`).run(new Date().toISOString());
+  cleanStaleLocks();
   const row = db.prepare(`SELECT 1 FROM sync_lock WHERE lock_key = 'global'`).get();
   return !!row;
+}
+
+/**
+ * Get detailed information about the current sync lock state.
+ * Useful for operators diagnosing stuck syncs.
+ */
+export function getSyncLockInfo(): { locked: boolean; acquired_at?: string; expires_at?: string; age_seconds?: number } {
+  const db = getDb();
+  // No cleanStaleLocks() here — callers (isSyncLocked, acquireSyncLock) already clean.
+  // This avoids redundant DELETE queries when getSyncLockInfo is called alongside them.
+  const row = db.prepare(
+    `SELECT acquired_at, expires_at FROM sync_lock WHERE lock_key = 'global'`
+  ).get() as { acquired_at: string; expires_at: string } | undefined;
+  if (!row) {
+    return { locked: false };
+  }
+  const ageSeconds = Math.round((Date.now() - new Date(row.acquired_at).getTime()) / 1000);
+  return {
+    locked: true,
+    acquired_at: row.acquired_at,
+    expires_at: row.expires_at,
+    age_seconds: ageSeconds,
+  };
 }
 
 /** Clear sync_log entries where enterprise/org data returned 0 records, allowing re-sync */

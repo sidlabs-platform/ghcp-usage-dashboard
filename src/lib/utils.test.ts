@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { formatNumber, formatPercent, formatDelta, formatMinutes, getDateRange, datesBetween } from "./utils";
+import { formatNumber, formatPercent, formatDelta, formatMinutes, getDateRange, datesBetween, parseAndClampDays, MAX_DAYS } from "./utils";
 
 // ── formatNumber ──────────────────────────────────────────────────────
 
@@ -82,6 +82,72 @@ describe("formatMinutes", () => {
   it("formats minutes >= 1440 as Xd", () => {
     expect(formatMinutes(1440)).toBe("1.0d");
     expect(formatMinutes(2880)).toBe("2.0d");
+  });
+});
+
+// ── parseAndClampDays ─────────────────────────────────────────────────
+
+describe("parseAndClampDays", () => {
+  it("returns default value when raw is null", () => {
+    const result = parseAndClampDays(null, 7);
+    expect(result).toEqual({ days: 7 });
+  });
+
+  it("returns default value of 7 when no default specified and raw is null", () => {
+    const result = parseAndClampDays(null);
+    expect(result).toEqual({ days: 7 });
+  });
+
+  it("parses valid days string", () => {
+    expect(parseAndClampDays("14")).toEqual({ days: 14 });
+    expect(parseAndClampDays("1")).toEqual({ days: 1 });
+    expect(parseAndClampDays("365")).toEqual({ days: 365 });
+  });
+
+  it("floors decimal values", () => {
+    expect(parseAndClampDays("7.9")).toEqual({ days: 7 });
+  });
+
+  it("returns error for values exceeding MAX_DAYS", () => {
+    const result = parseAndClampDays("366");
+    expect("error" in result).toBe(true);
+    if ("error" in result) {
+      expect(result.error).toContain("366");
+      expect(result.error).toContain(String(MAX_DAYS));
+    }
+  });
+
+  it("returns error for very large values", () => {
+    const result = parseAndClampDays("99999");
+    expect("error" in result).toBe(true);
+  });
+
+  it("returns error for zero", () => {
+    const result = parseAndClampDays("0");
+    expect("error" in result).toBe(true);
+  });
+
+  it("returns error for negative values", () => {
+    const result = parseAndClampDays("-5");
+    expect("error" in result).toBe(true);
+  });
+
+  it("returns error for non-numeric strings", () => {
+    const result = parseAndClampDays("abc");
+    expect("error" in result).toBe(true);
+  });
+
+  it("returns error for empty string", () => {
+    const result = parseAndClampDays("");
+    expect("error" in result).toBe(true);
+  });
+
+  it("accepts boundary value of MAX_DAYS", () => {
+    expect(parseAndClampDays(String(MAX_DAYS))).toEqual({ days: MAX_DAYS });
+  });
+
+  it("uses custom default value", () => {
+    expect(parseAndClampDays(null, 28)).toEqual({ days: 28 });
   });
 });
 

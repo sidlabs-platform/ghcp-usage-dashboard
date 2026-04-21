@@ -206,11 +206,24 @@ async function syncCategory(
       : syncState?.last_alert_updated_at || null;
 
     // Count actual alerts in DB for this scope (accurate after upsert)
+    // Use explicit SQL per category to avoid table name interpolation (security best practice)
     const db = getDb();
-    const table = category === "code_scanning" ? "ghas_code_scanning_alerts"
-      : category === "dependabot" ? "ghas_dependabot_alerts"
-      : "ghas_secret_scanning_alerts";
-    const totalAlerts = (db.prepare(`SELECT COUNT(*) as cnt FROM ${table} WHERE scope = ? AND scope_id = ?`).get(scope, scopeId) as { cnt: number }).cnt;
+    let totalAlerts: number;
+    switch (category) {
+      case "code_scanning":
+        totalAlerts = (db.prepare(`SELECT COUNT(*) as cnt FROM ghas_code_scanning_alerts WHERE scope = ? AND scope_id = ?`).get(scope, scopeId) as { cnt: number }).cnt;
+        break;
+      case "dependabot":
+        totalAlerts = (db.prepare(`SELECT COUNT(*) as cnt FROM ghas_dependabot_alerts WHERE scope = ? AND scope_id = ?`).get(scope, scopeId) as { cnt: number }).cnt;
+        break;
+      case "secret_scanning":
+        totalAlerts = (db.prepare(`SELECT COUNT(*) as cnt FROM ghas_secret_scanning_alerts WHERE scope = ? AND scope_id = ?`).get(scope, scopeId) as { cnt: number }).cnt;
+        break;
+      default: {
+        const _exhaustive: never = category;
+        throw new Error(`Unknown GHAS category: ${_exhaustive}`);
+      }
+    }
 
     updateGhasSyncState(
       enterpriseSlug, scope, scopeId, category,

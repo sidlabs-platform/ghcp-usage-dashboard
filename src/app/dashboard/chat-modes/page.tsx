@@ -34,8 +34,7 @@ import {
 interface FeatureRow {
   feature: string;
   interactions: number;
-  codeGen: number;
-  codeAccept: number;
+  acceptances: number;
   locAdded: number;
 }
 
@@ -81,8 +80,8 @@ const FEATURE_COLORS = [
 const featureExportColumns: CSVColumn[] = [
   { key: "feature", label: "Feature", format: (row) => featureLabel(row.feature) },
   { key: "interactions", label: "Interactions" },
-  { key: "codeGen", label: "Code Generations" },
-  { key: "codeAccept", label: "Acceptances" },
+  { key: "interactions", label: "Code Generations" },
+  { key: "acceptances", label: "Acceptances" },
   { key: "locAdded", label: "LoC Added" },
 ];
 
@@ -136,7 +135,7 @@ export default function CopilotFeaturesPage() {
       .map((f) => f.feature);
   }, [data]);
 
-  type FeatureSortField = "feature" | "interactions" | "codeGen" | "codeAccept" | "locAdded";
+  type FeatureSortField = "feature" | "interactions" | "acceptances" | "locAdded";
   const { sortedData: sortedFeatures, sortField: featureSortField, sortAsc: featureSortAsc, handleSort: handleFeatureSort } = useTableSort<FeatureRow, FeatureSortField>(data?.featureDistribution ?? [], "interactions");
 
   if (loading) {
@@ -169,11 +168,11 @@ export default function CopilotFeaturesPage() {
 
   const { kpis, featureDistribution, adoptionTrend, dailyTrend } = data;
 
-  // Bar chart data(horizontal): top 10 features by interactions+codeGen
+  // Bar chart data(horizontal): top 10 features by interactions + acceptances
   const barData = featureDistribution.slice(0, 10).map((f) => ({
     name: featureLabel(f.feature),
     interactions: f.interactions,
-    codeGen: f.codeGen,
+    acceptances: f.acceptances,
   }));
   const barHeight = Math.max(300, barData.length * 36 + 40);
 
@@ -288,8 +287,8 @@ export default function CopilotFeaturesPage() {
                     radius={[0, 4, 4, 0]}
                   />
                   <Bar
-                    dataKey="codeGen"
-                    name="Code Generations"
+                    dataKey="acceptances"
+                    name="Acceptances"
                     fill={CHART_COLORS.completions}
                     radius={[0, 4, 4, 0]}
                   />
@@ -388,8 +387,7 @@ export default function CopilotFeaturesPage() {
                 <tr className="border-b text-left text-[hsl(var(--muted-foreground))]">
                   <SortableHeader label="Feature" field={"feature" as FeatureSortField} sortField={featureSortField} sortAsc={featureSortAsc} onSort={handleFeatureSort} />
                   <SortableHeader label="Interactions" field={"interactions" as FeatureSortField} sortField={featureSortField} sortAsc={featureSortAsc} onSort={handleFeatureSort} align="right" />
-                  <SortableHeader label="Code Generations" field={"codeGen" as FeatureSortField} sortField={featureSortField} sortAsc={featureSortAsc} onSort={handleFeatureSort} align="right" />
-                  <SortableHeader label="Acceptances" field={"codeAccept" as FeatureSortField} sortField={featureSortField} sortAsc={featureSortAsc} onSort={handleFeatureSort} align="right" />
+                  <SortableHeader label="Acceptances" field={"acceptances" as FeatureSortField} sortField={featureSortField} sortAsc={featureSortAsc} onSort={handleFeatureSort} align="right" />
                   <SortableHeader label="LoC Added" field={"locAdded" as FeatureSortField} sortField={featureSortField} sortAsc={featureSortAsc} onSort={handleFeatureSort} align="right" last />
                 </tr>
               </thead>
@@ -398,8 +396,7 @@ export default function CopilotFeaturesPage() {
                   <tr key={f.feature} className="border-b last:border-0">
                     <td className="py-2.5 pr-4 font-medium">{featureLabel(f.feature)}</td>
                     <td className="py-2.5 pr-4 text-right tabular-nums">{formatNumber(f.interactions)}</td>
-                    <td className="py-2.5 pr-4 text-right tabular-nums">{formatNumber(f.codeGen)}</td>
-                    <td className="py-2.5 pr-4 text-right tabular-nums">{formatNumber(f.codeAccept)}</td>
+                    <td className="py-2.5 pr-4 text-right tabular-nums">{formatNumber(f.acceptances)}</td>
                     <td className="py-2.5 text-right tabular-nums">{formatNumber(f.locAdded)}</td>
                   </tr>
                 ))}

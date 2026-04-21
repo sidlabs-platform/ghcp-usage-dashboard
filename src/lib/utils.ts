@@ -6,6 +6,7 @@ export function cn(...inputs: ClassValue[]) {
 }
 
 export function formatNumber(value: number): string {
+  if (value == null || typeof value !== 'number' || isNaN(value)) return "0";
   if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
   if (value >= 1_000) return `${(value / 1_000).toFixed(1)}K`;
   return value.toLocaleString();
@@ -28,6 +29,30 @@ export function formatMinutes(minutes: number): string {
   if (minutes < 60) return `${Math.round(minutes)}m`;
   if (minutes < 1440) return `${(minutes / 60).toFixed(1)}h`;
   return `${(minutes / 1440).toFixed(1)}d`;
+}
+
+/** Maximum allowed value for the `days` query parameter. */
+export const MAX_DAYS = 365;
+
+/**
+ * Parse and validate the `days` query parameter.
+ * Returns a clamped value in [1, MAX_DAYS] or an error string.
+ * Returns 400-worthy error if the raw value is invalid or exceeds the cap.
+ */
+export function parseAndClampDays(
+  raw: string | null,
+  defaultValue = 7,
+): { days: number } | { error: string } {
+  const parsed = raw != null ? Number(raw) : defaultValue;
+  if (!Number.isFinite(parsed) || parsed < 1) {
+    return { error: `Invalid days parameter: value must be a positive integer (got "${raw}").` };
+  }
+  if (parsed > MAX_DAYS) {
+    return {
+      error: `days parameter exceeds maximum allowed value of ${MAX_DAYS} (got ${parsed}). Please use a smaller date range.`,
+    };
+  }
+  return { days: Math.floor(parsed) };
 }
 
 export function getDateRange(days: number): { start: string; end: string } {
