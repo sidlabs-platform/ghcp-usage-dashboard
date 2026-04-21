@@ -12,6 +12,7 @@ import { Users } from "lucide-react";
 import { PaginatedTable, type ColumnDef } from "@/components/tables/PaginatedTable";
 import { ExportMenu } from "@/components/ui/ExportMenu";
 import type { CSVColumn } from "@/lib/export/csv";
+import { formatNumber, safeNum } from "@/lib/utils";
 
 interface TeamSummary {
   teamSlug: string;
@@ -49,21 +50,21 @@ const teamColumns: ColumnDef<TeamSummary>[] = [
       const adoption = row.totalMembers > 0 ? ((row.avgDailyActiveUsers / row.totalMembers) * 100) : 0;
       return (
         <>
-          {row.avgDailyActiveUsers.toFixed(1)}
+          {safeNum(row.avgDailyActiveUsers).toFixed(1)}
           <span className="ml-1 text-xs text-[hsl(var(--muted-foreground))]">({adoption.toFixed(0)}%)</span>
         </>
       );
     },
   },
-  { key: "totalLocAdded", label: "LoC Added", align: "right", render: (row) => row.totalLocAdded.toLocaleString() },
-  { key: "overallAcceptanceRate", label: "Acceptance %", align: "right", render: (row) => `${row.overallAcceptanceRate.toFixed(1)}%` },
+  { key: "totalLocAdded", label: "LoC Added", align: "right", render: (row) => formatNumber(row.totalLocAdded) },
+  { key: "overallAcceptanceRate", label: "Acceptance %", align: "right", render: (row) => `${safeNum(row.overallAcceptanceRate).toFixed(1)}%` },
   {
     key: "agentAdoptionRate",
     label: "Agent",
     align: "right",
     render: (row) => (
       <Badge variant={row.agentAdoptionRate >= 50 ? "success" : row.agentAdoptionRate >= 20 ? "warning" : "secondary"}>
-        {row.agentAdoptionRate.toFixed(1)}%
+        {safeNum(row.agentAdoptionRate).toFixed(1)}%
       </Badge>
     ),
   },
@@ -73,7 +74,7 @@ const teamColumns: ColumnDef<TeamSummary>[] = [
     align: "right",
     render: (row) => (
       <Badge variant={row.chatAdoptionRate >= 50 ? "success" : row.chatAdoptionRate >= 20 ? "warning" : "secondary"}>
-        {row.chatAdoptionRate.toFixed(1)}%
+        {safeNum(row.chatAdoptionRate).toFixed(1)}%
       </Badge>
     ),
   },
@@ -83,7 +84,7 @@ const teamColumns: ColumnDef<TeamSummary>[] = [
     align: "right",
     render: (row) => (
       <Badge variant={row.cliAdoptionRate >= 50 ? "success" : row.cliAdoptionRate >= 20 ? "warning" : "secondary"}>
-        {row.cliAdoptionRate.toFixed(1)}%
+        {safeNum(row.cliAdoptionRate).toFixed(1)}%
       </Badge>
     ),
   },
@@ -93,12 +94,12 @@ const teamExportColumns: CSVColumn[] = [
   { key: "teamName", label: "Team" },
   { key: "source", label: "Source" },
   { key: "totalMembers", label: "Members" },
-  { key: "avgDailyActiveUsers", label: "Avg Daily Active Users", format: (row) => row.avgDailyActiveUsers.toFixed(1) },
+  { key: "avgDailyActiveUsers", label: "Avg Daily Active Users", format: (row) => safeNum(row.avgDailyActiveUsers).toFixed(1) },
   { key: "totalLocAdded", label: "LoC Added" },
-  { key: "overallAcceptanceRate", label: "Acceptance %", format: (row) => `${row.overallAcceptanceRate.toFixed(1)}%` },
-  { key: "agentAdoptionRate", label: "Agent Adoption %", format: (row) => `${row.agentAdoptionRate.toFixed(1)}%` },
-  { key: "chatAdoptionRate", label: "Chat Adoption %", format: (row) => `${row.chatAdoptionRate.toFixed(1)}%` },
-  { key: "cliAdoptionRate", label: "CLI Adoption %", format: (row) => `${row.cliAdoptionRate.toFixed(1)}%` },
+  { key: "overallAcceptanceRate", label: "Acceptance %", format: (row) => `${safeNum(row.overallAcceptanceRate).toFixed(1)}%` },
+  { key: "agentAdoptionRate", label: "Agent Adoption %", format: (row) => `${safeNum(row.agentAdoptionRate).toFixed(1)}%` },
+  { key: "chatAdoptionRate", label: "Chat Adoption %", format: (row) => `${safeNum(row.chatAdoptionRate).toFixed(1)}%` },
+  { key: "cliAdoptionRate", label: "CLI Adoption %", format: (row) => `${safeNum(row.cliAdoptionRate).toFixed(1)}%` },
 ];
 
 export default function TeamsPage() {

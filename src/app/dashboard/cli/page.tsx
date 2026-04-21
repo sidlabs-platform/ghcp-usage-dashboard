@@ -21,6 +21,7 @@ const CLITokenChart = dynamic(
   { ssr: false, loading: () => <ChartSkeleton /> }
 );
 import { Terminal, Activity, Zap, Hash } from "lucide-react";
+import { formatNumber } from "@/lib/utils";
 import { useTableSort } from "@/hooks/useTableSort";
 import { SortableHeader } from "@/components/tables/SortableHeader";
 
@@ -230,10 +231,10 @@ export default function CLIPage() {
                   {sortedCliUsers.map((user) => (
                     <tr key={user.login} className="border-b last:border-0">
                       <td className="py-3 pr-4 font-medium">{user.login}</td>
-                      <td className="py-3 pr-4 text-right">{user.sessions.toLocaleString()}</td>
-                      <td className="py-3 pr-4 text-right">{user.requests.toLocaleString()}</td>
-                      <td className="py-3 pr-4 text-right">{user.promptTokens.toLocaleString()}</td>
-                      <td className="py-3 pr-4 text-right">{user.outputTokens.toLocaleString()}</td>
+                      <td className="py-3 pr-4 text-right">{formatNumber(user.sessions)}</td>
+                      <td className="py-3 pr-4 text-right">{formatNumber(user.requests)}</td>
+                      <td className="py-3 pr-4 text-right">{formatNumber(user.promptTokens)}</td>
+                      <td className="py-3 pr-4 text-right">{formatNumber(user.outputTokens)}</td>
                       <td className="py-3 text-right">{user.days}</td>
                     </tr>
                   ))}

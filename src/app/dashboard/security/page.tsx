@@ -9,6 +9,7 @@ import { ChartSkeleton } from "@/components/states/ChartSkeleton";
 import { useDateRange } from "@/contexts/DateRangeContext";
 import { useScope } from "@/contexts/ScopeContext";
 import { ShieldCheck, ShieldAlert, Bug, Key, Sparkles, TrendingDown } from "lucide-react";
+import { safeNum } from "@/lib/utils";
 import { ExportMenu } from "@/components/ui/ExportMenu";
 
 const SecurityTrendChart = dynamic(
@@ -240,7 +241,7 @@ export default function SecurityPage() {
           <h2 className="text-lg font-semibold flex items-center gap-2">
             <Bug className="h-5 w-5" /> Code Scanning
             <span className="text-sm font-normal text-[hsl(var(--muted-foreground))]">
-              MTTR: {csData.mttrFormatted} · Fix Rate: {csData.fixRate.toFixed(1)}%
+              MTTR: {csData.mttrFormatted} · Fix Rate: {safeNum(csData.fixRate).toFixed(1)}%
             </span>
           </h2>
           <div className="grid gap-4 lg:grid-cols-2">
@@ -268,7 +269,7 @@ export default function SecurityPage() {
           <h2 className="text-lg font-semibold flex items-center gap-2">
             <ShieldAlert className="h-5 w-5" /> Dependabot
             <span className="text-sm font-normal text-[hsl(var(--muted-foreground))]">
-              MTTR: {depData.mttrFormatted} · Fix Rate: {depData.fixRate.toFixed(1)}%
+              MTTR: {depData.mttrFormatted} · Fix Rate: {safeNum(depData.fixRate).toFixed(1)}%
             </span>
           </h2>
           <div className="grid gap-4 lg:grid-cols-2">
@@ -300,7 +301,7 @@ export default function SecurityPage() {
           <h2 className="text-lg font-semibold flex items-center gap-2">
             <Key className="h-5 w-5" /> Secret Scanning
             <span className="text-sm font-normal text-[hsl(var(--muted-foreground))]">
-              MTTR: {ssData.mttrFormatted} · Fix Rate: {ssData.fixRate.toFixed(1)}%
+              MTTR: {ssData.mttrFormatted} · Fix Rate: {safeNum(ssData.fixRate).toFixed(1)}%
             </span>
           </h2>
           <div className="grid gap-4 lg:grid-cols-2">

@@ -12,6 +12,7 @@ import { Users } from "lucide-react";
 import { PaginatedTable, type ColumnDef } from "@/components/tables/PaginatedTable";
 import { ExportMenu } from "@/components/ui/ExportMenu";
 import type { CSVColumn } from "@/lib/export/csv";
+import { formatNumber, safeNum } from "@/lib/utils";
 
 interface UserRow {
   login: string;
@@ -33,9 +34,9 @@ interface UserRow {
 const userColumns: ColumnDef<UserRow>[] = [
   { key: "login", label: "User", render: (row) => <span className="font-medium">{row.login}</span> },
   { key: "activeDays", label: "Active Days", align: "right", render: (row) => row.activeDays },
-  { key: "locAdded", label: "LoC Added", align: "right", render: (row) => row.locAdded.toLocaleString() },
-  { key: "interactions", label: "Interactions", align: "right", render: (row) => row.interactions.toLocaleString() },
-  { key: "acceptanceRate", label: "Accept %", align: "right", render: (row) => `${row.acceptanceRate.toFixed(1)}%` },
+  { key: "locAdded", label: "LoC Added", align: "right", render: (row) => formatNumber(row.locAdded) },
+  { key: "interactions", label: "Interactions", align: "right", render: (row) => formatNumber(row.interactions) },
+  { key: "acceptanceRate", label: "Accept %", align: "right", render: (row) => `${safeNum(row.acceptanceRate).toFixed(1)}%` },
   {
     key: "features",
     label: "Features",
@@ -58,7 +59,7 @@ const userExportColumns: CSVColumn[] = [
   { key: "activeDays", label: "Active Days" },
   { key: "locAdded", label: "LoC Added" },
   { key: "interactions", label: "Interactions" },
-  { key: "acceptanceRate", label: "Acceptance %", format: (row) => `${row.acceptanceRate.toFixed(1)}%` },
+  { key: "acceptanceRate", label: "Acceptance %", format: (row) => `${safeNum(row.acceptanceRate).toFixed(1)}%` },
   {
     key: "features", label: "Features", format: (row) => {
       const f: string[] = [];

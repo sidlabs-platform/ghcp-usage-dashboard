@@ -13,11 +13,13 @@ export function formatNumber(value: number): string {
 }
 
 export function formatPercent(value: number, decimals = 1): string {
+  if (value == null || typeof value !== 'number' || isNaN(value)) return "0%";
   return `${value.toFixed(decimals)}%`;
 }
 
 export function formatDelta(current: number, previous: number): { value: string; positive: boolean } {
-  if (previous === 0) return { value: "N/A", positive: true };
+  if (previous == null || typeof previous !== 'number' || previous === 0) return { value: "N/A", positive: true };
+  if (current == null || typeof current !== 'number') return { value: "N/A", positive: true };
   const delta = ((current - previous) / previous) * 100;
   return {
     value: `${delta >= 0 ? "+" : ""}${delta.toFixed(1)}%`,
@@ -26,9 +28,19 @@ export function formatDelta(current: number, previous: number): { value: string;
 }
 
 export function formatMinutes(minutes: number): string {
+  if (minutes == null || typeof minutes !== 'number' || isNaN(minutes)) return "0m";
   if (minutes < 60) return `${Math.round(minutes)}m`;
   if (minutes < 1440) return `${(minutes / 60).toFixed(1)}h`;
   return `${(minutes / 1440).toFixed(1)}d`;
+}
+
+/**
+ * Safely coerce a value to a number, returning `fallback` (default 0) when
+ * the input is null, undefined, or NaN.
+ */
+export function safeNum(v: unknown, fallback = 0): number {
+  if (v == null || typeof v !== 'number' || isNaN(v)) return fallback;
+  return v;
 }
 
 /** Maximum allowed value for the `days` query parameter. */

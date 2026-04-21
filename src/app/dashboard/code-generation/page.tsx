@@ -24,6 +24,7 @@ const FeatureBreakdownChart = dynamic(
   { ssr: false, loading: () => <ChartSkeleton /> }
 );
 import { Code2, TrendingUp, FileCode, Percent } from "lucide-react";
+import { formatNumber } from "@/lib/utils";
 import type { CodeGenerationResponse } from "@/app/api/metrics/code-generation/route";
 import {
   AreaChart,
@@ -116,13 +117,13 @@ export default function CodeGenerationPage() {
           title="Completion LoC"
           value={kpis.completionLocAccepted}
           icon={<FileCode className="h-4 w-4" />}
-          subtitle={`${kpis.completionLocSuggested.toLocaleString()} suggested`}
+          subtitle={`${formatNumber(kpis.completionLocSuggested)} suggested`}
         />
         <MetricCard
           title="Agent LoC Added"
           value={kpis.agentLocAdded}
           icon={<TrendingUp className="h-4 w-4" />}
-          subtitle={`${kpis.agentLocDeleted.toLocaleString()} deleted by agent`}
+          subtitle={`${formatNumber(kpis.agentLocDeleted)} deleted by agent`}
         />
         <MetricCard
           title="Agent LoC Share"

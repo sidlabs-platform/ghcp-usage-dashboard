@@ -7,6 +7,7 @@ import { ChartSkeleton } from "@/components/states/ChartSkeleton";
 import { useDateRange } from "@/contexts/DateRangeContext";
 import { useScope } from "@/contexts/ScopeContext";
 import { DollarSign, Search, Filter, Building2, Users, ChevronDown, X } from "lucide-react";
+import { safeNum } from "@/lib/utils";
 import { ExportMenu } from "@/components/ui/ExportMenu";
 import type { BillingUsageRecord, ChargeScope, BillingCostCenterBreakdown, BillingRepositoryBreakdown } from "@/lib/types/billing";
 
@@ -42,10 +43,12 @@ const CHARGE_SCOPE_BADGE: Record<string, { label: string; color: string }> = {
   org: { label: "Org", color: "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-400" },
 };
 
-const fmtCurrency = (v: number) =>
-  v >= 1_000_000 ? `$${(v / 1_000_000).toFixed(1)}M`
-    : v >= 1_000 ? `$${(v / 1_000).toFixed(1)}K`
-    : `$${v.toFixed(2)}`;
+const fmtCurrency = (v: number) => {
+  const n = safeNum(v);
+  return n >= 1_000_000 ? `$${(n / 1_000_000).toFixed(1)}M`
+    : n >= 1_000 ? `$${(n / 1_000).toFixed(1)}K`
+    : `$${n.toFixed(2)}`;
+};
 
 export default function MeteredUsagePage() {
   const { days } = useDateRange();
@@ -345,7 +348,7 @@ export default function MeteredUsagePage() {
 
       {/* Summary row */}
       <div className="flex items-center gap-4 text-sm text-[hsl(var(--muted-foreground))]">
-        <span>{pagination.totalItems.toLocaleString()} records</span>
+        <span>{safeNum(pagination.totalItems).toLocaleString()} records</span>
         <span>·</span>
         <span>Page {pagination.page} of {pagination.totalPages || 1}</span>
       </div>
@@ -382,7 +385,7 @@ export default function MeteredUsagePage() {
                       <td className="px-3 py-2.5 whitespace-nowrap font-mono text-xs">{r.date}</td>
                       <td className="px-3 py-2.5 whitespace-nowrap font-medium">{r.product}</td>
                       <td className="px-3 py-2.5 whitespace-nowrap text-xs text-[hsl(var(--muted-foreground))]">{r.sku}</td>
-                      <td className="px-3 py-2.5 whitespace-nowrap text-right">{r.quantity.toLocaleString()}</td>
+                      <td className="px-3 py-2.5 whitespace-nowrap text-right">{safeNum(r.quantity).toLocaleString()}</td>
                       <td className="px-3 py-2.5 whitespace-nowrap text-xs">{r.unit_type}</td>
                       <td className="px-3 py-2.5 whitespace-nowrap text-right">{fmtCurrency(r.gross_amount)}</td>
                       <td className="px-3 py-2.5 whitespace-nowrap text-right text-emerald-600 dark:text-emerald-400">{r.discount_amount > 0 ? `-${fmtCurrency(r.discount_amount)}` : "—"}</td>

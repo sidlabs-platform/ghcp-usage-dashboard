@@ -8,6 +8,7 @@ import { ChartSkeleton } from "@/components/states/ChartSkeleton";
 import { useDateRange } from "@/contexts/DateRangeContext";
 import { useScope } from "@/contexts/ScopeContext";
 import { Zap, Users, Brain, AlertTriangle, Search, X } from "lucide-react";
+import { safeNum } from "@/lib/utils";
 import { ExportMenu } from "@/components/ui/ExportMenu";
 import type { BillingPremiumRequestRecord, PremiumRequestUserSummary, PremiumRequestModelSummary, PremiumDailyTrend } from "@/lib/types/billing";
 
@@ -46,10 +47,12 @@ interface FilterOptions {
   users: string[];
 }
 
-const fmtCurrency = (v: number) =>
-  v >= 1_000_000 ? `$${(v / 1_000_000).toFixed(1)}M`
-    : v >= 1_000 ? `$${(v / 1_000).toFixed(1)}K`
-    : `$${v.toFixed(2)}`;
+const fmtCurrency = (v: number) => {
+  const n = safeNum(v);
+  return n >= 1_000_000 ? `$${(n / 1_000_000).toFixed(1)}M`
+    : n >= 1_000 ? `$${(n / 1_000).toFixed(1)}K`
+    : `$${n.toFixed(2)}`;
+};
 
 export default function PremiumRequestsPage() {
   const { days } = useDateRange();
@@ -338,12 +341,12 @@ export default function PremiumRequestsPage() {
                         <tr key={u.username} className="hover:bg-[hsl(var(--accent))]/20 transition-colors">
                           <td className="px-4 py-2.5 font-medium">{u.username}</td>
                           <td className="px-4 py-2.5 text-[hsl(var(--muted-foreground))]">{u.organization || "—"}</td>
-                          <td className="px-4 py-2.5 text-right">{u.total_requests.toLocaleString()}</td>
-                          <td className="px-4 py-2.5 text-right text-emerald-600 dark:text-emerald-400">{u.within_quota.toLocaleString()}</td>
-                          <td className="px-4 py-2.5 text-right text-red-600 dark:text-red-400">{u.over_quota > 0 ? u.over_quota.toLocaleString() : "—"}</td>
-                          <td className="px-4 py-2.5 text-right text-[hsl(var(--muted-foreground))]">{u.quota_limit > 0 ? u.quota_limit.toLocaleString() : "—"}</td>
+                          <td className="px-4 py-2.5 text-right">{safeNum(u.total_requests).toLocaleString()}</td>
+                          <td className="px-4 py-2.5 text-right text-emerald-600 dark:text-emerald-400">{safeNum(u.within_quota).toLocaleString()}</td>
+                          <td className="px-4 py-2.5 text-right text-red-600 dark:text-red-400">{safeNum(u.over_quota) > 0 ? safeNum(u.over_quota).toLocaleString() : "—"}</td>
+                          <td className="px-4 py-2.5 text-right text-[hsl(var(--muted-foreground))]">{safeNum(u.quota_limit) > 0 ? safeNum(u.quota_limit).toLocaleString() : "—"}</td>
                           <td className={`px-4 py-2.5 text-right font-semibold ${utilColor}`}>
-                            {u.utilization_pct > 0 ? `${u.utilization_pct.toFixed(1)}%` : "—"}
+                            {safeNum(u.utilization_pct) > 0 ? `${safeNum(u.utilization_pct).toFixed(1)}%` : "—"}
                           </td>
                           <td className="px-4 py-2.5 text-right font-semibold">{fmtCurrency(u.total_net)}</td>
                         </tr>
@@ -444,7 +447,7 @@ export default function PremiumRequestsPage() {
                         <td className="px-3 py-2.5 whitespace-nowrap font-medium">{r.username || "—"}</td>
                         <td className="px-3 py-2.5 whitespace-nowrap">{r.organization || "—"}</td>
                         <td className="px-3 py-2.5 whitespace-nowrap">{r.model}</td>
-                        <td className="px-3 py-2.5 whitespace-nowrap text-right">{r.quantity.toLocaleString()}</td>
+                        <td className="px-3 py-2.5 whitespace-nowrap text-right">{safeNum(r.quantity).toLocaleString()}</td>
                         <td className="px-3 py-2.5 whitespace-nowrap text-right">{fmtCurrency(r.gross_amount)}</td>
                         <td className="px-3 py-2.5 whitespace-nowrap text-right font-semibold">{fmtCurrency(r.net_amount)}</td>
                         <td className="px-3 py-2.5 whitespace-nowrap">
@@ -459,7 +462,7 @@ export default function PremiumRequestsPage() {
                           )}
                         </td>
                         <td className="px-3 py-2.5 whitespace-nowrap text-right text-[hsl(var(--muted-foreground))]">
-                          {r.total_monthly_quota > 0 ? r.total_monthly_quota.toLocaleString() : "—"}
+                          {safeNum(r.total_monthly_quota) > 0 ? safeNum(r.total_monthly_quota).toLocaleString() : "—"}
                         </td>
                       </tr>
                     ))

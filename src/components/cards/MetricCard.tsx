@@ -1,4 +1,4 @@
-import { cn, formatNumber, formatPercent } from "@/lib/utils";
+import { cn, formatNumber, formatPercent, safeNum } from "@/lib/utils";
 import { Card } from "@/components/ui/card";
 import { TrendingUp, TrendingDown, Minus } from "lucide-react";
 
@@ -60,7 +60,7 @@ export function MetricCard({
                 <Minus className="h-3.5 w-3.5" />
               )}
               {delta.value > 0 ? "+" : ""}
-              {delta.value.toFixed(1)}%
+              {safeNum(delta.value).toFixed(1)}%
             </span>
           )}
         </div>

@@ -8,6 +8,7 @@ import { ChartSkeleton } from "@/components/states/ChartSkeleton";
 import { useDateRange } from "@/contexts/DateRangeContext";
 import { useScope } from "@/contexts/ScopeContext";
 import { Receipt, DollarSign, TrendingDown, Building2, Users, Package } from "lucide-react";
+import { safeNum } from "@/lib/utils";
 import { ExportMenu } from "@/components/ui/ExportMenu";
 import type { BillingOverviewKPIs, BillingProductBreakdown, BillingOrgBreakdown, BillingUserBreakdown, BillingCostCenterBreakdown } from "@/lib/types/billing";
 
@@ -43,10 +44,12 @@ interface DailyTrend {
   org_net: number;
 }
 
-const fmtCurrency = (v: number) =>
-  v >= 1_000_000 ? `$${(v / 1_000_000).toFixed(1)}M`
-    : v >= 1_000 ? `$${(v / 1_000).toFixed(1)}K`
-    : `$${v.toFixed(2)}`;
+const fmtCurrency = (v: number) => {
+  const n = safeNum(v);
+  return n >= 1_000_000 ? `$${(n / 1_000_000).toFixed(1)}M`
+    : n >= 1_000 ? `$${(n / 1_000).toFixed(1)}K`
+    : `$${n.toFixed(2)}`;
+};
 
 export default function BillingOverviewPage() {
   const { days } = useDateRange();

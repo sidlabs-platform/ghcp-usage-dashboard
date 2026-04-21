@@ -2,6 +2,7 @@
 
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from "recharts";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
+import { safeNum } from "@/lib/utils";
 
 interface AutofixInsightChartProps {
   available: number;
@@ -30,7 +31,7 @@ export function AutofixInsightChart({ available, committed, rate }: AutofixInsig
           </ResponsiveContainer>
           <div className="space-y-2">
             <div>
-              <p className="text-2xl font-bold">{rate.toFixed(1)}%</p>
+              <p className="text-2xl font-bold">{safeNum(rate).toFixed(1)}%</p>
               <p className="text-xs text-[hsl(var(--muted-foreground))]">Adoption Rate</p>
             </div>
             <div className="flex gap-4 text-sm">
