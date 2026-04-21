@@ -1,128 +1,51 @@
-# Copilot Instructions — GHCP Usage Dashboard
+# GitHub Copilot Instructions — GHCP Usage Dashboard
 
-## Build & Run
+## Project Context
+This is a Next.js 15 (App Router) TypeScript dashboard for GitHub Copilot enterprise usage metrics. It uses SQLite via better-sqlite3, Recharts for charts, and TailwindCSS for styling.
 
-```bash
-npm run dev          # Dev server with Turbopack (http://localhost:3000)
-npm run build        # Production build (Next.js)
-npm run lint         # ESLint (next lint)
-npx tsc --noEmit     # Type-check only (faster than full build, ~30s)
-```
+## Architecture Rules
 
-No test framework is configured. Validate changes with `npx tsc --noEmit` and `npm run build`.
+### Database Layer (`src/lib/db/`)
+- All database access through `getDb()` singleton
+- Schema files: `schema.sql`, `summary-schema.sql`, `ghas-schema.sql`, `billing-schema.sql`
+- **Always push aggregation into SQL** — never load all rows into JS just to aggregate
+- Use `json_each()` SQLite function to aggregate JSON array columns directly in SQL
+- Parameterize all queries — never interpolate user input into SQL strings
+- Use `buildLoginFilter()` and `buildEnterpriseFilter()` helpers for dynamic WHERE clauses
+- Wrap bulk operations in transactions for performance
 
-## Architecture
+### API Routes (`src/app/api/`)
+- Parse scope filters with `parseScopeFilter(searchParams)`
+- Apply user filtering with `filterByScope()` or SQL-level `allowedLogins`
+- Support query params: `days`, `teams`, `orgs`, `enterprises`
+- Wrap with `withTimeout()` (30s) and `withCache()` for resilience
+- Return appropriate `Cache-Control` headers
+- Return 400 for invalid inputs with descriptive error messages
 
-Next.js 15 App Router dashboard that syncs GitHub Copilot enterprise metrics, GHAS alerts, and billing data into a local SQLite database, then serves pre-aggregated data through cached API routes.
+### Summary Tables (`src/lib/db/summary-tables.ts`)
+- Pre-aggregate data during sync to avoid runtime computation
+- Tables: `daily_aggregate_cache`, `user_period_summary`, `team_summary_cache`
+- `refreshAllSummaries()` called after sync completes
+- New summary tables should follow the same refresh pattern
 
-### Data flow
+### Type Safety
+- All metric types defined in `src/lib/types/metrics.ts`
+- Use interfaces for object shapes, named exports
+- Strict TypeScript — no `any` types
 
-```
-GitHub APIs (Copilot metrics, seats, teams, GHAS, billing)
-    ↓  sync-service fetches day-by-day, stores raw data
-SQLite (data/copilot-metrics.db, WAL mode, better-sqlite3)
-    ↓  refreshAllSummaries() populates pre-aggregated tables
-Summary tables (user_period_summary, daily_aggregate_cache, team_summary_cache)
-    ↓  API routes query summaries, not raw tables
-API Routes (withCache → withTimeout wrappers)
-    ↓  React Query fetches with scope/date filters
-Dashboard pages (Recharts, dynamic imports, SSR disabled for charts)
-```
+### Performance Guidelines
+- **Critical**: `getAllUserMetrics()` loads all rows + parses 6 JSON columns per row — causes OOM on large datasets
+- Prefer SQL aggregation via `aggregation-queries.ts` over JS-side loops
+- Use `json_each()` for totals_by_model_feature, totals_by_language_feature, totals_by_feature breakdown
+- Add row-count guards: return 400 if estimated rows exceed threshold
+- Cache expensive computations in summary tables refreshed during sync
 
-### Key layers
+### Testing
+- Use Vitest; test files co-located as `*.test.ts`
+- Run: `npm test`, `npm run test:coverage`
 
-| Layer | Location | Notes |
-|-------|----------|-------|
-| GitHub API clients | `src/lib/github/` | `api-base.ts` has shared fetch with adaptive rate limiting, retry, pagination |
-| Sync orchestration | `src/lib/db/sync-service.ts` | `fullSync()`, `incrementalSync()`, `syncDay()` — lock via `sync_lock` table |
-| Database | `src/lib/db/database.ts` | Singleton `getDb()`, schemas in `*.sql` files, auto-migrated on init |
-| Repository layer | `src/lib/db/*-repo.ts` | `metrics-repo`, `seats-repo`, `teams-repo`, `ghas-repo`, `billing-repo` |
-| Summary refresh | `src/lib/db/summary-tables.ts` | Called after sync; API routes read from these, not raw `user_daily_metrics` |
-| Config | `src/lib/config/dashboard-config.ts` | Reads `dashboard-config.json` with 5-min cache, deep-merges with defaults |
-| API middleware | `src/lib/api/` | `withCache()`, `withTimeout()`, `parseScopeFilter()`, pagination helpers |
-| Cache | `src/lib/cache/memory-cache.ts` | In-memory TTL with LRU eviction (500 entries). Invalidated after sync |
-| Contexts | `src/contexts/` | `DateRangeContext` (days), `ScopeContext` (team/org filtering) — shared across all pages |
-| Export | `src/lib/export/` | CSV (paginated fetch-all), PDF (html2canvas + jspdf) |
-
-### Auth
-
-Uses `GITHUB_TOKEN` (PAT) from env. If a GitHub App is configured in env, use App auth for org-level endpoints and PAT only for enterprise-only endpoints. If no App is configured, PAT is used for everything.
-
-## Conventions
-
-### API route pattern
-
-Every API GET handler follows this composition pattern:
-
-```typescript
-async function handler(request: NextRequest) {
-  const params = request.nextUrl.searchParams;
-  const days = Number(params.get("days") ?? 7);
-  const { start, end } = getDateRange(days);
-  // ... query logic using scope filter + pagination
-  return NextResponse.json({ data, pagination });
-}
-
-export const GET = withTimeout(withCache(handler, CACHE_TTL.MEDIUM));
-```
-
-- Wrap with `withCache` (TTL constants: `SHORT` 2m, `MEDIUM` 5m, `LONG` 10m, `FILTERS` 30m), then `withTimeout` (30s default)
-- Parse scope with `parseScopeFilter(searchParams)` from `src/lib/api/scope-filter.ts`
-- Paginated routes return `{ data, pagination: { page, pageSize, totalItems, totalPages } }`
-- Use `buildOrderBy()` with an allowlist of column names to prevent SQL injection
-
-### Dashboard page pattern
-
-```typescript
-"use client";
-
-// Dynamic imports for charts (SSR disabled, ChartSkeleton loading state)
-const MyChart = dynamic(
-  () => import("@/components/charts/MyChart").then(m => ({ default: m.MyChart })),
-  { ssr: false, loading: () => <ChartSkeleton /> }
-);
-
-export default function MyPage() {
-  const { days } = useDateRange();
-  const { buildScopeParams, hasFilter } = useScope();
-  // Fetch from API with days + scope params, render cards + charts
-}
-```
-
-- All dashboard pages are client components (`"use client"`)
-- Charts are dynamically imported with `{ ssr: false }` and `ChartSkeleton` loading placeholder
-- Use `useDateRange()` and `useScope()` from contexts for shared filter state
-- Use `CHART_COLORS` from `src/lib/constants.ts` for consistent chart colors
-
-### Database
-
-- Schema files: `schema.sql`, `ghas-schema.sql`, `summary-schema.sql`, `billing-schema.sql` in `src/lib/db/`
-- All schema files use `CREATE TABLE IF NOT EXISTS` — safe to re-run
-- New columns added via migrations array in `database.ts` with `try/catch` for idempotency
-- Repo layer (`*-repo.ts`) contains all SQL queries — no raw SQL in API routes
-- After bulk inserts (sync), call `refreshAllSummaries()` then `cache.invalidateAll()`
-
-### Config-driven feature flags
-
-`dashboard-config.json` controls which features are synced and which sidebar pages are visible. Key behaviors:
-- `copilot.enterprise: false` → skips enterprise API calls, force-disables billing
-- `copilot.userMetrics: false` → hides pages that depend on per-user data (Code Gen, Features, Models, CLI, Teams, Users, IDE)
-- Each GHAS category (`codeScanning`, `dependabot`, `secretScanning`) toggled independently
-- Use `isMetricEnabled()`, `isCopilotSubEnabled()`, `getEffectiveBillingEnabled()` helpers — don't read config directly
-
-### Styling
-
-- Tailwind CSS v4 with CSS variables for theming: `hsl(var(--background))`, `hsl(var(--foreground))`, etc.
-- Dark mode via `dark` class on `<html>`, persisted in localStorage
-- `cn()` utility (clsx + tailwind-merge) for conditional class merging
-- UI primitives in `src/components/ui/` (shadcn/ui pattern)
-
-### Import aliases
-
-`@/*` maps to `./src/*` (configured in `tsconfig.json`). Always use `@/` imports.
-
-### GitHub API specifics
-
-- GHAS alert endpoints (code scanning, dependabot, secret scanning) do not support `state=all` — omit the state param to get all alerts
-- Billing endpoints use NDJSON format — use `fetchNDJSON()` from `api-base.ts`
-- GitHub API version: `2026-03-10` (set in `api-base.ts`)
+### Code Conventions
+- Follow existing naming: `getChatModeSums`, `getAdoptionStats`, `refreshDailyAggregate`
+- JSDoc on exported functions
+- Use `COALESCE(SUM(...), 0)` for nullable SQL aggregations
+- Sort results consistently (by day ASC, by count DESC)
