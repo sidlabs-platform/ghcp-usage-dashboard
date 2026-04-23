@@ -809,6 +809,51 @@ export function getActiveUsersDailyTrend(
   return db.prepare(sql).all(startDay, endDay, ...filter.params, ...ef.params) as ActiveUsersDailyRow[];
 }
 
+export interface ActiveUsersRollingRow {
+  day: string;
+  daily: number;
+  weekly: number;
+  monthly: number;
+  cliUsers: number;
+}
+
+/** Active users with rolling 7-day and 30-day window counts */
+export function getActiveUsersRollingTrend(
+  startDay: string,
+  endDay: string,
+  allowedLogins?: string[],
+  enterpriseSlugs?: string[],
+): ActiveUsersRollingRow[] {
+  const db = getDb();
+  const filter = buildLoginFilter(allowedLogins ?? []);
+  const ef = buildEnterpriseFilter(enterpriseSlugs);
+  
+  const sql = `
+    SELECT
+      m.day,
+      COUNT(DISTINCT m.user_login) as daily,
+      -- Rolling 7-day distinct user count (WAU)
+      (SELECT COUNT(DISTINCT w.user_login)
+       FROM user_daily_metrics w
+       WHERE w.day BETWEEN date(m.day, '-6 days') AND m.day${ef.clause}
+       ${filter.clause}
+      ) as weekly,
+      -- Rolling 30-day distinct user count (MAU)
+      (SELECT COUNT(DISTINCT mo.user_login)
+       FROM user_daily_metrics mo
+       WHERE mo.day BETWEEN date(m.day, '-29 days') AND m.day${ef.clause}
+       ${filter.clause}
+      ) as monthly,
+      COUNT(DISTINCT CASE WHEN m.used_cli = 1 THEN m.user_login END) as cliUsers
+    FROM user_daily_metrics m
+    WHERE m.day >= ? AND m.day <= ?${ef.clause}${filter.clause}
+    GROUP BY m.day
+    ORDER BY m.day ASC
+  `;
+  
+  return db.prepare(sql).all(startDay, endDay, ...ef.params, ...filter.params) as ActiveUsersRollingRow[];
+}
+
 // ── Feature usage daily (SQL, structured columns) ─────────────────────
 
 export interface FeatureUsageDailyRow {
