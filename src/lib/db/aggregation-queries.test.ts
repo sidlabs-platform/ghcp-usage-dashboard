@@ -229,4 +229,81 @@ describe("SQL json_each aggregation queries", () => {
 
     expect(row.cnt).toBe(3); // 2 users day1 + 1 user day2
   });
+
+  it("rolling window for 7-day WAU calculates correctly", () => {
+    // Test data:
+    // 2025-04-01: alice, bob (2 users)
+    // 2025-04-02: alice (1 user)
+    const rows = db.prepare(`
+      SELECT
+        m.day,
+        COUNT(DISTINCT m.user_login) as daily,
+        (SELECT COUNT(DISTINCT w.user_login)
+         FROM user_daily_metrics w
+         WHERE w.day BETWEEN date(m.day, '-6 days') AND m.day
+        ) as weekly
+      FROM user_daily_metrics m
+      WHERE m.day >= '2025-04-01' AND m.day <= '2025-04-02'
+      GROUP BY m.day
+      ORDER BY m.day ASC
+    `).all() as { day: string; daily: number; weekly: number }[];
+
+    expect(rows.length).toBe(2);
+    // 2025-04-01: 2 users (alice, bob) daily, same 2 in 7-day window
+    expect(rows[0].day).toBe("2025-04-01");
+    expect(rows[0].daily).toBe(2);
+    expect(rows[0].weekly).toBe(2);
+
+    // 2025-04-02: 1 user (alice) daily, 2 total in 7-day window (alice + bob)
+    expect(rows[1].day).toBe("2025-04-02");
+    expect(rows[1].daily).toBe(1);
+    expect(rows[1].weekly).toBe(2); // alice (day1+day2 deduplicated) + bob (day1)
+  });
+
+  it("rolling window for 30-day MAU calculates correctly", () => {
+    const rows = db.prepare(`
+      SELECT
+        m.day,
+        COUNT(DISTINCT m.user_login) as daily,
+        (SELECT COUNT(DISTINCT mo.user_login)
+         FROM user_daily_metrics mo
+         WHERE mo.day BETWEEN date(m.day, '-29 days') AND m.day
+        ) as monthly
+      FROM user_daily_metrics m
+      WHERE m.day >= '2025-04-01' AND m.day <= '2025-04-02'
+      GROUP BY m.day
+      ORDER BY m.day ASC
+    `).all() as { day: string; daily: number; monthly: number }[];
+
+    expect(rows.length).toBe(2);
+    // Over 30-day window, same results as 7-day since data is only 2 days
+    expect(rows[0].monthly).toBe(2);
+    expect(rows[1].monthly).toBe(2); // alice + bob deduplicated across 2 days
+  });
+
+  it("rolling window with filter by user login", () => {
+    // Filter to only alice
+    const rows = db.prepare(`
+      SELECT
+        m.day,
+        COUNT(DISTINCT m.user_login) as daily,
+        (SELECT COUNT(DISTINCT w.user_login)
+         FROM user_daily_metrics w
+         WHERE w.day BETWEEN date(m.day, '-6 days') AND m.day
+           AND w.user_login IN ('alice')
+        ) as weekly
+      FROM user_daily_metrics m
+      WHERE m.day >= '2025-04-01' AND m.day <= '2025-04-02'
+        AND m.user_login IN ('alice')
+      GROUP BY m.day
+      ORDER BY m.day ASC
+    `).all() as { day: string; daily: number; weekly: number }[];
+
+    expect(rows.length).toBe(2);
+    // alice appears on both days
+    expect(rows[0].daily).toBe(1);
+    expect(rows[0].weekly).toBe(1);
+    expect(rows[1].daily).toBe(1);
+    expect(rows[1].weekly).toBe(1); // alice deduplicated across window
+  });
 });

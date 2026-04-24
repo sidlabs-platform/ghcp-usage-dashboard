@@ -817,7 +817,27 @@ export interface ActiveUsersRollingRow {
   cliUsers: number;
 }
 
-/** Active users with rolling 7-day and 30-day window counts */
+/**
+ * Active users with rolling 7-day (WAU) and 30-day (MAU) window counts.
+ *
+ * For each day in the range, computes:
+ * - daily: unique users on that day
+ * - weekly: unique users in 7-day window ending on that day
+ * - monthly: unique users in 30-day window ending on that day
+ * - cliUsers: CLI users on that day
+ *
+ * Uses DISTINCT user counting within rolling windows to properly deduplicate
+ * users appearing on multiple days within each window period.
+ *
+ * Supports filtering by:
+ * - allowedLogins: team/org membership filter (applies to all queries)
+ * - enterpriseSlugs: enterprise/account filter (applies to all queries)
+ *
+ * Edge cases:
+ * - Single-day ranges: Each day has rolling windows constrained to available data
+ * - Empty filters: Returns empty result set
+ * - Date range start: Earlier days have windows < 7/30 days if fewer historical days exist
+ */
 export function getActiveUsersRollingTrend(
   startDay: string,
   endDay: string,

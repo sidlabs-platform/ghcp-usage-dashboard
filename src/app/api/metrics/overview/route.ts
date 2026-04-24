@@ -80,12 +80,13 @@ async function handler(request: NextRequest) {
               weekly: d.weekly_active_users,
               monthly: d.monthly_active_users,
             }))
-          : userTrendRows.map((r) => ({
+          : (console.warn(`[overview] Aggregated summary empty for range ${start}-${end}, using DAU fallback`),
+             userTrendRows.map((r) => ({
               day: r.day,
               daily: r.daily,
               weekly: r.daily,
               monthly: r.daily,
-            }));
+            })));
       }
 
       // Acceptance rate trend via SQL (completion-only, uses json_each)
