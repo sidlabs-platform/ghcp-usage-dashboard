@@ -20,6 +20,16 @@ import {
   Receipt,
   DollarSign,
   Zap,
+  TrendingUp,
+  Target,
+  BarChart3,
+  Gauge,
+  Rocket,
+  Activity,
+  Award,
+  Bot,
+  PiggyBank,
+  Settings2,
 } from "lucide-react";
 import { useState, useEffect } from "react";
 
@@ -38,6 +48,23 @@ const navItems = [
   { href: "/dashboard/billing", label: "Billing", icon: Receipt, visKey: "billing" as const },
   { href: "/dashboard/billing-usage", label: "Metered Usage", icon: DollarSign, visKey: "billingUsage" as const },
   { href: "/dashboard/billing-premium", label: "Premium Requests", icon: Zap, visKey: "billingPremium" as const },
+];
+
+const impactNavItems = [
+  { href: "/dashboard/impact", label: "Impact Overview", icon: TrendingUp, visKey: "impactOverview" as const },
+  { href: "/dashboard/impact/pr-efficiency", label: "PR Efficiency", icon: Target, visKey: "impactPrEfficiency" as const },
+  { href: "/dashboard/impact/agent-impact", label: "Agent Impact", icon: Bot, visKey: "impactAgentImpact" as const },
+  { href: "/dashboard/impact/license-utilization", label: "License Utilization", icon: Gauge, visKey: "impactLicenseUtilization" as const },
+  { href: "/dashboard/impact/code-review", label: "Code Review Impact", icon: Activity, visKey: "impactCodeReviewImpact" as const },
+  { href: "/dashboard/impact/roi", label: "ROI Score", icon: PiggyBank, visKey: "impactRoiScore" as const },
+  { href: "/dashboard/impact/time-to-value", label: "Time to Value", icon: Rocket, visKey: "impactTimeToValue" as const },
+  { href: "/dashboard/impact/adoption-funnel", label: "Adoption Funnel", icon: BarChart3, visKey: "impactAdoptionFunnel" as const },
+  { href: "/dashboard/impact/engagement", label: "Engagement Depth", icon: Activity, visKey: "impactEngagementDepth" as const },
+  { href: "/dashboard/impact/maturity", label: "Maturity Journey", icon: Award, visKey: "impactMaturityJourney" as const },
+  { href: "/dashboard/impact/health-score", label: "Health Score", icon: Gauge, visKey: "impactHealthScore" as const },
+  { href: "/dashboard/impact/agent-autonomy", label: "Agent Autonomy", icon: Bot, visKey: "impactAgentAutonomy" as const },
+  { href: "/dashboard/impact/cost-per-value", label: "Cost per Value", icon: PiggyBank, visKey: "impactCostPerValue" as const },
+  { href: "/dashboard/impact/version-compliance", label: "Version Compliance", icon: Settings2, visKey: "impactVersionCompliance" as const },
 ];
 
 type PageVisibility = Record<string, boolean>;
@@ -79,6 +106,34 @@ export function Sidebar() {
     return pageVisibility[item.visKey] !== false;
   });
 
+  const visibleImpactItems = impactNavItems.filter((item) => {
+    if (Object.keys(pageVisibility).length === 0) return true;
+    return pageVisibility[item.visKey] !== false;
+  });
+
+  const renderNavLink = (item: { href: string; label: string; icon: React.ComponentType<{ className?: string }>; visKey: string }) => {
+    const isActive =
+      item.href === "/dashboard"
+        ? pathname === "/dashboard"
+        : pathname === item.href || pathname.startsWith(item.href + "/");
+    return (
+      <Link
+        key={item.href}
+        href={item.href}
+        className={cn(
+          "flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors",
+          isActive
+            ? "bg-[hsl(var(--primary))]/10 text-[hsl(var(--primary))]"
+            : "text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--accent))] hover:text-[hsl(var(--foreground))]"
+        )}
+        title={collapsed ? item.label : undefined}
+      >
+        <item.icon className="h-5 w-5 shrink-0" />
+        {!collapsed && <span>{item.label}</span>}
+      </Link>
+    );
+  };
+
   return (
     <aside
       className={cn(
@@ -100,29 +155,19 @@ export function Sidebar() {
       </div>
 
       {/* Nav items */}
-      <nav className="flex-1 space-y-1 p-3">
-        {visibleNavItems.map((item) => {
-          const isActive =
-            item.href === "/dashboard"
-              ? pathname === "/dashboard"
-              : pathname === item.href || pathname.startsWith(item.href + "/");
-          return (
-            <Link
-              key={item.href}
-              href={item.href}
-              className={cn(
-                "flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors",
-                isActive
-                  ? "bg-[hsl(var(--primary))]/10 text-[hsl(var(--primary))]"
-                  : "text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--accent))] hover:text-[hsl(var(--foreground))]"
-              )}
-              title={collapsed ? item.label : undefined}
-            >
-              <item.icon className="h-5 w-5 shrink-0" />
-              {!collapsed && <span>{item.label}</span>}
-            </Link>
-          );
-        })}
+      <nav className="flex-1 space-y-1 overflow-y-auto p-3">
+        {visibleNavItems.map(renderNavLink)}
+        {visibleImpactItems.length > 0 && (
+          <>
+            <div className="my-3 border-t" />
+            {!collapsed && (
+              <div className="px-3 py-1 text-xs font-semibold uppercase tracking-wider text-[hsl(var(--muted-foreground))]">
+                Copilot Impact
+              </div>
+            )}
+            {visibleImpactItems.map(renderNavLink)}
+          </>
+        )}
       </nav>
 
       {/* Collapse toggle */}

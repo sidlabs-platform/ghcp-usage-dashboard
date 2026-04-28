@@ -24,6 +24,63 @@ export interface BillingMetricConfig {
   premiumRequests?: boolean;
 }
 
+export interface CicdImpactConfig {
+  /** Enable CI/CD impact metrics (requires Actions API calls). Default: false */
+  enabled: boolean;
+  /** Track build success/failure rates correlated with Copilot usage. */
+  buildSuccessRate?: boolean;
+  /** Track deployment frequency as a DORA metric. */
+  deploymentFrequency?: boolean;
+}
+
+export interface DevProductivityImpactConfig {
+  /** Enable developer productivity metrics (requires additional API calls). Default: false */
+  enabled: boolean;
+  /** Track time from PR creation to first review. */
+  reviewTurnaround?: boolean;
+  /** Track issue open→close duration. */
+  issueResolution?: boolean;
+  /** Track commits per developer per day. */
+  commitFrequency?: boolean;
+}
+
+export interface ImpactMetricConfig {
+  /** Master toggle for all Copilot impact metrics. Default: true */
+  enabled: boolean;
+  /** Compare merge times for Copilot-authored vs human-authored PRs. */
+  prEfficiency?: boolean;
+  /** Agent LoC as % of total LoC and adoption trend. */
+  agentImpact?: boolean;
+  /** Active users / total seats with trend. */
+  licenseUtilization?: boolean;
+  /** PR review suggestion stats from Copilot code review. */
+  codeReviewImpact?: boolean;
+  /** Cost per LoC, cost per active user tied to billing. */
+  roiScore?: boolean;
+  /** Days from seat assignment to first active usage. */
+  timeToValue?: boolean;
+  /** User journey: seat → first use → regular use → power user. */
+  adoptionFunnel?: boolean;
+  /** Multi-feature usage index per user. */
+  engagementDepth?: boolean;
+  /** One-page executive impact summary view. */
+  executiveSummary?: boolean;
+  /** User progression from inactive to power user stages. */
+  maturityJourney?: boolean;
+  /** Composite score: adoption × acceptance rate × feature breadth × engagement. */
+  healthScore?: boolean;
+  /** Dedicated Copilot coding agent view: PRs, LoC, success rate. */
+  agentAutonomy?: boolean;
+  /** Cost per PR, cost per LoC, cost per active user. */
+  costPerValue?: boolean;
+  /** Track users on minimum required IDE/plugin versions for LoC telemetry. */
+  versionCompliance?: boolean;
+  /** CI/CD impact metrics (requires Actions API). Disabled by default. */
+  cicd?: CicdImpactConfig;
+  /** Developer productivity metrics (requires additional APIs). Disabled by default. */
+  devProductivity?: DevProductivityImpactConfig;
+}
+
 export interface MetricConfig {
   enabled: boolean;
 }
@@ -62,6 +119,7 @@ export interface DashboardConfig {
     dependabot: MetricConfig;
     secretScanning: MetricConfig;
     billing: BillingMetricConfig;
+    impact: ImpactMetricConfig;
   };
   organizations?: OrganizationsConfig;
   security: SecurityConfig;
@@ -73,7 +131,8 @@ export type MetricCategory =
   | "codeScanning"
   | "dependabot"
   | "secretScanning"
-  | "billing";
+  | "billing"
+  | "impact";
 
 // --- Defaults ---
 
@@ -84,6 +143,25 @@ const DEFAULT_CONFIG: DashboardConfig = {
     dependabot: { enabled: true },
     secretScanning: { enabled: true },
     billing: { enabled: false, meteredUsage: true, premiumRequests: true },
+    impact: {
+      enabled: true,
+      prEfficiency: true,
+      agentImpact: true,
+      licenseUtilization: true,
+      codeReviewImpact: true,
+      roiScore: true,
+      timeToValue: true,
+      adoptionFunnel: true,
+      engagementDepth: true,
+      executiveSummary: true,
+      maturityJourney: true,
+      healthScore: true,
+      agentAutonomy: true,
+      costPerValue: true,
+      versionCompliance: true,
+      cicd: { enabled: false, buildSuccessRate: true, deploymentFrequency: true },
+      devProductivity: { enabled: false, reviewTurnaround: true, issueResolution: true, commitFrequency: true },
+    },
   },
   organizations: { include: [], exclude: [] },
   security: {
@@ -193,6 +271,55 @@ export function isBillingSubEnabled(sub: "meteredUsage" | "premiumRequests"): bo
   return (config.metrics.billing as BillingMetricConfig)[sub] ?? true;
 }
 
+// --- Impact metric helpers ---
+
+/** Top-level impact sub-toggle keys (flat boolean flags on ImpactMetricConfig). */
+export type ImpactSubKey =
+  | "prEfficiency"
+  | "agentImpact"
+  | "licenseUtilization"
+  | "codeReviewImpact"
+  | "roiScore"
+  | "timeToValue"
+  | "adoptionFunnel"
+  | "engagementDepth"
+  | "executiveSummary"
+  | "maturityJourney"
+  | "healthScore"
+  | "agentAutonomy"
+  | "costPerValue"
+  | "versionCompliance";
+
+/** Returns true when a specific impact sub-feature is enabled. */
+export function isImpactSubEnabled(sub: ImpactSubKey): boolean {
+  const config = getDashboardConfig();
+  if (!config.metrics.impact.enabled) return false;
+  return config.metrics.impact[sub] ?? true;
+}
+
+/** Returns true when a CI/CD impact sub-feature is enabled. */
+export function isCicdImpactSubEnabled(sub: "buildSuccessRate" | "deploymentFrequency"): boolean {
+  const config = getDashboardConfig();
+  if (!config.metrics.impact.enabled) return false;
+  const cicd = config.metrics.impact.cicd;
+  if (!cicd?.enabled) return false;
+  return cicd[sub] ?? true;
+}
+
+/** Returns true when a developer productivity impact sub-feature is enabled. */
+export function isDevProductivityImpactSubEnabled(sub: "reviewTurnaround" | "issueResolution" | "commitFrequency"): boolean {
+  const config = getDashboardConfig();
+  if (!config.metrics.impact.enabled) return false;
+  const dp = config.metrics.impact.devProductivity;
+  if (!dp?.enabled) return false;
+  return dp[sub] ?? true;
+}
+
+/** Returns the full impact config for client-side consumption. */
+export function getImpactConfig(): ImpactMetricConfig {
+  return getDashboardConfig().metrics.impact;
+}
+
 // --- Organization helpers ---
 
 /** Resolve effective org list: GITHUB_ORGS filtered by config include/exclude. */
@@ -229,6 +356,17 @@ function deepMergeConfig(defaults: DashboardConfig, overrides: Partial<Dashboard
     for (const key of Object.keys(overrides.metrics) as (keyof typeof overrides.metrics)[]) {
       if (overrides.metrics[key] && typeof overrides.metrics[key] === "object") {
         result.metrics[key] = { ...defaults.metrics[key], ...overrides.metrics[key] } as any;
+
+        // Deep-merge nested objects within impact (cicd, devProductivity)
+        if (key === "impact" && overrides.metrics.impact) {
+          const impactResult = result.metrics.impact as ImpactMetricConfig;
+          if (overrides.metrics.impact.cicd && defaults.metrics.impact.cicd) {
+            impactResult.cicd = { ...defaults.metrics.impact.cicd, ...overrides.metrics.impact.cicd };
+          }
+          if (overrides.metrics.impact.devProductivity && defaults.metrics.impact.devProductivity) {
+            impactResult.devProductivity = { ...defaults.metrics.impact.devProductivity, ...overrides.metrics.impact.devProductivity };
+          }
+        }
       }
     }
   }
