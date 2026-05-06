@@ -1,0 +1,145 @@
+import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from "vitest";
+import Database from "better-sqlite3";
+import path from "path";
+import fs from "fs";
+
+let db: Database.Database;
+
+vi.mock("./database", () => ({
+  getDb: () => db,
+}));
+
+import {
+  refreshUserSummary,
+  refreshDailyAggregate,
+  refreshDailyAggregateRange,
+  refreshTeamSummary,
+  refreshAllSummaries,
+} from "./summary-tables";
+
+beforeAll(() => {
+  db = new Database(":memory:");
+  db.pragma("journal_mode = WAL");
+  const schemaPath = path.join(process.cwd(), "src", "lib", "db", "schema.sql");
+  db.exec(fs.readFileSync(schemaPath, "utf-8"));
+  const summarySchemaPath = path.join(process.cwd(), "src", "lib", "db", "summary-schema.sql");
+  db.exec(fs.readFileSync(summarySchemaPath, "utf-8"));
+});
+
+afterAll(() => {
+  db.close();
+});
+
+beforeEach(() => {
+  db.exec("DELETE FROM user_daily_metrics");
+  db.exec("DELETE FROM team_memberships");
+  db.exec("DELETE FROM user_period_summary");
+  db.exec("DELETE FROM daily_aggregate_cache");
+  db.exec("DELETE FROM team_summary_cache");
+});
+
+function insertMetric(overrides: Partial<Record<string, unknown>> = {}) {
+  const defaults = {
+    day: "2024-01-10",
+    enterprise_id: "ent1",
+    enterprise_slug: "ent1",
+    user_id: 1,
+    user_login: "user1",
+    code_generation_activity_count: 10,
+    code_acceptance_activity_count: 7,
+    user_initiated_interaction_count: 5,
+    loc_suggested_to_add_sum: 20,
+    loc_added_sum: 15,
+    loc_deleted_sum: 3,
+    used_agent: 1,
+    used_chat: 1,
+    used_cli: 0,
+    used_copilot_code_review_active: 0,
+    used_copilot_code_review_passive: 0,
+    used_copilot_coding_agent: 0,
+  };
+  const m = { ...defaults, ...overrides };
+  db.prepare(`
+    INSERT INTO user_daily_metrics (day, enterprise_id, enterprise_slug, user_id, user_login,
+      code_generation_activity_count, code_acceptance_activity_count, user_initiated_interaction_count,
+      loc_suggested_to_add_sum, loc_added_sum, loc_deleted_sum,
+      used_agent, used_chat, used_cli, used_copilot_code_review_active, used_copilot_code_review_passive, used_copilot_coding_agent)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    m.day, m.enterprise_id, m.enterprise_slug, m.user_id, m.user_login,
+    m.code_generation_activity_count, m.code_acceptance_activity_count, m.user_initiated_interaction_count,
+    m.loc_suggested_to_add_sum, m.loc_added_sum, m.loc_deleted_sum,
+    m.used_agent, m.used_chat, m.used_cli, m.used_copilot_code_review_active, m.used_copilot_code_review_passive, m.used_copilot_coding_agent,
+  );
+}
+
+describe("refreshUserSummary", () => {
+  it("returns 0 for empty data", () => {
+    expect(refreshUserSummary("2024-01-01", "2024-01-31")).toBe(0);
+  });
+
+  it("aggregates user metrics into summary", () => {
+    insertMetric({ day: "2024-01-10" });
+    insertMetric({ day: "2024-01-11", user_id: 1, loc_added_sum: 5 });
+    const count = refreshUserSummary("2024-01-01", "2024-01-31");
+    expect(count).toBe(1);
+    const row = db.prepare("SELECT * FROM user_period_summary WHERE user_login = 'user1'").get() as any;
+    expect(row.active_days).toBe(2);
+    expect(row.loc_added).toBe(20); // 15 + 5
+  });
+
+  it("filters by enterprise slug", () => {
+    insertMetric({ enterprise_slug: "ent1" });
+    insertMetric({ enterprise_slug: "ent2", enterprise_id: "ent2", user_id: 2, user_login: "user2" });
+    const count = refreshUserSummary("2024-01-01", "2024-01-31", "ent1");
+    expect(count).toBe(1);
+  });
+});
+
+describe("refreshDailyAggregate", () => {
+  it("creates aggregate row for a day", () => {
+    insertMetric({ day: "2024-01-10" });
+    insertMetric({ day: "2024-01-10", user_id: 2, user_login: "user2", used_agent: 0 });
+    refreshDailyAggregate("2024-01-10");
+    const row = db.prepare("SELECT * FROM daily_aggregate_cache WHERE day = '2024-01-10'").get() as any;
+    expect(row.total_users).toBe(2);
+    expect(row.agent_users).toBe(1);
+  });
+});
+
+describe("refreshDailyAggregateRange", () => {
+  it("refreshes multiple days", () => {
+    insertMetric({ day: "2024-01-10" });
+    insertMetric({ day: "2024-01-11", user_id: 1 });
+    const count = refreshDailyAggregateRange("2024-01-10", "2024-01-11");
+    expect(count).toBe(2);
+    const rows = db.prepare("SELECT * FROM daily_aggregate_cache ORDER BY day").all();
+    expect(rows).toHaveLength(2);
+  });
+});
+
+describe("refreshTeamSummary", () => {
+  it("returns 0 with no teams", () => {
+    expect(refreshTeamSummary("2024-01-01", "2024-01-31")).toBe(0);
+  });
+
+  it("computes team metrics from memberships + user data", () => {
+    insertMetric({ day: "2024-01-10", user_login: "user1" });
+    db.prepare(`
+      INSERT INTO team_memberships (enterprise_slug, team_slug, team_name, source, org_slug, user_login, updated_at)
+      VALUES ('ent1', 'team-a', 'Team A', 'org', 'org1', 'user1', '2024-01-01')
+    `).run();
+    const count = refreshTeamSummary("2024-01-01", "2024-01-31");
+    expect(count).toBe(1);
+    const row = db.prepare("SELECT * FROM team_summary_cache WHERE team_slug = 'team-a'").get() as any;
+    expect(row.active_members).toBe(1);
+    expect(row.total_loc_added).toBe(15);
+  });
+});
+
+describe("refreshAllSummaries", () => {
+  it("calls all refresh functions without error", () => {
+    insertMetric({ day: "2024-01-10" });
+    expect(() => refreshAllSummaries("2024-01-10", "2024-01-10")).not.toThrow();
+  });
+});
