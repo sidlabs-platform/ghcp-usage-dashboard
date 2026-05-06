@@ -62,6 +62,19 @@ describe("computeTeamDayMetrics", () => {
     const result = computeTeamDayMetrics("team-a", "Team A", ["alice"], records, "2024-01-15");
     expect(result.locAdded).toBe(50);
   });
+
+  it("computes acceptanceRate from totals_by_feature", () => {
+    const records: UserDayRecord[] = [
+      makeRecord({
+        user_login: "alice", day: "2024-01-15",
+        totals_by_feature: [
+          { feature: "code_completion", code_generation_activity_count: 100, code_acceptance_activity_count: 40, loc_suggested_to_add_sum: 0, loc_suggested_to_delete_sum: 0, loc_added_sum: 0, loc_deleted_sum: 0, user_initiated_interaction_count: 0 },
+        ],
+      }),
+    ];
+    const result = computeTeamDayMetrics("team-a", "Team A", ["alice"], records, "2024-01-15");
+    expect(result.acceptanceRate).toBe(40);
+  });
 });
 
 describe("computeTeamSummary", () => {
@@ -90,5 +103,21 @@ describe("computeTeamSummary", () => {
     const result = computeTeamSummary("team-a", "Team A", ["alice", "bob"], records);
     expect(result.chatModes.agent).toBe(4);
     expect(result.chatModes.ask).toBe(7);
+  });
+
+  it("computes overallAcceptanceRate from totals_by_feature", () => {
+    const records: UserDayRecord[] = [
+      makeRecord({
+        user_login: "alice", day: "2024-01-15",
+        used_cli: true, used_copilot_code_review_active: true,
+        totals_by_feature: [
+          { feature: "code_completion", code_generation_activity_count: 50, code_acceptance_activity_count: 25, loc_suggested_to_add_sum: 0, loc_suggested_to_delete_sum: 0, loc_added_sum: 0, loc_deleted_sum: 0, user_initiated_interaction_count: 0 },
+        ],
+      }),
+    ];
+    const result = computeTeamSummary("team-a", "Team A", ["alice"], records);
+    expect(result.overallAcceptanceRate).toBe(50);
+    expect(result.cliAdoptionRate).toBe(100);
+    expect(result.codeReviewAdoptionRate).toBe(100);
   });
 });
