@@ -44,3 +44,4 @@ exp-001	2026-05-06T17:24:23Z	test-coverage	memory-cache.test.ts: get/set/TTL/evi
 119	2026-05-07 03:05	enterprise-config: getEnterpriseAuth empty app env branch	keep	89.41	76.53	92.90	91.15
 120	2026-05-07 03:07	ghas-repo: recomputeSecretScanningDaily empty scope early return	keep	89.45	76.58	92.90	91.15
 121	2026-05-07 03:08	metrics-repo: getAllOrgMetrics null numeric field ?? 0 branches	keep	89.45	77.23	92.90	91.15
+122	2026-05-07 03:10	metrics-repo: getFilteredOrgMetrics null numeric field ?? 0 branches	keep	89.48	77.94	92.90	91.15
