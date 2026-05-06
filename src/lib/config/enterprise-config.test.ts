@@ -164,5 +164,30 @@ describe("enterprise-config", () => {
       const enterprises = getConfiguredEnterprises();
       expect(enterprises).toEqual([]);
     });
+
+    it("includes app env vars in synthesis when all are set", () => {
+      resetEnterpriseConfigCache();
+      mockGetDashboardConfig.mockReturnValue({ enterprises: [] } as any);
+      process.env.GITHUB_ENTERPRISE = "legacy-ent";
+      process.env.GITHUB_TOKEN = "ghp_legacy";
+      process.env.GITHUB_APP_ID = "app1";
+      process.env.GITHUB_APP_PRIVATE_KEY = "key1";
+      process.env.GITHUB_APP_INSTALLATION_ID = "inst1";
+      const enterprises = getConfiguredEnterprises();
+      expect(enterprises[0].appIdEnvVar).toBe("GITHUB_APP_ID");
+      delete process.env.GITHUB_ENTERPRISE;
+      delete process.env.GITHUB_TOKEN;
+      delete process.env.GITHUB_APP_ID;
+      delete process.env.GITHUB_APP_PRIVATE_KEY;
+      delete process.env.GITHUB_APP_INSTALLATION_ID;
+    });
+  });
+
+  describe("caching", () => {
+    it("returns cached result on second call within TTL", () => {
+      const first = getConfiguredEnterprises();
+      const second = getConfiguredEnterprises();
+      expect(second).toBe(first);
+    });
   });
 });
