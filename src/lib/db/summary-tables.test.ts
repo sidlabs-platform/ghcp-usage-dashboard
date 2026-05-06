@@ -105,6 +105,16 @@ describe("refreshDailyAggregate", () => {
     expect(row.total_users).toBe(2);
     expect(row.agent_users).toBe(1);
   });
+
+  it("scopes to enterprise slug when provided", () => {
+    insertMetric({ day: "2024-01-12", enterprise_slug: "ent-a", user_login: "u1" });
+    insertMetric({ day: "2024-01-12", enterprise_slug: "ent-b", user_id: 2, user_login: "u2" });
+    refreshDailyAggregate("2024-01-12", "ent-a");
+    const rows = db.prepare("SELECT * FROM daily_aggregate_cache WHERE day = '2024-01-12'").all() as any[];
+    expect(rows).toHaveLength(1);
+    expect(rows[0].enterprise_slug).toBe("ent-a");
+    expect(rows[0].total_users).toBe(1);
+  });
 });
 
 describe("refreshDailyAggregateRange", () => {
