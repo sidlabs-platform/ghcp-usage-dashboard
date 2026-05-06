@@ -319,6 +319,12 @@ describe("batchUpsertUserDayMetrics", () => {
     const count = batchUpsertUserDayMetrics("ent1", records);
     expect(count).toBe(2);
   });
+
+  it("handles records with no chat mode data (fallback to 0)", () => {
+    const records = [{ day: "2024-01-21", enterprise_id: "ent-123", user_id: 50, user_login: "no-chat", code_generation_activity_count: 0, code_acceptance_activity_count: 0, user_initiated_interaction_count: 0, loc_suggested_to_add_sum: 0, loc_suggested_to_delete_sum: 0, loc_added_sum: 0, loc_deleted_sum: 0, used_agent: false, used_chat: false, used_cli: false, used_copilot_code_review_active: false, used_copilot_code_review_passive: false, used_copilot_coding_agent: false, totals_by_ide: [], totals_by_language_feature: [], totals_by_model_feature: [], totals_by_language_model: [] }] as any[];
+    const count = batchUpsertUserDayMetrics("ent1", records);
+    expect(count).toBe(1);
+  });
 });
 
 describe("getUserMetricsByLogin", () => {
