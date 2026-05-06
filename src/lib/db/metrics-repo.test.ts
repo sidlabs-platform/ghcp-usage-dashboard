@@ -341,6 +341,18 @@ describe("getFilteredOrgMetrics / getAllOrgMetrics", () => {
     expect(results[0].pull_requests).toBeDefined();
     expect(results[0].pull_requests!.total_created).toBe(7);
   });
+
+  it("getAllOrgMetrics handles null numeric fields via ?? 0 fallbacks", () => {
+    // Insert raw SQL with NULLs to trigger ?? 0 branches in merge logic
+    db.prepare(`INSERT OR REPLACE INTO org_daily_metrics (enterprise_slug, day, org_slug, enterprise_id, daily_active_users, weekly_active_users, monthly_active_users, monthly_active_agent_users, monthly_active_chat_users, daily_active_cli_users, code_generation_activity_count, code_acceptance_activity_count, user_initiated_interaction_count, loc_suggested_to_add_sum, loc_suggested_to_delete_sum, loc_added_sum, loc_deleted_sum, totals_by_ide, totals_by_feature, totals_by_language_feature, totals_by_model_feature, totals_by_language_model, pull_requests, raw_json) VALUES (?, ?, ?, ?, 3, 5, 10, 1, 1, 0, 20, 15, 30, 50, 5, 40, 3, '[]', '[]', '[]', '[]', '[]', NULL, '{}')`)
+      .run("ent1", "2024-04-20", "null-org1", "e1");
+    db.prepare(`INSERT OR REPLACE INTO org_daily_metrics (enterprise_slug, day, org_slug, enterprise_id, daily_active_users, weekly_active_users, monthly_active_users, monthly_active_agent_users, monthly_active_chat_users, daily_active_cli_users, code_generation_activity_count, code_acceptance_activity_count, user_initiated_interaction_count, loc_suggested_to_add_sum, loc_suggested_to_delete_sum, loc_added_sum, loc_deleted_sum, totals_by_ide, totals_by_feature, totals_by_language_feature, totals_by_model_feature, totals_by_language_model, pull_requests, raw_json) VALUES (?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, '[]', '[]', '[]', '[]', '[]', NULL, '{}')`)
+      .run("ent1", "2024-04-20", "null-org2", "e1");
+    const results = getAllOrgMetrics("2024-04-20", "2024-04-20");
+    const day = results.find(r => r.day === "2024-04-20");
+    expect(day).toBeDefined();
+    expect(day!.daily_active_users).toBe(3);
+  });
 });
 
 describe("recordSync / isSynced / getLatestSyncDay / getSyncStatus", () => {
