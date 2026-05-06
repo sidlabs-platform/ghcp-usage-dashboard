@@ -64,7 +64,7 @@ import { isCopilotSubEnabled, isEnterpriseEnabled } from "@/lib/config/dashboard
 import { isSynced, getLatestSyncDay, hasEnterpriseDataForRange, hasOrgDataForRange } from "./metrics-repo";
 import { metricsClient } from "@/lib/github/metrics-client";
 import { seatsClient } from "@/lib/github/seats-client";
-import { getConfiguredEnterprises } from "@/lib/config/enterprise-config";
+import { getConfiguredEnterprises, getResolvedOrgsForEnterprise } from "@/lib/config/enterprise-config";
 
 describe("sync-service", () => {
   beforeEach(() => {
@@ -205,5 +205,23 @@ describe("sync-service", () => {
       .mockRejectedValue(new Error("seats API failure"));
     const result = await syncSeats();
     expect(result).toBe(0);
+  });
+
+  it("incrementalSync returns 0 when enterprise disabled and no orgs", async () => {
+    (isEnterpriseEnabled as ReturnType<typeof vi.fn>).mockReturnValue(false);
+    (getResolvedOrgsForEnterprise as ReturnType<typeof vi.fn>).mockReturnValue([]);
+    const result = await incrementalSync();
+    expect(result.daysSynced).toBe(0);
+  });
+
+  it("syncDay skips user metrics when userMetrics disabled", async () => {
+    (isCopilotSubEnabled as ReturnType<typeof vi.fn>)
+      .mockImplementation((k: string) => k !== "userMetrics");
+    (isSynced as ReturnType<typeof vi.fn>).mockReturnValue(false);
+    (metricsClient.getEnterpriseDailyReport as ReturnType<typeof vi.fn>)
+      .mockResolvedValue([{ day: "2025-01-01" }]);
+    const result = await syncDay("test-ent", "2025-01-01");
+    expect(result.enterprise).toBe(1);
+    expect(result.users).toBe(0);
   });
 });
