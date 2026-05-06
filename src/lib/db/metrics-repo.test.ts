@@ -192,6 +192,11 @@ describe("enterprise metrics", () => {
     expect(resolveEnterpriseId(["ent1"])).toBe("ent-123");
   });
 
+  it("resolveEnterpriseId falls back to enterprise_daily_metrics when no user data", () => {
+    upsertEnterpriseDayMetrics("ent-only-slug", { ...baseDayTotal, enterprise_id: "ent-only-id" } as any);
+    expect(resolveEnterpriseId(["ent-only-slug"])).toBe("ent-only-id");
+  });
+
   it("resolveEnterpriseId returns null when no data", () => {
     expect(resolveEnterpriseId(["nonexistent"])).toBeNull();
   });
