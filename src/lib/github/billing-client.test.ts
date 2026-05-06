@@ -36,6 +36,13 @@ describe("billingClient", () => {
       expect(records[0].sku).toBe("sku,special");
     });
 
+    it("handles multiline quoted fields (newline inside quotes)", () => {
+      const csv = 'date,product,sku\n2024-01-01,copilot,"multi\nline"\n';
+      const records = billingClient.parsePremiumRequestCSV(csv);
+      expect(records).toHaveLength(1);
+      expect((records[0] as unknown as Record<string, string>).sku).toBe("multi\nline");
+    });
+
     it("handles escaped double-quotes inside quoted fields", () => {
       const csv = [
         "date,product,sku,quantity,unit_type,applied_cost_per_quantity,gross_amount,discount_amount,net_amount,organization,repository,username,workflow_path,cost_center_name",
@@ -172,6 +179,13 @@ describe("billingClient", () => {
       }));
       await expect(billingClient.createReport("my-ent", "detailed", "bad", "bad")).rejects.toThrow("Failed to create billing report");
     });
+
+    it("throws when no token available", async () => {
+      delete process.env.GITHUB_TOKEN;
+      const { getEnterpriseAuth } = await import("@/lib/config/enterprise-config");
+      (getEnterpriseAuth as ReturnType<typeof vi.fn>).mockReturnValue({ token: "" });
+      await expect(billingClient.createReport("my-ent", "detailed", "2024-01-01", "2024-01-31", "slug-no-token")).rejects.toThrow("GitHub token is required");
+    });
   });
 
   describe("fetchUsageReport", () => {
@@ -203,6 +217,19 @@ describe("billingClient", () => {
         .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ id: "r2", status: "pending" }) })
       );
       mockGF.mockResolvedValue({ id: "r2", status: "completed", download_urls: [] });
+      const records = await billingClient.fetchUsageReport("my-ent", "detailed", "2024-01-01", "2024-01-31");
+      expect(records).toHaveLength(0);
+    });
+
+    it("returns empty when report has null download URLs", async () => {
+      process.env.GITHUB_TOKEN = "ghp_test";
+      const { githubFetch, sleep } = await import("./api-base");
+      const mockGF = githubFetch as ReturnType<typeof vi.fn>;
+      (sleep as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+      vi.stubGlobal("fetch", vi.fn()
+        .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ id: "r4", status: "pending" }) })
+      );
+      mockGF.mockResolvedValue({ id: "r4", status: "completed", download_urls: null });
       const records = await billingClient.fetchUsageReport("my-ent", "detailed", "2024-01-01", "2024-01-31");
       expect(records).toHaveLength(0);
     });
