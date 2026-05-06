@@ -61,7 +61,7 @@ vi.mock("./enterprise-context", () => ({
 
 import { syncDay, syncSeats, syncTeams, fullSync, backfill, incrementalSync } from "./sync-service";
 import { isCopilotSubEnabled, isEnterpriseEnabled } from "@/lib/config/dashboard-config";
-import { isSynced, getLatestSyncDay } from "./metrics-repo";
+import { isSynced, getLatestSyncDay, hasEnterpriseDataForRange, hasOrgDataForRange } from "./metrics-repo";
 import { metricsClient } from "@/lib/github/metrics-client";
 
 describe("sync-service", () => {
@@ -69,6 +69,8 @@ describe("sync-service", () => {
     vi.clearAllMocks();
     (isCopilotSubEnabled as ReturnType<typeof vi.fn>).mockReturnValue(true);
     (isEnterpriseEnabled as ReturnType<typeof vi.fn>).mockReturnValue(true);
+    (hasEnterpriseDataForRange as ReturnType<typeof vi.fn>).mockReturnValue(true);
+    (hasOrgDataForRange as ReturnType<typeof vi.fn>).mockReturnValue(true);
   });
 
   it("syncDay fetches enterprise, users and org data", async () => {
@@ -128,5 +130,23 @@ describe("sync-service", () => {
     const result = await fullSync();
     expect(result.enterprises).toHaveLength(1);
     expect(result.enterprises[0].enterpriseSlug).toBe("test-ent");
+  });
+
+  it("fullSync triggers 28-day fallback when no enterprise data", async () => {
+    (hasEnterpriseDataForRange as ReturnType<typeof vi.fn>).mockReturnValue(false);
+    (metricsClient.getEnterprise28DayReport as ReturnType<typeof vi.fn>)
+      .mockResolvedValue([{ day: "2025-01-01" }]);
+    const result = await fullSync();
+    expect(metricsClient.getEnterprise28DayReport).toHaveBeenCalled();
+    expect(result.enterprises).toHaveLength(1);
+  });
+
+  it("fullSync triggers org 28-day fallback when no org data", async () => {
+    (hasOrgDataForRange as ReturnType<typeof vi.fn>).mockReturnValue(false);
+    (metricsClient.getOrg28DayReport as ReturnType<typeof vi.fn>)
+      .mockResolvedValue([{ day: "2025-01-01" }]);
+    const result = await fullSync();
+    expect(metricsClient.getOrg28DayReport).toHaveBeenCalled();
+    expect(result.enterprises).toHaveLength(1);
   });
 });
