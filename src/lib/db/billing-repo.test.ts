@@ -258,6 +258,25 @@ describe("getPremiumRequestsPaginated", () => {
     const result = getPremiumRequestsPaginated("2024-01-01", "2024-01-31", 1, 10, "date", "asc", undefined, { model: ["gpt-4"] });
     expect(result.records.every(r => r.model === "gpt-4")).toBe(true);
   });
+
+  it("supports exceedsQuota filter", () => {
+    upsertPremiumRequests("ent1", [
+      { date: "2024-01-13", product: "copilot", sku: "p1", quantity: 999, unit_type: "token", applied_cost_per_quantity: 0.01, gross_amount: 9.99, discount_amount: 0, net_amount: 9.99, username: "heavy-user", organization: "org1", model: "gpt-4", exceeds_quota: "TRUE", total_monthly_quota: 500, charge_scope: "user" },
+    ]);
+    const result = getPremiumRequestsPaginated("2024-01-01", "2024-01-31", 1, 10, "date", "asc", undefined, { exceedsQuota: true });
+    expect(result.records.every(r => r.exceeds_quota === "TRUE")).toBe(true);
+    expect(result.total).toBeGreaterThanOrEqual(1);
+  });
+
+  it("supports organization filter", () => {
+    const result = getPremiumRequestsPaginated("2024-01-01", "2024-01-31", 1, 10, "date", "asc", undefined, { organization: ["org1"] });
+    expect(result.records.every(r => r.organization === "org1")).toBe(true);
+  });
+
+  it("supports allowedLogins scope filter", () => {
+    const result = getPremiumRequestsPaginated("2024-01-01", "2024-01-31", 1, 10, "date", "asc", undefined, { allowedLogins: ["dev1"] });
+    expect(result.records.every(r => r.username === "dev1")).toBe(true);
+  });
 });
 
 describe("getPremiumUserSummary", () => {
