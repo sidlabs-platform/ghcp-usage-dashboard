@@ -37,6 +37,25 @@ describe("auto-sync-scheduler", () => {
     spy.mockRestore();
   });
 
+  it("startAutoSync schedules when enabled", () => {
+    mockConfig.mockReturnValue({ enabled: true, utcTime: "03:00" });
+    const spy = vi.spyOn(console, "log").mockImplementation(() => {});
+    startAutoSync();
+    expect(spy).toHaveBeenCalledWith(expect.stringContaining("Scheduler starting"));
+    const status = getAutoSyncStatus();
+    expect(status.nextRunAt).not.toBeNull();
+    spy.mockRestore();
+    stopAutoSync();
+  });
+
+  it("startAutoSync handles invalid utcTime gracefully", () => {
+    mockConfig.mockReturnValue({ enabled: true, utcTime: "invalid" });
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    startAutoSync();
+    expect(spy).toHaveBeenCalledWith(expect.stringContaining("Invalid utcTime"));
+    spy.mockRestore();
+  });
+
   it("getAutoSyncStatus returns current state", () => {
     const status = getAutoSyncStatus();
     expect(status.enabled).toBe(false);
