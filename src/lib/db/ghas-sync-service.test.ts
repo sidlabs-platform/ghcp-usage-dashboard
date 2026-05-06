@@ -58,11 +58,16 @@ vi.mock("@/lib/config/enterprise-config", () => ({
 vi.stubGlobal("setTimeout", (fn: () => void) => { fn(); return 0; });
 
 import { fullGhasSync, incrementalGhasSync } from "./ghas-sync-service";
-import { isMetricEnabled } from "@/lib/config/dashboard-config";
+import { isMetricEnabled, isCodeScanningAutofixEnabled } from "@/lib/config/dashboard-config";
 import { codeScanningClient } from "@/lib/github/code-scanning-client";
+import { getGhasSyncState, getOpenCodeScanningAlerts } from "./ghas-repo";
 
 describe("ghas-sync-service", () => {
-  beforeEach(() => { vi.clearAllMocks(); });
+  beforeEach(() => {
+    vi.clearAllMocks();
+    (isMetricEnabled as ReturnType<typeof vi.fn>).mockReturnValue(true);
+    (isCodeScanningAutofixEnabled as ReturnType<typeof vi.fn>).mockReturnValue(false);
+  });
 
   it("fullGhasSync fetches all categories for enterprise + orgs", async () => {
     const result = await fullGhasSync(undefined, "test-ent");
@@ -88,5 +93,28 @@ describe("ghas-sync-service", () => {
       .mockRejectedValue(new Error("API failure"));
     const result = await fullGhasSync(undefined, "test-ent");
     expect(result.categories["enterprise:test-ent:code_scanning"]?.alertsFetched).toBe(0);
+  });
+
+  it("does incremental sync when prior state exists", async () => {
+    const mockState = getGhasSyncState as ReturnType<typeof vi.fn>;
+    mockState.mockReturnValue({
+      last_alert_updated_at: "2025-01-01T00:00:00Z",
+      total_alerts: 10,
+    });
+    (codeScanningClient.getEnterpriseAlerts as ReturnType<typeof vi.fn>)
+      .mockResolvedValue([{ updated_at: "2025-01-02T00:00:00Z" }]);
+    const result = await fullGhasSync(undefined, "test-ent");
+    const cs = result.categories["enterprise:test-ent:code_scanning"];
+    expect(cs?.isIncremental).toBe(true);
+    expect(cs?.alertsFetched).toBe(1);
+  });
+
+  it("enriches autofix when enabled", async () => {
+    (isCodeScanningAutofixEnabled as ReturnType<typeof vi.fn>).mockReturnValue(true);
+    (getOpenCodeScanningAlerts as ReturnType<typeof vi.fn>).mockReturnValue([
+      { alert_number: 1, repo_full_name: "org/repo" },
+    ]);
+    const result = await fullGhasSync(undefined, "test-ent");
+    expect(result.categories["enterprise:test-ent:code_scanning"]).toBeDefined();
   });
 });
