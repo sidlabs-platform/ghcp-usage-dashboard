@@ -63,6 +63,8 @@ import { syncDay, syncSeats, syncTeams, fullSync, backfill, incrementalSync } fr
 import { isCopilotSubEnabled, isEnterpriseEnabled } from "@/lib/config/dashboard-config";
 import { isSynced, getLatestSyncDay, hasEnterpriseDataForRange, hasOrgDataForRange } from "./metrics-repo";
 import { metricsClient } from "@/lib/github/metrics-client";
+import { seatsClient } from "@/lib/github/seats-client";
+import { getConfiguredEnterprises } from "@/lib/config/enterprise-config";
 
 describe("sync-service", () => {
   beforeEach(() => {
@@ -189,5 +191,19 @@ describe("sync-service", () => {
     const result = await fullSync();
     expect(metricsClient.getOrg28DayReport).toHaveBeenCalled();
     expect(result.enterprises).toHaveLength(1);
+  });
+
+  it("fullSync returns empty result when no enterprises configured", async () => {
+    (getConfiguredEnterprises as ReturnType<typeof vi.fn>).mockReturnValue([]);
+    const result = await fullSync();
+    expect(result.enterprises).toHaveLength(0);
+    expect(result.backfill.daysSynced).toBe(0);
+  });
+
+  it("syncSeats handles org API errors gracefully", async () => {
+    (seatsClient.getOrgSeats as ReturnType<typeof vi.fn>)
+      .mockRejectedValue(new Error("seats API failure"));
+    const result = await syncSeats();
+    expect(result).toBe(0);
   });
 });
