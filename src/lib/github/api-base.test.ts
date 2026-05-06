@@ -9,7 +9,7 @@ vi.mock("./app-auth", () => ({
   getInstallationTokenForEnterprise: vi.fn(),
 }));
 
-import { resolveAuthMode } from "./api-base";
+import { resolveAuthMode, githubFetch, fetchNDJSON, GitHubApiError } from "./api-base";
 import { isAppAuthConfigured, isAppAuthConfiguredForEnterprise } from "./app-auth";
 
 const mockIsApp = isAppAuthConfigured as ReturnType<typeof vi.fn>;
@@ -18,6 +18,8 @@ const mockIsAppEnt = isAppAuthConfiguredForEnterprise as ReturnType<typeof vi.fn
 beforeEach(() => {
   mockIsApp.mockReset().mockReturnValue(false);
   mockIsAppEnt.mockReset().mockReturnValue(false);
+  vi.stubGlobal("fetch", vi.fn());
+  process.env.GITHUB_TOKEN = "test-token-123";
 });
 
 describe("resolveAuthMode", () => {
@@ -56,5 +58,60 @@ describe("resolveAuthMode", () => {
 
   it("returns 'none' for non-GitHub absolute URLs regardless of path content", () => {
     expect(resolveAuthMode("https://example.com/enterprises/foo")).toBe("none");
+  });
+});
+
+describe("githubFetch", () => {
+  it("returns JSON on successful response", async () => {
+    const mockFetch = fetch as unknown as ReturnType<typeof vi.fn>;
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ data: "hello" }),
+      headers: new Map(),
+    });
+    const result = await githubFetch<{ data: string }>("/orgs/my-org/info");
+    expect(result.data).toBe("hello");
+  });
+
+  it("returns null on 204", async () => {
+    const mockFetch = fetch as unknown as ReturnType<typeof vi.fn>;
+    mockFetch.mockResolvedValue({
+      ok: false,
+      status: 204,
+      headers: new Map(),
+    });
+    const result = await githubFetch("/orgs/my-org/info");
+    expect(result).toBeNull();
+  });
+
+  it("throws GitHubApiError on 4xx", async () => {
+    const mockFetch = fetch as unknown as ReturnType<typeof vi.fn>;
+    mockFetch.mockResolvedValue({
+      ok: false,
+      status: 403,
+      headers: new Map(),
+      text: () => Promise.resolve("forbidden"),
+    });
+    await expect(githubFetch("/orgs/my-org/info")).rejects.toThrow(GitHubApiError);
+  });
+});
+
+describe("fetchNDJSON", () => {
+  it("parses newline-delimited JSON from text fallback", async () => {
+    const mockFetch = fetch as unknown as ReturnType<typeof vi.fn>;
+    mockFetch.mockResolvedValue({
+      ok: true,
+      body: null,
+      text: () => Promise.resolve('{"a":1}\n{"a":2}\n'),
+    });
+    const result = await fetchNDJSON<{ a: number }>("https://storage.example.com/data.ndjson");
+    expect(result).toHaveLength(2);
+    expect(result[0].a).toBe(1);
+  });
+
+  it("throws on non-ok response", async () => {
+    const mockFetch = fetch as unknown as ReturnType<typeof vi.fn>;
+    mockFetch.mockResolvedValue({ ok: false, status: 404 });
+    await expect(fetchNDJSON("https://storage.example.com/missing")).rejects.toThrow("Failed to download NDJSON");
   });
 });
