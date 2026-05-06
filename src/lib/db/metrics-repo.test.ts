@@ -353,6 +353,16 @@ describe("getFilteredOrgMetrics / getAllOrgMetrics", () => {
     expect(day).toBeDefined();
     expect(day!.daily_active_users).toBe(3);
   });
+
+  it("getFilteredOrgMetrics handles null numeric fields via ?? 0 fallbacks", () => {
+    db.prepare(`INSERT OR REPLACE INTO org_daily_metrics (enterprise_slug, day, org_slug, enterprise_id, daily_active_users, weekly_active_users, monthly_active_users, monthly_active_agent_users, monthly_active_chat_users, daily_active_cli_users, code_generation_activity_count, code_acceptance_activity_count, user_initiated_interaction_count, loc_suggested_to_add_sum, loc_suggested_to_delete_sum, loc_added_sum, loc_deleted_sum, totals_by_ide, totals_by_feature, totals_by_language_feature, totals_by_model_feature, totals_by_language_model, pull_requests, raw_json) VALUES (?, ?, ?, ?, 5, 8, 12, 2, 2, 1, 30, 20, 40, 60, 10, 50, 5, '[]', '[]', '[]', '[]', '[]', NULL, '{}')`)
+      .run("ent1", "2024-04-21", "filt-org1", "e1");
+    db.prepare(`INSERT OR REPLACE INTO org_daily_metrics (enterprise_slug, day, org_slug, enterprise_id, daily_active_users, weekly_active_users, monthly_active_users, monthly_active_agent_users, monthly_active_chat_users, daily_active_cli_users, code_generation_activity_count, code_acceptance_activity_count, user_initiated_interaction_count, loc_suggested_to_add_sum, loc_suggested_to_delete_sum, loc_added_sum, loc_deleted_sum, totals_by_ide, totals_by_feature, totals_by_language_feature, totals_by_model_feature, totals_by_language_model, pull_requests, raw_json) VALUES (?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, '[]', '[]', '[]', '[]', '[]', NULL, '{}')`)
+      .run("ent1", "2024-04-21", "filt-org2", "e1");
+    const results = getFilteredOrgMetrics(["filt-org1", "filt-org2"], "2024-04-21", "2024-04-21");
+    expect(results).toHaveLength(1);
+    expect(results[0].daily_active_users).toBe(5);
+  });
 });
 
 describe("recordSync / isSynced / getLatestSyncDay / getSyncStatus", () => {
