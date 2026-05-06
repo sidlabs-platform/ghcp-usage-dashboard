@@ -459,3 +459,29 @@ describe("refreshBillingDailyAggregates", () => {
     expect(rows.length).toBeGreaterThanOrEqual(1);
   });
 });
+
+describe("appendBillingFilters edge cases", () => {
+  it("returns nothing when org+scopeOrgs have empty intersection", () => {
+    upsertUsageRecords("ent1", [
+      { date: "2024-01-10", product: "copilot", sku: "s1", quantity: 1, unit_type: "seat", applied_cost_per_quantity: 10, gross_amount: 10, discount_amount: 0, net_amount: 10, organization: "org1", repository: "", username: "u1", workflow_path: "", cost_center_name: "", charge_scope: "user" },
+    ]);
+    const result = getOverviewKPIs("2024-01-01", "2024-01-31", { organization: ["org1"], scopeOrgs: ["different-org"] });
+    expect(result.totalNet).toBe(0);
+  });
+
+  it("returns nothing when allowedLogins is empty array", () => {
+    upsertUsageRecords("ent1", [
+      { date: "2024-01-10", product: "copilot", sku: "s1", quantity: 1, unit_type: "seat", applied_cost_per_quantity: 10, gross_amount: 10, discount_amount: 0, net_amount: 10, organization: "org1", repository: "", username: "u1", workflow_path: "", cost_center_name: "", charge_scope: "user" },
+    ]);
+    const result = getOverviewKPIs("2024-01-01", "2024-01-31", { allowedLogins: [] });
+    expect(result.totalNet).toBe(0);
+  });
+
+  it("filters by scopeOrgs alone without page-level org filter", () => {
+    upsertUsageRecords("ent1", [
+      { date: "2024-01-10", product: "copilot", sku: "s1", quantity: 1, unit_type: "seat", applied_cost_per_quantity: 10, gross_amount: 10, discount_amount: 0, net_amount: 10, organization: "org1", repository: "", username: "u1", workflow_path: "", cost_center_name: "", charge_scope: "user" },
+    ]);
+    const result = getOverviewKPIs("2024-01-01", "2024-01-31", { scopeOrgs: ["org1"] });
+    expect(result.totalNet).toBe(10);
+  });
+});
