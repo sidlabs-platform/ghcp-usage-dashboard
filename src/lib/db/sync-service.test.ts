@@ -210,6 +210,20 @@ describe("sync-service", () => {
     expect(result.enterprises).toHaveLength(1);
   });
 
+  it("fullSync handles syncBilling error gracefully", async () => {
+    const { syncBilling } = await import("./billing-sync-service");
+    (syncBilling as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("billing error"));
+    const result = await fullSync();
+    expect(result.enterprises).toHaveLength(1);
+  });
+
+  it("fullSync handles refreshAllSummaries error gracefully", async () => {
+    const { refreshAllSummaries } = await import("./summary-tables");
+    (refreshAllSummaries as ReturnType<typeof vi.fn>).mockImplementation(() => { throw new Error("summary error"); });
+    const result = await fullSync();
+    expect(result.enterprises).toHaveLength(1);
+  });
+
   it("fullSync returns empty result when no enterprises configured", async () => {
     (getConfiguredEnterprises as ReturnType<typeof vi.fn>).mockReturnValue([]);
     const result = await fullSync();

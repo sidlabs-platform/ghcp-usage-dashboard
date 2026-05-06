@@ -55,3 +55,4 @@ exp-001	2026-05-06T17:24:23Z	test-coverage	memory-cache.test.ts: get/set/TTL/evi
 130	2026-05-07 03:25	billing-client no-token, multiline CSV, null download_urls branches	KEEP	89.65	79.72	92.90	91.22
 131	2026-05-07 03:27	autofix rethrow, recordSync null day, getLatestSyncDay null branches	KEEP	89.68	79.89	92.90	91.26
 132	2026-05-07 03:28	dashboard-config isCopilotSubEnabled copilot.enabled=false	KEEP	89.71	79.94	92.90	91.26
+133	2026-05-07 03:30	sync-service syncTeams enterprise/org API error handling	KEEP	89.78	79.94	92.90	91.33
