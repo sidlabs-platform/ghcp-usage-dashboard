@@ -99,6 +99,16 @@ describe("getOverviewKPIs", () => {
     expect(kpis.totalNet).toBe(13); // 8 + 5
     expect(kpis.totalGross).toBe(15); // 10 + 5
   });
+
+  it("applies billing filters to KPIs", () => {
+    upsertUsageRecords("ent1", [
+      { date: "2024-01-14", product: "copilot", sku: "s1", quantity: 1, unit_type: "seat", applied_cost_per_quantity: 20, gross_amount: 20, discount_amount: 0, net_amount: 20, organization: "filtered-org", repository: "", username: "kpiuser", workflow_path: "", cost_center_name: "cc1", charge_scope: "user" },
+      { date: "2024-01-14", product: "actions", sku: "s2", quantity: 1, unit_type: "min", applied_cost_per_quantity: 5, gross_amount: 5, discount_amount: 0, net_amount: 5, organization: "other-org", repository: "", username: "other", workflow_path: "", cost_center_name: "", charge_scope: "org" },
+    ]);
+    const kpis = getOverviewKPIs("2024-01-14", "2024-01-14", { organization: ["filtered-org"] });
+    expect(kpis.totalNet).toBeGreaterThanOrEqual(20);
+    expect(kpis.uniqueOrgs).toBeGreaterThanOrEqual(1);
+  });
 });
 
 describe("getDailyAggregates", () => {
