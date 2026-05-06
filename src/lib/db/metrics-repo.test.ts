@@ -21,6 +21,11 @@ import {
   getEnterpriseMetrics,
   resolveEnterpriseId,
   hasEnterpriseDataForRange,
+  upsertUserDayMetrics,
+  getUserMetrics,
+  upsertOrgDayMetrics,
+  getOrgMetrics,
+  getAllOrgSlugs,
 } from "./metrics-repo";
 
 beforeAll(() => {
@@ -171,5 +176,56 @@ describe("enterprise metrics", () => {
 
   it("hasEnterpriseDataForRange returns false for empty range", () => {
     expect(hasEnterpriseDataForRange("ent-123", "2025-01-01", "2025-01-31")).toBe(false);
+  });
+});
+
+describe("upsertUserDayMetrics / getUserMetrics", () => {
+  it("upserts and retrieves user metrics with chat mode extraction", () => {
+    const record = {
+      day: "2024-01-10", enterprise_id: "ent-123", user_id: 1, user_login: "dev1",
+      code_generation_activity_count: 5, code_acceptance_activity_count: 3,
+      user_initiated_interaction_count: 10, loc_suggested_to_add_sum: 100,
+      loc_suggested_to_delete_sum: 20, loc_added_sum: 80, loc_deleted_sum: 15,
+      used_agent: true, used_chat: true, used_cli: false,
+      used_copilot_code_review_active: false, used_copilot_code_review_passive: false,
+      used_copilot_coding_agent: false,
+      totals_by_ide: [], totals_by_feature: [
+        { feature: "chat_panel_agent_mode", user_initiated_interaction_count: 7, code_generation_activity_count: 0, code_acceptance_activity_count: 0, loc_added_sum: 0, loc_deleted_sum: 0 },
+      ],
+      totals_by_language_feature: [], totals_by_model_feature: [], totals_by_language_model: [],
+    } as any;
+    upsertUserDayMetrics("ent1", record);
+    const results = getUserMetrics("ent-123", "2024-01-01", "2024-01-31");
+    expect(results).toHaveLength(1);
+    expect(results[0].user_login).toBe("dev1");
+    expect(results[0].chat_panel_agent_mode).toBe(7);
+  });
+});
+
+describe("upsertOrgDayMetrics / getOrgMetrics / getAllOrgSlugs", () => {
+  const orgDayTotal = {
+    day: "2024-01-10", enterprise_id: "ent-123",
+    daily_active_users: 10, weekly_active_users: 30, monthly_active_users: 50,
+    monthly_active_agent_users: 5, monthly_active_chat_users: 8, daily_active_cli_users: 2,
+    code_generation_activity_count: 100, code_acceptance_activity_count: 80,
+    user_initiated_interaction_count: 200, loc_suggested_to_add_sum: 500,
+    loc_suggested_to_delete_sum: 50, loc_added_sum: 400, loc_deleted_sum: 80,
+    totals_by_ide: [], totals_by_feature: [], totals_by_language_feature: [],
+    totals_by_model_feature: [], totals_by_language_model: [],
+  };
+
+  it("upserts and retrieves org metrics", () => {
+    upsertOrgDayMetrics("ent1", "my-org", orgDayTotal as any);
+    const results = getOrgMetrics("my-org", "2024-01-01", "2024-01-31");
+    expect(results).toHaveLength(1);
+    expect(results[0].daily_active_users).toBe(10);
+  });
+
+  it("getAllOrgSlugs lists distinct org slugs", () => {
+    upsertOrgDayMetrics("ent1", "org-a", orgDayTotal as any);
+    upsertOrgDayMetrics("ent1", "org-b", orgDayTotal as any);
+    const slugs = getAllOrgSlugs();
+    expect(slugs).toContain("org-a");
+    expect(slugs).toContain("org-b");
   });
 });
