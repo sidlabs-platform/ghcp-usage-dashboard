@@ -9,7 +9,7 @@ vi.mock("./app-auth", () => ({
   getInstallationTokenForEnterprise: vi.fn(),
 }));
 
-import { resolveAuthMode, githubFetch, fetchNDJSON, GitHubApiError } from "./api-base";
+import { resolveAuthMode, githubFetch, githubFetchPaginated, fetchNDJSON, GitHubApiError } from "./api-base";
 import { isAppAuthConfigured, isAppAuthConfiguredForEnterprise } from "./app-auth";
 
 const mockIsApp = isAppAuthConfigured as ReturnType<typeof vi.fn>;
@@ -113,5 +113,40 @@ describe("fetchNDJSON", () => {
     const mockFetch = fetch as unknown as ReturnType<typeof vi.fn>;
     mockFetch.mockResolvedValue({ ok: false, status: 404 });
     await expect(fetchNDJSON("https://storage.example.com/missing")).rejects.toThrow("Failed to download NDJSON");
+  });
+});
+
+describe("githubFetchPaginated", () => {
+  it("fetches single page of results", async () => {
+    const mockFetch = fetch as unknown as ReturnType<typeof vi.fn>;
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve([{ id: 1 }, { id: 2 }]),
+      headers: new Map(),
+    });
+    const result = await githubFetchPaginated<{ id: number }>("/orgs/my-org/teams", 100);
+    expect(result).toHaveLength(2);
+  });
+
+  it("paginates across multiple pages", async () => {
+    const mockFetch = fetch as unknown as ReturnType<typeof vi.fn>;
+    const page1 = Array.from({ length: 100 }, (_, i) => ({ id: i }));
+    const page2 = [{ id: 100 }, { id: 101 }];
+    mockFetch
+      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve(page1), headers: new Map() })
+      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve(page2), headers: new Map() });
+    const result = await githubFetchPaginated<{ id: number }>("/orgs/my-org/teams", 100);
+    expect(result).toHaveLength(102);
+  });
+
+  it("stops on empty array", async () => {
+    const mockFetch = fetch as unknown as ReturnType<typeof vi.fn>;
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve([]),
+      headers: new Map(),
+    });
+    const result = await githubFetchPaginated("/orgs/my-org/teams");
+    expect(result).toEqual([]);
   });
 });
