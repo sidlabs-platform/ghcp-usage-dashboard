@@ -59,7 +59,7 @@ vi.mock("./enterprise-context", () => ({
   updateEnterpriseRegistry: vi.fn(),
 }));
 
-import { syncDay, syncSeats, syncTeams, fullSync, backfill, incrementalSync } from "./sync-service";
+import { syncDay, syncSeats, syncTeams, fullSync, backfill, incrementalSync, backfillEnterprise } from "./sync-service";
 import { isCopilotSubEnabled, isEnterpriseEnabled } from "@/lib/config/dashboard-config";
 import { isSynced, getLatestSyncDay, hasEnterpriseDataForRange, hasOrgDataForRange } from "./metrics-repo";
 import { metricsClient } from "@/lib/github/metrics-client";
@@ -284,5 +284,12 @@ describe("sync-service", () => {
     const result = await syncDay("test-ent", "2025-01-01");
     expect(result.enterprise).toBe(1);
     expect(result.users).toBe(0);
+  });
+
+  it("backfillEnterprise skips fully-synced days", async () => {
+    (isSynced as ReturnType<typeof vi.fn>).mockReturnValue(true);
+    const result = await backfillEnterprise("test-ent", 3);
+    expect(result.daysSynced).toBe(0);
+    expect(result.daysSkipped).toBeGreaterThanOrEqual(2);
   });
 });
