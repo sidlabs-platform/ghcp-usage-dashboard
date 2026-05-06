@@ -525,3 +525,17 @@ describe("getFilteredOrgMetrics PR merge with null PR fields", () => {
     expect(results[0].pull_requests!.total_created).toBe(4);
   });
 });
+
+describe("mapDayTotalRow JSON null fallback", () => {
+  it("uses || '[]' fallback when JSON columns are NULL in DB", () => {
+    db.prepare(`INSERT OR REPLACE INTO org_daily_metrics (enterprise_slug, day, org_slug, enterprise_id, daily_active_users, weekly_active_users, monthly_active_users, monthly_active_agent_users, monthly_active_chat_users, daily_active_cli_users, code_generation_activity_count, code_acceptance_activity_count, user_initiated_interaction_count, loc_suggested_to_add_sum, loc_suggested_to_delete_sum, loc_added_sum, loc_deleted_sum, totals_by_ide, totals_by_feature, totals_by_language_feature, totals_by_model_feature, totals_by_language_model, pull_requests, raw_json) VALUES (?, ?, ?, ?, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, NULL, NULL, NULL, NULL, NULL, NULL, '{}')`)
+      .run("ent1", "2024-07-01", "null-json-org", "e1");
+    const results = getOrgMetrics("null-json-org", "2024-07-01", "2024-07-01");
+    expect(results).toHaveLength(1);
+    expect(results[0].totals_by_ide).toEqual([]);
+    expect(results[0].totals_by_feature).toEqual([]);
+    expect(results[0].totals_by_language_feature).toEqual([]);
+    expect(results[0].totals_by_model_feature).toEqual([]);
+    expect(results[0].totals_by_language_model).toEqual([]);
+  });
+});
