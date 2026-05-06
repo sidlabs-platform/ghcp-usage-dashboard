@@ -244,4 +244,42 @@ describe("githubFetchCursorPaginatedWithCutoff", () => {
     const result = await githubFetchCursorPaginatedWithCutoff<{ updated_at: string }>("/orgs/o/alerts", "2024-01-05");
     expect(result).toHaveLength(1);
   });
+
+  it("retries on 429 then succeeds", async () => {
+    const mockFetch = fetch as unknown as ReturnType<typeof vi.fn>;
+    mockFetch
+      .mockResolvedValueOnce({
+        ok: false, status: 429,
+        headers: new Map([["retry-after", "1"]]),
+        text: () => Promise.resolve("rate limited"),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve([{ updated_at: "2024-01-05", id: 1 }]),
+        headers: new Map([["link", ""]]),
+      });
+    const result = await githubFetchCursorPaginatedWithCutoff<{ updated_at: string }>("/orgs/o/alerts");
+    expect(result).toHaveLength(1);
+  });
+
+  it("throws on 4xx non-retryable error", async () => {
+    const mockFetch = fetch as unknown as ReturnType<typeof vi.fn>;
+    mockFetch.mockResolvedValue({
+      ok: false, status: 404,
+      headers: new Map(),
+      text: () => Promise.resolve("not found"),
+    });
+    await expect(githubFetchCursorPaginatedWithCutoff<{ updated_at: string }>("/orgs/o/alerts")).rejects.toThrow("404");
+  });
+});
+
+describe("resolveAuthMode (absolute GitHub URL)", () => {
+  it("extracts path from absolute GitHub API URL", () => {
+    expect(resolveAuthMode("https://api.github.com/enterprises/ent/copilot")).toBe("pat");
+  });
+
+  it("returns app for org path in absolute GitHub URL", () => {
+    mockIsApp.mockReturnValue(true);
+    expect(resolveAuthMode("https://api.github.com/orgs/my-org/copilot")).toBe("app");
+  });
 });
