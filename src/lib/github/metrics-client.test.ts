@@ -42,6 +42,16 @@ describe("MetricsClient", () => {
       const result = await client.getEnterpriseDailyReport("ent", "2024-01-01");
       expect(result).toHaveLength(1);
     });
+
+    it("warns and skips unrecognized records (no day key)", async () => {
+      mockGithubFetch.mockResolvedValue({ download_links: ["http://dl"] });
+      mockFetchNDJSON.mockResolvedValue([{ unknown_key: "value" }]);
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const result = await client.getEnterpriseDailyReport("ent", "2024-01-01");
+      expect(result).toHaveLength(0);
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("skipped unrecognised"));
+      warnSpy.mockRestore();
+    });
   });
 
   describe("getEnterpriseUserDailyReport", () => {
@@ -122,6 +132,15 @@ describe("MetricsClient", () => {
       mockFetchNDJSON.mockResolvedValue([{ day: "2024-01-01", daily_active_users: 2 }]);
       const result = await client.getOrg28DayReport("my-org");
       expect(result).toHaveLength(1);
+    });
+
+    it("returns empty and warns when no download_links", async () => {
+      mockGithubFetch.mockResolvedValue(null);
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const result = await client.getOrg28DayReport("my-org");
+      expect(result).toEqual([]);
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("org-28-day"));
+      warnSpy.mockRestore();
     });
   });
 

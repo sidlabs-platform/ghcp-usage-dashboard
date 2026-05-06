@@ -11,3 +11,4 @@ exp-001	2026-05-06T17:24:23Z	test-coverage	memory-cache.test.ts: get/set/TTL/evi
 84	2026-05-07T01:43:57	sync-scheduler: incrementalSync failure + config-disabled mid-run	KEEP	85.49	+0.14
 85	2026-05-07T01:45:34	api-base: fetchNDJSON streaming body path	KEEP	85.92	+0.43
 86	2026-05-07T01:46:34	api-base: 429 retry test for PaginatedWithCutoff	KEEP	86.09	+0.17
+87	2026-05-07T01:47:33	api-base: 403 error + multi-page PaginatedWithCutoff	KEEP	86.20	+0.11
