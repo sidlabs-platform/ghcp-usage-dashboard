@@ -224,6 +224,24 @@ describe("sync-service", () => {
     expect(result.enterprises).toHaveLength(1);
   });
 
+  it("fullSync handles 28-day enterprise fallback error gracefully", async () => {
+    (hasEnterpriseDataForRange as ReturnType<typeof vi.fn>).mockReturnValue(false);
+    (metricsClient.getEnterprise28DayReport as ReturnType<typeof vi.fn>)
+      .mockRejectedValue(new Error("28-day ent error"));
+    const result = await fullSync();
+    expect(result.enterprises).toHaveLength(1);
+  });
+
+  it("fullSync handles 28-day org fallback error gracefully", async () => {
+    (hasOrgDataForRange as ReturnType<typeof vi.fn>).mockReturnValue(false);
+    (metricsClient.getOrg28DayReport as ReturnType<typeof vi.fn>)
+      .mockRejectedValue(new Error("28-day org error"));
+    (metricsClient.getEnterprise28DayReport as ReturnType<typeof vi.fn>)
+      .mockResolvedValue([]);
+    const result = await fullSync();
+    expect(result.enterprises).toHaveLength(1);
+  });
+
   it("fullSync returns empty result when no enterprises configured", async () => {
     (getConfiguredEnterprises as ReturnType<typeof vi.fn>).mockReturnValue([]);
     const result = await fullSync();
