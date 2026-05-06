@@ -187,6 +187,15 @@ describe("enterprise metrics", () => {
     expect(results[0].pull_requests!.total_created).toBe(5);
   });
 
+  it("upsertEnterpriseDayMetrics handles undefined optional fields", () => {
+    const minimal = { day: "2024-01-12", enterprise_id: "ent-123", daily_active_users: 1, weekly_active_users: 2, monthly_active_users: 3, monthly_active_agent_users: 0, monthly_active_chat_users: 0, code_generation_activity_count: 0, code_acceptance_activity_count: 0, user_initiated_interaction_count: 0, loc_suggested_to_add_sum: 0, loc_suggested_to_delete_sum: 0, loc_added_sum: 0, loc_deleted_sum: 0 };
+    upsertEnterpriseDayMetrics("ent1", minimal as any);
+    const results = getEnterpriseMetrics("2024-01-12", "2024-01-12");
+    expect(results).toHaveLength(1);
+    expect(results[0].daily_active_cli_users).toBe(0);
+    expect(results[0].totals_by_ide).toEqual([]);
+  });
+
   it("resolveEnterpriseId finds from enterprise metrics", () => {
     upsertEnterpriseDayMetrics("ent1", baseDayTotal as any);
     expect(resolveEnterpriseId(["ent1"])).toBe("ent-123");
