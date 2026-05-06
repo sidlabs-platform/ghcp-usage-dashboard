@@ -15,7 +15,9 @@ import {
   upsertSecretScanningAlerts,
   recomputeCodeScanningDaily,
   recomputeSecretScanningDaily,
+  recomputeDependabotDaily,
   getCodeScanningDaily,
+  getDependabotDaily,
   getSecretScanningDaily,
   getSecurityOverview,
   getOpenCodeScanningAlerts,
@@ -138,5 +140,29 @@ describe("getSecurityOverview", () => {
     expect(overview.codeScanning).toBeNull();
     expect(overview.dependabot).toBeNull();
     expect(overview.secretScanning).toBeNull();
+  });
+});
+
+describe("recomputeDependabotDaily / getDependabotDaily", () => {
+  it("recomputes daily aggregates from dependabot alerts", () => {
+    upsertDependabotAlerts("ent1", "org", "my-org", [
+      { number: 100, repository: { full_name: "org/repo" }, state: "open", security_vulnerability: { severity: "high", package: { ecosystem: "npm", name: "lodash" } }, created_at: "2024-01-10T10:00:00Z", updated_at: "2024-01-10T10:00:00Z" },
+    ] as any);
+    recomputeDependabotDaily("ent1", "org", "my-org");
+    const daily = getDependabotDaily("org", "my-org", "2024-01-01", "2024-01-31", ["ent1"]);
+    expect(daily.length).toBeGreaterThanOrEqual(1);
+    expect(daily[0].opened).toBe(1);
+  });
+});
+
+describe("recomputeSecretScanningDaily / getSecretScanningDaily", () => {
+  it("recomputes daily aggregates from secret scanning alerts", () => {
+    upsertSecretScanningAlerts("ent1", "org", "my-org", [
+      { number: 200, repository: { full_name: "org/repo" }, state: "open", secret_type: "github_token", secret_type_display_name: "GitHub Token", created_at: "2024-01-12T10:00:00Z", updated_at: "2024-01-12T10:00:00Z" },
+    ] as any);
+    recomputeSecretScanningDaily("ent1", "org", "my-org");
+    const daily = getSecretScanningDaily("org", "my-org", "2024-01-01", "2024-01-31", ["ent1"]);
+    expect(daily.length).toBeGreaterThanOrEqual(1);
+    expect(daily[0].opened).toBe(1);
   });
 });
