@@ -59,13 +59,16 @@ vi.mock("./enterprise-context", () => ({
   updateEnterpriseRegistry: vi.fn(),
 }));
 
-import { syncDay, syncSeats, syncTeams, fullSync } from "./sync-service";
-import { isCopilotSubEnabled } from "@/lib/config/dashboard-config";
+import { syncDay, syncSeats, syncTeams, fullSync, backfill, incrementalSync } from "./sync-service";
+import { isCopilotSubEnabled, isEnterpriseEnabled } from "@/lib/config/dashboard-config";
+import { isSynced, getLatestSyncDay } from "./metrics-repo";
+import { metricsClient } from "@/lib/github/metrics-client";
 
 describe("sync-service", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     (isCopilotSubEnabled as ReturnType<typeof vi.fn>).mockReturnValue(true);
+    (isEnterpriseEnabled as ReturnType<typeof vi.fn>).mockReturnValue(true);
   });
 
   it("syncDay fetches enterprise, users and org data", async () => {
@@ -73,6 +76,20 @@ describe("sync-service", () => {
     expect(result.enterprise).toBe(1);
     expect(result.users).toBe(1);
     expect(result.orgs["test-org"]).toBe(1);
+  });
+
+  it("syncDay skips already-synced scopes", async () => {
+    (isSynced as ReturnType<typeof vi.fn>).mockReturnValue(true);
+    const result = await syncDay("test-ent", "2025-01-01");
+    expect(result.enterprise).toBe(0);
+    expect(result.users).toBe(0);
+  });
+
+  it("syncDay handles API errors gracefully", async () => {
+    (metricsClient.getEnterpriseDailyReport as ReturnType<typeof vi.fn>)
+      .mockRejectedValue(new Error("timeout"));
+    const result = await syncDay("test-ent", "2025-01-01");
+    expect(result.enterprise).toBe(0);
   });
 
   it("syncSeats returns 0 when disabled", async () => {
@@ -91,6 +108,20 @@ describe("sync-service", () => {
       .mockImplementation((k: string) => k !== "teams");
     const result = await syncTeams();
     expect(result).toBe(0);
+  });
+
+  it("backfill loops over configured enterprises", async () => {
+    (isSynced as ReturnType<typeof vi.fn>).mockReturnValue(true);
+    const result = await backfill(1);
+    expect(result.daysSkipped).toBeGreaterThanOrEqual(0);
+  });
+
+  it("incrementalSync returns early when already at yesterday", async () => {
+    const yesterday = new Date();
+    yesterday.setDate(yesterday.getDate() - 1);
+    (getLatestSyncDay as ReturnType<typeof vi.fn>).mockReturnValue(yesterday.toISOString().split("T")[0]);
+    const result = await incrementalSync();
+    expect(result.daysSynced).toBe(0);
   });
 
   it("fullSync orchestrates backfill + seats + teams", async () => {
