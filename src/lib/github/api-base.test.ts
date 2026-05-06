@@ -224,6 +224,22 @@ describe("githubFetchPaginatedWithCutoff", () => {
     expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("429"));
     warnSpy.mockRestore();
   });
+
+  it("throws on non-retryable error with body text", async () => {
+    const mockFetch = fetch as unknown as ReturnType<typeof vi.fn>;
+    mockFetch.mockResolvedValue({ ok: false, status: 403, headers: new Map(), text: () => Promise.resolve("Forbidden") });
+    await expect(githubFetchPaginatedWithCutoff<{ updated_at: string }>("/orgs/o/alerts")).rejects.toThrow("GitHub API error 403: Forbidden");
+  });
+
+  it("fetches multiple pages when first page is full", async () => {
+    const mockFetch = fetch as unknown as ReturnType<typeof vi.fn>;
+    const page1 = Array.from({ length: 100 }, (_, i) => ({ updated_at: "2024-01-05", id: i }));
+    mockFetch
+      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve(page1), headers: new Map() })
+      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve([{ updated_at: "2024-01-05", id: 100 }]), headers: new Map() });
+    const result = await githubFetchPaginatedWithCutoff<{ updated_at: string }>("/orgs/o/alerts");
+    expect(result).toHaveLength(101);
+  });
 });
 
 describe("githubFetchCursorPaginatedWithCutoff", () => {
