@@ -22,6 +22,9 @@ import {
   getOrgBreakdown,
   getUserBreakdown,
   getUsageRecordsPaginated,
+  getPremiumRequestsPaginated,
+  getPremiumUserSummary,
+  getPremiumModelSummary,
 } from "./billing-repo";
 
 beforeAll(() => {
@@ -210,5 +213,44 @@ describe("getUsageRecordsPaginated", () => {
     const result = getUsageRecordsPaginated("2024-01-01", "2024-01-31", 1, 10, "date", "asc", "alice");
     expect(result.total).toBe(1);
     expect(result.records[0].username).toBe("alice");
+  });
+});
+
+describe("getPremiumRequestsPaginated", () => {
+  it("paginates premium records", () => {
+    upsertPremiumRequests("ent1", [
+      { date: "2024-01-10", product: "copilot", sku: "p1", quantity: 100, unit_type: "token", applied_cost_per_quantity: 0.01, gross_amount: 1, discount_amount: 0, net_amount: 1, username: "dev1", organization: "org1", model: "gpt-4", exceeds_quota: "FALSE", total_monthly_quota: 500, charge_scope: "user" },
+      { date: "2024-01-11", product: "copilot", sku: "p2", quantity: 200, unit_type: "token", applied_cost_per_quantity: 0.01, gross_amount: 2, discount_amount: 0, net_amount: 2, username: "dev2", organization: "org1", model: "claude-3", exceeds_quota: "FALSE", total_monthly_quota: 300, charge_scope: "user" },
+    ]);
+    const page1 = getPremiumRequestsPaginated("2024-01-01", "2024-01-31", 1, 1, "date", "asc");
+    expect(page1.total).toBe(2);
+    expect(page1.records).toHaveLength(1);
+  });
+});
+
+describe("getPremiumUserSummary", () => {
+  it("aggregates per user", () => {
+    upsertPremiumRequests("ent1", [
+      { date: "2024-01-10", product: "copilot", sku: "p1", quantity: 100, unit_type: "token", applied_cost_per_quantity: 0.01, gross_amount: 1, discount_amount: 0, net_amount: 1, username: "dev1", organization: "org1", model: "gpt-4", exceeds_quota: "FALSE", total_monthly_quota: 500, charge_scope: "user" },
+      { date: "2024-01-11", product: "copilot", sku: "p2", quantity: 50, unit_type: "token", applied_cost_per_quantity: 0.02, gross_amount: 1, discount_amount: 0, net_amount: 1, username: "dev1", organization: "org1", model: "claude-3", exceeds_quota: "FALSE", total_monthly_quota: 500, charge_scope: "user" },
+    ]);
+    const summary = getPremiumUserSummary("2024-01-01", "2024-01-31");
+    expect(summary).toHaveLength(1);
+    expect(summary[0].username).toBe("dev1");
+    expect(summary[0].total_requests).toBe(150);
+  });
+});
+
+describe("getPremiumModelSummary", () => {
+  it("aggregates per model", () => {
+    upsertPremiumRequests("ent1", [
+      { date: "2024-01-10", product: "copilot", sku: "p1", quantity: 100, unit_type: "token", applied_cost_per_quantity: 0.01, gross_amount: 1, discount_amount: 0, net_amount: 1, username: "dev1", organization: "org1", model: "gpt-4", exceeds_quota: "FALSE", total_monthly_quota: 500, charge_scope: "user" },
+      { date: "2024-01-10", product: "copilot", sku: "p2", quantity: 200, unit_type: "token", applied_cost_per_quantity: 0.01, gross_amount: 2, discount_amount: 0, net_amount: 2, username: "dev2", organization: "org1", model: "gpt-4", exceeds_quota: "FALSE", total_monthly_quota: 300, charge_scope: "user" },
+    ]);
+    const summary = getPremiumModelSummary("2024-01-01", "2024-01-31");
+    expect(summary).toHaveLength(1);
+    expect(summary[0].model).toBe("gpt-4");
+    expect(summary[0].total_requests).toBe(300);
+    expect(summary[0].unique_users).toBe(2);
   });
 });
