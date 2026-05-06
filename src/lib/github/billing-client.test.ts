@@ -150,6 +150,19 @@ describe("billingClient", () => {
       expect(result.id).toBe("new-report");
     });
 
+    it("uses enterprise auth when slug is provided", async () => {
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({ id: "slug-report", status: "pending" }),
+      });
+      vi.stubGlobal("fetch", mockFetch);
+      const result = await billingClient.createReport("my-ent", "detailed", "2024-01-01", "2024-01-31", "my-slug");
+      expect(result.id).toBe("slug-report");
+      expect(mockFetch).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
+        headers: expect.objectContaining({ Authorization: "Bearer test-token" }),
+      }));
+    });
+
     it("throws when response is not ok", async () => {
       process.env.GITHUB_TOKEN = "ghp_test";
       vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
