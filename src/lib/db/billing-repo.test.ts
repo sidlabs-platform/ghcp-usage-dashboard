@@ -218,6 +218,20 @@ describe("getUsageRecordsPaginated", () => {
     expect(result.total).toBe(1);
     expect(result.records[0].username).toBe("alice");
   });
+
+  it("supports product and charge_scope filters", () => {
+    upsertUsageRecords("ent1", [
+      { date: "2024-01-13", product: "copilot", sku: "s1", quantity: 1, unit_type: "seat", applied_cost_per_quantity: 10, gross_amount: 10, discount_amount: 0, net_amount: 10, organization: "org1", repository: "", username: "filteruser", workflow_path: "", cost_center_name: "", charge_scope: "user" },
+      { date: "2024-01-13", product: "actions", sku: "s2", quantity: 2, unit_type: "min", applied_cost_per_quantity: 1, gross_amount: 2, discount_amount: 0, net_amount: 2, organization: "org1", repository: "", username: "filteruser", workflow_path: "", cost_center_name: "", charge_scope: "org" },
+    ]);
+    const result = getUsageRecordsPaginated("2024-01-01", "2024-01-31", 1, 10, "date", "asc", undefined, { product: ["copilot"], chargeScope: "user" });
+    expect(result.records.every(r => r.product === "copilot")).toBe(true);
+  });
+
+  it("supports allowedLogins scope filter", () => {
+    const result = getUsageRecordsPaginated("2024-01-01", "2024-01-31", 1, 10, "date", "asc", undefined, { allowedLogins: ["alice"] });
+    expect(result.records.every(r => r.username === "alice")).toBe(true);
+  });
 });
 
 describe("getPremiumRequestsPaginated", () => {
