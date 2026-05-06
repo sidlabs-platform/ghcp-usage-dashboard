@@ -19,6 +19,9 @@ import {
   updateBillingSyncState,
   getUsageFilterOptions,
   getPremiumFilterOptions,
+  getOrgBreakdown,
+  getUserBreakdown,
+  getUsageRecordsPaginated,
 } from "./billing-repo";
 
 beforeAll(() => {
@@ -149,5 +152,63 @@ describe("getPremiumFilterOptions", () => {
     expect(opts.models).toEqual(["claude-3", "gpt-4"]);
     expect(opts.organizations).toEqual(["org1", "org2"]);
     expect(opts.users).toEqual(["dev1", "dev2"]);
+  });
+});
+
+describe("getProductBreakdown", () => {
+  it("groups by product and charge_scope", () => {
+    upsertUsageRecords("ent1", [
+      { date: "2024-01-10", product: "copilot", sku: "s1", quantity: 1, unit_type: "seat", applied_cost_per_quantity: 10, gross_amount: 10, discount_amount: 0, net_amount: 10, organization: "org1", repository: "", username: "", workflow_path: "", cost_center_name: "", charge_scope: "user" },
+      { date: "2024-01-10", product: "actions", sku: "s2", quantity: 5, unit_type: "min", applied_cost_per_quantity: 1, gross_amount: 5, discount_amount: 0, net_amount: 5, organization: "org1", repository: "", username: "", workflow_path: "", cost_center_name: "", charge_scope: "org" },
+    ]);
+    const breakdown = getProductBreakdown("2024-01-01", "2024-01-31");
+    expect(breakdown).toHaveLength(2);
+    expect(breakdown[0].total_net).toBe(10); // copilot has higher net, sorted DESC
+  });
+});
+
+describe("getOrgBreakdown", () => {
+  it("groups by organization", () => {
+    upsertUsageRecords("ent1", [
+      { date: "2024-01-10", product: "copilot", sku: "s1", quantity: 1, unit_type: "seat", applied_cost_per_quantity: 10, gross_amount: 10, discount_amount: 0, net_amount: 10, organization: "org1", repository: "", username: "", workflow_path: "", cost_center_name: "", charge_scope: "user" },
+      { date: "2024-01-10", product: "copilot", sku: "s2", quantity: 1, unit_type: "seat", applied_cost_per_quantity: 5, gross_amount: 5, discount_amount: 0, net_amount: 5, organization: "org2", repository: "", username: "u2", workflow_path: "", cost_center_name: "", charge_scope: "user" },
+    ]);
+    const breakdown = getOrgBreakdown("2024-01-01", "2024-01-31");
+    expect(breakdown).toHaveLength(2);
+    expect(breakdown[0].organization).toBe("org1");
+  });
+});
+
+describe("getUserBreakdown", () => {
+  it("groups by username", () => {
+    upsertUsageRecords("ent1", [
+      { date: "2024-01-10", product: "copilot", sku: "s1", quantity: 1, unit_type: "seat", applied_cost_per_quantity: 10, gross_amount: 10, discount_amount: 0, net_amount: 10, organization: "org1", repository: "", username: "dev1", workflow_path: "", cost_center_name: "", charge_scope: "user" },
+    ]);
+    const breakdown = getUserBreakdown("2024-01-01", "2024-01-31");
+    expect(breakdown).toHaveLength(1);
+    expect(breakdown[0].username).toBe("dev1");
+    expect(breakdown[0].total_net).toBe(10);
+  });
+});
+
+describe("getUsageRecordsPaginated", () => {
+  it("paginates results correctly", () => {
+    upsertUsageRecords("ent1", [
+      { date: "2024-01-10", product: "copilot", sku: "s1", quantity: 1, unit_type: "seat", applied_cost_per_quantity: 10, gross_amount: 10, discount_amount: 0, net_amount: 10, organization: "org1", repository: "", username: "u1", workflow_path: "", cost_center_name: "", charge_scope: "user" },
+      { date: "2024-01-11", product: "copilot", sku: "s2", quantity: 1, unit_type: "seat", applied_cost_per_quantity: 5, gross_amount: 5, discount_amount: 0, net_amount: 5, organization: "org1", repository: "", username: "u2", workflow_path: "", cost_center_name: "", charge_scope: "user" },
+    ]);
+    const page1 = getUsageRecordsPaginated("2024-01-01", "2024-01-31", 1, 1, "date", "asc");
+    expect(page1.total).toBe(2);
+    expect(page1.records).toHaveLength(1);
+  });
+
+  it("supports search filter", () => {
+    upsertUsageRecords("ent1", [
+      { date: "2024-01-10", product: "copilot", sku: "s1", quantity: 1, unit_type: "seat", applied_cost_per_quantity: 10, gross_amount: 10, discount_amount: 0, net_amount: 10, organization: "org1", repository: "", username: "alice", workflow_path: "", cost_center_name: "", charge_scope: "user" },
+      { date: "2024-01-10", product: "actions", sku: "s2", quantity: 1, unit_type: "min", applied_cost_per_quantity: 1, gross_amount: 1, discount_amount: 0, net_amount: 1, organization: "org1", repository: "", username: "bob", workflow_path: "", cost_center_name: "", charge_scope: "org" },
+    ]);
+    const result = getUsageRecordsPaginated("2024-01-01", "2024-01-31", 1, 10, "date", "asc", "alice");
+    expect(result.total).toBe(1);
+    expect(result.records[0].username).toBe("alice");
   });
 });
