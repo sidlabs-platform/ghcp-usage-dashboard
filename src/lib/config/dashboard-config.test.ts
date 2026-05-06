@@ -182,4 +182,25 @@ describe("dashboard-config (with config file)", () => {
     const orgs = getResolvedOrgs();
     expect(orgs).toEqual(["org-a", "org-c"]);
   });
+
+  it("isBillingSubEnabled returns true when billing enabled and sub not disabled", () => {
+    mockReadFileSync.mockReturnValue(JSON.stringify({
+      metrics: { billing: { enabled: true, meteredUsage: true, premiumRequests: true } },
+    }));
+    vi.setSystemTime(Date.now() + 30 * 60 * 1000);
+    process.env.GITHUB_ENTERPRISE = "test-ent";
+    const result = isBillingSubEnabled("meteredUsage");
+    expect(result).toBe(true);
+    delete process.env.GITHUB_ENTERPRISE;
+  });
+
+  it("deep merge preserves autoSync override", () => {
+    mockReadFileSync.mockReturnValue(JSON.stringify({
+      autoSync: { enabled: true, utcTime: "05:00" },
+    }));
+    vi.setSystemTime(Date.now() + 40 * 60 * 1000);
+    const config = getDashboardConfig();
+    expect(config.autoSync?.enabled).toBe(true);
+    expect(config.autoSync?.utcTime).toBe("05:00");
+  });
 });
