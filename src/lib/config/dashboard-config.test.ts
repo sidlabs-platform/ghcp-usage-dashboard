@@ -215,4 +215,13 @@ describe("dashboard-config (with config file)", () => {
     expect(config.metrics.copilot.enabled).toBe(true);
     expect(config.metrics.billing.enabled).toBe(true);
   });
+
+  it("isCopilotSubEnabled returns false when copilot.enabled is false", () => {
+    mockReadFileSync.mockReturnValue(JSON.stringify({
+      metrics: { copilot: { enabled: false } },
+    }));
+    vi.setSystemTime(Date.now() + 60 * 60 * 1000);
+    expect(isCopilotSubEnabled("userMetrics")).toBe(false);
+    expect(isCopilotSubEnabled("seats")).toBe(false);
+  });
 });
