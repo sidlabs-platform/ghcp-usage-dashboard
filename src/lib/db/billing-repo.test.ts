@@ -312,6 +312,14 @@ describe("getUsageRecordsPaginated", () => {
     const result = getUsageRecordsPaginated("2024-01-01", "2024-01-31", 1, 10, "date", "asc", undefined, { allowedLogins: [] });
     expect(result.total).toBe(0);
   });
+
+  it("falls back to date sort for unknown sort field", () => {
+    upsertUsageRecords("ent1", [
+      { date: "2024-01-10", product: "copilot", sku: "s1", quantity: 1, unit_type: "seat", applied_cost_per_quantity: 10, gross_amount: 10, discount_amount: 0, net_amount: 10, organization: "org1", repository: "", username: "u1", workflow_path: "", cost_center_name: "", charge_scope: "user" },
+    ]);
+    const result = getUsageRecordsPaginated("2024-01-01", "2024-01-31", 1, 10, "invalid_col", "desc");
+    expect(result.total).toBeGreaterThanOrEqual(1);
+  });
 });
 
 describe("getPremiumRequestsPaginated", () => {
@@ -375,6 +383,14 @@ describe("getPremiumRequestsPaginated", () => {
   it("returns empty when allowedLogins is empty with no active scopeOrgs", () => {
     const result = getPremiumRequestsPaginated("2024-01-01", "2024-01-31", 1, 10, "date", "asc", undefined, { allowedLogins: [] });
     expect(result.total).toBe(0);
+  });
+
+  it("falls back to date sort for unknown premium sort field", () => {
+    upsertPremiumRequests("ent1", [
+      { date: "2024-01-10", product: "copilot", sku: "p1", quantity: 100, unit_type: "token", applied_cost_per_quantity: 0.01, gross_amount: 1, discount_amount: 0, net_amount: 1, username: "dev1", organization: "org1", model: "gpt-4", exceeds_quota: "FALSE", total_monthly_quota: 500, charge_scope: "user" },
+    ]);
+    const result = getPremiumRequestsPaginated("2024-01-01", "2024-01-31", 1, 10, "bad_field", "asc");
+    expect(result.total).toBeGreaterThanOrEqual(1);
   });
 });
 
