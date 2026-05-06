@@ -1,8 +1,24 @@
-import { describe, it, expect } from "vitest";
-import { resolveAuthMode } from "./api-base";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 
-// resolveAuthMode is testable without mocking because its default path
-// checks isAppAuthConfigured() which reads env vars (not set in test → false)
+vi.mock("./app-auth", () => ({
+  isAppAuthConfigured: vi.fn(() => false),
+  getInstallationToken: vi.fn(),
+  validateAppAuth: vi.fn(),
+  logAuthMode: vi.fn(),
+  isAppAuthConfiguredForEnterprise: vi.fn(() => false),
+  getInstallationTokenForEnterprise: vi.fn(),
+}));
+
+import { resolveAuthMode } from "./api-base";
+import { isAppAuthConfigured, isAppAuthConfiguredForEnterprise } from "./app-auth";
+
+const mockIsApp = isAppAuthConfigured as ReturnType<typeof vi.fn>;
+const mockIsAppEnt = isAppAuthConfiguredForEnterprise as ReturnType<typeof vi.fn>;
+
+beforeEach(() => {
+  mockIsApp.mockReset().mockReturnValue(false);
+  mockIsAppEnt.mockReset().mockReturnValue(false);
+});
 
 describe("resolveAuthMode", () => {
   it("returns 'none' for non-GitHub absolute URLs", () => {
@@ -15,9 +31,23 @@ describe("resolveAuthMode", () => {
     expect(resolveAuthMode("/enterprises/acme/copilot/metrics")).toBe("pat");
   });
 
-  it("returns 'pat' for org endpoints when no App auth env vars are set", () => {
-    // In test env, GITHUB_APP_ID etc. are not set → isAppAuthConfigured() returns false
+  it("returns 'pat' for org endpoints when no App auth is configured", () => {
     expect(resolveAuthMode("/orgs/my-org/copilot/usage")).toBe("pat");
+  });
+
+  it("returns 'app' for org endpoints when App auth is configured", () => {
+    mockIsApp.mockReturnValue(true);
+    expect(resolveAuthMode("/orgs/my-org/copilot/usage")).toBe("app");
+  });
+
+  it("returns 'app' when enterprise slug has app configured", () => {
+    mockIsAppEnt.mockReturnValue(true);
+    expect(resolveAuthMode("/orgs/my-org/metrics", "ent1")).toBe("app");
+  });
+
+  it("returns 'pat' when enterprise slug has no app configured", () => {
+    mockIsAppEnt.mockReturnValue(false);
+    expect(resolveAuthMode("/orgs/my-org/metrics", "ent1")).toBe("pat");
   });
 
   it("returns 'pat' for absolute GitHub API enterprise URLs", () => {
@@ -25,7 +55,6 @@ describe("resolveAuthMode", () => {
   });
 
   it("returns 'none' for non-GitHub absolute URLs regardless of path content", () => {
-    // Even though path contains /enterprises/, the host is not GitHub
     expect(resolveAuthMode("https://example.com/enterprises/foo")).toBe("none");
   });
 });
