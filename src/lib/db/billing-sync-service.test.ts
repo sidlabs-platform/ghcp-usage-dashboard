@@ -37,6 +37,7 @@ describe("billing-sync-service", () => {
     mockSubEnabled.mockReturnValue(true);
     mockFetchUsage.mockResolvedValue([{ day: "2025-01-01" }]);
     mockFetchPremium.mockResolvedValue([{ day: "2025-01-01" }]);
+    (getBillingSyncState as ReturnType<typeof vi.fn>).mockReturnValue(null);
   });
 
   it("returns zeros when billing disabled", async () => {
@@ -75,5 +76,22 @@ describe("billing-sync-service", () => {
     const result = await syncBilling("test-ent");
     // detailed range start > today means null range → 0
     expect(result.usageRecords).toBe(0);
+  });
+
+  it("handles premium_request errors independently", async () => {
+    mockSubEnabled.mockImplementation((key: string) => key === "premiumRequests");
+    mockFetchPremium.mockRejectedValue(new Error("premium timeout"));
+    const result = await syncBilling("test-ent");
+    expect(result.premiumRecords).toBe(0);
+    expect(result.errors).toHaveLength(1);
+    expect(result.errors[0]).toContain("premium_request");
+    expect(result.errors[0]).toContain("premium timeout");
+  });
+
+  it("handles non-Error thrown objects in formatError", async () => {
+    mockFetchUsage.mockRejectedValueOnce("raw string error");
+    const result = await syncBilling("test-ent");
+    expect(result.errors[0]).toContain("summarized");
+    expect(result.errors[0]).toContain("raw string error");
   });
 });
