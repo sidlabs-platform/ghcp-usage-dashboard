@@ -64,6 +64,13 @@ describe("parseScopeFilter", () => {
     expect(result.allowedLogins).toEqual(new Set(["user1", "user2"]));
   });
 
+  it("groups multiple composite teams from same enterprise", () => {
+    mockResolve.mockReturnValue(["user1", "user2"]);
+    const result = parseScopeFilter(new URLSearchParams("teams=ent1:team-a,ent1:team-b"));
+    expect(result.selectedTeams).toEqual(["team-a", "team-b"]);
+    expect(mockResolve).toHaveBeenCalledWith(["team-a", "team-b"], [], ["ent1"]);
+  });
+
   it("handles composite teams with org filter", () => {
     mockResolve.mockReturnValueOnce(["user1"]).mockReturnValueOnce(["user2"]);
     const result = parseScopeFilter(new URLSearchParams("teams=ent1:team-a&orgs=org1"));
