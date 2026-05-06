@@ -131,4 +131,39 @@ describe("auto-sync-scheduler", () => {
     logSpy.mockRestore();
     stopAutoSync();
   });
+
+  it("executeAutoSync handles GHAS sync failure gracefully", async () => {
+    mockConfig.mockReturnValue({ enabled: true, utcTime: "03:00" });
+    mockAcquire.mockReturnValue(true);
+    mockIncrSync.mockResolvedValue({ daysSynced: 1, daysSkipped: 0 });
+    mockMetric.mockReturnValue(true); // enables GHAS
+    const { fullGhasSync } = await import("@/lib/db/ghas-sync-service");
+    (fullGhasSync as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("ghas boom"));
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    startAutoSync();
+    await vi.runOnlyPendingTimersAsync();
+    expect(errSpy).toHaveBeenCalledWith(expect.stringContaining("GHAS sync failed"), expect.any(Error));
+    errSpy.mockRestore();
+    logSpy.mockRestore();
+    stopAutoSync();
+  });
+
+  it("executeAutoSync handles billing sync failure gracefully", async () => {
+    mockConfig.mockReturnValue({ enabled: true, utcTime: "03:00" });
+    mockAcquire.mockReturnValue(true);
+    mockIncrSync.mockResolvedValue({ daysSynced: 1, daysSkipped: 0 });
+    mockMetric.mockReturnValue(false); // no GHAS
+    mockBillingEnabled.mockReturnValue(true);
+    const { syncBilling } = await import("@/lib/db/billing-sync-service");
+    (syncBilling as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("billing error"));
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    startAutoSync();
+    await vi.runOnlyPendingTimersAsync();
+    expect(errSpy).toHaveBeenCalledWith(expect.stringContaining("Billing sync failed"), expect.any(Error));
+    errSpy.mockRestore();
+    logSpy.mockRestore();
+    stopAutoSync();
+  });
 });
