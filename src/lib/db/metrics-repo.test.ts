@@ -17,6 +17,10 @@ import {
   isSyncLocked,
   forceReleaseSyncLock,
   getSyncLockInfo,
+  upsertEnterpriseDayMetrics,
+  getEnterpriseMetrics,
+  resolveEnterpriseId,
+  hasEnterpriseDataForRange,
 } from "./metrics-repo";
 
 beforeAll(() => {
@@ -112,5 +116,60 @@ describe("sync lock", () => {
     heartbeatSyncLock();
     const after = getSyncLockInfo().expires_at;
     expect(new Date(after!).getTime()).toBeGreaterThanOrEqual(new Date(before!).getTime());
+  });
+});
+
+describe("enterprise metrics", () => {
+  beforeEach(() => {
+    db.exec("DELETE FROM enterprise_daily_metrics");
+  });
+
+  const baseDayTotal = {
+    day: "2024-01-10",
+    enterprise_id: "ent-123",
+    daily_active_users: 10,
+    weekly_active_users: 25,
+    monthly_active_users: 50,
+    monthly_active_agent_users: 5,
+    monthly_active_chat_users: 20,
+    daily_active_cli_users: 3,
+    code_generation_activity_count: 100,
+    code_acceptance_activity_count: 70,
+    user_initiated_interaction_count: 200,
+    loc_suggested_to_add_sum: 500,
+    loc_suggested_to_delete_sum: 50,
+    loc_added_sum: 400,
+    loc_deleted_sum: 80,
+    totals_by_ide: [],
+    totals_by_feature: [],
+    totals_by_language_feature: [],
+    totals_by_model_feature: [],
+    totals_by_language_model: [],
+  };
+
+  it("upserts and retrieves enterprise metrics", () => {
+    upsertEnterpriseDayMetrics("ent1", baseDayTotal as any);
+    const results = getEnterpriseMetrics("2024-01-01", "2024-01-31");
+    expect(results).toHaveLength(1);
+    expect(results[0].daily_active_users).toBe(10);
+    expect(results[0].loc_added_sum).toBe(400);
+  });
+
+  it("resolveEnterpriseId finds from enterprise metrics", () => {
+    upsertEnterpriseDayMetrics("ent1", baseDayTotal as any);
+    expect(resolveEnterpriseId(["ent1"])).toBe("ent-123");
+  });
+
+  it("resolveEnterpriseId returns null when no data", () => {
+    expect(resolveEnterpriseId(["nonexistent"])).toBeNull();
+  });
+
+  it("hasEnterpriseDataForRange returns true when data exists", () => {
+    upsertEnterpriseDayMetrics("ent1", baseDayTotal as any);
+    expect(hasEnterpriseDataForRange("ent-123", "2024-01-01", "2024-01-31")).toBe(true);
+  });
+
+  it("hasEnterpriseDataForRange returns false for empty range", () => {
+    expect(hasEnterpriseDataForRange("ent-123", "2025-01-01", "2025-01-31")).toBe(false);
   });
 });
