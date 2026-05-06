@@ -73,4 +73,16 @@ describe("withCache", () => {
     expect(result.headers.get("X-Cache")).toBe("HIT");
     expect(handler).toHaveBeenCalledTimes(1);
   });
+
+  it("returns original response when body is not valid JSON", async () => {
+    const handler = vi.fn().mockResolvedValue(
+      new NextResponse("plain text", { status: 200, headers: { "Content-Type": "text/plain" } }),
+    );
+    const wrapped = withCache(handler);
+
+    const result = await wrapped(makeRequest());
+    expect(result.status).toBe(200);
+    const text = await result.text();
+    expect(text).toBe("plain text");
+  });
 });
