@@ -74,6 +74,8 @@ describe("sync-service", () => {
     (isEnterpriseEnabled as ReturnType<typeof vi.fn>).mockReturnValue(true);
     (hasEnterpriseDataForRange as ReturnType<typeof vi.fn>).mockReturnValue(true);
     (hasOrgDataForRange as ReturnType<typeof vi.fn>).mockReturnValue(true);
+    (getConfiguredEnterprises as ReturnType<typeof vi.fn>).mockReturnValue([{ slug: "test-ent", displayName: "Test" }]);
+    (getResolvedOrgsForEnterprise as ReturnType<typeof vi.fn>).mockReturnValue(["test-org"]);
   });
 
   it("syncDay fetches enterprise, users and org data", async () => {
@@ -247,6 +249,16 @@ describe("sync-service", () => {
     const result = await fullSync();
     expect(result.enterprises).toHaveLength(0);
     expect(result.backfill.daysSynced).toBe(0);
+  });
+
+  it("fullSync skips teams and seats when disabled", async () => {
+    (isCopilotSubEnabled as ReturnType<typeof vi.fn>).mockImplementation((sub: string) => {
+      if (sub === "teams" || sub === "seats") return false;
+      return true;
+    });
+    const result = await fullSync();
+    expect(result.enterprises[0].teams).toBe(0);
+    expect(result.enterprises[0].seats).toBe(0);
   });
 
   it("syncSeats handles org API errors gracefully", async () => {
