@@ -132,6 +132,27 @@ describe("sync-service", () => {
     expect(result).toBe(0);
   });
 
+  it("syncTeams fetches enterprise + org teams when enabled", async () => {
+    const result = await syncTeams();
+    expect(result).toBe(2); // 1 enterprise team + 1 org team
+  });
+
+  it("syncTeams only fetches org teams when enterprise disabled", async () => {
+    (isEnterpriseEnabled as ReturnType<typeof vi.fn>).mockReturnValue(false);
+    const result = await syncTeams();
+    expect(result).toBe(1); // only org teams
+  });
+
+  it("incrementalSync syncs gap days when latestDay is old", async () => {
+    const threeDaysAgo = new Date();
+    threeDaysAgo.setDate(threeDaysAgo.getDate() - 3);
+    (getLatestSyncDay as ReturnType<typeof vi.fn>).mockReturnValue(threeDaysAgo.toISOString().split("T")[0]);
+    const { datesBetween } = await import("@/lib/utils");
+    (datesBetween as ReturnType<typeof vi.fn>).mockReturnValue(["2025-04-01", "2025-04-02"]);
+    const result = await incrementalSync();
+    expect(result.daysSynced).toBe(2);
+  });
+
   it("backfill loops over configured enterprises", async () => {
     (isSynced as ReturnType<typeof vi.fn>).mockReturnValue(true);
     const result = await backfill(1);
