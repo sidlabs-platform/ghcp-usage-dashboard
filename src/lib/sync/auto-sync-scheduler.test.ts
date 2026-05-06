@@ -68,6 +68,14 @@ describe("auto-sync-scheduler", () => {
     spy.mockRestore();
   });
 
+  it("startAutoSync handles out-of-range utcTime (hour > 23)", () => {
+    mockConfig.mockReturnValue({ enabled: true, utcTime: "25:00" });
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    startAutoSync();
+    expect(spy).toHaveBeenCalledWith(expect.stringContaining("Invalid utcTime"));
+    spy.mockRestore();
+  });
+
   it("getAutoSyncStatus returns current state", () => {
     const status = getAutoSyncStatus();
     expect(status.enabled).toBe(false);
