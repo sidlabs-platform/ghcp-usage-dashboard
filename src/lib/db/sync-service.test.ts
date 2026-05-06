@@ -105,6 +105,26 @@ describe("sync-service", () => {
     expect(result).toBe(1);
   });
 
+  it("syncDay org-only mode fetches user metrics per org", async () => {
+    (isEnterpriseEnabled as ReturnType<typeof vi.fn>).mockReturnValue(false);
+    (isSynced as ReturnType<typeof vi.fn>).mockReturnValue(false);
+    (metricsClient.getOrgUserDailyReport as ReturnType<typeof vi.fn>)
+      .mockResolvedValue([{ login: "org-u1" }, { login: "org-u2" }]);
+    const result = await syncDay("test-ent", "2025-01-01");
+    expect(result.enterprise).toBe(0); // enterprise fetch skipped
+    expect(result.users).toBe(2); // per-org user fetch
+    expect(metricsClient.getOrgUserDailyReport).toHaveBeenCalledWith("test-org", "2025-01-01", "test-ent");
+  });
+
+  it("syncDay org-only handles org user fetch errors", async () => {
+    (isEnterpriseEnabled as ReturnType<typeof vi.fn>).mockReturnValue(false);
+    (isSynced as ReturnType<typeof vi.fn>).mockReturnValue(false);
+    (metricsClient.getOrgUserDailyReport as ReturnType<typeof vi.fn>)
+      .mockRejectedValue(new Error("org user error"));
+    const result = await syncDay("test-ent", "2025-01-01");
+    expect(result.users).toBe(0);
+  });
+
   it("syncTeams returns 0 when disabled", async () => {
     (isCopilotSubEnabled as ReturnType<typeof vi.fn>)
       .mockImplementation((k: string) => k !== "teams");
