@@ -25,6 +25,10 @@ import {
   getPremiumRequestsPaginated,
   getPremiumUserSummary,
   getPremiumModelSummary,
+  getCostCenterBreakdown,
+  getRepositoryBreakdown,
+  getPremiumDailyTrend,
+  refreshBillingDailyAggregates,
 } from "./billing-repo";
 
 beforeAll(() => {
@@ -252,5 +256,51 @@ describe("getPremiumModelSummary", () => {
     expect(summary[0].model).toBe("gpt-4");
     expect(summary[0].total_requests).toBe(300);
     expect(summary[0].unique_users).toBe(2);
+  });
+});
+
+describe("getCostCenterBreakdown", () => {
+  it("groups by cost center", () => {
+    upsertUsageRecords("ent1", [
+      { date: "2024-01-10", product: "copilot", sku: "s1", quantity: 1, unit_type: "seat", applied_cost_per_quantity: 10, gross_amount: 10, discount_amount: 0, net_amount: 10, organization: "org1", repository: "", username: "", workflow_path: "", cost_center_name: "engineering", charge_scope: "org" },
+    ]);
+    const breakdown = getCostCenterBreakdown("2024-01-01", "2024-01-31");
+    expect(breakdown).toHaveLength(1);
+    expect(breakdown[0].cost_center_name).toBe("engineering");
+  });
+});
+
+describe("getRepositoryBreakdown", () => {
+  it("groups by repository", () => {
+    upsertUsageRecords("ent1", [
+      { date: "2024-01-10", product: "actions", sku: "s1", quantity: 100, unit_type: "min", applied_cost_per_quantity: 0.1, gross_amount: 10, discount_amount: 0, net_amount: 10, organization: "org1", repository: "org1/repo-a", username: "", workflow_path: ".github/workflows/ci.yml", cost_center_name: "", charge_scope: "org" },
+    ]);
+    const breakdown = getRepositoryBreakdown("2024-01-01", "2024-01-31");
+    expect(breakdown).toHaveLength(1);
+    expect(breakdown[0].repository).toBe("org1/repo-a");
+  });
+});
+
+describe("getPremiumDailyTrend", () => {
+  it("groups by day", () => {
+    upsertPremiumRequests("ent1", [
+      { date: "2024-01-10", product: "copilot", sku: "p1", quantity: 100, unit_type: "token", applied_cost_per_quantity: 0.01, gross_amount: 1, discount_amount: 0, net_amount: 1, username: "dev1", organization: "org1", model: "gpt-4", exceeds_quota: "FALSE", total_monthly_quota: 500, charge_scope: "user" },
+      { date: "2024-01-11", product: "copilot", sku: "p2", quantity: 200, unit_type: "token", applied_cost_per_quantity: 0.01, gross_amount: 2, discount_amount: 0, net_amount: 2, username: "dev1", organization: "org1", model: "gpt-4", exceeds_quota: "FALSE", total_monthly_quota: 500, charge_scope: "user" },
+    ]);
+    const trend = getPremiumDailyTrend("2024-01-01", "2024-01-31");
+    expect(trend).toHaveLength(2);
+    expect(trend[0].day).toBe("2024-01-10");
+  });
+});
+
+describe("refreshBillingDailyAggregates", () => {
+  it("populates daily aggregate table from usage records", () => {
+    upsertUsageRecords("ent1", [
+      { date: "2024-01-10", product: "copilot", sku: "s1", quantity: 1, unit_type: "seat", applied_cost_per_quantity: 10, gross_amount: 10, discount_amount: 0, net_amount: 10, organization: "org1", repository: "", username: "", workflow_path: "", cost_center_name: "", charge_scope: "user" },
+    ]);
+    refreshBillingDailyAggregates("ent1");
+    const rows = db.prepare("SELECT * FROM billing_daily_aggregate WHERE enterprise_slug = 'ent1'").all() as any[];
+    expect(rows).toHaveLength(1);
+    expect(rows[0].total_net).toBe(10);
   });
 });
