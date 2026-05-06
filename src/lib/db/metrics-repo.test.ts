@@ -30,6 +30,9 @@ import {
   getUserMetricsByLogin,
   getDistinctUsers,
   getAllUserMetrics,
+  getAggregatedDailySummary,
+  getFilteredOrgMetrics,
+  getAllOrgMetrics,
 } from "./metrics-repo";
 
 beforeAll(() => {
@@ -266,5 +269,32 @@ describe("getAllUserMetrics", () => {
   it("returns all user metrics without enterprise_id filter", () => {
     const results = getAllUserMetrics("2024-01-01", "2024-01-31");
     expect(results.length).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe("getAggregatedDailySummary", () => {
+  it("aggregates user metrics into daily summaries with rolling windows", () => {
+    const summary = getAggregatedDailySummary("2024-01-01", "2024-01-31");
+    expect(summary.length).toBeGreaterThanOrEqual(1);
+    expect(summary[0].daily_active_users).toBeGreaterThanOrEqual(1);
+    expect(typeof summary[0].weekly_active_users).toBe("number");
+    expect(typeof summary[0].monthly_active_users).toBe("number");
+  });
+});
+
+describe("getFilteredOrgMetrics / getAllOrgMetrics", () => {
+  it("getAllOrgMetrics aggregates across all orgs per day", () => {
+    upsertOrgDayMetrics("ent1", "agg-org1", { day: "2024-01-15", enterprise_id: "ent-123", daily_active_users: 5, weekly_active_users: 10, monthly_active_users: 20, monthly_active_agent_users: 2, monthly_active_chat_users: 3, daily_active_cli_users: 1, code_generation_activity_count: 50, code_acceptance_activity_count: 40, user_initiated_interaction_count: 100, loc_suggested_to_add_sum: 200, loc_suggested_to_delete_sum: 30, loc_added_sum: 150, loc_deleted_sum: 20, totals_by_ide: [], totals_by_feature: [], totals_by_language_feature: [], totals_by_model_feature: [], totals_by_language_model: [] } as any);
+    upsertOrgDayMetrics("ent1", "agg-org2", { day: "2024-01-15", enterprise_id: "ent-123", daily_active_users: 3, weekly_active_users: 7, monthly_active_users: 15, monthly_active_agent_users: 1, monthly_active_chat_users: 2, daily_active_cli_users: 0, code_generation_activity_count: 30, code_acceptance_activity_count: 20, user_initiated_interaction_count: 60, loc_suggested_to_add_sum: 100, loc_suggested_to_delete_sum: 10, loc_added_sum: 80, loc_deleted_sum: 10, totals_by_ide: [], totals_by_feature: [], totals_by_language_feature: [], totals_by_model_feature: [], totals_by_language_model: [] } as any);
+    const results = getAllOrgMetrics("2024-01-15", "2024-01-15");
+    const day = results.find((r) => r.day === "2024-01-15");
+    expect(day).toBeDefined();
+    expect(day!.daily_active_users).toBeGreaterThanOrEqual(8);
+  });
+
+  it("getFilteredOrgMetrics filters to specific org slugs", () => {
+    const results = getFilteredOrgMetrics(["agg-org1"], "2024-01-15", "2024-01-15");
+    expect(results.length).toBeGreaterThanOrEqual(1);
+    expect(results[0].daily_active_users).toBe(5);
   });
 });
