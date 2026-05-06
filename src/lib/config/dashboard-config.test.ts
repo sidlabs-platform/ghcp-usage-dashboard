@@ -22,6 +22,8 @@ import {
   isBillingSubEnabled,
 } from "./dashboard-config";
 
+const mockReadFileSync = vi.mocked(fs.readFileSync);
+
 describe("dashboard-config (defaults)", () => {
   afterEach(() => {
     delete process.env.GITHUB_ORGS;
@@ -132,5 +134,52 @@ describe("dashboard-config (defaults)", () => {
       expect(getEffectiveBillingEnabled()).toBe(false);
       expect(isBillingSubEnabled("meteredUsage")).toBe(false);
     });
+  });
+});
+
+describe("dashboard-config (with config file)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    // Move system time forward past 5-min cache TTL
+    vi.setSystemTime(Date.now() + 10 * 60 * 1000);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    mockReadFileSync.mockImplementation(() => { throw new Error("ENOENT"); });
+    delete process.env.GITHUB_ORGS;
+  });
+
+  it("deep merges overrides with defaults", () => {
+    mockReadFileSync.mockReturnValue(JSON.stringify({
+      metrics: { billing: { enabled: true }, codeScanning: { autofix: true } },
+      security: { backfillDays: 30 },
+    }));
+    const config = getDashboardConfig();
+    expect(config.metrics.billing.enabled).toBe(true);
+    expect(config.metrics.codeScanning.autofix).toBe(true);
+    expect(config.metrics.copilot.enabled).toBe(true); // preserved from defaults
+    expect(config.security.backfillDays).toBe(30);
+    expect(config.security.syncIntervalMinutes).toBe(60); // default preserved
+  });
+
+  it("getResolvedOrgs with include filter", () => {
+    mockReadFileSync.mockReturnValue(JSON.stringify({
+      organizations: { include: ["org-a"] },
+    }));
+    vi.setSystemTime(Date.now() + 10 * 60 * 1000);
+    process.env.GITHUB_ORGS = "org-a,org-b,org-c";
+    const orgs = getResolvedOrgs();
+    expect(orgs).toEqual(["org-a"]);
+  });
+
+  it("getResolvedOrgs with exclude filter", () => {
+    mockReadFileSync.mockReturnValue(JSON.stringify({
+      organizations: { exclude: ["org-b"] },
+    }));
+    vi.setSystemTime(Date.now() + 20 * 60 * 1000);
+    process.env.GITHUB_ORGS = "org-a,org-b,org-c";
+    const orgs = getResolvedOrgs();
+    expect(orgs).toEqual(["org-a", "org-c"]);
   });
 });
