@@ -243,4 +243,20 @@ describe("dashboard-config (with config file)", () => {
     // Warning may have already been emitted by previous test; just verify behavior
     expect(isEnterpriseEnabled()).toBe(false);
   });
+
+  it("isCodeScanningAutofixEnabled returns false when codeScanning disabled", () => {
+    mockReadFileSync.mockReturnValue(JSON.stringify({
+      metrics: { codeScanning: { enabled: false, autofix: true } },
+    }));
+    vi.setSystemTime(Date.now() + 90 * 60 * 1000);
+    expect(isCodeScanningAutofixEnabled()).toBe(false);
+  });
+
+  it("isCodeScanningAutofixEnabled returns true when autofix enabled", () => {
+    mockReadFileSync.mockReturnValue(JSON.stringify({
+      metrics: { codeScanning: { enabled: true, autofix: true } },
+    }));
+    vi.setSystemTime(Date.now() + 100 * 60 * 1000);
+    expect(isCodeScanningAutofixEnabled()).toBe(true);
+  });
 });
