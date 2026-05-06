@@ -303,6 +303,35 @@ describe("getFilteredOrgMetrics / getAllOrgMetrics", () => {
     expect(results.length).toBeGreaterThanOrEqual(1);
     expect(results[0].daily_active_users).toBe(5);
   });
+
+  it("merges pull_requests across orgs with weightedMedian", () => {
+    const pr1 = { total_created: 10, total_reviewed: 5, total_merged: 8, total_suggestions: 3, total_applied_suggestions: 1, total_created_by_copilot: 2, total_reviewed_by_copilot: 1, total_merged_created_by_copilot: 2, total_merged_reviewed_by_copilot: 1, total_copilot_suggestions: 2, total_copilot_applied_suggestions: 1, median_minutes_to_merge: 60, median_minutes_to_merge_copilot_authored: 30, median_minutes_to_merge_copilot_reviewed: 45 };
+    const pr2 = { total_created: 6, total_reviewed: 4, total_merged: 4, total_suggestions: 2, total_applied_suggestions: 0, total_created_by_copilot: 1, total_reviewed_by_copilot: 0, total_merged_created_by_copilot: 1, total_merged_reviewed_by_copilot: 0, total_copilot_suggestions: 1, total_copilot_applied_suggestions: 0, median_minutes_to_merge: 120, median_minutes_to_merge_copilot_authored: 90, median_minutes_to_merge_copilot_reviewed: null };
+    upsertOrgDayMetrics("ent1", "pr-org1", { day: "2024-02-01", enterprise_id: "ent-123", daily_active_users: 2, weekly_active_users: 4, monthly_active_users: 8, monthly_active_agent_users: 0, monthly_active_chat_users: 0, daily_active_cli_users: 0, code_generation_activity_count: 10, code_acceptance_activity_count: 5, user_initiated_interaction_count: 20, loc_suggested_to_add_sum: 50, loc_suggested_to_delete_sum: 5, loc_added_sum: 40, loc_deleted_sum: 3, totals_by_ide: [], totals_by_feature: [], totals_by_language_feature: [], totals_by_model_feature: [], totals_by_language_model: [], pull_requests: pr1 } as any);
+    upsertOrgDayMetrics("ent1", "pr-org2", { day: "2024-02-01", enterprise_id: "ent-123", daily_active_users: 1, weekly_active_users: 3, monthly_active_users: 5, monthly_active_agent_users: 0, monthly_active_chat_users: 0, daily_active_cli_users: 0, code_generation_activity_count: 5, code_acceptance_activity_count: 2, user_initiated_interaction_count: 10, loc_suggested_to_add_sum: 20, loc_suggested_to_delete_sum: 2, loc_added_sum: 15, loc_deleted_sum: 1, totals_by_ide: [], totals_by_feature: [], totals_by_language_feature: [], totals_by_model_feature: [], totals_by_language_model: [], pull_requests: pr2 } as any);
+    const results = getFilteredOrgMetrics(["pr-org1", "pr-org2"], "2024-02-01", "2024-02-01");
+    expect(results).toHaveLength(1);
+    const pr = results[0].pull_requests!;
+    expect(pr.total_created).toBe(16);
+    expect(pr.total_merged).toBe(12);
+    // weightedMedian: (60*8 + 120*4) / 12 = 80
+    expect(pr.median_minutes_to_merge).toBeCloseTo(80, 1);
+  });
+
+  it("handles one org with PR and one without", () => {
+    upsertOrgDayMetrics("ent1", "pr-org3", { day: "2024-02-02", enterprise_id: "ent-123", daily_active_users: 1, weekly_active_users: 1, monthly_active_users: 1, monthly_active_agent_users: 0, monthly_active_chat_users: 0, daily_active_cli_users: 0, code_generation_activity_count: 1, code_acceptance_activity_count: 0, user_initiated_interaction_count: 1, loc_suggested_to_add_sum: 0, loc_suggested_to_delete_sum: 0, loc_added_sum: 0, loc_deleted_sum: 0, totals_by_ide: [], totals_by_feature: [], totals_by_language_feature: [], totals_by_model_feature: [], totals_by_language_model: [] } as any);
+    upsertOrgDayMetrics("ent1", "pr-org4", { day: "2024-02-02", enterprise_id: "ent-123", daily_active_users: 2, weekly_active_users: 2, monthly_active_users: 2, monthly_active_agent_users: 0, monthly_active_chat_users: 0, daily_active_cli_users: 0, code_generation_activity_count: 2, code_acceptance_activity_count: 1, user_initiated_interaction_count: 2, loc_suggested_to_add_sum: 10, loc_suggested_to_delete_sum: 1, loc_added_sum: 8, loc_deleted_sum: 1, totals_by_ide: [], totals_by_feature: [], totals_by_language_feature: [], totals_by_model_feature: [], totals_by_language_model: [], pull_requests: { total_created: 3, total_reviewed: 2, total_merged: 2, total_suggestions: 1, total_applied_suggestions: 0, total_created_by_copilot: 0, total_reviewed_by_copilot: 0, total_merged_created_by_copilot: 0, total_merged_reviewed_by_copilot: 0, total_copilot_suggestions: 0, total_copilot_applied_suggestions: 0, median_minutes_to_merge: 45, median_minutes_to_merge_copilot_authored: null, median_minutes_to_merge_copilot_reviewed: null } } as any);
+    const results = getFilteredOrgMetrics(["pr-org3", "pr-org4"], "2024-02-02", "2024-02-02");
+    expect(results).toHaveLength(1);
+    // First org has no PR, second has PR → copies PR
+    expect(results[0].pull_requests).toBeDefined();
+    expect(results[0].pull_requests!.total_created).toBe(3);
+  });
+
+  it("empty orgSlugs delegates to getAllOrgMetrics", () => {
+    const results = getFilteredOrgMetrics([], "2024-01-15", "2024-01-15");
+    expect(results.length).toBeGreaterThanOrEqual(1);
+  });
 });
 
 describe("recordSync / isSynced / getLatestSyncDay / getSyncStatus", () => {
