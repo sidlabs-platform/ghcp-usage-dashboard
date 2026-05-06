@@ -150,6 +150,13 @@ describe("getUserSummaries", () => {
     expect(summaries[0].activeDays).toBe(2);
     expect(summaries[0].usedAgent).toBe(true);
   });
+
+  it("returns acceptanceRate 0 when codeGen is 0", () => {
+    insertMetric({ user_login: "zero-gen", user_id: 99, code_generation_activity_count: 0, code_acceptance_activity_count: 0 });
+    const summaries = getUserSummaries("2024-01-01", "2024-01-31");
+    const u = summaries.find((s) => s.login === "zero-gen");
+    expect(u!.acceptanceRate).toBe(0);
+  });
 });
 
 describe("getAdoptionDailyTrend", () => {
@@ -211,6 +218,13 @@ describe("getUserSummariesPaginated", () => {
     const result = getUserSummariesPaginated("2024-01-01", "2024-01-31", 1, 10, "login", "asc", "ali");
     expect(result.total).toBe(1);
     expect(result.users[0].login).toBe("alice");
+  });
+
+  it("falls back to activeDays sort for unknown sort field", () => {
+    insertMetric({ user_login: "alice", user_id: 1 });
+    insertMetric({ user_login: "bob", user_id: 2 });
+    const result = getUserSummariesPaginated("2024-01-01", "2024-01-31", 1, 10, "unknownField", "desc");
+    expect(result.total).toBe(2);
   });
 });
 
