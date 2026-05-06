@@ -213,6 +213,29 @@ describe("upsertUserDayMetrics / getUserMetrics", () => {
     expect(results[0].user_login).toBe("dev1");
     expect(results[0].chat_panel_agent_mode).toBe(7);
   });
+
+  it("stores and retrieves totals_by_cli and agent_edit fields", () => {
+    const record = {
+      day: "2024-01-11", enterprise_id: "ent-123", user_id: 99, user_login: "cli-user",
+      code_generation_activity_count: 2, code_acceptance_activity_count: 1,
+      user_initiated_interaction_count: 3, loc_suggested_to_add_sum: 10,
+      loc_suggested_to_delete_sum: 1, loc_added_sum: 8, loc_deleted_sum: 0,
+      used_agent: false, used_chat: false, used_cli: true,
+      used_copilot_code_review_active: false, used_copilot_code_review_passive: false,
+      used_copilot_coding_agent: true,
+      totals_by_ide: [], totals_by_feature: [],
+      totals_by_language_feature: [], totals_by_model_feature: [], totals_by_language_model: [],
+      totals_by_cli: [{ name: "ghcs", total_chats: 5 }],
+      agent_edit: { files_changed: 3, lines_added: 20, lines_deleted: 5 },
+    } as any;
+    upsertUserDayMetrics("ent1", record);
+    const results = getUserMetricsByLogin("cli-user", "2024-01-01", "2024-01-31");
+    expect(results).toHaveLength(1);
+    expect(results[0].totals_by_cli).toEqual([{ name: "ghcs", total_chats: 5 }]);
+    expect(results[0].agent_edit).toEqual({ files_changed: 3, lines_added: 20, lines_deleted: 5 });
+    expect(results[0].used_cli).toBe(true);
+    expect(results[0].used_copilot_coding_agent).toBe(true);
+  });
 });
 
 describe("upsertOrgDayMetrics / getOrgMetrics / getAllOrgSlugs", () => {
