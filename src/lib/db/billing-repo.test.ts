@@ -357,6 +357,15 @@ describe("getPremiumRequestsPaginated", () => {
     const result = getPremiumRequestsPaginated("2024-01-01", "2024-01-31", 1, 10, "date", "asc", undefined, { allowedLogins: ["dev1"] });
     expect(result.records.every(r => r.username === "dev1")).toBe(true);
   });
+
+  it("applies org+scopeOrgs intersection for premium requests", () => {
+    upsertPremiumRequests("ent1", [
+      { date: "2024-02-20", product: "copilot", sku: "p1", quantity: 50, unit_type: "token", applied_cost_per_quantity: 0.01, gross_amount: 0.5, discount_amount: 0, net_amount: 0.5, username: "prem-u1", organization: "prem-shared", model: "gpt-4", exceeds_quota: "FALSE", total_monthly_quota: 500, charge_scope: "user" },
+      { date: "2024-02-20", product: "copilot", sku: "p1", quantity: 30, unit_type: "token", applied_cost_per_quantity: 0.01, gross_amount: 0.3, discount_amount: 0, net_amount: 0.3, username: "prem-u2", organization: "prem-other", model: "gpt-4", exceeds_quota: "FALSE", total_monthly_quota: 500, charge_scope: "user" },
+    ]);
+    const result = getPremiumRequestsPaginated("2024-02-20", "2024-02-20", 1, 10, "date", "asc", undefined, { organization: ["prem-shared", "prem-other"], scopeOrgs: ["prem-shared"] });
+    expect(result.records.every(r => r.organization === "prem-shared")).toBe(true);
+  });
 });
 
 describe("getPremiumUserSummary", () => {
