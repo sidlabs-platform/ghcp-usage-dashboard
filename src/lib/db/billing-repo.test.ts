@@ -258,6 +258,16 @@ describe("getUsageRecordsPaginated", () => {
     expect(result.records.every(r => r.product === "copilot")).toBe(true);
   });
 
+  it("supports username filter in appendBillingFilters", () => {
+    upsertUsageRecords("ent1", [
+      { date: "2024-01-13", product: "copilot", sku: "s1", quantity: 1, unit_type: "seat", applied_cost_per_quantity: 10, gross_amount: 10, discount_amount: 0, net_amount: 10, organization: "org1", repository: "", username: "target-user", workflow_path: "", cost_center_name: "", charge_scope: "user" },
+      { date: "2024-01-13", product: "copilot", sku: "s1", quantity: 1, unit_type: "seat", applied_cost_per_quantity: 5, gross_amount: 5, discount_amount: 0, net_amount: 5, organization: "org1", repository: "", username: "other-user", workflow_path: "", cost_center_name: "", charge_scope: "user" },
+    ]);
+    const result = getUsageRecordsPaginated("2024-01-01", "2024-01-31", 1, 10, "date", "asc", undefined, { username: "target-user" });
+    expect(result.records.every(r => r.username === "target-user")).toBe(true);
+    expect(result.total).toBe(1);
+  });
+
   it("supports allowedLogins scope filter", () => {
     const result = getUsageRecordsPaginated("2024-01-01", "2024-01-31", 1, 10, "date", "asc", undefined, { allowedLogins: ["alice"] });
     expect(result.records.every(r => r.username === "alice")).toBe(true);
