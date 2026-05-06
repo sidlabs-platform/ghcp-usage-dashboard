@@ -19,6 +19,10 @@ import {
   getCompletionTotals,
   getFeatureBreakdown,
   getModelBreakdown,
+  getLanguageBreakdown,
+  getLanguageByFeatureBreakdown,
+  getFeatureDailyTrend,
+  getCompletionDailyTrend,
 } from "./aggregation-queries";
 
 beforeAll(() => {
@@ -222,5 +226,65 @@ describe("getFeatureBreakdown", () => {
     const comp = breakdown.find((r) => r.feature === "code_completion");
     expect(comp!.interactions).toBe(10); // code_generation_activity_count
     expect(comp!.locAdded).toBe(50);
+  });
+});
+
+describe("getLanguageBreakdown", () => {
+  it("aggregates language LOC from json_each", () => {
+    const langFeature = JSON.stringify([
+      { language: "TypeScript", loc_added_sum: 100, loc_suggested_to_add_sum: 120, code_generation_activity_count: 10, code_acceptance_activity_count: 8 },
+      { language: "Python", loc_added_sum: 50, loc_suggested_to_add_sum: 60, code_generation_activity_count: 5, code_acceptance_activity_count: 3 },
+    ]);
+    db.prepare(`INSERT INTO user_daily_metrics (day, enterprise_id, enterprise_slug, user_id, user_login, totals_by_language_feature)
+      VALUES ('2024-01-12', 'ent1', 'ent1', 1, 'user1', ?)`).run(langFeature);
+    const breakdown = getLanguageBreakdown("2024-01-01", "2024-01-31");
+    expect(breakdown.length).toBeGreaterThanOrEqual(2);
+    const ts = breakdown.find((r) => r.language === "TypeScript");
+    expect(ts!.locAdded).toBe(100);
+  });
+});
+
+describe("getLanguageByFeatureBreakdown", () => {
+  it("includes generations and acceptances per language", () => {
+    const langFeature = JSON.stringify([
+      { language: "Go", loc_added_sum: 30, loc_deleted_sum: 5, code_generation_activity_count: 7, code_acceptance_activity_count: 4 },
+    ]);
+    db.prepare(`INSERT INTO user_daily_metrics (day, enterprise_id, enterprise_slug, user_id, user_login, totals_by_language_feature)
+      VALUES ('2024-01-13', 'ent1', 'ent1', 1, 'user1', ?)`).run(langFeature);
+    const breakdown = getLanguageByFeatureBreakdown("2024-01-01", "2024-01-31");
+    const go = breakdown.find((r) => r.language === "Go");
+    expect(go!.generations).toBe(7);
+    expect(go!.acceptances).toBe(4);
+  });
+});
+
+describe("getFeatureDailyTrend", () => {
+  it("returns daily interactions per feature", () => {
+    const features = JSON.stringify([
+      { feature: "code_completion", user_initiated_interaction_count: 20, code_generation_activity_count: 10, code_acceptance_activity_count: 8, loc_added_sum: 50, loc_deleted_sum: 5 },
+    ]);
+    db.prepare(`INSERT INTO user_daily_metrics (day, enterprise_id, enterprise_slug, user_id, user_login, totals_by_feature)
+      VALUES ('2024-01-14', 'ent1', 'ent1', 1, 'user1', ?)`).run(features);
+    const trend = getFeatureDailyTrend("2024-01-01", "2024-01-31");
+    const row = trend.find((r) => r.day === "2024-01-14");
+    expect(row!.feature).toBe("code_completion");
+    expect(row!.interactions).toBe(20);
+  });
+});
+
+describe("getCompletionDailyTrend", () => {
+  it("returns daily completion vs agent metrics", () => {
+    const features = JSON.stringify([
+      { feature: "code_completion", loc_suggested_to_add_sum: 100, loc_added_sum: 80, loc_deleted_sum: 0, code_generation_activity_count: 20, code_acceptance_activity_count: 15 },
+      { feature: "agent_edit", loc_suggested_to_add_sum: 0, loc_added_sum: 30, loc_deleted_sum: 10, code_generation_activity_count: 5, code_acceptance_activity_count: 5 },
+    ]);
+    db.prepare(`INSERT INTO user_daily_metrics (day, enterprise_id, enterprise_slug, user_id, user_login, totals_by_feature)
+      VALUES ('2024-01-15', 'ent1', 'ent1', 1, 'user1', ?)`).run(features);
+    const trend = getCompletionDailyTrend("2024-01-01", "2024-01-31");
+    const row = trend.find((r) => r.day === "2024-01-15");
+    expect(row!.completionSuggested).toBe(100);
+    expect(row!.completionAccepted).toBe(80);
+    expect(row!.agentAdded).toBe(30);
+    expect(row!.agentDeleted).toBe(10);
   });
 });
