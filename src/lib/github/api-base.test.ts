@@ -177,6 +177,25 @@ describe("githubFetchPaginated", () => {
     const result = await githubFetchPaginated("/orgs/my-org/teams");
     expect(result).toEqual([]);
   });
+
+  it("extracts .seats from non-array response", async () => {
+    const mockFetch = fetch as unknown as ReturnType<typeof vi.fn>;
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ seats: [{ login: "u1" }, { login: "u2" }] }),
+      headers: new Map(),
+    });
+    const result = await githubFetchPaginated<{ login: string }>("/orgs/my-org/copilot/billing/seats");
+    expect(result).toHaveLength(2);
+    expect(result[0].login).toBe("u1");
+  });
+
+  it("returns empty on 204 status", async () => {
+    const mockFetch = fetch as unknown as ReturnType<typeof vi.fn>;
+    mockFetch.mockResolvedValue({ ok: false, status: 204, headers: new Map() });
+    const result = await githubFetchPaginated("/orgs/my-org/teams");
+    expect(result).toEqual([]);
+  });
 });
 
 describe("githubFetchPaginatedWithCutoff", () => {
