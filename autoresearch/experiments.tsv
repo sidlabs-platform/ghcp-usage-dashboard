@@ -1,3 +1,4 @@
 experiment_id	timestamp	program	description	result	coverage_before	coverage_after	notes
 exp-001	2026-05-06T17:24:23Z	test-coverage	memory-cache.test.ts: get/set/TTL/eviction/invalidation (10 tests)	kept	4.71	5.83	+1.12% statements
 76	2026-05-07T01:13:23	billing-client: no-download-URLs + fetchPremiumRequestReport	KEEP	83.32	+0.10
+77	2026-05-07T01:16:13	metrics-repo: PR merge + weightedMedian + empty orgSlugs	KEEP	83.65	+0.33

@@ -283,3 +283,23 @@ describe("resolveAuthMode (absolute GitHub URL)", () => {
     expect(resolveAuthMode("https://api.github.com/orgs/my-org/copilot")).toBe("app");
   });
 });
+
+describe("adaptiveRateDelay", () => {
+  it("delays 200ms when remaining is between 100-1000", async () => {
+    vi.useFakeTimers();
+    const { adaptiveRateDelay } = await import("./api-base");
+    const mockFetch = fetch as unknown as ReturnType<typeof vi.fn>;
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({}),
+      headers: new Map([["x-ratelimit-remaining", "500"], ["x-ratelimit-reset", String(Math.floor(Date.now() / 1000) + 60)]]),
+    });
+    // Prime the rate limit state
+    await githubFetch("/orgs/test/copilot", 1, "pat");
+    // adaptiveRateDelay should sleep 200ms
+    const p = adaptiveRateDelay("pat");
+    await vi.advanceTimersByTimeAsync(200);
+    await p;
+    vi.useRealTimers();
+  });
+});
