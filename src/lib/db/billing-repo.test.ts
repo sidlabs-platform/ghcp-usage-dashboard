@@ -242,6 +242,33 @@ describe("getUsageRecordsPaginated", () => {
     const result = getUsageRecordsPaginated("2024-01-01", "2024-01-31", 1, 10, "date", "asc", undefined, { allowedLogins: ["alice"] });
     expect(result.records.every(r => r.username === "alice")).toBe(true);
   });
+
+  it("supports scopeOrgs filter (team/org scope)", () => {
+    upsertUsageRecords("ent1", [
+      { date: "2024-01-15", product: "copilot", sku: "s1", quantity: 1, unit_type: "seat", applied_cost_per_quantity: 10, gross_amount: 10, discount_amount: 0, net_amount: 10, organization: "scope-org", repository: "", username: "scopeuser", workflow_path: "", cost_center_name: "", charge_scope: "org" },
+    ]);
+    const result = getUsageRecordsPaginated("2024-01-15", "2024-01-15", 1, 10, "date", "asc", undefined, { scopeOrgs: ["scope-org"] });
+    expect(result.records.every(r => r.organization === "scope-org")).toBe(true);
+  });
+
+  it("returns nothing when org+scopeOrgs have no intersection", () => {
+    const result = getUsageRecordsPaginated("2024-01-01", "2024-01-31", 1, 10, "date", "asc", undefined, { organization: ["nonexistent"], scopeOrgs: ["also-nonexistent"] });
+    expect(result.total).toBe(0);
+  });
+
+  it("supports sku filter", () => {
+    const result = getUsageRecordsPaginated("2024-01-01", "2024-01-31", 1, 10, "date", "asc", undefined, { sku: ["s1"] });
+    expect(result.records.every(r => r.sku === "s1")).toBe(true);
+  });
+
+  it("supports costCenter filter", () => {
+    upsertUsageRecords("ent1", [
+      { date: "2024-01-16", product: "copilot", sku: "s1", quantity: 1, unit_type: "seat", applied_cost_per_quantity: 10, gross_amount: 10, discount_amount: 0, net_amount: 10, organization: "org1", repository: "", username: "ccuser", workflow_path: "", cost_center_name: "engineering", charge_scope: "user" },
+    ]);
+    const result = getUsageRecordsPaginated("2024-01-16", "2024-01-16", 1, 10, "date", "asc", undefined, { costCenter: "engineering" });
+    expect(result.total).toBeGreaterThanOrEqual(1);
+    expect(result.records[0].cost_center_name).toBe("engineering");
+  });
 });
 
 describe("getPremiumRequestsPaginated", () => {
