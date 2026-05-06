@@ -26,6 +26,10 @@ import {
   getIdeBreakdown,
   getIdeTrend,
   getFeatureUsageDaily,
+  getModelByFeatureBreakdown,
+  getModelTrend,
+  getCliUserBreakdown,
+  estimateRowCount,
 } from "./aggregation-queries";
 
 beforeAll(() => {
@@ -327,5 +331,56 @@ describe("getFeatureUsageDaily", () => {
     const row = daily.find((r) => r.day === "2024-01-18");
     expect(row!.completions).toBeGreaterThanOrEqual(15);
     expect(row!.chatUsers).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe("getModelByFeatureBreakdown", () => {
+  it("aggregates model×feature from json_each", () => {
+    const modelFeature = JSON.stringify([
+      { model: "gpt-4o", feature: "code_completion", user_initiated_interaction_count: 30 },
+      { model: "gpt-4o", feature: "chat_panel", user_initiated_interaction_count: 10 },
+    ]);
+    db.prepare(`INSERT INTO user_daily_metrics (day, enterprise_id, enterprise_slug, user_id, user_login, totals_by_model_feature)
+      VALUES ('2024-01-19', 'ent1', 'ent1', 1, 'user1', ?)`).run(modelFeature);
+    const breakdown = getModelByFeatureBreakdown("2024-01-01", "2024-01-31");
+    const comp = breakdown.find((r) => r.model === "gpt-4o" && r.feature === "code_completion");
+    expect(comp!.interactions).toBe(30);
+  });
+});
+
+describe("getModelTrend", () => {
+  it("returns daily interactions for specified models", () => {
+    const modelFeature = JSON.stringify([
+      { model: "claude-3.5", feature: "chat_panel", user_initiated_interaction_count: 15 },
+    ]);
+    db.prepare(`INSERT INTO user_daily_metrics (day, enterprise_id, enterprise_slug, user_id, user_login, totals_by_model_feature)
+      VALUES ('2024-01-20', 'ent1', 'ent1', 1, 'user1', ?)`).run(modelFeature);
+    const trend = getModelTrend("2024-01-01", "2024-01-31", ["claude-3.5"]);
+    const row = trend.find((r) => r.day === "2024-01-20");
+    expect(row!.interactions).toBe(15);
+  });
+
+  it("returns empty for empty topModels", () => {
+    expect(getModelTrend("2024-01-01", "2024-01-31", [])).toEqual([]);
+  });
+});
+
+describe("getCliUserBreakdown", () => {
+  it("aggregates CLI usage per user", () => {
+    const cliData = JSON.stringify({ session_count: 5, request_count: 10, prompt_count: 8, token_usage: { prompt_tokens_sum: 1000, output_tokens_sum: 500 } });
+    db.prepare(`INSERT INTO user_daily_metrics (day, enterprise_id, enterprise_slug, user_id, user_login, used_cli, totals_by_cli)
+      VALUES ('2024-01-21', 'ent1', 'ent1', 1, 'cli-user', 1, ?)`).run(cliData);
+    const breakdown = getCliUserBreakdown("2024-01-01", "2024-01-31");
+    const user = breakdown.find((r) => r.login === "cli-user");
+    expect(user!.sessions).toBe(5);
+    expect(user!.requests).toBe(10);
+  });
+});
+
+describe("estimateRowCount", () => {
+  it("returns count and exceeds flag", () => {
+    const result = estimateRowCount("2024-01-01", "2024-01-31");
+    expect(result.count).toBeGreaterThanOrEqual(0);
+    expect(typeof result.exceeds).toBe("boolean");
   });
 });
