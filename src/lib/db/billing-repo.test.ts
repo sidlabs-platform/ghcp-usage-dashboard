@@ -230,6 +230,20 @@ describe("getPremiumRequestsPaginated", () => {
     expect(page1.total).toBe(2);
     expect(page1.records).toHaveLength(1);
   });
+
+  it("supports search filter", () => {
+    upsertPremiumRequests("ent1", [
+      { date: "2024-01-12", product: "copilot", sku: "p1", quantity: 10, unit_type: "token", applied_cost_per_quantity: 0.01, gross_amount: 0.1, discount_amount: 0, net_amount: 0.1, username: "search-user", organization: "org1", model: "gpt-4", exceeds_quota: "FALSE", total_monthly_quota: 500, charge_scope: "user" },
+    ]);
+    const result = getPremiumRequestsPaginated("2024-01-01", "2024-01-31", 1, 10, "date", "asc", "search-user");
+    expect(result.total).toBe(1);
+    expect(result.records[0].username).toBe("search-user");
+  });
+
+  it("supports model filter", () => {
+    const result = getPremiumRequestsPaginated("2024-01-01", "2024-01-31", 1, 10, "date", "asc", undefined, { model: ["gpt-4"] });
+    expect(result.records.every(r => r.model === "gpt-4")).toBe(true);
+  });
 });
 
 describe("getPremiumUserSummary", () => {
