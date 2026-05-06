@@ -174,4 +174,13 @@ describe("ghas-sync-service", () => {
     const result = await fullGhasSync(undefined, "test-ent");
     expect(result.categories["enterprise:test-ent:code_scanning"]).toBeDefined();
   });
+
+  it("skips enterprise-level sync when enterprise mode disabled", async () => {
+    const { isEnterpriseEnabled } = await import("@/lib/config/dashboard-config");
+    (isEnterpriseEnabled as ReturnType<typeof vi.fn>).mockReturnValue(false);
+    const result = await fullGhasSync(undefined, "test-ent");
+    // Only org-level categories (3), not enterprise-level
+    expect(Object.keys(result.categories)).toHaveLength(3);
+    expect(Object.keys(result.categories).every(k => k.startsWith("org:"))).toBe(true);
+  });
 });
