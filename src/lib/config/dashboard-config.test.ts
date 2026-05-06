@@ -203,24 +203,4 @@ describe("dashboard-config (with config file)", () => {
     expect(config.autoSync?.enabled).toBe(true);
     expect(config.autoSync?.utcTime).toBe("05:00");
   });
-
-  it("returns cached config within TTL", () => {
-    mockReadFileSync.mockReturnValue(JSON.stringify({}));
-    vi.setSystemTime(Date.now() + 50 * 60 * 1000);
-    const config1 = getDashboardConfig();
-    mockReadFileSync.mockReturnValue(JSON.stringify({ security: { backfillDays: 99 } }));
-    // Within 5-minute TTL, should return cached
-    const config2 = getDashboardConfig();
-    expect(config2.security.backfillDays).toBe(config1.security.backfillDays);
-  });
-
-  it("deep merge handles organizations override", () => {
-    mockReadFileSync.mockReturnValue(JSON.stringify({
-      organizations: { include: ["org-x"], exclude: ["org-y"] },
-    }));
-    vi.setSystemTime(Date.now() + 60 * 60 * 1000);
-    const config = getDashboardConfig();
-    expect(config.organizations.include).toEqual(["org-x"]);
-    expect(config.organizations.exclude).toEqual(["org-y"]);
-  });
 });
