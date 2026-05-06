@@ -26,6 +26,10 @@ import {
   upsertOrgDayMetrics,
   getOrgMetrics,
   getAllOrgSlugs,
+  batchUpsertUserDayMetrics,
+  getUserMetricsByLogin,
+  getDistinctUsers,
+  getAllUserMetrics,
 } from "./metrics-repo";
 
 beforeAll(() => {
@@ -227,5 +231,40 @@ describe("upsertOrgDayMetrics / getOrgMetrics / getAllOrgSlugs", () => {
     const slugs = getAllOrgSlugs();
     expect(slugs).toContain("org-a");
     expect(slugs).toContain("org-b");
+  });
+});
+
+describe("batchUpsertUserDayMetrics", () => {
+  it("inserts multiple records in a transaction", () => {
+    const records = [
+      { day: "2024-01-20", enterprise_id: "ent-123", user_id: 10, user_login: "batch1", code_generation_activity_count: 1, code_acceptance_activity_count: 0, user_initiated_interaction_count: 0, loc_suggested_to_add_sum: 0, loc_suggested_to_delete_sum: 0, loc_added_sum: 0, loc_deleted_sum: 0, used_agent: false, used_chat: false, used_cli: false, used_copilot_code_review_active: false, used_copilot_code_review_passive: false, used_copilot_coding_agent: false, totals_by_ide: [], totals_by_feature: [], totals_by_language_feature: [], totals_by_model_feature: [], totals_by_language_model: [] },
+      { day: "2024-01-20", enterprise_id: "ent-123", user_id: 11, user_login: "batch2", code_generation_activity_count: 2, code_acceptance_activity_count: 0, user_initiated_interaction_count: 0, loc_suggested_to_add_sum: 0, loc_suggested_to_delete_sum: 0, loc_added_sum: 0, loc_deleted_sum: 0, used_agent: false, used_chat: false, used_cli: false, used_copilot_code_review_active: false, used_copilot_code_review_passive: false, used_copilot_coding_agent: false, totals_by_ide: [], totals_by_feature: [], totals_by_language_feature: [], totals_by_model_feature: [], totals_by_language_model: [] },
+    ] as any[];
+    const count = batchUpsertUserDayMetrics("ent1", records);
+    expect(count).toBe(2);
+  });
+});
+
+describe("getUserMetricsByLogin", () => {
+  it("retrieves metrics for a specific user", () => {
+    const record = { day: "2024-01-22", enterprise_id: "ent-123", user_id: 20, user_login: "specific-user", code_generation_activity_count: 5, code_acceptance_activity_count: 3, user_initiated_interaction_count: 10, loc_suggested_to_add_sum: 50, loc_suggested_to_delete_sum: 5, loc_added_sum: 40, loc_deleted_sum: 2, used_agent: false, used_chat: true, used_cli: false, used_copilot_code_review_active: false, used_copilot_code_review_passive: false, used_copilot_coding_agent: false, totals_by_ide: [], totals_by_feature: [], totals_by_language_feature: [], totals_by_model_feature: [], totals_by_language_model: [] } as any;
+    upsertUserDayMetrics("ent1", record);
+    const results = getUserMetricsByLogin("specific-user", "2024-01-01", "2024-01-31");
+    expect(results).toHaveLength(1);
+    expect(results[0].code_generation_activity_count).toBe(5);
+  });
+});
+
+describe("getDistinctUsers", () => {
+  it("returns distinct user logins", () => {
+    const users = getDistinctUsers("ent-123", "2024-01-01", "2024-01-31");
+    expect(users.length).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe("getAllUserMetrics", () => {
+  it("returns all user metrics without enterprise_id filter", () => {
+    const results = getAllUserMetrics("2024-01-01", "2024-01-31");
+    expect(results.length).toBeGreaterThanOrEqual(1);
   });
 });
