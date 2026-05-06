@@ -5,8 +5,10 @@ import {
   computeTrendDirection,
   getTopEcosystems,
   getSeverityDistribution,
+  computeSecuritySummary,
+  formatMTTR,
 } from "./ghas-aggregation";
-import type { CodeScanningDaily, DependabotDaily } from "@/lib/types/ghas";
+import type { CodeScanningDaily, DependabotDaily, SecretScanningDaily } from "@/lib/types/ghas";
 
 describe("computeFixRate", () => {
   it("returns 0 for empty data", () => {
@@ -109,6 +111,47 @@ describe("getSeverityDistribution", () => {
     expect(result).toHaveLength(4);
     expect(result[0]).toEqual({ severity: "critical", count: 5, color: "#ef4444" });
     expect(result[1]).toEqual({ severity: "high", count: 10, color: "#f97316" });
+  });
+});
+
+describe("computeSecuritySummary", () => {
+  it("returns summary with all-zero values when no data", () => {
+    const result = computeSecuritySummary([], [], []);
+    expect(result.totalOpenAlerts).toBe(0);
+    expect(result.fixedLast30d).toBe(0);
+    expect(result.categories.codeScanning).toBeNull();
+  });
+
+  it("computes summary from mixed data", () => {
+    const cs = [makeCsDaily("2024-01-01", { total_open: 5, opened: 2, fixed: 1, severity_critical: 1 })];
+    const dep = [makeDepDaily("2024-01-01", { total_open: 3, opened: 1, fixed: 1, severity_high: 2 })];
+    const ss: SecretScanningDaily[] = [
+      { day: "2024-01-01", scope: "org", scope_id: "o", opened: 1, resolved: 1, total_open: 2, resolution_counts: {} },
+    ];
+    const result = computeSecuritySummary(cs, dep, ss);
+    expect(result.totalOpenAlerts).toBe(10);
+    expect(result.criticalAlerts).toBe(1);
+    expect(result.highAlerts).toBe(2);
+    expect(result.fixedLast30d).toBe(3);
+    expect(result.openedLast30d).toBe(4);
+    expect(result.categories.codeScanning).not.toBeNull();
+    expect(result.categories.dependabot).not.toBeNull();
+    expect(result.categories.secretScanning).not.toBeNull();
+  });
+});
+
+describe("formatMTTR", () => {
+  it("returns N/A for null", () => {
+    expect(formatMTTR(null)).toBe("N/A");
+  });
+  it("formats sub-day as hours", () => {
+    expect(formatMTTR(0.5)).toBe("12h");
+  });
+  it("formats days under 30", () => {
+    expect(formatMTTR(5)).toBe("5.0d");
+  });
+  it("formats 30+ days as months", () => {
+    expect(formatMTTR(60)).toBe("2.0mo");
   });
 });
 
