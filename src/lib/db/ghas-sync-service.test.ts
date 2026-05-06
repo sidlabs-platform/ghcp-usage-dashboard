@@ -60,6 +60,8 @@ vi.stubGlobal("setTimeout", (fn: () => void) => { fn(); return 0; });
 import { fullGhasSync, incrementalGhasSync } from "./ghas-sync-service";
 import { isMetricEnabled, isCodeScanningAutofixEnabled } from "@/lib/config/dashboard-config";
 import { codeScanningClient } from "@/lib/github/code-scanning-client";
+import { dependabotClient } from "@/lib/github/dependabot-client";
+import { secretScanningClient } from "@/lib/github/secret-scanning-client";
 import { getGhasSyncState, getOpenCodeScanningAlerts } from "./ghas-repo";
 
 describe("ghas-sync-service", () => {
@@ -67,6 +69,13 @@ describe("ghas-sync-service", () => {
     vi.clearAllMocks();
     (isMetricEnabled as ReturnType<typeof vi.fn>).mockReturnValue(true);
     (isCodeScanningAutofixEnabled as ReturnType<typeof vi.fn>).mockReturnValue(false);
+    (codeScanningClient.getEnterpriseAlerts as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    (codeScanningClient.getOrgAlerts as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    (codeScanningClient.getAlertAutofixStatus as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+    (dependabotClient.getEnterpriseAlerts as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    (dependabotClient.getOrgAlerts as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    (secretScanningClient.getEnterpriseAlerts as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    (secretScanningClient.getOrgAlerts as ReturnType<typeof vi.fn>).mockResolvedValue([]);
   });
 
   it("fullGhasSync fetches all categories for enterprise + orgs", async () => {
@@ -116,5 +125,31 @@ describe("ghas-sync-service", () => {
     ]);
     const result = await fullGhasSync(undefined, "test-ent");
     expect(result.categories["enterprise:test-ent:code_scanning"]).toBeDefined();
+  });
+
+  it("enrichAutofixStatuses maps success status to available", async () => {
+    (isCodeScanningAutofixEnabled as ReturnType<typeof vi.fn>).mockReturnValue(true);
+    (codeScanningClient.getEnterpriseAlerts as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    (codeScanningClient.getOrgAlerts as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    (getOpenCodeScanningAlerts as ReturnType<typeof vi.fn>).mockReturnValue([
+      { alert_number: 10, repo_full_name: "myorg/myrepo" },
+    ]);
+    (codeScanningClient.getAlertAutofixStatus as ReturnType<typeof vi.fn>)
+      .mockResolvedValue({ status: "success" });
+    const result = await fullGhasSync(undefined, "test-ent");
+    expect(result.categories["enterprise:test-ent:code_scanning"]).toBeDefined();
+  });
+
+  it("enrichAutofixStatuses handles rejected API calls", async () => {
+    (isCodeScanningAutofixEnabled as ReturnType<typeof vi.fn>).mockReturnValue(true);
+    (codeScanningClient.getEnterpriseAlerts as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    (codeScanningClient.getOrgAlerts as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    (getOpenCodeScanningAlerts as ReturnType<typeof vi.fn>).mockReturnValue([
+      { alert_number: 99, repo_full_name: "myorg/myrepo" },
+    ]);
+    (codeScanningClient.getAlertAutofixStatus as ReturnType<typeof vi.fn>)
+      .mockRejectedValue(new Error("autofix API down"));
+    const result = await fullGhasSync(undefined, "test-ent");
+    expect(result.errors).toBe(0); // enrichment errors don't count as sync errors
   });
 });

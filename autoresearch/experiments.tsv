@@ -3,3 +3,4 @@ exp-001	2026-05-06T17:24:23Z	test-coverage	memory-cache.test.ts: get/set/TTL/evi
 76	2026-05-07T01:13:23	billing-client: no-download-URLs + fetchPremiumRequestReport	KEEP	83.32	+0.10
 77	2026-05-07T01:16:13	metrics-repo: PR merge + weightedMedian + empty orgSlugs	KEEP	83.65	+0.33
 78	2026-05-07T01:21:25	api-base: adaptiveRateDelay 200ms delay test	KEEP	83.72	+0.07
+79	2026-05-07T01:23:24	sync-service: org-only mode user fetch + error	KEEP	84.16	+0.44
