@@ -33,6 +33,12 @@ import {
   getAggregatedDailySummary,
   getFilteredOrgMetrics,
   getAllOrgMetrics,
+  recordSync,
+  isSynced,
+  getLatestSyncDay,
+  getSyncStatus,
+  hasOrgDataForRange,
+  clearEmptySyncEntries,
 } from "./metrics-repo";
 
 beforeAll(() => {
@@ -296,5 +302,43 @@ describe("getFilteredOrgMetrics / getAllOrgMetrics", () => {
     const results = getFilteredOrgMetrics(["agg-org1"], "2024-01-15", "2024-01-15");
     expect(results.length).toBeGreaterThanOrEqual(1);
     expect(results[0].daily_active_users).toBe(5);
+  });
+});
+
+describe("recordSync / isSynced / getLatestSyncDay / getSyncStatus", () => {
+  it("records a sync and checks isSynced", () => {
+    recordSync("ent1", "enterprise", "ent1", "2024-01-10", 5);
+    expect(isSynced("ent1", "enterprise", "ent1", "2024-01-10")).toBe(true);
+    expect(isSynced("ent1", "enterprise", "ent1", "2024-01-11")).toBe(false);
+  });
+
+  it("getLatestSyncDay returns the latest day", () => {
+    recordSync("ent1", "enterprise", "ent1", "2024-01-12", 3);
+    const latest = getLatestSyncDay("ent1", "enterprise", "ent1");
+    expect(latest).toBe("2024-01-12");
+  });
+
+  it("getSyncStatus returns grouped sync info", () => {
+    const status = getSyncStatus(["ent1"]);
+    expect(status.length).toBeGreaterThanOrEqual(1);
+    expect(status[0].days_synced).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe("hasOrgDataForRange", () => {
+  it("returns true when org has data", () => {
+    expect(hasOrgDataForRange("my-org", "2024-01-01", "2024-01-31")).toBe(true);
+  });
+
+  it("returns false for unknown org", () => {
+    expect(hasOrgDataForRange("nonexistent", "2024-01-01", "2024-01-31")).toBe(false);
+  });
+});
+
+describe("clearEmptySyncEntries", () => {
+  it("removes zero-count sync entries", () => {
+    recordSync("ent1", "enterprise", "ent1", "2024-01-05", 0);
+    const removed = clearEmptySyncEntries(["ent1"]);
+    expect(removed).toBeGreaterThanOrEqual(1);
   });
 });
