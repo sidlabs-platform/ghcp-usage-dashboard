@@ -289,6 +289,19 @@ describe("getUsageRecordsPaginated", () => {
     expect(result.total).toBeGreaterThanOrEqual(1);
     expect(result.records[0].cost_center_name).toBe("engineering");
   });
+
+  it("supports combined allowedLogins + scopeOrgs (OR clause)", () => {
+    upsertUsageRecords("ent1", [
+      { date: "2024-02-10", product: "copilot", sku: "s1", quantity: 1, unit_type: "seat", applied_cost_per_quantity: 10, gross_amount: 10, discount_amount: 0, net_amount: 10, organization: "combo-org", repository: "", username: "combo-user", workflow_path: "", cost_center_name: "", charge_scope: "user" },
+    ]);
+    const result = getUsageRecordsPaginated("2024-02-10", "2024-02-10", 1, 10, "date", "asc", undefined, { allowedLogins: ["combo-user"], scopeOrgs: ["combo-org"] });
+    expect(result.total).toBeGreaterThanOrEqual(1);
+  });
+
+  it("returns empty when allowedLogins is empty array with no scopeOrgs", () => {
+    const result = getUsageRecordsPaginated("2024-01-01", "2024-01-31", 1, 10, "date", "asc", undefined, { allowedLogins: [] });
+    expect(result.total).toBe(0);
+  });
 });
 
 describe("getPremiumRequestsPaginated", () => {

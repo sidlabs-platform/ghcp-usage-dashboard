@@ -15,3 +15,4 @@ exp-001	2026-05-06T17:24:23Z	test-coverage	memory-cache.test.ts: get/set/TTL/evi
 88	2026-05-07T01:50:38	metrics-client: unrecognized record + org-28-day no-links	KEEP	86.34	+0.14
 90	2026-05-07T01:54:24	dashboard-config: cache-hit + organizations-override	REVERT	86.42	+0.00
 91	2026-05-07T01:56:03	teams-client: org/enterprise member error handling	KEEP	86.51	+0.09
+92	2026-05-07T01:57:51	billing-repo: enterprise-slug + scopeOrgs KPI filters	KEEP	86.75	+0.24
