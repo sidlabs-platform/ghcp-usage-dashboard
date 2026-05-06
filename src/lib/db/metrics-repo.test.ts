@@ -331,6 +331,11 @@ describe("getAggregatedDailySummary", () => {
     expect(typeof summary[0].weekly_active_users).toBe("number");
     expect(typeof summary[0].monthly_active_users).toBe("number");
   });
+
+  it("filters by enterprise slug with aliased buildEnterpriseFilter", () => {
+    const summary = getAggregatedDailySummary("2024-01-01", "2024-01-31", ["ent1"]);
+    expect(summary.length).toBeGreaterThanOrEqual(1);
+  });
 });
 
 describe("getFilteredOrgMetrics / getAllOrgMetrics", () => {
