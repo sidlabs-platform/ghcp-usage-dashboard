@@ -276,6 +276,16 @@ describe("getUsageRecordsPaginated", () => {
     expect(result.total).toBe(0);
   });
 
+  it("applies org+scopeOrgs intersection filter when both overlap", () => {
+    upsertUsageRecords("ent1", [
+      { date: "2024-02-20", product: "copilot", sku: "s1", quantity: 1, unit_type: "seat", applied_cost_per_quantity: 10, gross_amount: 10, discount_amount: 0, net_amount: 10, organization: "shared-org", repository: "", username: "isect-user", workflow_path: "", cost_center_name: "", charge_scope: "user" },
+      { date: "2024-02-20", product: "copilot", sku: "s1", quantity: 1, unit_type: "seat", applied_cost_per_quantity: 5, gross_amount: 5, discount_amount: 0, net_amount: 5, organization: "other-org", repository: "", username: "other-user", workflow_path: "", cost_center_name: "", charge_scope: "user" },
+    ]);
+    const result = getUsageRecordsPaginated("2024-02-20", "2024-02-20", 1, 10, "date", "asc", undefined, { organization: ["shared-org", "other-org"], scopeOrgs: ["shared-org"] });
+    expect(result.records.every(r => r.organization === "shared-org")).toBe(true);
+    expect(result.total).toBe(1);
+  });
+
   it("supports sku filter", () => {
     const result = getUsageRecordsPaginated("2024-01-01", "2024-01-31", 1, 10, "date", "asc", undefined, { sku: ["s1"] });
     expect(result.records.every(r => r.sku === "s1")).toBe(true);
