@@ -508,4 +508,15 @@ describe("getFilteredOrgMetrics PR merge with null PR fields", () => {
     expect(results).toHaveLength(1);
     expect(results[0].pull_requests!.total_created).toBe(8);
   });
+
+  it("assigns PRs when first org has none and second has PRs", () => {
+    const prValid = JSON.stringify({ total_created: 4, total_reviewed: 2, total_merged: 1, total_suggestions: 0, total_applied_suggestions: 0, total_created_by_copilot: 0, total_reviewed_by_copilot: 0, total_merged_created_by_copilot: 0, total_merged_reviewed_by_copilot: 0, total_copilot_suggestions: 0, total_copilot_applied_suggestions: 0, median_minutes_to_merge: 50, median_minutes_to_merge_copilot_authored: null, median_minutes_to_merge_copilot_reviewed: null });
+    db.prepare(`INSERT OR REPLACE INTO org_daily_metrics (enterprise_slug, day, org_slug, enterprise_id, daily_active_users, weekly_active_users, monthly_active_users, monthly_active_agent_users, monthly_active_chat_users, daily_active_cli_users, code_generation_activity_count, code_acceptance_activity_count, user_initiated_interaction_count, loc_suggested_to_add_sum, loc_suggested_to_delete_sum, loc_added_sum, loc_deleted_sum, totals_by_ide, totals_by_feature, totals_by_language_feature, totals_by_model_feature, totals_by_language_model, pull_requests, raw_json) VALUES (?, ?, ?, ?, 2, 3, 5, 0, 0, 0, 5, 3, 2, 10, 2, 8, 1, '[]', '[]', '[]', '[]', '[]', NULL, '{}')`)
+      .run("ent1", "2024-06-04", "filt-nopr-org1", "e1");
+    db.prepare(`INSERT OR REPLACE INTO org_daily_metrics (enterprise_slug, day, org_slug, enterprise_id, daily_active_users, weekly_active_users, monthly_active_users, monthly_active_agent_users, monthly_active_chat_users, daily_active_cli_users, code_generation_activity_count, code_acceptance_activity_count, user_initiated_interaction_count, loc_suggested_to_add_sum, loc_suggested_to_delete_sum, loc_added_sum, loc_deleted_sum, totals_by_ide, totals_by_feature, totals_by_language_feature, totals_by_model_feature, totals_by_language_model, pull_requests, raw_json) VALUES (?, ?, ?, ?, 3, 4, 6, 1, 1, 0, 10, 7, 5, 20, 5, 15, 3, '[]', '[]', '[]', '[]', '[]', ?, '{}')`)
+      .run("ent1", "2024-06-04", "filt-nopr-org2", "e1", prValid);
+    const results = getFilteredOrgMetrics(["filt-nopr-org1", "filt-nopr-org2"], "2024-06-04", "2024-06-04");
+    expect(results).toHaveLength(1);
+    expect(results[0].pull_requests!.total_created).toBe(4);
+  });
 });
