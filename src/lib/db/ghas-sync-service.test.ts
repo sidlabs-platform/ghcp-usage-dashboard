@@ -152,4 +152,10 @@ describe("ghas-sync-service", () => {
     const result = await fullGhasSync(undefined, "test-ent");
     expect(result.errors).toBe(0); // enrichment errors don't count as sync errors
   });
+
+  it("fullGhasSync without slug uses getConfiguredEnterprises", async () => {
+    const result = await fullGhasSync();
+    expect(Object.keys(result.categories).length).toBeGreaterThanOrEqual(6);
+    expect(result.errors).toBe(0);
+  });
 });
