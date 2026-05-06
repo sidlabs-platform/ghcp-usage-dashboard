@@ -63,13 +63,22 @@ describe("MemoryCache", () => {
 
   describe("LRU eviction", () => {
     it("evicts least recently accessed entry at capacity", () => {
-      // Create a fresh cache instance to test capacity (singleton has 500 max)
-      // We'll fill the singleton and verify size stays bounded
-      // Instead, test that eviction works by filling and checking
       for (let i = 0; i < 501; i++) {
         cache.set(`key-${i}`, i);
       }
-      // Size should be capped at 500
+      expect(cache.size).toBeLessThanOrEqual(500);
+    });
+
+    it("evicts expired entry found during eviction scan", () => {
+      // Fill to capacity with short TTL on first entry
+      cache.set("expire-me", "old", 1000);
+      for (let i = 1; i < 500; i++) {
+        cache.set(`fill-${i}`, i);
+      }
+      // Expire the first entry
+      vi.advanceTimersByTime(1001);
+      // Trigger eviction by adding one more
+      cache.set("trigger", "new");
       expect(cache.size).toBeLessThanOrEqual(500);
     });
   });

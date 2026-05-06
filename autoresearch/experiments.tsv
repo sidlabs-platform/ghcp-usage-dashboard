@@ -35,3 +35,4 @@ exp-001	2026-05-06T17:24:23Z	test-coverage	memory-cache.test.ts: get/set/TTL/evi
 109	2026-05-07T02:49:07.5334679+05:30	billing-client CSV parser escaped double-quote branch	KEEP	89.02	75.88	92.69	90.83
 110	2026-05-07T02:50:26.9211614+05:30	billing-client createReport with enterpriseSlug auth branch	KEEP	89.09	75.93	92.69	90.9
 111	2026-05-07T02:53:21.0714612+05:30	csv fetchAllPages non-array dataExtractor error branches	KEEP	89.15	76.04	92.69	90.97
+112	2026-05-07T02:54:44.0821015+05:30	seats-client null seats field and enterprise null page branches	KEEP	89.18	76.20	92.69	90.97
