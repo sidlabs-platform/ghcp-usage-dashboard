@@ -126,6 +126,16 @@ describe("refreshDailyAggregateRange", () => {
     const rows = db.prepare("SELECT * FROM daily_aggregate_cache ORDER BY day").all();
     expect(rows).toHaveLength(2);
   });
+
+  it("scopes to enterprise slug when provided", () => {
+    insertMetric({ day: "2024-01-13", enterprise_slug: "ea", user_login: "u1" });
+    insertMetric({ day: "2024-01-13", enterprise_slug: "eb", user_id: 2, user_login: "u2" });
+    const count = refreshDailyAggregateRange("2024-01-13", "2024-01-13", "ea");
+    expect(count).toBe(1);
+    const rows = db.prepare("SELECT * FROM daily_aggregate_cache WHERE day = '2024-01-13'").all() as any[];
+    expect(rows).toHaveLength(1);
+    expect(rows[0].enterprise_slug).toBe("ea");
+  });
 });
 
 describe("refreshTeamSummary", () => {
