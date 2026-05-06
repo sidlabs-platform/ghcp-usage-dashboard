@@ -77,6 +77,18 @@ describe("billingClient", () => {
       expect(records[0].net_amount).toBe(0);
       expect(records[0].username).toBe("");
     });
+
+    it("handles short rows (fewer values than headers) via ?? fallback", () => {
+      const csv = [
+        "date,product,sku,quantity,unit_type,applied_cost_per_quantity,gross_amount,discount_amount,net_amount,organization,repository,username,workflow_path,cost_center_name",
+        "2024-01-01,copilot,s1"
+      ].join("\n");
+      const records = billingClient.parseUsageCSV(csv);
+      expect(records).toHaveLength(1);
+      expect(records[0].date).toBe("2024-01-01");
+      expect(records[0].quantity).toBe(0);
+      expect(records[0].username).toBe("");
+    });
   });
 
   describe("parsePremiumRequestCSV", () => {
