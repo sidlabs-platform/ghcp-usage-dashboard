@@ -41,3 +41,4 @@ exp-001	2026-05-06T17:24:23Z	test-coverage	memory-cache.test.ts: get/set/TTL/evi
 115	2026-05-07T02:58:35.0521693+05:30	scope-filter same-enterprise multiple composite teams grouping	KEEP	89.32	76.31	92.69	91.08
 117	2026-05-07 03:01	aggregation-queries: getAdoptionStats with enterpriseSlugs (no delta)	revert	89.41	76.42	92.90	91.15
 118	2026-05-07 03:03	dashboard-config: deepMerge non-object metrics key branch	keep	89.41	76.47	92.90	91.15
+119	2026-05-07 03:05	enterprise-config: getEnterpriseAuth empty app env branch	keep	89.41	76.53	92.90	91.15

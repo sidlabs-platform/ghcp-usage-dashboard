@@ -216,6 +216,12 @@ describe("recomputeSecretScanningDaily / getSecretScanningDaily", () => {
     expect(day2!.resolved).toBe(1);
     expect(day2!.resolution_counts).toEqual({ revoked: 1 });
   });
+
+  it("returns early when no alerts exist for scope", () => {
+    recomputeSecretScanningDaily("ent1", "org", "empty-org");
+    const daily = getSecretScanningDaily("org", "empty-org", "2024-01-01", "2024-12-31", ["ent1"]);
+    expect(daily).toEqual([]);
+  });
 });
 
 describe("getAllGhasSyncStates", () => {
