@@ -173,6 +173,20 @@ describe("enterprise metrics", () => {
     expect(results[0].loc_added_sum).toBe(400);
   });
 
+  it("stores and retrieves totals_by_cli and pull_requests fields", () => {
+    const record = {
+      ...baseDayTotal,
+      day: "2024-01-11",
+      totals_by_cli: [{ name: "ghcs", total_chats: 12 }],
+      pull_requests: { total_created: 5, total_reviewed: 3, total_merged: 4, total_suggestions: 2, total_applied_suggestions: 1, total_created_by_copilot: 1, total_reviewed_by_copilot: 0, total_merged_created_by_copilot: 1, total_merged_reviewed_by_copilot: 0, total_copilot_suggestions: 1, total_copilot_applied_suggestions: 0, median_minutes_to_merge: 45, median_minutes_to_merge_copilot_authored: null, median_minutes_to_merge_copilot_reviewed: null },
+    };
+    upsertEnterpriseDayMetrics("ent1", record as any);
+    const results = getEnterpriseMetrics("2024-01-11", "2024-01-11");
+    expect(results).toHaveLength(1);
+    expect(results[0].totals_by_cli).toEqual([{ name: "ghcs", total_chats: 12 }]);
+    expect(results[0].pull_requests!.total_created).toBe(5);
+  });
+
   it("resolveEnterpriseId finds from enterprise metrics", () => {
     upsertEnterpriseDayMetrics("ent1", baseDayTotal as any);
     expect(resolveEnterpriseId(["ent1"])).toBe("ent-123");
