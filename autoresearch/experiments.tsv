@@ -45,3 +45,4 @@ exp-001	2026-05-06T17:24:23Z	test-coverage	memory-cache.test.ts: get/set/TTL/evi
 120	2026-05-07 03:07	ghas-repo: recomputeSecretScanningDaily empty scope early return	keep	89.45	76.58	92.90	91.15
 121	2026-05-07 03:08	metrics-repo: getAllOrgMetrics null numeric field ?? 0 branches	keep	89.45	77.23	92.90	91.15
 122	2026-05-07 03:10	metrics-repo: getFilteredOrgMetrics null numeric field ?? 0 branches	keep	89.48	77.94	92.90	91.15
+123	2026-05-07 03:11	metrics-repo: weightedMedian zero-weight average branch	keep	89.55	78.10	92.90	91.22

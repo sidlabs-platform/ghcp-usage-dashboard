@@ -373,6 +373,20 @@ describe("getFilteredOrgMetrics / getAllOrgMetrics", () => {
     const day = results.find(r => r.day === "2024-05-01");
     expect(day!.pull_requests!.median_minutes_to_merge).toBe(70); // (60+80)/2
   });
+
+  it("weightedMedian returns b when a is null (a==null path)", () => {
+    // First org has null median_minutes_to_merge, second has value
+    const prNullMedian = { total_created: 2, total_reviewed: 1, total_merged: 3, total_suggestions: 0, total_applied_suggestions: 0, total_created_by_copilot: 0, total_reviewed_by_copilot: 0, total_merged_created_by_copilot: 0, total_merged_reviewed_by_copilot: 0, total_copilot_suggestions: 0, total_copilot_applied_suggestions: 0, median_minutes_to_merge: null, median_minutes_to_merge_copilot_authored: null, median_minutes_to_merge_copilot_reviewed: null };
+    const prWithMedian = { total_created: 4, total_reviewed: 2, total_merged: 5, total_suggestions: 0, total_applied_suggestions: 0, total_created_by_copilot: 0, total_reviewed_by_copilot: 0, total_merged_created_by_copilot: 0, total_merged_reviewed_by_copilot: 0, total_copilot_suggestions: 0, total_copilot_applied_suggestions: 0, median_minutes_to_merge: 90, median_minutes_to_merge_copilot_authored: null, median_minutes_to_merge_copilot_reviewed: null };
+    upsertOrgDayMetrics("ent1", "wm-a-null1", { day: "2024-05-02", enterprise_id: "e1", daily_active_users: 1, weekly_active_users: 1, monthly_active_users: 1, monthly_active_agent_users: 0, monthly_active_chat_users: 0, daily_active_cli_users: 0, code_generation_activity_count: 0, code_acceptance_activity_count: 0, user_initiated_interaction_count: 0, loc_suggested_to_add_sum: 0, loc_suggested_to_delete_sum: 0, loc_added_sum: 0, loc_deleted_sum: 0, totals_by_ide: [], totals_by_feature: [], totals_by_language_feature: [], totals_by_model_feature: [], totals_by_language_model: [], pull_requests: prNullMedian } as any);
+    upsertOrgDayMetrics("ent1", "wm-a-null2", { day: "2024-05-02", enterprise_id: "e1", daily_active_users: 1, weekly_active_users: 1, monthly_active_users: 1, monthly_active_agent_users: 0, monthly_active_chat_users: 0, daily_active_cli_users: 0, code_generation_activity_count: 0, code_acceptance_activity_count: 0, user_initiated_interaction_count: 0, loc_suggested_to_add_sum: 0, loc_suggested_to_delete_sum: 0, loc_added_sum: 0, loc_deleted_sum: 0, totals_by_ide: [], totals_by_feature: [], totals_by_language_feature: [], totals_by_model_feature: [], totals_by_language_model: [], pull_requests: prWithMedian } as any);
+    const results = getAllOrgMetrics("2024-05-02", "2024-05-02");
+    const day = results.find(r => r.day === "2024-05-02");
+    // a==null → returns b (90)
+    expect(day!.pull_requests!.median_minutes_to_merge).toBe(90);
+    // both null → returns null
+    expect(day!.pull_requests!.median_minutes_to_merge_copilot_authored).toBeNull();
+  });
 });
 
 describe("recordSync / isSynced / getLatestSyncDay / getSyncStatus", () => {
