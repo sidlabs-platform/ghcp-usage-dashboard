@@ -212,6 +212,18 @@ describe("githubFetchPaginatedWithCutoff", () => {
     const result = await githubFetchPaginatedWithCutoff<{ updated_at: string }>("/orgs/o/alerts");
     expect(result).toEqual([]);
   });
+
+  it("retries on 429 then succeeds", async () => {
+    const mockFetch = fetch as unknown as ReturnType<typeof vi.fn>;
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    mockFetch
+      .mockResolvedValueOnce({ ok: false, status: 429, headers: new Map([["retry-after", "1"]]) })
+      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve([{ updated_at: "2024-01-05", id: 1 }]), headers: new Map() });
+    const result = await githubFetchPaginatedWithCutoff<{ updated_at: string }>("/orgs/o/alerts");
+    expect(result).toHaveLength(1);
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("429"));
+    warnSpy.mockRestore();
+  });
 });
 
 describe("githubFetchCursorPaginatedWithCutoff", () => {

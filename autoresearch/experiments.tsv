@@ -9,3 +9,4 @@ exp-001	2026-05-06T17:24:23Z	test-coverage	memory-cache.test.ts: get/set/TTL/evi
 82	2026-05-07T01:36:39	sync-service: syncTeams modes + incrementalSync gap	KEEP	85.28	+0.76
 83	2026-05-07T01:38:29	sync-service: empty enterprises + seats error	KEEP	85.35	+0.07
 84	2026-05-07T01:43:57	sync-scheduler: incrementalSync failure + config-disabled mid-run	KEEP	85.49	+0.14
+85	2026-05-07T01:45:34	api-base: fetchNDJSON streaming body path	KEEP	85.92	+0.43
