@@ -64,6 +64,19 @@ describe("billingClient", () => {
       const records = billingClient.parseUsageCSV(csv);
       expect(records).toEqual([]);
     });
+
+    it("handles missing/empty usage fields with fallback defaults", () => {
+      const csv = [
+        "date,product,sku,quantity,unit_type,applied_cost_per_quantity,gross_amount,discount_amount,net_amount,organization,repository,username,workflow_path,cost_center_name",
+        "2024-01-01,,,,,,,,,,,,,"
+      ].join("\n");
+      const records = billingClient.parseUsageCSV(csv);
+      expect(records).toHaveLength(1);
+      expect(records[0].product).toBe("");
+      expect(records[0].quantity).toBe(0);
+      expect(records[0].net_amount).toBe(0);
+      expect(records[0].username).toBe("");
+    });
   });
 
   describe("parsePremiumRequestCSV", () => {
@@ -77,6 +90,19 @@ describe("billingClient", () => {
       expect(records[0].model).toBe("gpt-4");
       expect(records[0].exceeds_quota).toBe("TRUE");
       expect(records[0].charge_scope).toBe("user");
+    });
+
+    it("handles missing/empty fields with fallback defaults", () => {
+      const csv = [
+        "date,product,sku,quantity,unit_type,applied_cost_per_quantity,gross_amount,discount_amount,net_amount,username,organization,model,exceeds_quota,total_monthly_quota",
+        "2024-01-01,,,,,,,,,,,,,"
+      ].join("\n");
+      const records = billingClient.parsePremiumRequestCSV(csv);
+      expect(records).toHaveLength(1);
+      expect(records[0].product).toBe("");
+      expect(records[0].quantity).toBe(0);
+      expect(records[0].model).toBe("");
+      expect(records[0].exceeds_quota).toBe("FALSE");
     });
   });
 
