@@ -148,5 +148,36 @@ describe("billingClient", () => {
       expect(records).toHaveLength(1);
       expect(records[0].product).toBe("copilot");
     });
+
+    it("returns empty when report has no download URLs", async () => {
+      process.env.GITHUB_TOKEN = "ghp_test";
+      const { githubFetch, sleep } = await import("./api-base");
+      const mockGF = githubFetch as ReturnType<typeof vi.fn>;
+      (sleep as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+      vi.stubGlobal("fetch", vi.fn()
+        .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ id: "r2", status: "pending" }) })
+      );
+      mockGF.mockResolvedValue({ id: "r2", status: "completed", download_urls: [] });
+      const records = await billingClient.fetchUsageReport("my-ent", "detailed", "2024-01-01", "2024-01-31");
+      expect(records).toHaveLength(0);
+    });
+  });
+
+  describe("fetchPremiumRequestReport", () => {
+    it("orchestrates create → wait → download → parse", async () => {
+      process.env.GITHUB_TOKEN = "ghp_test";
+      const { githubFetch, sleep } = await import("./api-base");
+      const mockGF = githubFetch as ReturnType<typeof vi.fn>;
+      (sleep as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+      const csvContent = "date,product,sku,quantity,unit_type,applied_cost_per_quantity,gross_amount,discount_amount,net_amount,username,organization,model,exceeds_quota,total_monthly_quota\n2024-01-01,copilot,s1,5,request,2,10,0,10,alice,org,gpt-4,FALSE,100\n";
+      vi.stubGlobal("fetch", vi.fn()
+        .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ id: "r3", status: "pending" }) })
+        .mockResolvedValueOnce({ ok: true, text: () => Promise.resolve(csvContent) })
+      );
+      mockGF.mockResolvedValue({ id: "r3", status: "completed", download_urls: ["https://storage.example.com/csv"] });
+      const records = await billingClient.fetchPremiumRequestReport("my-ent", "2024-01-01", "2024-01-31");
+      expect(records).toHaveLength(1);
+      expect(records[0].model).toBe("gpt-4");
+    });
   });
 });
