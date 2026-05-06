@@ -52,6 +52,15 @@ describe("MetricsClient", () => {
       expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("skipped unrecognised"));
       warnSpy.mockRestore();
     });
+
+    it("warns when NDJSON records fetched but none match DayTotal shape", async () => {
+      mockGithubFetch.mockResolvedValue({ download_links: ["http://dl"] });
+      mockFetchNDJSON.mockResolvedValue([{ no_day: true }]);
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      await client.getEnterpriseDailyReport("ent", "2024-01-01");
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("0 matched DayTotal"));
+      warnSpy.mockRestore();
+    });
   });
 
   describe("getEnterpriseUserDailyReport", () => {
