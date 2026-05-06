@@ -174,4 +174,26 @@ describe("fetchAllPages", () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false, status: 500 }));
     await expect(fetchAllPages("/api/test", new URLSearchParams(), (j) => j.data)).rejects.toThrow("HTTP 500");
   });
+
+  it("throws when dataExtractor returns non-array on first page", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ data: "not-array", pagination: { totalPages: 1 } }),
+    }));
+    await expect(fetchAllPages("/api/test", new URLSearchParams(), (j) => j.data)).rejects.toThrow("invalid data format");
+  });
+
+  it("throws when dataExtractor returns non-array on subsequent page", async () => {
+    const mockFetch = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ data: [{ id: 1 }], pagination: { totalPages: 2 } }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ data: "bad" }),
+      });
+    vi.stubGlobal("fetch", mockFetch);
+    await expect(fetchAllPages("/api/test", new URLSearchParams(), (j) => j.data)).rejects.toThrow("invalid data format (page 2)");
+  });
 });
