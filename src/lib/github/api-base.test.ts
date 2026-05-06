@@ -342,4 +342,28 @@ describe("adaptiveRateDelay", () => {
     await p;
     vi.useRealTimers();
   });
+
+  it("waits until reset when remaining < 100", async () => {
+    vi.useFakeTimers();
+    const { adaptiveRateDelay } = await import("./api-base");
+    const mockFetch = fetch as unknown as ReturnType<typeof vi.fn>;
+    const resetAt = Math.floor(Date.now() / 1000) + 5; // 5s from now
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({}),
+      headers: new Map([["x-ratelimit-remaining", "50"], ["x-ratelimit-reset", String(resetAt)]]),
+    });
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    // Prime state — need to advance timers since adaptiveRateDelay may sleep
+    const fetchP = githubFetch("/orgs/low/info", 1, "pat");
+    await vi.advanceTimersByTimeAsync(1000);
+    await fetchP;
+    // Now adaptiveRateDelay should see remaining=50 and wait until reset
+    const p = adaptiveRateDelay("pat");
+    await vi.advanceTimersByTimeAsync(7000);
+    await p;
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("Only 50 requests remaining"));
+    warnSpy.mockRestore();
+    vi.useRealTimers();
+  });
 });
