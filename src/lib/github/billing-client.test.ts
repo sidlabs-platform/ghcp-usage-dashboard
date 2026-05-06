@@ -106,4 +106,26 @@ describe("billingClient", () => {
       await expect(billingClient.downloadReportCSV("https://storage.example.com/bad")).rejects.toThrow("Failed to download");
     });
   });
+
+  describe("createReport", () => {
+    it("creates a report and returns the export object", async () => {
+      process.env.GITHUB_TOKEN = "ghp_test";
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({ id: "new-report", status: "pending" }),
+      }));
+      const result = await billingClient.createReport("my-ent", "detailed", "2024-01-01", "2024-01-31");
+      expect(result.id).toBe("new-report");
+    });
+
+    it("throws when response is not ok", async () => {
+      process.env.GITHUB_TOKEN = "ghp_test";
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+        ok: false,
+        status: 422,
+        text: () => Promise.resolve("invalid dates"),
+      }));
+      await expect(billingClient.createReport("my-ent", "detailed", "bad", "bad")).rejects.toThrow("Failed to create billing report");
+    });
+  });
 });
