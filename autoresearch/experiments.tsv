@@ -17,3 +17,13 @@ exp-001	2026-05-06T17:24:23Z	test-coverage	memory-cache.test.ts: get/set/TTL/evi
 91	2026-05-07T01:56:03	teams-client: org/enterprise member error handling	KEEP	86.51	+0.09
 92	2026-05-07T01:57:51	billing-repo: enterprise-slug + scopeOrgs KPI filters	KEEP	86.75	+0.24
 93	2026-05-07T01:59:11	billing-repo: combined scope + empty allowedLogins	KEEP	86.81	+0.06
+94	2026-05-07T02:03:22	app-auth: mock jose class, cover minting/caching/validation	KEEP	87.29	+0.48
+2026-05-07T02:11:15	api-base: adaptiveRateDelay low-quota wait-until-reset path test	keep	87.70	74.25	91.27	89.74
+2026-05-07T02:12:22	api-base: cursorPaginatedWithCutoff 204 empty return test	keep	87.73	74.30	91.27	89.74
+2026-05-07T02:13:29	api-base: paginated .seats extraction + 204 branch tests	keep	87.80	74.52	91.27	89.77
+2026-05-07T02:17:54	auto-sync-scheduler: GHAS + billing sync error path tests	keep	87.87	74.63	91.27	89.85
+2026-05-07T02:20:23	metrics-repo: getAllOrgMetrics PR merge for first-org-no-PR path	keep	87.96	74.68	91.27	89.96
+2026-05-07T02:21:47	summary-tables: enterprise-scoped refreshDailyAggregate test	keep	88.00	74.85	91.27	89.99
+2026-05-07T02:24:02	summary-tables: enterprise-scoped refreshDailyAggregateRange test	keep	88.00	74.95	91.27	89.99
+2026-05-07T02:26:25	billing-repo: org+scopeOrgs intersection filter with overlap test	keep	88.10	75.01	91.48	90.10
+2026-05-07T02:27:27	billing-repo: premium org+scopeOrgs intersection filter test	keep	88.29	75.12	91.88	90.28

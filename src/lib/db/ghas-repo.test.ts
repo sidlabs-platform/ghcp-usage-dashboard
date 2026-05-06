@@ -175,6 +175,22 @@ describe("recomputeDependabotDaily / getDependabotDaily", () => {
     expect(daily.length).toBeGreaterThanOrEqual(1);
     expect(daily[0].opened).toBe(1);
   });
+
+  it("populates fixed, dismissed, severity, and ecosystem_counts", () => {
+    upsertDependabotAlerts("ent1", "org", "my-org", [
+      { number: 10, repository: { full_name: "org/r" }, state: "open", security_vulnerability: { severity: "critical", package: { ecosystem: "pip", name: "pkg" } }, created_at: "2024-02-01T00:00:00Z", updated_at: "2024-02-01T00:00:00Z" },
+      { number: 11, repository: { full_name: "org/r" }, state: "fixed", security_vulnerability: { severity: "high", package: { ecosystem: "npm", name: "x" } }, created_at: "2024-02-01T00:00:00Z", updated_at: "2024-02-02T00:00:00Z", fixed_at: "2024-02-02T00:00:00Z" },
+      { number: 12, repository: { full_name: "org/r" }, state: "dismissed", security_vulnerability: { severity: "medium", package: { ecosystem: "npm", name: "y" } }, created_at: "2024-02-01T00:00:00Z", updated_at: "2024-02-02T00:00:00Z", dismissed_at: "2024-02-02T00:00:00Z", dismissed_reason: "tolerable_risk" },
+    ] as any);
+    recomputeDependabotDaily("ent1", "org", "my-org");
+    const daily = getDependabotDaily("org", "my-org", "2024-02-01", "2024-02-28", ["ent1"]);
+    const day2 = daily.find(d => d.day === "2024-02-02");
+    expect(day2).toBeDefined();
+    expect(day2!.fixed).toBe(1);
+    expect(day2!.dismissed).toBe(1);
+    expect(day2!.severity_critical).toBe(1);
+    expect(day2!.ecosystem_counts).toEqual({ pip: 1 });
+  });
 });
 
 describe("recomputeSecretScanningDaily / getSecretScanningDaily", () => {
