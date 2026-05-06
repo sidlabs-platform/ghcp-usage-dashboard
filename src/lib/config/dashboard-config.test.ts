@@ -203,4 +203,16 @@ describe("dashboard-config (with config file)", () => {
     expect(config.autoSync?.enabled).toBe(true);
     expect(config.autoSync?.utcTime).toBe("05:00");
   });
+
+  it("deep merge skips non-object metrics keys gracefully", () => {
+    // When a metrics sub-key is null/primitive, deepMergeConfig skips it
+    mockReadFileSync.mockReturnValue(JSON.stringify({
+      metrics: { copilot: null, billing: { enabled: true } },
+    }));
+    vi.setSystemTime(Date.now() + 50 * 60 * 1000);
+    const config = getDashboardConfig();
+    // copilot should keep defaults since null is not a valid object
+    expect(config.metrics.copilot.enabled).toBe(true);
+    expect(config.metrics.billing.enabled).toBe(true);
+  });
 });
