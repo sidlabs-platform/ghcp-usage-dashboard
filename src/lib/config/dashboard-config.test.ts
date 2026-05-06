@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import fs from "fs";
 
 // Mock fs before importing the module under test
 vi.mock("fs", () => ({
@@ -15,6 +16,10 @@ import {
   getAutoSyncConfig,
   isCodeScanningAutofixEnabled,
   getResolvedOrgs,
+  isEnterpriseEnabled,
+  isCopilotSubEnabled,
+  getEffectiveBillingEnabled,
+  isBillingSubEnabled,
 } from "./dashboard-config";
 
 describe("dashboard-config (defaults)", () => {
@@ -90,6 +95,42 @@ describe("dashboard-config (defaults)", () => {
       process.env.GITHUB_ORGS = "org-a,,org-b,";
       const result = getResolvedOrgs();
       expect(result).toEqual(["org-a", "org-b"]);
+    });
+  });
+
+  describe("isEnterpriseEnabled", () => {
+    it("returns false when GITHUB_ENTERPRISE is not set", () => {
+      delete process.env.GITHUB_ENTERPRISE;
+      expect(isEnterpriseEnabled()).toBe(false);
+    });
+
+    it("returns true when GITHUB_ENTERPRISE is set", () => {
+      process.env.GITHUB_ENTERPRISE = "my-ent";
+      expect(isEnterpriseEnabled()).toBe(true);
+      delete process.env.GITHUB_ENTERPRISE;
+    });
+  });
+
+  describe("isCopilotSubEnabled", () => {
+    it("returns true for userMetrics by default", () => {
+      expect(isCopilotSubEnabled("userMetrics")).toBe(true);
+    });
+
+    it("returns true for seats by default", () => {
+      expect(isCopilotSubEnabled("seats")).toBe(true);
+    });
+
+    it("returns false for enterprise when env var missing", () => {
+      delete process.env.GITHUB_ENTERPRISE;
+      expect(isCopilotSubEnabled("enterprise")).toBe(false);
+    });
+  });
+
+  describe("getEffectiveBillingEnabled / isBillingSubEnabled", () => {
+    it("returns false when enterprise is disabled", () => {
+      delete process.env.GITHUB_ENTERPRISE;
+      expect(getEffectiveBillingEnabled()).toBe(false);
+      expect(isBillingSubEnabled("meteredUsage")).toBe(false);
     });
   });
 });
