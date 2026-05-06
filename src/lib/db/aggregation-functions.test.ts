@@ -23,6 +23,9 @@ import {
   getLanguageByFeatureBreakdown,
   getFeatureDailyTrend,
   getCompletionDailyTrend,
+  getIdeBreakdown,
+  getIdeTrend,
+  getFeatureUsageDaily,
 } from "./aggregation-queries";
 
 beforeAll(() => {
@@ -286,5 +289,43 @@ describe("getCompletionDailyTrend", () => {
     expect(row!.completionAccepted).toBe(80);
     expect(row!.agentAdded).toBe(30);
     expect(row!.agentDeleted).toBe(10);
+  });
+});
+
+describe("getIdeBreakdown", () => {
+  it("aggregates IDE usage from json_each", () => {
+    const ideData = JSON.stringify([
+      { ide: "vscode", user_initiated_interaction_count: 50, code_generation_activity_count: 30, code_acceptance_activity_count: 20, loc_added_sum: 200, loc_deleted_sum: 10 },
+    ]);
+    db.prepare(`INSERT INTO user_daily_metrics (day, enterprise_id, enterprise_slug, user_id, user_login, totals_by_ide)
+      VALUES ('2024-01-16', 'ent1', 'ent1', 1, 'user1', ?)`).run(ideData);
+    const breakdown = getIdeBreakdown("2024-01-01", "2024-01-31");
+    const vs = breakdown.find((r) => r.ide === "vscode");
+    expect(vs!.interactions).toBe(50);
+    expect(vs!.locAdded).toBe(200);
+  });
+});
+
+describe("getIdeTrend", () => {
+  it("returns daily IDE interactions", () => {
+    const ideData = JSON.stringify([
+      { ide: "jetbrains", user_initiated_interaction_count: 25, code_generation_activity_count: 10, code_acceptance_activity_count: 5, loc_added_sum: 80, loc_deleted_sum: 3 },
+    ]);
+    db.prepare(`INSERT INTO user_daily_metrics (day, enterprise_id, enterprise_slug, user_id, user_login, totals_by_ide)
+      VALUES ('2024-01-17', 'ent1', 'ent1', 1, 'user1', ?)`).run(ideData);
+    const trend = getIdeTrend("2024-01-01", "2024-01-31");
+    const row = trend.find((r) => r.day === "2024-01-17" && r.ide === "jetbrains");
+    expect(row!.interactions).toBe(25);
+  });
+});
+
+describe("getFeatureUsageDaily", () => {
+  it("returns daily feature usage from structured columns", () => {
+    db.prepare(`INSERT INTO user_daily_metrics (day, enterprise_id, enterprise_slug, user_id, user_login, code_generation_activity_count, used_chat, used_agent, used_cli)
+      VALUES ('2024-01-18', 'ent1', 'ent1', 1, 'user1', 15, 1, 1, 0)`).run();
+    const daily = getFeatureUsageDaily("2024-01-01", "2024-01-31");
+    const row = daily.find((r) => r.day === "2024-01-18");
+    expect(row!.completions).toBeGreaterThanOrEqual(15);
+    expect(row!.chatUsers).toBeGreaterThanOrEqual(1);
   });
 });
