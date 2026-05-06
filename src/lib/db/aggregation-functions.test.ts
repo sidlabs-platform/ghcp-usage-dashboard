@@ -13,9 +13,12 @@ import {
   getChatModeSums,
   getAdoptionStats,
   getUserSummaries,
+  getUserSummariesPaginated,
   getAdoptionDailyTrend,
   getActiveUsersDailyTrend,
   getCompletionTotals,
+  getFeatureBreakdown,
+  getModelBreakdown,
 } from "./aggregation-queries";
 
 beforeAll(() => {
@@ -168,5 +171,56 @@ describe("getCompletionTotals", () => {
     expect(totals.completionAccepted).toBe(80);
     expect(totals.compGenCount).toBe(50);
     expect(totals.compAcceptCount).toBe(40);
+  });
+});
+
+describe("getUserSummariesPaginated", () => {
+  it("paginates user summaries", () => {
+    insertMetric({ user_login: "alice", user_id: 1 });
+    insertMetric({ user_login: "bob", user_id: 2 });
+    insertMetric({ user_login: "charlie", user_id: 3 });
+    const page1 = getUserSummariesPaginated("2024-01-01", "2024-01-31", 1, 2, "login", "asc");
+    expect(page1.total).toBe(3);
+    expect(page1.users).toHaveLength(2);
+    expect(page1.users[0].login).toBe("alice");
+  });
+
+  it("supports search filter", () => {
+    insertMetric({ user_login: "alice", user_id: 1 });
+    insertMetric({ user_login: "bob", user_id: 2 });
+    const result = getUserSummariesPaginated("2024-01-01", "2024-01-31", 1, 10, "login", "asc", "ali");
+    expect(result.total).toBe(1);
+    expect(result.users[0].login).toBe("alice");
+  });
+});
+
+describe("getModelBreakdown", () => {
+  it("aggregates model usage from json_each", () => {
+    const modelFeature = JSON.stringify([
+      { model: "gpt-4o", feature: "code_completion", user_initiated_interaction_count: 10 },
+      { model: "claude-3.5", feature: "chat_panel", user_initiated_interaction_count: 5 },
+    ]);
+    db.prepare(`INSERT INTO user_daily_metrics (day, enterprise_id, enterprise_slug, user_id, user_login, totals_by_model_feature)
+      VALUES ('2024-01-10', 'ent1', 'ent1', 1, 'user1', ?)`).run(modelFeature);
+    const breakdown = getModelBreakdown("2024-01-01", "2024-01-31");
+    expect(breakdown.length).toBeGreaterThanOrEqual(2);
+    const gpt = breakdown.find((r) => r.model === "gpt-4o");
+    expect(gpt!.interactions).toBe(10);
+  });
+});
+
+describe("getFeatureBreakdown", () => {
+  it("aggregates feature usage from json_each", () => {
+    const features = JSON.stringify([
+      { feature: "code_completion", user_initiated_interaction_count: 20, code_generation_activity_count: 10, code_acceptance_activity_count: 8, loc_added_sum: 50, loc_deleted_sum: 5 },
+      { feature: "chat_panel", user_initiated_interaction_count: 15, code_generation_activity_count: 3, code_acceptance_activity_count: 0, loc_added_sum: 10, loc_deleted_sum: 0 },
+    ]);
+    db.prepare(`INSERT INTO user_daily_metrics (day, enterprise_id, enterprise_slug, user_id, user_login, totals_by_feature)
+      VALUES ('2024-01-10', 'ent1', 'ent1', 1, 'user1', ?)`).run(features);
+    const breakdown = getFeatureBreakdown("2024-01-01", "2024-01-31");
+    expect(breakdown.length).toBeGreaterThanOrEqual(2);
+    const comp = breakdown.find((r) => r.feature === "code_completion");
+    expect(comp!.interactions).toBe(10); // code_generation_activity_count
+    expect(comp!.locAdded).toBe(50);
   });
 });
