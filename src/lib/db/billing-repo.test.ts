@@ -387,4 +387,13 @@ describe("refreshBillingDailyAggregates", () => {
     expect(rows).toHaveLength(1);
     expect(rows[0].total_net).toBe(10);
   });
+
+  it("refreshes all enterprises when no slug provided", () => {
+    upsertUsageRecords("ent2", [
+      { date: "2024-01-17", product: "actions", sku: "s2", quantity: 5, unit_type: "min", applied_cost_per_quantity: 1, gross_amount: 5, discount_amount: 0, net_amount: 5, organization: "org2", repository: "", username: "", workflow_path: "", cost_center_name: "", charge_scope: "org" },
+    ]);
+    refreshBillingDailyAggregates();
+    const rows = db.prepare("SELECT * FROM billing_daily_aggregate").all() as any[];
+    expect(rows.length).toBeGreaterThanOrEqual(1);
+  });
 });
