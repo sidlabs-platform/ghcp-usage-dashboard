@@ -107,6 +107,14 @@ describe("enterprise-config", () => {
       delete process.env.BETA_TOKEN;
       expect(() => getEnterpriseAuth("beta-inc")).toThrow("BETA_TOKEN");
     });
+
+    it("returns undefined appConfig when app env vars exist but are empty", () => {
+      delete process.env.ACME_APP_ID;
+      resetEnterpriseConfigCache();
+      const auth = getEnterpriseAuth("acme-corp");
+      expect(auth.token).toBe("ghp_acme123");
+      expect(auth.appConfig).toBeUndefined();
+    });
   });
 
   describe("isMultiEnterprise", () => {
