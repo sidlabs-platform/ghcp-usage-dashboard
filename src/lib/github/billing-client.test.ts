@@ -89,6 +89,12 @@ describe("billingClient", () => {
       expect(records[0].quantity).toBe(0);
       expect(records[0].username).toBe("");
     });
+
+    it("skips blank lines between data rows", () => {
+      const csv = "date,product,sku,quantity,unit_type,applied_cost_per_quantity,gross_amount,discount_amount,net_amount,organization,repository,username,workflow_path,cost_center_name\n\n2024-01-01,copilot,s1,1,seat,10,10,0,10,org,,user,,\n\n";
+      const records = billingClient.parseUsageCSV(csv);
+      expect(records).toHaveLength(1);
+    });
   });
 
   describe("parsePremiumRequestCSV", () => {
