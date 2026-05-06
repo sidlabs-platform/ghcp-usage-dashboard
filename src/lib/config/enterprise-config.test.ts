@@ -9,6 +9,7 @@ import {
   getResolvedOrgsForEnterprise,
   resetEnterpriseConfigCache,
 } from "./enterprise-config";
+import { getDashboardConfig } from "./dashboard-config";
 
 // Mock the dashboard-config module
 vi.mock("./dashboard-config", () => ({
@@ -32,6 +33,8 @@ vi.mock("./dashboard-config", () => ({
     ],
   })),
 }));
+
+const mockGetDashboardConfig = vi.mocked(getDashboardConfig);
 
 describe("enterprise-config", () => {
   beforeEach(() => {
@@ -127,6 +130,31 @@ describe("enterprise-config", () => {
     it("returns all included orgs when no excludes", () => {
       const orgs = getResolvedOrgsForEnterprise("beta-inc");
       expect(orgs).toEqual(["org-x"]);
+    });
+  });
+
+  describe("legacy env var synthesis", () => {
+    it("synthesizes config from env vars when no enterprises in config", () => {
+      resetEnterpriseConfigCache();
+      mockGetDashboardConfig.mockReturnValue({ enterprises: [] } as any);
+      process.env.GITHUB_ENTERPRISE = "legacy-ent";
+      process.env.GITHUB_TOKEN = "ghp_legacy";
+      process.env.GITHUB_ORGS = "org1, org2";
+      const enterprises = getConfiguredEnterprises();
+      expect(enterprises).toHaveLength(1);
+      expect(enterprises[0].slug).toBe("legacy-ent");
+      expect(enterprises[0].organizations?.include).toEqual(["org1", "org2"]);
+      delete process.env.GITHUB_ENTERPRISE;
+      delete process.env.GITHUB_TOKEN;
+      delete process.env.GITHUB_ORGS;
+    });
+
+    it("returns empty when no config and no env vars", () => {
+      resetEnterpriseConfigCache();
+      mockGetDashboardConfig.mockReturnValue({ enterprises: [] } as any);
+      delete process.env.GITHUB_ENTERPRISE;
+      const enterprises = getConfiguredEnterprises();
+      expect(enterprises).toEqual([]);
     });
   });
 });
