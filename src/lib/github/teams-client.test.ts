@@ -51,4 +51,24 @@ describe("TeamsClient", () => {
     expect(results[0].slug).toBe("ent-team");
     expect(results[0].members).toEqual(["charlie"]);
   });
+
+  it("getOrgTeamsWithMembers handles member fetch error gracefully", async () => {
+    mockPaginated
+      .mockResolvedValueOnce([{ slug: "team-a", name: "Team A", description: "" }])
+      .mockRejectedValueOnce(new Error("member fetch failed"));
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const results = await client.getOrgTeamsWithMembers("my-org");
+    expect(results).toEqual([]);
+    expect(errSpy).toHaveBeenCalledWith(expect.stringContaining("org team"), expect.any(Error));
+    errSpy.mockRestore();
+  });
+
+  it("getEnterpriseTeamMembers handles API failure gracefully", async () => {
+    mockPaginated.mockRejectedValue(new Error("members failed"));
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const members = await client.getEnterpriseTeamMembers("my-ent", "team-x");
+    expect(members).toEqual([]);
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("team-x"), expect.any(Error));
+    warnSpy.mockRestore();
+  });
 });
