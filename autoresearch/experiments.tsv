@@ -38,3 +38,4 @@ exp-001	2026-05-06T17:24:23Z	test-coverage	memory-cache.test.ts: get/set/TTL/evi
 112	2026-05-07T02:54:44.0821015+05:30	seats-client null seats field and enterprise null page branches	KEEP	89.18	76.20	92.69	90.97
 113	2026-05-07T02:55:53.9651371+05:30	memory-cache expired entry eviction during LRU scan	KEEP	89.25	76.26	92.69	91.04
 114	2026-05-07T02:57:09.8406911+05:30	with-cache non-JSON response body fallback branch	KEEP	89.28	76.26	92.69	91.08
+115	2026-05-07T02:58:35.0521693+05:30	scope-filter same-enterprise multiple composite teams grouping	KEEP	89.32	76.31	92.69	91.08

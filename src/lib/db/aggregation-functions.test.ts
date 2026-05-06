@@ -116,6 +116,13 @@ describe("getChatModeSums", () => {
     const result = getChatModeSums("2024-01-01", "2024-01-31", ["user1"]);
     expect(result.ask).toBe(5);
   });
+
+  it("filters by enterprise slugs", () => {
+    insertMetric({ enterprise_slug: "ent-a", chat_panel_ask_mode: 4 });
+    insertMetric({ enterprise_slug: "ent-b", user_id: 2, chat_panel_ask_mode: 6 });
+    const result = getChatModeSums("2024-01-01", "2024-01-31", undefined, ["ent-a"]);
+    expect(result.ask).toBe(4);
+  });
 });
 
 describe("getAdoptionStats", () => {
