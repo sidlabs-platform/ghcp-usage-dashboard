@@ -539,3 +539,19 @@ describe("mapDayTotalRow JSON null fallback", () => {
     expect(results[0].totals_by_language_model).toEqual([]);
   });
 });
+
+describe("mapUserRow JSON null fallback", () => {
+  it("uses || '[]' fallback when user JSON columns are NULL in DB", () => {
+    db.prepare(`INSERT OR REPLACE INTO user_daily_metrics (enterprise_slug, day, enterprise_id, user_id, user_login, code_generation_activity_count, code_acceptance_activity_count, user_initiated_interaction_count, loc_suggested_to_add_sum, loc_suggested_to_delete_sum, loc_added_sum, loc_deleted_sum, chat_panel_agent_mode, chat_panel_ask_mode, chat_panel_custom_mode, chat_panel_edit_mode, chat_panel_plan_mode, chat_panel_unknown_mode, used_agent, used_chat, used_cli, used_copilot_code_review_active, used_copilot_code_review_passive, used_copilot_coding_agent, totals_by_ide, totals_by_feature, totals_by_language_feature, totals_by_model_feature, totals_by_language_model, totals_by_cli, agent_edit, raw_json) VALUES (?, ?, ?, ?, ?, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, '{}')`)
+      .run("ent1", "2024-07-01", "e1", 9999, "null-json-user");
+    const results = getUserMetricsByLogin("null-json-user", "2024-07-01", "2024-07-01");
+    expect(results).toHaveLength(1);
+    expect(results[0].totals_by_ide).toEqual([]);
+    expect(results[0].totals_by_feature).toEqual([]);
+    expect(results[0].totals_by_language_feature).toEqual([]);
+    expect(results[0].totals_by_model_feature).toEqual([]);
+    expect(results[0].totals_by_language_model).toEqual([]);
+    expect(results[0].totals_by_cli).toBeUndefined();
+    expect(results[0].agent_edit).toBeUndefined();
+  });
+});
