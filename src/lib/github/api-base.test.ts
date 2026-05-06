@@ -9,7 +9,7 @@ vi.mock("./app-auth", () => ({
   getInstallationTokenForEnterprise: vi.fn(),
 }));
 
-import { resolveAuthMode, githubFetch, githubFetchPaginated, fetchNDJSON, GitHubApiError } from "./api-base";
+import { resolveAuthMode, githubFetch, githubFetchPaginated, githubFetchPaginatedWithCutoff, fetchNDJSON, GitHubApiError } from "./api-base";
 import { isAppAuthConfigured, isAppAuthConfiguredForEnterprise } from "./app-auth";
 
 const mockIsApp = isAppAuthConfigured as ReturnType<typeof vi.fn>;
@@ -163,6 +163,41 @@ describe("githubFetchPaginated", () => {
       headers: new Map(),
     });
     const result = await githubFetchPaginated("/orgs/my-org/teams");
+    expect(result).toEqual([]);
+  });
+});
+
+describe("githubFetchPaginatedWithCutoff", () => {
+  it("fetches all items when no cutoff", async () => {
+    const mockFetch = fetch as unknown as ReturnType<typeof vi.fn>;
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve([{ updated_at: "2024-01-01", id: 1 }]),
+      headers: new Map(),
+    });
+    const result = await githubFetchPaginatedWithCutoff<{ updated_at: string }>("/orgs/o/code-scanning/alerts");
+    expect(result).toHaveLength(1);
+  });
+
+  it("stops at cutoff date", async () => {
+    const mockFetch = fetch as unknown as ReturnType<typeof vi.fn>;
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve([
+        { updated_at: "2024-01-05", id: 1 },
+        { updated_at: "2024-01-01", id: 2 },
+      ]),
+      headers: new Map(),
+    });
+    const result = await githubFetchPaginatedWithCutoff<{ updated_at: string }>("/orgs/o/alerts", "2024-01-03");
+    expect(result).toHaveLength(1);
+    expect((result[0] as any).id).toBe(1);
+  });
+
+  it("returns empty on 204", async () => {
+    const mockFetch = fetch as unknown as ReturnType<typeof vi.fn>;
+    mockFetch.mockResolvedValue({ ok: false, status: 204, headers: new Map() });
+    const result = await githubFetchPaginatedWithCutoff<{ updated_at: string }>("/orgs/o/alerts");
     expect(result).toEqual([]);
   });
 });
