@@ -36,6 +36,16 @@ describe("billingClient", () => {
       expect(records[0].sku).toBe("sku,special");
     });
 
+    it("handles escaped double-quotes inside quoted fields", () => {
+      const csv = [
+        "date,product,sku,quantity,unit_type,applied_cost_per_quantity,gross_amount,discount_amount,net_amount,organization,repository,username,workflow_path,cost_center_name",
+        '2024-01-01,copilot,"sku""quoted",1,seat,10,10,0,10,org,,user,,',
+      ].join("\n");
+      const records = billingClient.parseUsageCSV(csv);
+      expect(records).toHaveLength(1);
+      expect(records[0].sku).toBe('sku"quoted');
+    });
+
     it("handles CRLF line endings", () => {
       const csv = "date,product,sku,quantity,unit_type,applied_cost_per_quantity,gross_amount,discount_amount,net_amount,organization,repository,username,workflow_path,cost_center_name\r\n2024-01-01,copilot,s1,1,seat,10,10,0,10,org,,user,,\r\n";
       const records = billingClient.parseUsageCSV(csv);
