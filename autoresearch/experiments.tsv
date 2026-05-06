@@ -30,3 +30,4 @@ exp-001	2026-05-06T17:24:23Z	test-coverage	memory-cache.test.ts: get/set/TTL/evi
 104	2026-05-07T02:36:38.5620718+05:30	ghas-repo getDependabotDaily fixed/dismissed/severity/ecosystem coverage	KEEP	88.43	75.23	92.29	90.28
 105	2026-05-07T02:37:35.4461794+05:30	ghas-repo getSecretScanningDaily resolved/resolution_counts coverage	KEEP	88.52	75.28	92.49	90.28
 106	2026-05-07T02:39:24.2791382+05:30	billing-repo premium empty org+scopeOrgs and empty allowedLogins branches	KEEP	88.66	75.39	92.49	90.43
+107	2026-05-07T02:45:33.3176412+05:30	ghas-sync-service fullGhasSync without slug (getConfiguredEnterprises branch)	KEEP	88.69	75.44	92.69	90.46

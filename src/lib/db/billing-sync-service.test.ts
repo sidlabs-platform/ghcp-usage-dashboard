@@ -94,4 +94,17 @@ describe("billing-sync-service", () => {
     expect(result.errors[0]).toContain("summarized");
     expect(result.errors[0]).toContain("raw string error");
   });
+
+  it("handles detailed usage sync error", async () => {
+    mockSubEnabled.mockImplementation((key: string) => key === "meteredUsage");
+    mockFetchUsage.mockResolvedValueOnce([]).mockRejectedValueOnce(new Error("detailed fail"));
+    const result = await syncBilling("test-ent");
+    expect(result.errors.some(e => e.includes("detailed"))).toBe(true);
+  });
+
+  it("handles refreshBillingDailyAggregates error", async () => {
+    (refreshBillingDailyAggregates as ReturnType<typeof vi.fn>).mockImplementation(() => { throw new Error("agg crash"); });
+    const result = await syncBilling("test-ent");
+    expect(result.errors.some(e => e.includes("daily aggregates"))).toBe(true);
+  });
 });
