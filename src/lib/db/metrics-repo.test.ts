@@ -447,6 +447,15 @@ describe("recordSync / isSynced / getLatestSyncDay / getSyncStatus", () => {
     expect(latest).toBe("2024-01-12");
   });
 
+  it("getLatestSyncDay returns null for unknown scope", () => {
+    expect(getLatestSyncDay("ent1", "users", "nonexistent")).toBeNull();
+  });
+
+  it("recordSync with null day stores __none__", () => {
+    recordSync("ent1", "teams", "all", null, 10);
+    expect(isSynced("ent1", "teams", "all", "__none__")).toBe(true);
+  });
+
   it("getSyncStatus returns grouped sync info", () => {
     const status = getSyncStatus(["ent1"]);
     expect(status.length).toBeGreaterThanOrEqual(1);

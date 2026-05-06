@@ -42,6 +42,13 @@ describe("CodeScanningClient", () => {
     const result = await codeScanningClient.getAlertAutofixStatus("owner", "repo", 99);
     expect(result).toBeNull();
   });
+
+  it("getAlertAutofixStatus rethrows non-404 errors", async () => {
+    const err = new (GitHubApiError as any)(500);
+    err.status = 500;
+    mockGithubFetch.mockRejectedValue(err);
+    await expect(codeScanningClient.getAlertAutofixStatus("owner", "repo", 1)).rejects.toThrow();
+  });
 });
 
 describe("DependabotClient", () => {
