@@ -9,7 +9,7 @@ vi.mock("./app-auth", () => ({
   getInstallationTokenForEnterprise: vi.fn(),
 }));
 
-import { resolveAuthMode, githubFetch, githubFetchPaginated, githubFetchPaginatedWithCutoff, fetchNDJSON, GitHubApiError } from "./api-base";
+import { resolveAuthMode, githubFetch, githubFetchPaginated, githubFetchPaginatedWithCutoff, githubFetchCursorPaginatedWithCutoff, fetchNDJSON, GitHubApiError } from "./api-base";
 import { isAppAuthConfigured, isAppAuthConfiguredForEnterprise } from "./app-auth";
 
 const mockIsApp = isAppAuthConfigured as ReturnType<typeof vi.fn>;
@@ -199,5 +199,49 @@ describe("githubFetchPaginatedWithCutoff", () => {
     mockFetch.mockResolvedValue({ ok: false, status: 204, headers: new Map() });
     const result = await githubFetchPaginatedWithCutoff<{ updated_at: string }>("/orgs/o/alerts");
     expect(result).toEqual([]);
+  });
+});
+
+describe("githubFetchCursorPaginatedWithCutoff", () => {
+  it("fetches all items with cursor pagination", async () => {
+    const mockFetch = fetch as unknown as ReturnType<typeof vi.fn>;
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve([{ updated_at: "2024-01-05", id: 1 }]),
+      headers: new Map([["link", ""]]),
+    });
+    const result = await githubFetchCursorPaginatedWithCutoff<{ updated_at: string }>("/orgs/o/dependabot/alerts");
+    expect(result).toHaveLength(1);
+  });
+
+  it("follows next cursor from Link header", async () => {
+    const mockFetch = fetch as unknown as ReturnType<typeof vi.fn>;
+    mockFetch
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve([{ updated_at: "2024-01-05", id: 1 }]),
+        headers: new Map([["link", '<https://api.github.com/orgs/o/dependabot/alerts?per_page=100&after=cursor123>; rel="next"']]),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve([]),
+        headers: new Map([["link", ""]]),
+      });
+    const result = await githubFetchCursorPaginatedWithCutoff<{ updated_at: string }>("/orgs/o/dependabot/alerts");
+    expect(result).toHaveLength(1);
+  });
+
+  it("stops at cutoff date", async () => {
+    const mockFetch = fetch as unknown as ReturnType<typeof vi.fn>;
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve([
+        { updated_at: "2024-01-10", id: 1 },
+        { updated_at: "2024-01-01", id: 2 },
+      ]),
+      headers: new Map([["link", ""]]),
+    });
+    const result = await githubFetchCursorPaginatedWithCutoff<{ updated_at: string }>("/orgs/o/alerts", "2024-01-05");
+    expect(result).toHaveLength(1);
   });
 });
