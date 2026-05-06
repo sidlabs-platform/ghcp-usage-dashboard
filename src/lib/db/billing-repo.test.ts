@@ -109,6 +109,26 @@ describe("getOverviewKPIs", () => {
     expect(kpis.totalNet).toBeGreaterThanOrEqual(20);
     expect(kpis.uniqueOrgs).toBeGreaterThanOrEqual(1);
   });
+
+  it("filters by enterprise slug", () => {
+    upsertUsageRecords("ent-a", [
+      { date: "2024-02-01", product: "copilot", sku: "s1", quantity: 1, unit_type: "seat", applied_cost_per_quantity: 100, gross_amount: 100, discount_amount: 0, net_amount: 100, organization: "org1", repository: "", username: "u1", workflow_path: "", cost_center_name: "", charge_scope: "user" },
+    ]);
+    upsertUsageRecords("ent-b", [
+      { date: "2024-02-01", product: "copilot", sku: "s1", quantity: 1, unit_type: "seat", applied_cost_per_quantity: 50, gross_amount: 50, discount_amount: 0, net_amount: 50, organization: "org2", repository: "", username: "u2", workflow_path: "", cost_center_name: "", charge_scope: "user" },
+    ]);
+    const kpis = getOverviewKPIs("2024-02-01", "2024-02-01", undefined, ["ent-a"]);
+    expect(kpis.totalNet).toBe(100);
+  });
+
+  it("applies scopeOrgs filter to premium KPIs", () => {
+    upsertPremiumRequests("ent1", [
+      { date: "2024-02-05", product: "copilot", sku: "p1", quantity: 10, unit_type: "token", applied_cost_per_quantity: 1, gross_amount: 10, discount_amount: 0, net_amount: 10, username: "u1", organization: "scoped-org", model: "gpt-4", exceeds_quota: "FALSE", total_monthly_quota: 100, charge_scope: "user" },
+      { date: "2024-02-05", product: "copilot", sku: "p2", quantity: 20, unit_type: "token", applied_cost_per_quantity: 1, gross_amount: 20, discount_amount: 0, net_amount: 20, username: "u2", organization: "other-org", model: "gpt-4", exceeds_quota: "FALSE", total_monthly_quota: 100, charge_scope: "user" },
+    ]);
+    const kpis = getOverviewKPIs("2024-02-05", "2024-02-05", { scopeOrgs: ["scoped-org"] });
+    expect(kpis.totalNet).toBeGreaterThanOrEqual(10);
+  });
 });
 
 describe("getDailyAggregates", () => {
