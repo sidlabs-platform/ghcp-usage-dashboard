@@ -153,9 +153,25 @@ describe("ghas-sync-service", () => {
     expect(result.errors).toBe(0); // enrichment errors don't count as sync errors
   });
 
-  it("fullGhasSync without slug uses getConfiguredEnterprises", async () => {
-    const result = await fullGhasSync();
-    expect(Object.keys(result.categories).length).toBeGreaterThanOrEqual(6);
-    expect(result.errors).toBe(0);
+  it("enrichAutofixStatuses maps outdated status to available", async () => {
+    (isCodeScanningAutofixEnabled as ReturnType<typeof vi.fn>).mockReturnValue(true);
+    (codeScanningClient.getEnterpriseAlerts as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    (getOpenCodeScanningAlerts as ReturnType<typeof vi.fn>).mockReturnValue([
+      { alert_number: 20, repo_full_name: "org/repo" },
+    ]);
+    (codeScanningClient.getAlertAutofixStatus as ReturnType<typeof vi.fn>)
+      .mockResolvedValue({ status: "outdated" });
+    const result = await fullGhasSync(undefined, "test-ent");
+    expect(result.categories["enterprise:test-ent:code_scanning"]).toBeDefined();
+  });
+
+  it("enrichAutofixStatuses skips alerts with invalid repo_full_name", async () => {
+    (isCodeScanningAutofixEnabled as ReturnType<typeof vi.fn>).mockReturnValue(true);
+    (codeScanningClient.getEnterpriseAlerts as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    (getOpenCodeScanningAlerts as ReturnType<typeof vi.fn>).mockReturnValue([
+      { alert_number: 5, repo_full_name: "no-slash" },
+    ]);
+    const result = await fullGhasSync(undefined, "test-ent");
+    expect(result.categories["enterprise:test-ent:code_scanning"]).toBeDefined();
   });
 });

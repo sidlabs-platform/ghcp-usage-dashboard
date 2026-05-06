@@ -57,3 +57,4 @@ exp-001	2026-05-06T17:24:23Z	test-coverage	memory-cache.test.ts: get/set/TTL/evi
 132	2026-05-07 03:28	dashboard-config isCopilotSubEnabled copilot.enabled=false	KEEP	89.71	79.94	92.90	91.26
 133	2026-05-07 03:30	sync-service syncTeams enterprise/org API error handling	KEEP	89.78	79.94	92.90	91.33
 134	2026-05-07 03:31	sync-service syncBilling and refreshAllSummaries error paths	KEEP	89.84	79.94	92.90	91.40
+135	2026-05-07 03:32	sync-service 28-day fallback enterprise/org error paths	KEEP	89.91	79.94	92.90	91.48
