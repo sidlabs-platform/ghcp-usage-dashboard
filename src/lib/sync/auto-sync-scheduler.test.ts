@@ -104,4 +104,31 @@ describe("auto-sync-scheduler", () => {
     spy.mockRestore();
     stopAutoSync();
   });
+
+  it("executeAutoSync handles incrementalSync failure gracefully", async () => {
+    mockConfig.mockReturnValue({ enabled: true, utcTime: "03:00" });
+    mockAcquire.mockReturnValue(true);
+    mockIncrSync.mockRejectedValue(new Error("sync blew up"));
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    startAutoSync();
+    await vi.runOnlyPendingTimersAsync();
+    expect(errSpy).toHaveBeenCalledWith(expect.stringContaining("Incremental sync failed"), expect.any(Error));
+    errSpy.mockRestore();
+    logSpy.mockRestore();
+    stopAutoSync();
+  });
+
+  it("executeAutoSync reschedules after config becomes disabled mid-run", async () => {
+    mockConfig.mockReturnValue({ enabled: true, utcTime: "03:00" });
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    startAutoSync();
+    // Disable config after start but before timer fires
+    mockConfig.mockReturnValue({ enabled: false, utcTime: "03:00" });
+    await vi.runOnlyPendingTimersAsync();
+    const status = getAutoSyncStatus();
+    expect(status.nextRunAt).toBeNull();
+    logSpy.mockRestore();
+    stopAutoSync();
+  });
 });

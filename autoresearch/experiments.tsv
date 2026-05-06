@@ -7,3 +7,4 @@ exp-001	2026-05-06T17:24:23Z	test-coverage	memory-cache.test.ts: get/set/TTL/evi
 80	2026-05-07T01:26:32	ghas-sync: autofix success/rejected enrichment	KEEP	84.30	+0.14
 81	2026-05-07T01:29:37	billing-sync: premium error + formatError non-Error	KEEP	84.52	+0.22
 82	2026-05-07T01:36:39	sync-service: syncTeams modes + incrementalSync gap	KEEP	85.28	+0.76
+83	2026-05-07T01:38:29	sync-service: empty enterprises + seats error	KEEP	85.35	+0.07
