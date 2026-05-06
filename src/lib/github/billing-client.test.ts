@@ -73,4 +73,37 @@ describe("billingClient", () => {
       expect(reports[0].id).toBe("r1");
     });
   });
+
+  describe("waitForReport", () => {
+    it("returns completed report immediately", async () => {
+      const { githubFetch } = await import("./api-base");
+      const mockGF = githubFetch as ReturnType<typeof vi.fn>;
+      mockGF.mockResolvedValue({ id: "r1", status: "completed", download_urls: ["http://dl"] });
+      const result = await billingClient.waitForReport("my-ent", "r1");
+      expect(result.status).toBe("completed");
+    });
+
+    it("throws on failed report", async () => {
+      const { githubFetch } = await import("./api-base");
+      const mockGF = githubFetch as ReturnType<typeof vi.fn>;
+      mockGF.mockResolvedValue({ id: "r1", status: "failed" });
+      await expect(billingClient.waitForReport("my-ent", "r1")).rejects.toThrow("failed");
+    });
+  });
+
+  describe("downloadReportCSV", () => {
+    it("downloads CSV content from URL", async () => {
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+        ok: true,
+        text: () => Promise.resolve("col1,col2\nval1,val2"),
+      }));
+      const csv = await billingClient.downloadReportCSV("https://storage.example.com/report.csv");
+      expect(csv).toContain("col1,col2");
+    });
+
+    it("throws on failed download", async () => {
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false, status: 403 }));
+      await expect(billingClient.downloadReportCSV("https://storage.example.com/bad")).rejects.toThrow("Failed to download");
+    });
+  });
 });
