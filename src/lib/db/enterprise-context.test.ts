@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { getEnterpriseConfig } from "@/lib/config/enterprise-config";
 
 vi.mock("@/lib/config/enterprise-config", () => ({
   getEnterpriseConfig: vi.fn(() => ({
@@ -22,6 +23,8 @@ vi.mock("@/lib/db/database", () => {
 
 import { getEnterpriseContext, getAllEnterpriseContexts, updateEnterpriseRegistry } from "./enterprise-context";
 
+const mockGetConfig = vi.mocked(getEnterpriseConfig);
+
 describe("enterprise-context", () => {
   it("getEnterpriseContext returns context with null enterprise_id when db not available", () => {
     const ctx = getEnterpriseContext("ent1");
@@ -29,6 +32,13 @@ describe("enterprise-context", () => {
     expect(ctx.displayName).toBe("Enterprise 1");
     expect(ctx.enterpriseId).toBeNull();
     expect(ctx.organizations.include).toEqual(["org1"]);
+  });
+
+  it("getEnterpriseContext defaults organizations to empty arrays when not configured", () => {
+    mockGetConfig.mockReturnValueOnce({ slug: "ent3", displayName: "No Orgs", tokenEnvVar: "TOK" });
+    const ctx = getEnterpriseContext("ent3");
+    expect(ctx.organizations.include).toEqual([]);
+    expect(ctx.organizations.exclude).toEqual([]);
   });
 
   it("getAllEnterpriseContexts returns array of contexts", () => {
