@@ -84,5 +84,83 @@ describe("MetricsClient", () => {
       const result = await client.getOrgDailyReport("my-org", "2024-01-02");
       expect(result).toHaveLength(1);
     });
+
+    it("returns empty when no download_links", async () => {
+      mockGithubFetch.mockResolvedValue({});
+      const result = await client.getOrgDailyReport("my-org", "2024-01-02");
+      expect(result).toEqual([]);
+    });
+  });
+
+  describe("getEnterprise28DayReport", () => {
+    it("returns DayTotals from 28-day endpoint", async () => {
+      mockGithubFetch.mockResolvedValue({ download_links: ["http://dl"] });
+      mockFetchNDJSON.mockResolvedValue([{ day: "2024-01-01", daily_active_users: 5 }]);
+      const result = await client.getEnterprise28DayReport("ent");
+      expect(result).toHaveLength(1);
+    });
+
+    it("returns empty when no download_links", async () => {
+      mockGithubFetch.mockResolvedValue(null);
+      const result = await client.getEnterprise28DayReport("ent");
+      expect(result).toEqual([]);
+    });
+  });
+
+  describe("getEnterpriseUser28DayReport", () => {
+    it("returns user records from 28-day endpoint", async () => {
+      mockGithubFetch.mockResolvedValue({ download_links: ["http://dl"] });
+      mockFetchNDJSON.mockResolvedValue([{ login: "bob", day: "2024-01-01" }]);
+      const result = await client.getEnterpriseUser28DayReport("ent");
+      expect(result).toHaveLength(1);
+    });
+  });
+
+  describe("getOrg28DayReport", () => {
+    it("returns DayTotals from org 28-day", async () => {
+      mockGithubFetch.mockResolvedValue({ download_links: ["http://dl"] });
+      mockFetchNDJSON.mockResolvedValue([{ day: "2024-01-01", daily_active_users: 2 }]);
+      const result = await client.getOrg28DayReport("my-org");
+      expect(result).toHaveLength(1);
+    });
+  });
+
+  describe("getOrgUserDailyReport", () => {
+    it("returns user records from org user endpoint", async () => {
+      mockGithubFetch.mockResolvedValue({ download_links: ["http://dl"] });
+      mockFetchNDJSON.mockResolvedValue([{ login: "alice" }]);
+      const result = await client.getOrgUserDailyReport("my-org", "2024-01-02");
+      expect(result).toHaveLength(1);
+    });
+  });
+
+  describe("fetchEnterpriseUserDateRange", () => {
+    it("fetches user data for multiple days", async () => {
+      mockGithubFetch.mockResolvedValue({ download_links: ["http://dl"] });
+      mockFetchNDJSON.mockResolvedValue([{ login: "alice" }]);
+      const result = await client.fetchEnterpriseUserDateRange("ent", ["2024-01-01"]);
+      expect(result.size).toBe(1);
+    });
+
+    it("handles error gracefully", async () => {
+      mockGithubFetch.mockRejectedValue(new Error("fail"));
+      const result = await client.fetchEnterpriseUserDateRange("ent", ["2024-01-01"]);
+      expect(result.get("2024-01-01")).toEqual([]);
+    });
+  });
+
+  describe("fetchOrgDateRange", () => {
+    it("fetches org data for multiple days", async () => {
+      mockGithubFetch.mockResolvedValue({ download_links: ["http://dl"] });
+      mockFetchNDJSON.mockResolvedValue([{ day: "2024-01-01", daily_active_users: 1 }]);
+      const result = await client.fetchOrgDateRange("my-org", ["2024-01-01"]);
+      expect(result.size).toBe(1);
+    });
+
+    it("handles error gracefully", async () => {
+      mockGithubFetch.mockRejectedValue(new Error("fail"));
+      const result = await client.fetchOrgDateRange("my-org", ["2024-01-01"]);
+      expect(result.get("2024-01-01")).toEqual([]);
+    });
   });
 });
