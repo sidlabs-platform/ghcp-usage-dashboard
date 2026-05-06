@@ -1,5 +1,16 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
+vi.mock("jose", () => ({
+  importPKCS8: vi.fn(async () => "mock-key"),
+  SignJWT: class {
+    setProtectedHeader() { return this; }
+    setIssuer() { return this; }
+    setIssuedAt() { return this; }
+    setExpirationTime() { return this; }
+    async sign() { return "mock-jwt-token"; }
+  },
+}));
+
 describe("app-auth (no env)", () => {
   it("isAppAuthConfigured returns false without env vars", async () => {
     const { isAppAuthConfigured } = await import("./app-auth");
@@ -15,9 +26,14 @@ describe("app-auth (no env)", () => {
     );
     spy.mockRestore();
   });
+
+  it("getInstallationToken throws when no config", async () => {
+    const { getInstallationToken } = await import("./app-auth");
+    await expect(getInstallationToken()).rejects.toThrow("not configured");
+  });
 });
 
-describe("app-auth (with env)", () => {
+describe("app-auth (with env + mocked jose)", () => {
   beforeEach(() => {
     vi.resetModules();
     process.env.GITHUB_APP_ID = "123";
@@ -44,14 +60,46 @@ describe("app-auth (with env)", () => {
     spy.mockRestore();
   });
 
-  it("getInstallationToken throws when token mint fails (no jose key)", async () => {
+  it("getInstallationToken mints and returns token", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ token: "ghs_minted123", expires_at: new Date(Date.now() + 3600_000).toISOString() }),
+    }));
     const { getInstallationToken } = await import("./app-auth");
-    // Will fail because the PEM key is invalid
-    await expect(getInstallationToken()).rejects.toThrow();
+    const token = await getInstallationToken();
+    expect(token).toBe("ghs_minted123");
   });
 
-  it("validateAppAuth throws on mint failure", async () => {
+  it("getInstallationToken returns cached token on second call", async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ token: "ghs_cached", expires_at: new Date(Date.now() + 3600_000).toISOString() }),
+    });
+    vi.stubGlobal("fetch", mockFetch);
+    const { getInstallationToken } = await import("./app-auth");
+    await getInstallationToken();
+    const token2 = await getInstallationToken();
+    expect(token2).toBe("ghs_cached");
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("getInstallationToken throws when mint fails", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: false, status: 401, text: async () => "Unauthorized",
+    }));
+    const { getInstallationToken } = await import("./app-auth");
+    await expect(getInstallationToken()).rejects.toThrow("Failed to create installation token");
+  });
+
+  it("validateAppAuth succeeds after successful mint", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ token: "ghs_valid", expires_at: new Date(Date.now() + 3600_000).toISOString() }),
+    }));
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
     const { validateAppAuth } = await import("./app-auth");
-    await expect(validateAppAuth()).rejects.toThrow();
+    await expect(validateAppAuth()).resolves.toBeUndefined();
+    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("validated"));
+    logSpy.mockRestore();
   });
 });
