@@ -341,6 +341,14 @@ describe("getUserMetricsByLogin", () => {
     expect(results).toHaveLength(1);
     expect(results[0].code_generation_activity_count).toBe(5);
   });
+
+  it("upsertUserDayMetrics stores true code-review/agent flags and optional fields", () => {
+    const record = { day: "2024-01-23", enterprise_id: "ent-123", user_id: 21, user_login: "review-user", code_generation_activity_count: 1, code_acceptance_activity_count: 1, user_initiated_interaction_count: 1, loc_suggested_to_add_sum: 5, loc_suggested_to_delete_sum: 1, loc_added_sum: 4, loc_deleted_sum: 0, used_agent: true, used_chat: true, used_cli: true, used_copilot_code_review_active: true, used_copilot_code_review_passive: true, used_copilot_coding_agent: true, totals_by_ide: [{ name: "vsc" }], totals_by_feature: [{ feature: "code_completion" }], totals_by_language_feature: [{ lang: "ts" }], totals_by_model_feature: [{ model: "gpt4" }], totals_by_language_model: [{ lang: "ts" }], totals_by_cli: [{ name: "ghcs" }], agent_edit: { total: 3 } } as any;
+    upsertUserDayMetrics("ent1", record);
+    const results = getUserMetricsByLogin("review-user", "2024-01-23", "2024-01-23");
+    expect(results).toHaveLength(1);
+    expect(results[0].used_copilot_code_review_active).toBe(true);
+  });
 });
 
 describe("getDistinctUsers", () => {
