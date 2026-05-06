@@ -48,3 +48,4 @@ exp-001	2026-05-06T17:24:23Z	test-coverage	memory-cache.test.ts: get/set/TTL/evi
 123	2026-05-07 03:11	metrics-repo: weightedMedian zero-weight average branch	keep	89.55	78.10	92.90	91.22
 124	2026-05-07 03:12	metrics-repo: weightedMedian a==null and both-null branches	keep	89.61	78.31	92.90	91.22
 125	2026-05-07 03:14	metrics-repo: totals_by_cli and agent_edit upsert/retrieve paths	keep	89.61	78.69	92.90	91.22
+126	2026-05-07 03:15	metrics-repo: enterprise totals_by_cli and pull_requests paths	keep	89.61	78.86	92.90	91.22

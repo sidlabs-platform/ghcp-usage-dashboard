@@ -278,6 +278,14 @@ describe("upsertOrgDayMetrics / getOrgMetrics / getAllOrgSlugs", () => {
     expect(slugs).toContain("org-a");
     expect(slugs).toContain("org-b");
   });
+
+  it("stores and retrieves totals_by_cli for org metrics", () => {
+    const record = { ...orgDayTotal, day: "2024-01-12", totals_by_cli: [{ name: "ghcs", total_chats: 8 }] };
+    upsertOrgDayMetrics("ent1", "cli-org", record as any);
+    const results = getOrgMetrics("cli-org", "2024-01-12", "2024-01-12");
+    expect(results).toHaveLength(1);
+    expect(results[0].totals_by_cli).toEqual([{ name: "ghcs", total_chats: 8 }]);
+  });
 });
 
 describe("batchUpsertUserDayMetrics", () => {
