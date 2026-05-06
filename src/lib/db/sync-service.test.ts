@@ -64,6 +64,7 @@ import { isCopilotSubEnabled, isEnterpriseEnabled } from "@/lib/config/dashboard
 import { isSynced, getLatestSyncDay, hasEnterpriseDataForRange, hasOrgDataForRange } from "./metrics-repo";
 import { metricsClient } from "@/lib/github/metrics-client";
 import { seatsClient } from "@/lib/github/seats-client";
+import { teamsClient } from "@/lib/github/teams-client";
 import { getConfiguredEnterprises, getResolvedOrgsForEnterprise } from "@/lib/config/enterprise-config";
 
 describe("sync-service", () => {
@@ -143,6 +144,22 @@ describe("sync-service", () => {
     (isEnterpriseEnabled as ReturnType<typeof vi.fn>).mockReturnValue(false);
     const result = await syncTeams();
     expect(result).toBe(1); // only org teams
+  });
+
+  it("syncTeams handles enterprise teams API error gracefully", async () => {
+    (teamsClient.getEnterpriseTeamsWithMembers as ReturnType<typeof vi.fn>)
+      .mockRejectedValue(new Error("enterprise teams error"));
+    const result = await syncTeams();
+    expect(result).toBe(1); // only org teams succeed
+  });
+
+  it("syncTeams handles org teams API error gracefully", async () => {
+    (teamsClient.getEnterpriseTeamsWithMembers as ReturnType<typeof vi.fn>)
+      .mockResolvedValue([{ name: "t1", members: [] }]);
+    (teamsClient.getOrgTeamsWithMembers as ReturnType<typeof vi.fn>)
+      .mockRejectedValue(new Error("org teams error"));
+    const result = await syncTeams();
+    expect(result).toBe(1); // only enterprise teams succeed
   });
 
   it("incrementalSync syncs gap days when latestDay is old", async () => {
