@@ -366,6 +366,16 @@ describe("getPremiumRequestsPaginated", () => {
     const result = getPremiumRequestsPaginated("2024-02-20", "2024-02-20", 1, 10, "date", "asc", undefined, { organization: ["prem-shared", "prem-other"], scopeOrgs: ["prem-shared"] });
     expect(result.records.every(r => r.organization === "prem-shared")).toBe(true);
   });
+
+  it("returns empty when org+scopeOrgs intersection is empty", () => {
+    const result = getPremiumRequestsPaginated("2024-01-01", "2024-01-31", 1, 10, "date", "asc", undefined, { organization: ["no-match"], scopeOrgs: ["other-scope"] });
+    expect(result.total).toBe(0);
+  });
+
+  it("returns empty when allowedLogins is empty with no active scopeOrgs", () => {
+    const result = getPremiumRequestsPaginated("2024-01-01", "2024-01-31", 1, 10, "date", "asc", undefined, { allowedLogins: [] });
+    expect(result.total).toBe(0);
+  });
 });
 
 describe("getPremiumUserSummary", () => {

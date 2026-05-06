@@ -28,3 +28,4 @@ exp-001	2026-05-06T17:24:23Z	test-coverage	memory-cache.test.ts: get/set/TTL/evi
 2026-05-07T02:26:25	billing-repo: org+scopeOrgs intersection filter with overlap test	keep	88.10	75.01	91.48	90.10
 2026-05-07T02:27:27	billing-repo: premium org+scopeOrgs intersection filter test	keep	88.29	75.12	91.88	90.28
 104	2026-05-07T02:36:38.5620718+05:30	ghas-repo getDependabotDaily fixed/dismissed/severity/ecosystem coverage	KEEP	88.43	75.23	92.29	90.28
+105	2026-05-07T02:37:35.4461794+05:30	ghas-repo getSecretScanningDaily resolved/resolution_counts coverage	KEEP	88.52	75.28	92.49	90.28
