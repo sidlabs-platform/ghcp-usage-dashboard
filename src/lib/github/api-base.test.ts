@@ -311,6 +311,13 @@ describe("githubFetchCursorPaginatedWithCutoff", () => {
     });
     await expect(githubFetchCursorPaginatedWithCutoff<{ updated_at: string }>("/orgs/o/alerts")).rejects.toThrow("404");
   });
+
+  it("returns empty on 204", async () => {
+    const mockFetch = fetch as unknown as ReturnType<typeof vi.fn>;
+    mockFetch.mockResolvedValue({ ok: false, status: 204, headers: new Map() });
+    const result = await githubFetchCursorPaginatedWithCutoff<{ updated_at: string }>("/orgs/o/dependabot/alerts");
+    expect(result).toEqual([]);
+  });
 });
 
 describe("resolveAuthMode (absolute GitHub URL)", () => {
