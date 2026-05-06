@@ -110,6 +110,13 @@ describe("githubFetch", () => {
     mockFetch.mockResolvedValue({ ok: false, status: 500, headers: new Map() });
     await expect(githubFetch("/orgs/my-org/info", 2)).rejects.toThrow("GitHub API failed after 2 retries");
   });
+
+  it("throws when GITHUB_TOKEN is not set", async () => {
+    delete process.env.GITHUB_TOKEN;
+    const mockFetch = fetch as unknown as ReturnType<typeof vi.fn>;
+    mockFetch.mockResolvedValue({ ok: true, json: () => Promise.resolve({}), headers: new Map() });
+    await expect(githubFetch("/enterprises/ent/usage")).rejects.toThrow("GITHUB_TOKEN environment variable is required");
+  });
 });
 
 describe("fetchNDJSON", () => {
