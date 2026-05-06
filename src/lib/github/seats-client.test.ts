@@ -44,6 +44,12 @@ describe("SeatsClient", () => {
       const result = await client.getOrgSeats("my-org");
       expect(result.seats).toHaveLength(100);
     });
+
+    it("handles response with no seats field", async () => {
+      mockFetch.mockResolvedValue({ total_seats: 0 });
+      const result = await client.getOrgSeats("my-org");
+      expect(result.seats).toEqual([]);
+    });
   });
 
   describe("getEnterpriseSeats", () => {
@@ -51,6 +57,12 @@ describe("SeatsClient", () => {
       mockFetch.mockResolvedValue(null);
       const result = await client.getEnterpriseSeats("my-ent");
       expect(result).toEqual({ totalSeats: 0, seats: [] });
+    });
+
+    it("handles response with no seats field", async () => {
+      mockFetch.mockResolvedValue({ total_seats: 0 });
+      const result = await client.getEnterpriseSeats("my-ent");
+      expect(result.seats).toEqual([]);
     });
 
     it("returns seats with pagination", async () => {
@@ -61,6 +73,15 @@ describe("SeatsClient", () => {
       const result = await client.getEnterpriseSeats("my-ent");
       expect(result.totalSeats).toBe(120);
       expect(result.seats).toHaveLength(120);
+    });
+
+    it("stops paginating when null response", async () => {
+      const page1 = Array.from({ length: 100 }, (_, i) => ({ login: `e${i}` }));
+      mockFetch
+        .mockResolvedValueOnce({ total_seats: 200, seats: page1 })
+        .mockResolvedValueOnce(null);
+      const result = await client.getEnterpriseSeats("my-ent");
+      expect(result.seats).toHaveLength(100);
     });
   });
 });
