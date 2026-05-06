@@ -130,6 +130,18 @@ describe("fetchNDJSON", () => {
     mockFetch.mockResolvedValue({ ok: false, status: 404 });
     await expect(fetchNDJSON("https://storage.example.com/missing")).rejects.toThrow("Failed to download NDJSON");
   });
+
+  it("parses streaming body when resp.body is present", async () => {
+    const mockFetch = fetch as unknown as ReturnType<typeof vi.fn>;
+    const encoder = new TextEncoder();
+    const chunks = [encoder.encode('{"a":1}\n{"a":2}\n'), encoder.encode('{"a":3}\n')];
+    let idx = 0;
+    const mockReader = { read: vi.fn(async () => idx < chunks.length ? { done: false, value: chunks[idx++] } : { done: true, value: undefined }) };
+    mockFetch.mockResolvedValue({ ok: true, body: { getReader: () => mockReader } });
+    const result = await fetchNDJSON<{ a: number }>("https://storage.example.com/data.ndjson");
+    expect(result).toHaveLength(3);
+    expect(result[2].a).toBe(3);
+  });
 });
 
 describe("githubFetchPaginated", () => {
