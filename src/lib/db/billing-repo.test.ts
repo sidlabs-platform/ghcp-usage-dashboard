@@ -392,6 +392,22 @@ describe("getPremiumRequestsPaginated", () => {
     const result = getPremiumRequestsPaginated("2024-01-01", "2024-01-31", 1, 10, "bad_field", "asc");
     expect(result.total).toBeGreaterThanOrEqual(1);
   });
+
+  it("filters by exceedsQuota false", () => {
+    upsertPremiumRequests("ent1", [
+      { date: "2024-03-01", product: "copilot", sku: "p1", quantity: 10, unit_type: "token", applied_cost_per_quantity: 0.01, gross_amount: 0.1, discount_amount: 0, net_amount: 0.1, username: "q-user", organization: "org1", model: "gpt-4", exceeds_quota: "FALSE", total_monthly_quota: 500, charge_scope: "user" },
+    ]);
+    const result = getPremiumRequestsPaginated("2024-03-01", "2024-03-01", 1, 10, "date", "asc", undefined, { exceedsQuota: false });
+    expect(result.records.every(r => r.exceeds_quota === "FALSE")).toBe(true);
+  });
+
+  it("filters by scopeOrgs alone without page-level org filter", () => {
+    upsertPremiumRequests("ent1", [
+      { date: "2024-03-02", product: "copilot", sku: "p1", quantity: 20, unit_type: "token", applied_cost_per_quantity: 0.01, gross_amount: 0.2, discount_amount: 0, net_amount: 0.2, username: "scope-u", organization: "scoped-org", model: "gpt-4", exceeds_quota: "FALSE", total_monthly_quota: 500, charge_scope: "user" },
+    ]);
+    const result = getPremiumRequestsPaginated("2024-03-02", "2024-03-02", 1, 10, "date", "asc", undefined, { scopeOrgs: ["scoped-org"] });
+    expect(result.total).toBe(1);
+  });
 });
 
 describe("getPremiumUserSummary", () => {
