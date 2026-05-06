@@ -94,6 +94,22 @@ describe("githubFetch", () => {
     });
     await expect(githubFetch("/orgs/my-org/info")).rejects.toThrow(GitHubApiError);
   });
+
+  it("retries on 429 then succeeds", async () => {
+    const mockFetch = fetch as unknown as ReturnType<typeof vi.fn>;
+    mockFetch
+      .mockResolvedValueOnce({ ok: false, status: 429, headers: new Map([["retry-after", "0"]]) })
+      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ ok: true }), headers: new Map() });
+    const result = await githubFetch<{ ok: boolean }>("/orgs/my-org/info");
+    expect(result.ok).toBe(true);
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("throws after exhausting retries on 500", async () => {
+    const mockFetch = fetch as unknown as ReturnType<typeof vi.fn>;
+    mockFetch.mockResolvedValue({ ok: false, status: 500, headers: new Map() });
+    await expect(githubFetch("/orgs/my-org/info", 2)).rejects.toThrow("GitHub API failed after 2 retries");
+  });
 });
 
 describe("fetchNDJSON", () => {
