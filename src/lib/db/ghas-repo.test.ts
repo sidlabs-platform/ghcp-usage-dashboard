@@ -203,6 +203,19 @@ describe("recomputeSecretScanningDaily / getSecretScanningDaily", () => {
     expect(daily.length).toBeGreaterThanOrEqual(1);
     expect(daily[0].opened).toBe(1);
   });
+
+  it("populates resolved and resolution_counts", () => {
+    upsertSecretScanningAlerts("ent1", "org", "my-org", [
+      { number: 50, repository: { full_name: "org/r" }, state: "resolved", secret_type: "aws_key", secret_type_display_name: "AWS Key", created_at: "2024-03-01T00:00:00Z", updated_at: "2024-03-02T00:00:00Z", resolved_at: "2024-03-02T00:00:00Z", resolution: "revoked" },
+      { number: 51, repository: { full_name: "org/r" }, state: "open", secret_type: "npm_token", secret_type_display_name: "NPM", created_at: "2024-03-01T00:00:00Z", updated_at: "2024-03-01T00:00:00Z" },
+    ] as any);
+    recomputeSecretScanningDaily("ent1", "org", "my-org");
+    const daily = getSecretScanningDaily("org", "my-org", "2024-03-01", "2024-03-31", ["ent1"]);
+    const day2 = daily.find(d => d.day === "2024-03-02");
+    expect(day2).toBeDefined();
+    expect(day2!.resolved).toBe(1);
+    expect(day2!.resolution_counts).toEqual({ revoked: 1 });
+  });
 });
 
 describe("getAllGhasSyncStates", () => {
