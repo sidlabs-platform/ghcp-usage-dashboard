@@ -89,6 +89,28 @@ describe("billingClient", () => {
       mockGF.mockResolvedValue({ id: "r1", status: "failed" });
       await expect(billingClient.waitForReport("my-ent", "r1")).rejects.toThrow("failed");
     });
+
+    it("polls and returns after pending→completed", async () => {
+      const { githubFetch, sleep } = await import("./api-base");
+      const mockGF = githubFetch as ReturnType<typeof vi.fn>;
+      (sleep as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+      mockGF
+        .mockResolvedValueOnce({ id: "r1", status: "pending" })
+        .mockResolvedValueOnce({ id: "r1", status: "completed", download_urls: ["http://dl"] });
+      const progress = vi.fn();
+      const result = await billingClient.waitForReport("my-ent", "r1", 60000, progress);
+      expect(result.status).toBe("completed");
+      expect(progress).toHaveBeenCalledWith(expect.stringContaining("pending"));
+    });
+
+    it("throws timeout when report never completes", async () => {
+      const { githubFetch, sleep } = await import("./api-base");
+      const mockGF = githubFetch as ReturnType<typeof vi.fn>;
+      (sleep as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+      mockGF.mockResolvedValue({ id: "r1", status: "pending" });
+      // Use a very short timeout (1ms) to trigger the timeout path
+      await expect(billingClient.waitForReport("my-ent", "r1", 1)).rejects.toThrow("timed out");
+    });
   });
 
   describe("downloadReportCSV", () => {
