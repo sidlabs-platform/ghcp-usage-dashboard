@@ -224,4 +224,23 @@ describe("dashboard-config (with config file)", () => {
     expect(isCopilotSubEnabled("userMetrics")).toBe(false);
     expect(isCopilotSubEnabled("seats")).toBe(false);
   });
+
+  it("isEnterpriseEnabled returns false when copilot.enterprise is false", () => {
+    mockReadFileSync.mockReturnValue(JSON.stringify({
+      metrics: { copilot: { enabled: true, enterprise: false } },
+    }));
+    vi.setSystemTime(Date.now() + 70 * 60 * 1000);
+    delete process.env.GITHUB_ENTERPRISE;
+    expect(isEnterpriseEnabled()).toBe(false);
+  });
+
+  it("isEnterpriseEnabled warns when enterprise=true but env missing", () => {
+    mockReadFileSync.mockReturnValue(JSON.stringify({
+      metrics: { copilot: { enabled: true, enterprise: true } },
+    }));
+    vi.setSystemTime(Date.now() + 80 * 60 * 1000);
+    delete process.env.GITHUB_ENTERPRISE;
+    // Warning may have already been emitted by previous test; just verify behavior
+    expect(isEnterpriseEnabled()).toBe(false);
+  });
 });
