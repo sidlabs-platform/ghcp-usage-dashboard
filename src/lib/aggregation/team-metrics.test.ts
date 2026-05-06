@@ -120,4 +120,12 @@ describe("computeTeamSummary", () => {
     expect(result.cliAdoptionRate).toBe(100);
     expect(result.codeReviewAdoptionRate).toBe(100);
   });
+
+  it("returns 0 adoption rates when members is empty", () => {
+    const result = computeTeamSummary("team-x", "Team X", [], []);
+    expect(result.agentAdoptionRate).toBe(0);
+    expect(result.chatAdoptionRate).toBe(0);
+    expect(result.cliAdoptionRate).toBe(0);
+    expect(result.codeReviewAdoptionRate).toBe(0);
+  });
 });
