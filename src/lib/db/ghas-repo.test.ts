@@ -144,6 +144,25 @@ describe("getSecurityOverview", () => {
     expect(overview.dependabot).toBeNull();
     expect(overview.secretScanning).toBeNull();
   });
+
+  it("returns populated overview when alerts exist", () => {
+    upsertCodeScanningAlerts("ent1", "org", "overview-org", [
+      { number: 300, repository: { full_name: "org/r" }, state: "open", rule: { id: "r1", severity: "high", security_severity_level: "high" }, tool: { name: "codeql" }, created_at: new Date().toISOString(), updated_at: new Date().toISOString() },
+    ] as any);
+    upsertDependabotAlerts("ent1", "org", "overview-org", [
+      { number: 301, repository: { full_name: "org/r" }, state: "open", security_vulnerability: { severity: "critical", package: { ecosystem: "npm", name: "pkg" } }, created_at: new Date().toISOString(), updated_at: new Date().toISOString() },
+    ] as any);
+    upsertSecretScanningAlerts("ent1", "org", "overview-org", [
+      { number: 302, repository: { full_name: "org/r" }, state: "open", secret_type: "token", secret_type_display_name: "Token", created_at: new Date().toISOString(), updated_at: new Date().toISOString() },
+    ] as any);
+    const overview = getSecurityOverview("org", "overview-org", ["ent1"]);
+    expect(overview.codeScanning).not.toBeNull();
+    expect(overview.codeScanning!.totalOpen).toBe(1);
+    expect(overview.dependabot).not.toBeNull();
+    expect(overview.dependabot!.criticalOpen).toBe(1);
+    expect(overview.secretScanning).not.toBeNull();
+    expect(overview.secretScanning!.totalOpen).toBe(1);
+  });
 });
 
 describe("recomputeDependabotDaily / getDependabotDaily", () => {
