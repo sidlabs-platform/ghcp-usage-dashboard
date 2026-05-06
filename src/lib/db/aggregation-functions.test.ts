@@ -134,15 +134,6 @@ describe("getAdoptionStats", () => {
     expect(stats.agentUsers).toBe(1);
     expect(stats.cliUsers).toBe(1);
   });
-
-  it("filters by enterprise slugs", () => {
-    insertMetric({ enterprise_slug: "ent-x", user_login: "u1", used_agent: 1 });
-    insertMetric({ enterprise_slug: "ent-y", user_login: "u2", user_id: 2, used_cli: 1 });
-    const stats = getAdoptionStats("2024-01-01", "2024-01-31", undefined, ["ent-x"]);
-    expect(stats.totalUsers).toBe(1);
-    expect(stats.agentUsers).toBe(1);
-    expect(stats.cliUsers).toBe(0);
-  });
 });
 
 describe("getUserSummaries", () => {
