@@ -332,6 +332,15 @@ describe("getFilteredOrgMetrics / getAllOrgMetrics", () => {
     const results = getFilteredOrgMetrics([], "2024-01-15", "2024-01-15");
     expect(results.length).toBeGreaterThanOrEqual(1);
   });
+
+  it("getAllOrgMetrics merges PR data when first org has no PR", () => {
+    upsertOrgDayMetrics("ent1", "allorg-nop", { day: "2024-03-10", enterprise_id: "e1", daily_active_users: 1, weekly_active_users: 1, monthly_active_users: 1, monthly_active_agent_users: 0, monthly_active_chat_users: 0, daily_active_cli_users: 0, code_generation_activity_count: 1, code_acceptance_activity_count: 0, user_initiated_interaction_count: 1, loc_suggested_to_add_sum: 0, loc_suggested_to_delete_sum: 0, loc_added_sum: 0, loc_deleted_sum: 0, totals_by_ide: [], totals_by_feature: [], totals_by_language_feature: [], totals_by_model_feature: [], totals_by_language_model: [] } as any);
+    upsertOrgDayMetrics("ent1", "allorg-ypr", { day: "2024-03-10", enterprise_id: "e1", daily_active_users: 2, weekly_active_users: 2, monthly_active_users: 2, monthly_active_agent_users: 0, monthly_active_chat_users: 0, daily_active_cli_users: 0, code_generation_activity_count: 2, code_acceptance_activity_count: 1, user_initiated_interaction_count: 2, loc_suggested_to_add_sum: 10, loc_suggested_to_delete_sum: 0, loc_added_sum: 5, loc_deleted_sum: 0, totals_by_ide: [], totals_by_feature: [], totals_by_language_feature: [], totals_by_model_feature: [], totals_by_language_model: [], pull_requests: { total_created: 7, total_reviewed: 3, total_merged: 5, total_suggestions: 2, total_applied_suggestions: 1, total_created_by_copilot: 1, total_reviewed_by_copilot: 0, total_merged_created_by_copilot: 1, total_merged_reviewed_by_copilot: 0, total_copilot_suggestions: 1, total_copilot_applied_suggestions: 0, median_minutes_to_merge: 30, median_minutes_to_merge_copilot_authored: null, median_minutes_to_merge_copilot_reviewed: null } } as any);
+    const results = getAllOrgMetrics("2024-03-10", "2024-03-10");
+    expect(results).toHaveLength(1);
+    expect(results[0].pull_requests).toBeDefined();
+    expect(results[0].pull_requests!.total_created).toBe(7);
+  });
 });
 
 describe("recordSync / isSynced / getLatestSyncDay / getSyncStatus", () => {
