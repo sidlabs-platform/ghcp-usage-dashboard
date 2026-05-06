@@ -30,6 +30,8 @@ import {
   getModelTrend,
   getCliUserBreakdown,
   estimateRowCount,
+  getActiveUsersRollingTrend,
+  getModelByLanguageBreakdown,
 } from "./aggregation-queries";
 
 beforeAll(() => {
@@ -382,5 +384,30 @@ describe("estimateRowCount", () => {
     const result = estimateRowCount("2024-01-01", "2024-01-31");
     expect(result.count).toBeGreaterThanOrEqual(0);
     expect(typeof result.exceeds).toBe("boolean");
+  });
+});
+
+describe("getActiveUsersRollingTrend", () => {
+  it("returns daily/weekly/monthly rolling user counts", () => {
+    db.prepare(`INSERT INTO user_daily_metrics (day, enterprise_id, enterprise_slug, user_id, user_login, used_cli)
+      VALUES ('2024-01-22', 'ent1', 'ent1', 1, 'rolling-user', 0)`).run();
+    const trend = getActiveUsersRollingTrend("2024-01-22", "2024-01-22");
+    expect(trend.length).toBeGreaterThanOrEqual(1);
+    expect(trend[0].daily).toBeGreaterThanOrEqual(1);
+    expect(typeof trend[0].weekly).toBe("number");
+    expect(typeof trend[0].monthly).toBe("number");
+  });
+});
+
+describe("getModelByLanguageBreakdown", () => {
+  it("aggregates model×language from json_each", () => {
+    const langModel = JSON.stringify([
+      { model: "gpt-4o", language: "Python", user_initiated_interaction_count: 40 },
+    ]);
+    db.prepare(`INSERT INTO user_daily_metrics (day, enterprise_id, enterprise_slug, user_id, user_login, totals_by_language_model)
+      VALUES ('2024-01-23', 'ent1', 'ent1', 1, 'user1', ?)`).run(langModel);
+    const breakdown = getModelByLanguageBreakdown("2024-01-01", "2024-01-31");
+    const py = breakdown.find((r) => r.model === "gpt-4o" && r.language === "Python");
+    expect(py!.interactions).toBe(40);
   });
 });
