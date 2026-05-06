@@ -24,6 +24,9 @@ import {
   promoteAutofixCommitted,
   updateGhasSyncState,
   getGhasSyncState,
+  getAllGhasSyncStates,
+  computeMTTR,
+  updateAlertAutofixStatuses,
 } from "./ghas-repo";
 
 beforeAll(() => {
@@ -164,5 +167,41 @@ describe("recomputeSecretScanningDaily / getSecretScanningDaily", () => {
     const daily = getSecretScanningDaily("org", "my-org", "2024-01-01", "2024-01-31", ["ent1"]);
     expect(daily.length).toBeGreaterThanOrEqual(1);
     expect(daily[0].opened).toBe(1);
+  });
+});
+
+describe("getAllGhasSyncStates", () => {
+  it("returns all sync states", () => {
+    updateGhasSyncState("ent1", "org", "test-org", "code_scanning", "2024-01-10T00:00:00Z", "2024-01-10T00:00:00Z", 3, "ok");
+    const states = getAllGhasSyncStates(["ent1"]);
+    expect(states.length).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe("computeMTTR", () => {
+  it("computes mean time to remediate for code scanning", () => {
+    upsertCodeScanningAlerts("ent1", "org", "mttr-org", [
+      { number: 500, repository: { full_name: "org/repo" }, state: "fixed", rule: { id: "r1", severity: "high", security_severity_level: "high" }, tool: { name: "codeql" }, created_at: "2024-01-01T00:00:00Z", updated_at: "2024-01-05T00:00:00Z", fixed_at: "2024-01-05T00:00:00Z" },
+    ] as any);
+    const mttr = computeMTTR("org", "mttr-org", "code_scanning", ["ent1"]);
+    expect(mttr).toBe(4);
+  });
+
+  it("returns null when no fixed alerts", () => {
+    const mttr = computeMTTR("org", "empty-org", "code_scanning");
+    expect(mttr).toBeNull();
+  });
+});
+
+describe("updateAlertAutofixStatuses", () => {
+  it("batch-updates autofix statuses", () => {
+    upsertCodeScanningAlerts("ent1", "org", "autofix-org", [
+      { number: 600, repository: { full_name: "org/repo" }, state: "open", rule: { id: "r1", severity: "medium", security_severity_level: "medium" }, tool: { name: "codeql" }, created_at: "2024-01-01T00:00:00Z", updated_at: "2024-01-01T00:00:00Z" },
+    ] as any);
+    updateAlertAutofixStatuses("ent1", "org", "autofix-org", [
+      { alertNumber: 600, repoFullName: "org/repo", autofixStatus: "available" },
+    ]);
+    const row = db.prepare("SELECT autofix_status FROM ghas_code_scanning_alerts WHERE alert_number = 600 AND scope_id = 'autofix-org'").get() as any;
+    expect(row.autofix_status).toBe("available");
   });
 });
