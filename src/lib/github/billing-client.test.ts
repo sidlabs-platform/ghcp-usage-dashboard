@@ -128,4 +128,25 @@ describe("billingClient", () => {
       await expect(billingClient.createReport("my-ent", "detailed", "bad", "bad")).rejects.toThrow("Failed to create billing report");
     });
   });
+
+  describe("fetchUsageReport", () => {
+    it("orchestrates create → wait → download → parse", async () => {
+      process.env.GITHUB_TOKEN = "ghp_test";
+      const { githubFetch, sleep } = await import("./api-base");
+      const mockGF = githubFetch as ReturnType<typeof vi.fn>;
+      const mockSleep = sleep as ReturnType<typeof vi.fn>;
+      mockSleep.mockResolvedValue(undefined);
+      // createReport mock (uses global fetch)
+      const csvContent = "date,product,sku,quantity,unit_type,applied_cost_per_quantity,gross_amount,discount_amount,net_amount,organization,repository,username,workflow_path,cost_center_name\n2024-01-01,copilot,s1,1,seat,10,10,0,10,org,,user,,\n";
+      vi.stubGlobal("fetch", vi.fn()
+        .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ id: "r1", status: "pending" }) })
+        .mockResolvedValueOnce({ ok: true, text: () => Promise.resolve(csvContent) })
+      );
+      // waitForReport uses githubFetch (getReport)
+      mockGF.mockResolvedValue({ id: "r1", status: "completed", download_urls: ["https://storage.example.com/csv"] });
+      const records = await billingClient.fetchUsageReport("my-ent", "detailed", "2024-01-01", "2024-01-31");
+      expect(records).toHaveLength(1);
+      expect(records[0].product).toBe("copilot");
+    });
+  });
 });
