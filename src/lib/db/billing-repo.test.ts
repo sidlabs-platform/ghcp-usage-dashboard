@@ -376,6 +376,16 @@ describe("getPremiumRequestsPaginated", () => {
     expect(result.records.every(r => r.username === "dev1")).toBe(true);
   });
 
+  it("supports username filter in appendPremiumFilters", () => {
+    upsertPremiumRequests("ent1", [
+      { date: "2024-01-14", product: "copilot", sku: "p1", quantity: 10, unit_type: "token", applied_cost_per_quantity: 0.01, gross_amount: 0.1, discount_amount: 0, net_amount: 0.1, username: "prem-target", organization: "org1", model: "gpt-4", exceeds_quota: "FALSE", total_monthly_quota: 500, charge_scope: "user" },
+      { date: "2024-01-14", product: "copilot", sku: "p1", quantity: 5, unit_type: "token", applied_cost_per_quantity: 0.01, gross_amount: 0.05, discount_amount: 0, net_amount: 0.05, username: "prem-other", organization: "org1", model: "gpt-4", exceeds_quota: "FALSE", total_monthly_quota: 500, charge_scope: "user" },
+    ]);
+    const result = getPremiumRequestsPaginated("2024-01-14", "2024-01-14", 1, 10, "date", "asc", undefined, { username: "prem-target" });
+    expect(result.total).toBe(1);
+    expect(result.records[0].username).toBe("prem-target");
+  });
+
   it("applies org+scopeOrgs intersection for premium requests", () => {
     upsertPremiumRequests("ent1", [
       { date: "2024-02-20", product: "copilot", sku: "p1", quantity: 50, unit_type: "token", applied_cost_per_quantity: 0.01, gross_amount: 0.5, discount_amount: 0, net_amount: 0.5, username: "prem-u1", organization: "prem-shared", model: "gpt-4", exceeds_quota: "FALSE", total_monthly_quota: 500, charge_scope: "user" },
