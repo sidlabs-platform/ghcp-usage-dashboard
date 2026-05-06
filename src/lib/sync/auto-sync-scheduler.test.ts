@@ -2,13 +2,13 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 vi.mock("@/lib/config/dashboard-config", () => ({
   getAutoSyncConfig: vi.fn(() => ({ enabled: false, utcTime: "03:00" })),
-  isMetricEnabled: vi.fn(() => true),
-  getEffectiveBillingEnabled: vi.fn(() => true),
+  isMetricEnabled: vi.fn(() => false),
+  getEffectiveBillingEnabled: vi.fn(() => false),
 }));
-vi.mock("@/lib/db/sync-service", () => ({ incrementalSync: vi.fn() }));
+vi.mock("@/lib/db/sync-service", () => ({ incrementalSync: vi.fn(async () => ({ daysSynced: 1, daysSkipped: 0 })) }));
 vi.mock("@/lib/db/summary-tables", () => ({ refreshAllSummaries: vi.fn() }));
-vi.mock("@/lib/db/ghas-sync-service", () => ({ fullGhasSync: vi.fn() }));
-vi.mock("@/lib/db/billing-sync-service", () => ({ syncBilling: vi.fn() }));
+vi.mock("@/lib/db/ghas-sync-service", () => ({ fullGhasSync: vi.fn(async () => ({})) }));
+vi.mock("@/lib/db/billing-sync-service", () => ({ syncBilling: vi.fn(async () => ({})) }));
 vi.mock("@/lib/config/enterprise-config", () => ({ getEnterpriseSlugs: vi.fn(() => ["ent1"]) }));
 vi.mock("@/lib/db/metrics-repo", () => ({
   acquireSyncLock: vi.fn(() => true),
@@ -20,14 +20,26 @@ vi.mock("@/lib/cache/memory-cache", () => ({
 }));
 
 import { startAutoSync, stopAutoSync, getAutoSyncStatus } from "./auto-sync-scheduler";
-import { getAutoSyncConfig } from "@/lib/config/dashboard-config";
+import { getAutoSyncConfig, isMetricEnabled, getEffectiveBillingEnabled } from "@/lib/config/dashboard-config";
+import { incrementalSync } from "@/lib/db/sync-service";
+import { acquireSyncLock } from "@/lib/db/metrics-repo";
 
 const mockConfig = getAutoSyncConfig as ReturnType<typeof vi.fn>;
+const mockMetric = isMetricEnabled as ReturnType<typeof vi.fn>;
+const mockBillingEnabled = getEffectiveBillingEnabled as ReturnType<typeof vi.fn>;
+const mockIncrSync = incrementalSync as ReturnType<typeof vi.fn>;
+const mockAcquire = acquireSyncLock as ReturnType<typeof vi.fn>;
 
 describe("auto-sync-scheduler", () => {
   beforeEach(() => {
+    vi.useFakeTimers();
     stopAutoSync();
+    vi.clearAllMocks();
     mockConfig.mockReturnValue({ enabled: false, utcTime: "03:00" });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it("startAutoSync does not schedule when disabled", () => {
@@ -67,5 +79,29 @@ describe("auto-sync-scheduler", () => {
     stopAutoSync();
     const status = getAutoSyncStatus();
     expect(status.nextRunAt).toBeNull();
+  });
+
+  it("executeAutoSync runs full cycle when timer fires", async () => {
+    mockConfig.mockReturnValue({ enabled: true, utcTime: "03:00" });
+    mockMetric.mockReturnValue(true);
+    mockBillingEnabled.mockReturnValue(true);
+    const spy = vi.spyOn(console, "log").mockImplementation(() => {});
+    startAutoSync();
+    // Fire the scheduled timer
+    await vi.runOnlyPendingTimersAsync();
+    expect(mockIncrSync).toHaveBeenCalled();
+    spy.mockRestore();
+    stopAutoSync();
+  });
+
+  it("executeAutoSync skips when lock not acquired", async () => {
+    mockConfig.mockReturnValue({ enabled: true, utcTime: "03:00" });
+    mockAcquire.mockReturnValue(false);
+    const spy = vi.spyOn(console, "log").mockImplementation(() => {});
+    startAutoSync();
+    await vi.runOnlyPendingTimersAsync();
+    expect(mockIncrSync).not.toHaveBeenCalled();
+    spy.mockRestore();
+    stopAutoSync();
   });
 });
