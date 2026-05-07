@@ -30,9 +30,10 @@ export function parsePaginationParams(
   defaultSort: string = "id",
   defaultDir: "asc" | "desc" = "desc",
 ): PaginationParams {
-  const page = Math.max(1, parseInt(searchParams.get("page") || "1", 10));
+  const rawPage = parseInt(searchParams.get("page") || "1", 10);
+  const page = Math.max(1, Number.isNaN(rawPage) ? 1 : rawPage);
   const rawPageSize = parseInt(searchParams.get("pageSize") || String(DEFAULT_PAGE_SIZE), 10);
-  const pageSize = Math.min(Math.max(1, rawPageSize), MAX_PAGE_SIZE);
+  const pageSize = Math.min(Math.max(1, Number.isNaN(rawPageSize) ? DEFAULT_PAGE_SIZE : rawPageSize), MAX_PAGE_SIZE);
   const sortField = searchParams.get("sort") || defaultSort;
   const sortDir = (searchParams.get("sortDir") === "asc" ? "asc" : searchParams.get("sortDir") === "desc" ? "desc" : defaultDir) as "asc" | "desc";
   const search = searchParams.get("search") || undefined;

@@ -12,8 +12,10 @@ async function handler(request: NextRequest) {
     const { enterpriseSlugs } = filter;
     const hasFilter = filter.selectedTeams.length > 0 || filter.selectedOrgs.length > 0;
 
-    const page = Math.max(1, parseInt(params.get("page") || "1", 10));
-    const pageSize = Math.min(Math.max(1, parseInt(params.get("pageSize") || "50", 10)), 200);
+    const rawPage = parseInt(params.get("page") || "1", 10);
+    const page = Math.max(1, Number.isNaN(rawPage) ? 1 : rawPage);
+    const rawPageSize = parseInt(params.get("pageSize") || "50", 10);
+    const pageSize = Math.min(Math.max(1, Number.isNaN(rawPageSize) ? 50 : rawPageSize), 200);
     const sort = params.get("sort") || "_lastActivity";
     const sortDir = (params.get("sortDir") === "asc" ? "asc" : "desc") as "asc" | "desc";
 
