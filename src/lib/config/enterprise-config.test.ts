@@ -73,6 +73,13 @@ describe("enterprise-config", () => {
     it("throws for unknown slug", () => {
       expect(() => getEnterpriseConfig("unknown")).toThrow('Enterprise "unknown" not found');
     });
+
+    it("throws with (none) when enterprises list is empty", () => {
+      (getDashboardConfig as ReturnType<typeof vi.fn>).mockReturnValueOnce({ enterprises: [] });
+      resetEnterpriseConfigCache();
+      expect(() => getEnterpriseConfig("anything")).toThrow("(none)");
+      resetEnterpriseConfigCache();
+    });
   });
 
   describe("getClientEnterpriseList", () => {
@@ -138,6 +145,16 @@ describe("enterprise-config", () => {
     it("returns all included orgs when no excludes", () => {
       const orgs = getResolvedOrgsForEnterprise("beta-inc");
       expect(orgs).toEqual(["org-x"]);
+    });
+
+    it("returns empty array when organizations config is undefined", () => {
+      (getDashboardConfig as ReturnType<typeof vi.fn>).mockReturnValueOnce({
+        enterprises: [{ slug: "no-orgs", displayName: "No Orgs", tokenEnvVar: "T" }],
+      });
+      resetEnterpriseConfigCache();
+      const orgs = getResolvedOrgsForEnterprise("no-orgs");
+      expect(orgs).toEqual([]);
+      resetEnterpriseConfigCache();
     });
   });
 
