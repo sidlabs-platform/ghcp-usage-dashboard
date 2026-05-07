@@ -42,12 +42,18 @@ async function handler(request: NextRequest) {
     const enterpriseSlugs = selectedEnterprises.length > 0 ? selectedEnterprises : undefined;
     const hasScope = selectedTeams.length > 0 || selectedOrgs.length > 0;
 
+    const rawChargeScope = params.get("chargeScope");
+    const validChargeScopes: ChargeScope[] = ["user", "org"];
+    const chargeScope = rawChargeScope && validChargeScopes.includes(rawChargeScope as ChargeScope)
+      ? (rawChargeScope as ChargeScope)
+      : undefined;
+
     const filters: BillingFilters = {
       product: params.get("product")?.split(",").filter(Boolean),
       sku: params.get("sku")?.split(",").filter(Boolean),
       organization: params.get("organization")?.split(",").filter(Boolean),
       username: params.get("username") || undefined,
-      chargeScope: (params.get("chargeScope") as ChargeScope) || undefined,
+      chargeScope,
       costCenter: params.get("costCenter") || undefined,
     };
 
