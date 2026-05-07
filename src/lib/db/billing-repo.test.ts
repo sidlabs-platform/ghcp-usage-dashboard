@@ -536,4 +536,50 @@ describe("appendBillingFilters edge cases", () => {
     const result = getOverviewKPIs("2024-01-01", "2024-01-31", { scopeOrgs: ["org1"] });
     expect(result.totalNet).toBe(10);
   });
+
+  it("getOverviewKPIs with enterpriseSlugs triggers enterprise filter + premium ?? 0 fallback", () => {
+    upsertUsageRecords("ent1", [
+      { date: "2024-01-10", product: "copilot", sku: "s1", quantity: 1, unit_type: "seat", applied_cost_per_quantity: 5, gross_amount: 5, discount_amount: 0, net_amount: 5, organization: "org1", repository: "", username: "u1", workflow_path: "", cost_center_name: "", charge_scope: "user" },
+    ]);
+    // No premium requests → premium query returns undefined → ?? 0 fallbacks fire
+    const result = getOverviewKPIs("2024-01-01", "2024-01-31", undefined, ["ent1"]);
+    expect(result.totalNet).toBe(5);
+    // Non-matching enterprise returns 0
+    const empty = getOverviewKPIs("2024-01-01", "2024-01-31", undefined, ["no-match"]);
+    expect(empty.totalNet).toBe(0);
+  });
+
+  it("getDailyAggregates with enterpriseSlugs filters correctly", () => {
+    upsertUsageRecords("ent1", [
+      { date: "2024-01-10", product: "copilot", sku: "s1", quantity: 1, unit_type: "seat", applied_cost_per_quantity: 10, gross_amount: 10, discount_amount: 0, net_amount: 10, organization: "org1", repository: "", username: "u1", workflow_path: "", cost_center_name: "", charge_scope: "user" },
+    ]);
+    const rows = getDailyAggregates("2024-01-01", "2024-01-31", undefined, ["ent1"]);
+    expect(rows.length).toBe(1);
+    const empty = getDailyAggregates("2024-01-01", "2024-01-31", undefined, ["no-match"]);
+    expect(empty.length).toBe(0);
+  });
+
+  it("getProductBreakdown with enterpriseSlugs filters correctly", () => {
+    upsertUsageRecords("ent1", [
+      { date: "2024-01-10", product: "copilot", sku: "s1", quantity: 1, unit_type: "seat", applied_cost_per_quantity: 10, gross_amount: 10, discount_amount: 0, net_amount: 10, organization: "org1", repository: "", username: "u1", workflow_path: "", cost_center_name: "", charge_scope: "user" },
+    ]);
+    const rows = getProductBreakdown("2024-01-01", "2024-01-31", undefined, ["ent1"]);
+    expect(rows.length).toBe(1);
+  });
+
+  it("getOrgBreakdown with enterpriseSlugs filters correctly", () => {
+    upsertUsageRecords("ent1", [
+      { date: "2024-01-10", product: "copilot", sku: "s1", quantity: 1, unit_type: "seat", applied_cost_per_quantity: 10, gross_amount: 10, discount_amount: 0, net_amount: 10, organization: "org1", repository: "", username: "u1", workflow_path: "", cost_center_name: "", charge_scope: "user" },
+    ]);
+    const rows = getOrgBreakdown("2024-01-01", "2024-01-31", undefined, ["ent1"]);
+    expect(rows.length).toBe(1);
+  });
+
+  it("getUserBreakdown with enterpriseSlugs filters correctly", () => {
+    upsertUsageRecords("ent1", [
+      { date: "2024-01-10", product: "copilot", sku: "s1", quantity: 1, unit_type: "seat", applied_cost_per_quantity: 10, gross_amount: 10, discount_amount: 0, net_amount: 10, organization: "org1", repository: "", username: "u1", workflow_path: "", cost_center_name: "", charge_scope: "user" },
+    ]);
+    const rows = getUserBreakdown("2024-01-01", "2024-01-31", undefined, ["ent1"]);
+    expect(rows.length).toBe(1);
+  });
 });
