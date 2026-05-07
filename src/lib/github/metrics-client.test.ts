@@ -211,5 +211,32 @@ describe("MetricsClient", () => {
       const result = await client.fetchOrgDateRange("my-org", ["2024-01-01"]);
       expect(result.get("2024-01-01")).toEqual([]);
     });
+
+    it("sleeps between multiple days", async () => {
+      mockGithubFetch.mockResolvedValue({ download_links: ["http://dl"] });
+      mockFetchNDJSON.mockResolvedValue([{ day: "2024-01-01", daily_active_users: 1 }]);
+      await client.fetchOrgDateRange("my-org", ["2024-01-01", "2024-01-02"]);
+      expect(sleep).toHaveBeenCalled();
+    });
+  });
+
+  describe("fetchEnterpriseUserDateRange (multi-day)", () => {
+    it("sleeps between multiple days", async () => {
+      mockGithubFetch.mockResolvedValue({ download_links: ["http://dl"] });
+      mockFetchNDJSON.mockResolvedValue([{ login: "alice" }]);
+      await client.fetchEnterpriseUserDateRange("ent", ["2024-01-01", "2024-01-02"]);
+      expect(sleep).toHaveBeenCalled();
+    });
+  });
+
+  describe("getEnterprise28DayReport (warn path)", () => {
+    it("warns with report keys when report exists but has no download_links", async () => {
+      mockGithubFetch.mockResolvedValue({ id: "abc", status: "ready" });
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const result = await client.getEnterprise28DayReport("ent");
+      expect(result).toEqual([]);
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("enterprise-28-day"));
+      warnSpy.mockRestore();
+    });
   });
 });
