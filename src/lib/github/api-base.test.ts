@@ -10,7 +10,7 @@ vi.mock("./app-auth", () => ({
 }));
 
 import { resolveAuthMode, githubFetch, githubFetchPaginated, githubFetchPaginatedWithCutoff, githubFetchCursorPaginatedWithCutoff, fetchNDJSON, GitHubApiError } from "./api-base";
-import { isAppAuthConfigured, isAppAuthConfiguredForEnterprise } from "./app-auth";
+import { isAppAuthConfigured, isAppAuthConfiguredForEnterprise, getInstallationToken, validateAppAuth } from "./app-auth";
 
 const mockIsApp = isAppAuthConfigured as ReturnType<typeof vi.fn>;
 const mockIsAppEnt = isAppAuthConfiguredForEnterprise as ReturnType<typeof vi.fn>;
@@ -434,5 +434,23 @@ describe("adaptiveRateDelay", () => {
     expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("Only 50 requests remaining"));
     warnSpy.mockRestore();
     vi.useRealTimers();
+  });
+});
+
+describe("ensureAuthReady (app mode)", () => {
+  it("validates app auth and fetches installation token for app mode", async () => {
+    mockIsApp.mockReturnValue(true);
+    (validateAppAuth as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+    (getInstallationToken as ReturnType<typeof vi.fn>).mockResolvedValue("app-token-123");
+    const mockFetch = fetch as unknown as ReturnType<typeof vi.fn>;
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ data: "ok" }),
+      headers: new Map(),
+    });
+    const result = await githubFetch<{ data: string }>("/orgs/my-org/info", 1, "app");
+    expect(result.data).toBe("ok");
+    expect(validateAppAuth).toHaveBeenCalled();
+    expect(getInstallationToken).toHaveBeenCalled();
   });
 });
