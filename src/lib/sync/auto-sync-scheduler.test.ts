@@ -175,6 +175,23 @@ describe("auto-sync-scheduler", () => {
     stopAutoSync();
   });
 
+  it("executeAutoSync returns early when stopped is set before async body runs", async () => {
+    mockConfig.mockReturnValue({ enabled: true, utcTime: "03:00" });
+    mockAcquire.mockReturnValue(true);
+    // Stop during incrementalSync to set stopped=true before finally block
+    mockIncrSync.mockImplementation(async () => {
+      stopAutoSync(); // sets stopped=true mid-execution
+      return { daysSynced: 0, daysSkipped: 0 };
+    });
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    startAutoSync();
+    await vi.runOnlyPendingTimersAsync();
+    // After stopping mid-run, scheduleNext should NOT re-schedule
+    const status = getAutoSyncStatus();
+    expect(status.nextRunAt).toBeNull();
+    logSpy.mockRestore();
+  });
+
   it("schedules for next day when current UTC time is past utcTime", () => {
     // Set fake time to 04:00 UTC — past 03:00
     vi.setSystemTime(new Date("2024-06-01T04:00:00Z"));
