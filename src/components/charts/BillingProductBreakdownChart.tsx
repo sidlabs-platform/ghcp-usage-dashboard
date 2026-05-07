@@ -32,17 +32,17 @@ const fmtCurrency = (v: number) =>
   v >= 1000 ? `$${(v / 1000).toFixed(1)}K` : `$${v.toFixed(2)}`;
 
 export function BillingProductBreakdownChart({ data }: BillingProductBreakdownChartProps) {
+  const sorted = useMemo(
+    () => [...(data || [])].sort((a, b) => b.total_net - a.total_net),
+    [data],
+  );
+
   if (!data || data.length === 0)
     return (
       <div className="flex items-center justify-center h-64 text-[hsl(var(--muted-foreground))]">
         No data available
       </div>
     );
-
-  const sorted = useMemo(
-    () => [...data].sort((a, b) => b.total_net - a.total_net),
-    [data],
-  );
 
   const chartHeight = Math.max(300, sorted.length * 36 + 40);
 

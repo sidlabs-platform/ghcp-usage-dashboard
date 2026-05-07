@@ -25,20 +25,20 @@ interface PremiumQuotaChartProps {
 }
 
 export function PremiumQuotaChart({ data }: PremiumQuotaChartProps) {
+  const sorted = useMemo(
+    () =>
+      [...(data || [])]
+        .sort((a, b) => b.within_quota + b.over_quota - (a.within_quota + a.over_quota))
+        .slice(0, 15),
+    [data],
+  );
+
   if (!data || data.length === 0)
     return (
       <div className="flex items-center justify-center h-64 text-[hsl(var(--muted-foreground))]">
         No data available
       </div>
     );
-
-  const sorted = useMemo(
-    () =>
-      [...data]
-        .sort((a, b) => b.within_quota + b.over_quota - (a.within_quota + a.over_quota))
-        .slice(0, 15),
-    [data],
-  );
 
   // Use the first row's quota_limit as the reference line value (assumes uniform limit)
   const quotaLimit = sorted.length > 0 ? sorted[0].quota_limit : 0;
