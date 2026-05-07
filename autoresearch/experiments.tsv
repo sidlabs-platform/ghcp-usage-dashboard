@@ -79,3 +79,4 @@ exp-001	2026-05-06T17:24:23Z	test-coverage	memory-cache.test.ts: get/set/TTL/evi
 188	2026-05-07T08:41:31.8971772+05:30	test(query-client): cover singleton pattern	KEEP	91.52	88.88	93.1	92.02
 189	2026-05-07T16:43:23+05:30	bug-hunting	fix(api-base): guard retry-after parseInt against NaN in 3 locations	KEEP	92.22	92.22	branches 90.02->89.92 (new uncovered guard branches)
 190	2026-05-07T16:44:58+05:30	bug-hunting	fix(api-base): fetchNDJSON try/catch on JSON.parse to skip malformed lines	KEEP	92.22	92.23	+0.01 stmts; added regression test
+191	2026-05-07T16:46:18+05:30	bug-hunting	fix(app-auth): validate installation token response shape	KEEP	92.23	92.25	+0.02 stmts; added 2 regression tests

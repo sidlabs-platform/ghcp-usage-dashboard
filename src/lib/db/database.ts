@@ -64,7 +64,15 @@ export function getDb(): Database.Database {
     "ALTER TABLE team_summary_cache ADD COLUMN enterprise_slug TEXT NOT NULL DEFAULT ''",
   ];
   for (const sql of migrations) {
-    try { _db.exec(sql); } catch { /* column already exists or table not yet created */ }
+    try {
+      _db.exec(sql);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      // Expected: column already exists or table not yet created
+      if (!msg.includes("duplicate column") && !msg.includes("no such table")) {
+        console.error(`[database] Unexpected migration error: ${msg} — SQL: ${sql}`);
+      }
+    }
   }
 
   // Now safe to run schema files (CREATE TABLE IF NOT EXISTS + CREATE INDEX).
