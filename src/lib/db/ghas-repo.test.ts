@@ -288,4 +288,26 @@ describe("updateAlertAutofixStatuses", () => {
     const row = db.prepare("SELECT autofix_status FROM ghas_code_scanning_alerts WHERE alert_number = 600 AND scope_id = 'autofix-org'").get() as any;
     expect(row.autofix_status).toBe("available");
   });
+
+  it("getDependabotDaily handles NULL ecosystem_counts with || fallback", () => {
+    db.prepare(`INSERT INTO ghas_dependabot_daily (day, enterprise_slug, scope, scope_id, opened, fixed, dismissed, auto_dismissed, total_open, severity_critical, severity_high, severity_medium, severity_low, ecosystem_counts) VALUES (?, ?, ?, ?, 1, 0, 0, 0, 1, 0, 1, 0, 0, NULL)`).run("2024-05-01", "ent1", "org", "null-eco-org");
+    const rows = getDependabotDaily("org", "null-eco-org", "2024-05-01", "2024-05-01");
+    expect(rows).toHaveLength(1);
+    expect(rows[0].ecosystem_counts).toEqual({});
+  });
+
+  it("getSecretScanningDaily handles NULL resolution_counts with || fallback", () => {
+    db.prepare(`INSERT INTO ghas_secret_scanning_daily (day, enterprise_slug, scope, scope_id, opened, resolved, total_open, resolution_counts) VALUES (?, ?, ?, ?, 1, 0, 1, NULL)`).run("2024-05-01", "ent1", "org", "null-res-org");
+    const rows = getSecretScanningDaily("org", "null-res-org", "2024-05-01", "2024-05-01");
+    expect(rows).toHaveLength(1);
+    expect(rows[0].resolution_counts).toEqual({});
+  });
+
+  it("recomputeCodeScanningDaily early return when no alerts exist", () => {
+    expect(() => recomputeCodeScanningDaily("ent1", "org", "empty-cs-org")).not.toThrow();
+  });
+
+  it("recomputeDependabotDaily early return when no alerts exist", () => {
+    expect(() => recomputeDependabotDaily("ent1", "org", "empty-dep-org")).not.toThrow();
+  });
 });

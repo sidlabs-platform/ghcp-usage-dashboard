@@ -76,3 +76,4 @@ exp-001	2026-05-06T17:24:23Z	test-coverage	memory-cache.test.ts: get/set/TTL/evi
 185	2026-05-07T08:32:46.9772356+05:30	fix(summary-tables): disambiguate enterprise_slug in team summary JOIN + test	KEEP	91.36	88.61	92.9	91.84
 186	2026-05-07T08:34:36.5491992+05:30	test(enterprise-config): empty enterprises (none) + undefined organizations fallback	KEEP	91.36	88.78	92.9	91.84
 187	2026-05-07T08:39:16.9245086+05:30	test(sync-service): non-Error throw + 28-day fallback data present	KEEP	91.36	88.78	92.9	91.84
+188	2026-05-07T08:41:31.8971772+05:30	test(query-client): cover singleton pattern	KEEP	91.52	88.88	93.1	92.02
