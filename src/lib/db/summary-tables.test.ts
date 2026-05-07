@@ -155,6 +155,16 @@ describe("refreshTeamSummary", () => {
     expect(row.active_members).toBe(1);
     expect(row.total_loc_added).toBe(15);
   });
+
+  it("refreshTeamSummary with enterpriseSlug filters by enterprise", () => {
+    insertMetric({ day: "2024-01-10", user_login: "user1", enterprise_slug: "ent-x" });
+    db.prepare(`
+      INSERT INTO team_memberships (enterprise_slug, team_slug, team_name, source, org_slug, user_login, updated_at)
+      VALUES ('ent-x', 'team-x', 'Team X', 'org', 'org1', 'user1', '2024-01-01')
+    `).run();
+    const count = refreshTeamSummary("2024-01-01", "2024-01-31", "ent-x");
+    expect(count).toBe(1);
+  });
 });
 
 describe("refreshAllSummaries", () => {

@@ -72,3 +72,4 @@ exp-001	2026-05-06T17:24:23Z	test-coverage	memory-cache.test.ts: get/set/TTL/evi
 181	2026-05-07T08:20:31.0318240+05:30	test(billing-repo): enterprise slug filter tests for 6 query functions	KEEP	90.83	87.64	92.69	91.77
 182	2026-05-07T08:22:32.6202897+05:30	test(billing-repo): enterprise slug paginated/summary/breakdown + sync fallback	KEEP	91.29	88.07	92.69	91.77
 183	2026-05-07T08:26:29.3697191+05:30	test(metrics-repo): upsertUserDay undefined JSON + resolveEnterpriseId fallback + weightedMedian null	KEEP	91.29	88.4	92.69	91.77
+184	2026-05-07T08:28:22.9308310+05:30	test(ghas-sync): fullGhasSync without enterpriseSlug fallback	KEEP	91.33	88.5	92.9	91.8
