@@ -331,6 +331,15 @@ describe("batchUpsertUserDayMetrics", () => {
     const count = batchUpsertUserDayMetrics("ent1", records);
     expect(count).toBe(1);
   });
+
+  it("handles records with all JSON fields undefined (|| [] fallback)", () => {
+    const records = [{ day: "2024-01-25", enterprise_id: "ent-123", user_id: 70, user_login: "no-json", code_generation_activity_count: 0, code_acceptance_activity_count: 0, user_initiated_interaction_count: 0, loc_suggested_to_add_sum: 0, loc_suggested_to_delete_sum: 0, loc_added_sum: 0, loc_deleted_sum: 0, used_agent: false, used_chat: false, used_cli: false, used_copilot_code_review_active: false, used_copilot_code_review_passive: false, used_copilot_coding_agent: false }] as any[];
+    const count = batchUpsertUserDayMetrics("ent1", records);
+    expect(count).toBe(1);
+    const row = db.prepare("SELECT totals_by_ide, totals_by_feature FROM user_daily_metrics WHERE user_login = 'no-json'").get() as any;
+    expect(row.totals_by_ide).toBe("[]");
+    expect(row.totals_by_feature).toBe("[]");
+  });
 });
 
 describe("getUserMetricsByLogin", () => {
