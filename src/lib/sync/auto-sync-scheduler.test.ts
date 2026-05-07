@@ -174,4 +174,20 @@ describe("auto-sync-scheduler", () => {
     logSpy.mockRestore();
     stopAutoSync();
   });
+
+  it("schedules for next day when current UTC time is past utcTime", () => {
+    // Set fake time to 04:00 UTC — past 03:00
+    vi.setSystemTime(new Date("2024-06-01T04:00:00Z"));
+    mockConfig.mockReturnValue({ enabled: true, utcTime: "03:00" });
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    startAutoSync();
+    const status = getAutoSyncStatus();
+    // Next run should be ~23 hours later (next day at 03:00 UTC)
+    expect(status.nextRunAt).not.toBeNull();
+    const nextRun = new Date(status.nextRunAt!);
+    expect(nextRun.getUTCHours()).toBe(3);
+    expect(nextRun.getUTCDate()).toBe(2); // next day
+    logSpy.mockRestore();
+    stopAutoSync();
+  });
 });
