@@ -152,10 +152,12 @@ function updateRateLimit(resp: Response, mode: AuthMode, enterpriseSlug?: string
   const remaining = resp.headers.get("x-ratelimit-remaining");
   const reset = resp.headers.get("x-ratelimit-reset");
   if (remaining !== null) {
-    state.remaining = parseInt(remaining, 10);
+    const parsed = parseInt(remaining, 10);
+    if (Number.isFinite(parsed)) state.remaining = parsed;
   }
   if (reset !== null) {
-    state.resetAt = parseInt(reset, 10) * 1000;
+    const parsed = parseInt(reset, 10);
+    if (Number.isFinite(parsed)) state.resetAt = parsed * 1000;
   }
 }
 
