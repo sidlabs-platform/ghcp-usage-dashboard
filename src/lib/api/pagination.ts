@@ -63,7 +63,7 @@ export function buildOrderBy(
 ): string {
   const column = allowedColumns.includes(params.sortField)
     ? params.sortField
-    : (defaultColumn || allowedColumns[0]);
+    : (defaultColumn || allowedColumns[0] || "id");
   return `ORDER BY ${column} ${params.sortDir.toUpperCase()}`;
 }
 
