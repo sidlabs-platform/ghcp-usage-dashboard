@@ -96,7 +96,7 @@ async function listReports(
     billingPath(enterprise),
     3, undefined, enterpriseSlug
   );
-  return resp.usage_report_exports;
+  return resp?.usage_report_exports ?? [];
 }
 
 /**

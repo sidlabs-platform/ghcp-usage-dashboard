@@ -105,6 +105,16 @@ describe("githubFetch", () => {
     expect(mockFetch).toHaveBeenCalledTimes(2);
   });
 
+  it("falls back to exponential backoff when retry-after is non-numeric", async () => {
+    const mockFetch = fetch as unknown as ReturnType<typeof vi.fn>;
+    mockFetch
+      .mockResolvedValueOnce({ ok: false, status: 429, headers: new Map([["retry-after", "not-a-number"]]) })
+      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ ok: true }), headers: new Map() });
+    const result = await githubFetch<{ ok: boolean }>("/orgs/my-org/info");
+    expect(result.ok).toBe(true);
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+  });
+
   it("throws after exhausting retries on 500", async () => {
     const mockFetch = fetch as unknown as ReturnType<typeof vi.fn>;
     mockFetch.mockResolvedValue({ ok: false, status: 500, headers: new Map() });
@@ -161,6 +171,19 @@ describe("fetchNDJSON", () => {
     const result = await fetchNDJSON<{ a: number }>("https://storage.example.com/data.ndjson");
     expect(result).toHaveLength(2);
     expect(result[1].a).toBe(2);
+  });
+
+  it("skips malformed NDJSON lines instead of throwing", async () => {
+    const mockFetch = fetch as unknown as ReturnType<typeof vi.fn>;
+    const body = '{"a":1}\nNOT_JSON\n{"a":3}\n';
+    mockFetch.mockResolvedValue({ ok: true, text: () => Promise.resolve(body), body: null });
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const result = await fetchNDJSON<{ a: number }>("https://storage.example.com/data.ndjson");
+    expect(result).toHaveLength(2);
+    expect(result[0].a).toBe(1);
+    expect(result[1].a).toBe(3);
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("Skipping malformed line"));
+    warnSpy.mockRestore();
   });
 });
 

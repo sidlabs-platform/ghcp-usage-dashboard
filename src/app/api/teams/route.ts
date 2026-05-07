@@ -163,8 +163,10 @@ async function handler(request: NextRequest) {
     const selectedEnterprises = enterprisesParam ? enterprisesParam.split(",").filter(Boolean) : [];
     const enterpriseSlugs = selectedEnterprises.length > 0 ? selectedEnterprises : undefined;
 
-    const page = Math.max(1, parseInt(params.get("page") || "1", 10));
-    const pageSize = Math.min(Math.max(1, parseInt(params.get("pageSize") || "50", 10)), 200);
+    const rawPage = parseInt(params.get("page") || "1", 10);
+    const page = Math.max(1, Number.isNaN(rawPage) ? 1 : rawPage);
+    const rawPageSize = parseInt(params.get("pageSize") || "50", 10);
+    const pageSize = Math.min(Math.max(1, Number.isNaN(rawPageSize) ? 50 : rawPageSize), 200);
     const sort = params.get("sort") || "total_members";
     const sortDir = (params.get("sortDir") === "asc" ? "asc" : "desc") as "asc" | "desc";
 

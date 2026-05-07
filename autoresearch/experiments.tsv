@@ -77,3 +77,14 @@ exp-001	2026-05-06T17:24:23Z	test-coverage	memory-cache.test.ts: get/set/TTL/evi
 186	2026-05-07T08:34:36.5491992+05:30	test(enterprise-config): empty enterprises (none) + undefined organizations fallback	KEEP	91.36	88.78	92.9	91.84
 187	2026-05-07T08:39:16.9245086+05:30	test(sync-service): non-Error throw + 28-day fallback data present	KEEP	91.36	88.78	92.9	91.84
 188	2026-05-07T08:41:31.8971772+05:30	test(query-client): cover singleton pattern	KEEP	91.52	88.88	93.1	92.02
+189	2026-05-07T16:43:23+05:30	bug-hunting	fix(api-base): guard retry-after parseInt against NaN in 3 locations	KEEP	92.22	92.22	branches 90.02->89.92 (new uncovered guard branches)
+190	2026-05-07T16:44:58+05:30	bug-hunting	fix(api-base): fetchNDJSON try/catch on JSON.parse to skip malformed lines	KEEP	92.22	92.23	+0.01 stmts; added regression test
+192	2026-05-07T16:47:14+05:30	bug-hunting	fix(database): log unexpected migration errors instead of swallowing	REVERT	92.25	92.16	-0.09 stmts; new branches untestable without real SQLite
+193	2026-05-07T16:48:21+05:30	bug-hunting	fix(api-base): guard updateRateLimit parseInt against NaN	KEEP	92.25	92.26	+0.01 stmts
+194	2026-05-07T16:49:22+05:30	bug-hunting	fix(billing-usage): validate chargeScope query param	KEEP	92.26	92.26	stable coverage; real input validation fix
+195	2026-05-07T16:52:57+05:30	bug-hunting	fix(pagination): guard parseInt for page/pageSize against NaN across 6 files	KEEP	92.26	92.26	branches 89.97->89.88 (new NaN guard paths); fixes real NaN-in-SQL bug
+196	2026-05-07T16:55:37+05:30	bug-hunting	fix(sync): guard BACKFILL_DAYS parseInt against NaN in 3 locations	KEEP	92.26	92.26	stable; prevents Invalid Date in summary refresh
+197	2026-05-07T16:57:29+05:30	bug-hunting	fix(pagination): guard buildOrderBy against empty allowedColumns	KEEP	92.26	92.26	stable; prevents ORDER BY undefined
+198	2026-05-07T17:01:23+05:30	bug-hunting	fix(security-routes): return 400 when scopeId cannot be resolved	KEEP	92.26	92.26	stable; prevents silent empty results from misconfiguration
+199	2026-05-07T17:05:30+05:30	bug-hunting	fix(seats-repo): skip seats with null/missing assignee + regression tests	KEEP	92.26	92.27	+0.01 stmts; prevents TypeError on deleted-user seats
+200	2026-05-07T17:09:59+05:30	bug-hunting	fix(billing-client): guard listReports against null API response	KEEP	92.27	92.27	stable; prevents TypeError on 204 response

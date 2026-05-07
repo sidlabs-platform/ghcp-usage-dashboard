@@ -10,6 +10,7 @@ function buildEnterpriseFilter(slugs?: string[], prefix = "WHERE"): { clause: st
 }
 
 export function upsertSeat(enterpriseSlug: string, orgSlug: string, seat: CopilotSeat): void {
+  if (!seat.assignee?.login) return; // skip seats with missing assignee (e.g., deleted users)
   const db = getDb();
   db.prepare(`
     INSERT OR REPLACE INTO copilot_seats (
@@ -47,6 +48,7 @@ export function upsertSeats(enterpriseSlug: string, orgSlug: string, seats: Copi
 
   const tx = db.transaction(() => {
     for (const seat of seats) {
+      if (!seat.assignee?.login) continue; // skip seats with missing assignee (e.g., deleted users)
       stmt.run(
         enterpriseSlug, orgSlug, seat.assignee.login, seat.assignee.id, seat.plan_type,
         seat.last_activity_at, seat.last_activity_editor, seat.last_authenticated_at,

@@ -119,3 +119,19 @@ function makeSeat(login: string, id: number, planType: string, lastActivity: str
     updated_at: "2024-06-15T00:00:00Z",
   };
 }
+
+describe("null assignee handling", () => {
+  it("upsertSeat skips seat with null assignee", () => {
+    const before = getAllSeats();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    upsertSeat("acme", "org-a", { assignee: null } as any);
+    expect(getAllSeats().length).toBe(before.length);
+  });
+
+  it("upsertSeats skips seats with missing assignee login", () => {
+    const before = getAllSeats();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    upsertSeats("acme", "org-a", [{ assignee: { id: 99 } } as any]);
+    expect(getAllSeats().length).toBe(before.length);
+  });
+});

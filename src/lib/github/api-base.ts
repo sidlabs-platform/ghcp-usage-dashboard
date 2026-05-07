@@ -152,10 +152,12 @@ function updateRateLimit(resp: Response, mode: AuthMode, enterpriseSlug?: string
   const remaining = resp.headers.get("x-ratelimit-remaining");
   const reset = resp.headers.get("x-ratelimit-reset");
   if (remaining !== null) {
-    state.remaining = parseInt(remaining, 10);
+    const parsed = parseInt(remaining, 10);
+    if (Number.isFinite(parsed)) state.remaining = parsed;
   }
   if (reset !== null) {
-    state.resetAt = parseInt(reset, 10) * 1000;
+    const parsed = parseInt(reset, 10);
+    if (Number.isFinite(parsed)) state.resetAt = parsed * 1000;
   }
 }
 
@@ -207,7 +209,8 @@ export async function githubFetch<T>(path: string, retries = 3, authMode?: AuthM
 
     if (resp.status === 429 || resp.status >= 500) {
       const retryAfter = resp.headers.get("retry-after");
-      const waitMs = retryAfter ? parseInt(retryAfter) * 1000 : Math.pow(2, attempt) * 1000;
+      const parsed = retryAfter ? parseInt(retryAfter, 10) : NaN;
+      const waitMs = Number.isFinite(parsed) && parsed > 0 ? parsed * 1000 : Math.pow(2, attempt) * 1000;
       console.warn(`GitHub API ${resp.status} on ${path}, retrying in ${waitMs}ms (attempt ${attempt + 1}/${retries})`);
       await sleep(waitMs);
       continue;
@@ -266,6 +269,18 @@ export async function fetchNDJSON<T>(downloadUrl: string): Promise<T[]> {
   }
 
   const results: T[] = [];
+  let skipped = 0;
+
+  function safeParse(line: string): void {
+    const trimmed = line.trim();
+    if (!trimmed) return;
+    try {
+      results.push(JSON.parse(trimmed) as T);
+    } catch {
+      skipped++;
+      console.warn(`[fetchNDJSON] Skipping malformed line: ${trimmed.slice(0, 120)}`);
+    }
+  }
 
   // Use streaming if body is available, otherwise fall back to text
   if (resp.body) {
@@ -279,31 +294,23 @@ export async function fetchNDJSON<T>(downloadUrl: string): Promise<T[]> {
 
       buffer += decoder.decode(value, { stream: true });
       const lines = buffer.split("\n");
-      // Keep incomplete last line in buffer
       buffer = lines.pop() || "";
 
       for (const line of lines) {
-        const trimmed = line.trim();
-        if (trimmed) {
-          results.push(JSON.parse(trimmed) as T);
-        }
+        safeParse(line);
       }
     }
 
-    // Process remaining buffer
-    const remaining = buffer.trim();
-    if (remaining) {
-      results.push(JSON.parse(remaining) as T);
-    }
+    safeParse(buffer);
   } else {
-    // Fallback: load entire response as text
     const text = await resp.text();
     for (const line of text.split("\n")) {
-      const trimmed = line.trim();
-      if (trimmed) {
-        results.push(JSON.parse(trimmed) as T);
-      }
+      safeParse(line);
     }
+  }
+
+  if (skipped > 0) {
+    console.warn(`[fetchNDJSON] Skipped ${skipped} malformed line(s) out of ${results.length + skipped}`);
   }
 
   return results;
@@ -336,8 +343,9 @@ export async function githubFetchPaginatedWithCutoff<
       if (resp.status === 204) break;
       if (resp.status === 429 || resp.status >= 500) {
         const retryAfter = resp.headers.get("retry-after");
-        const waitMs = retryAfter
-          ? parseInt(retryAfter) * 1000
+        const parsedRetry = retryAfter ? parseInt(retryAfter, 10) : NaN;
+        const waitMs = Number.isFinite(parsedRetry) && parsedRetry > 0
+          ? parsedRetry * 1000
           : Math.pow(2, page % 3) * 1000;
         console.warn(`GitHub API ${resp.status}, retrying in ${waitMs}ms`);
         await sleep(waitMs);
@@ -400,8 +408,9 @@ export async function githubFetchCursorPaginatedWithCutoff<
       if (resp.status === 204) break;
       if (resp.status === 429 || resp.status >= 500) {
         const retryAfter = resp.headers.get("retry-after");
-        const waitMs = retryAfter
-          ? parseInt(retryAfter) * 1000
+        const parsedRetry = retryAfter ? parseInt(retryAfter, 10) : NaN;
+        const waitMs = Number.isFinite(parsedRetry) && parsedRetry > 0
+          ? parsedRetry * 1000
           : Math.pow(2, i % 3) * 1000;
         console.warn(`GitHub API ${resp.status}, retrying in ${waitMs}ms`);
         await sleep(waitMs);
