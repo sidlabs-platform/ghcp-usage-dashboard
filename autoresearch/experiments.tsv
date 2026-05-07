@@ -69,3 +69,4 @@ exp-001	2026-05-06T17:24:23Z	test-coverage	memory-cache.test.ts: get/set/TTL/evi
 178	2026-05-07T08:14:55.3722713+05:30	test(utils): null/NaN guard branches in formatNumber + formatPercent	KEEP	90.50	87.31	92.69	91.77
 179	2026-05-07T08:15:52.8779020+05:30	test(utils): null/NaN guards in formatDelta + formatMinutes	KEEP	90.57	87.42	92.69	91.77
 180	2026-05-07T08:17:41.3074954+05:30	test(auto-sync): msUntilNextRun next-day scheduling branch	KEEP	90.57	87.42	92.69	91.77
+181	2026-05-07T08:20:31.0318240+05:30	test(billing-repo): enterprise slug filter tests for 6 query functions	KEEP	90.83	87.64	92.69	91.77

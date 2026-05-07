@@ -582,4 +582,67 @@ describe("appendBillingFilters edge cases", () => {
     const rows = getUserBreakdown("2024-01-01", "2024-01-31", undefined, ["ent1"]);
     expect(rows.length).toBe(1);
   });
+
+  it("getUsageRecordsPaginated with enterpriseSlugs", () => {
+    upsertUsageRecords("ent1", [
+      { date: "2024-01-10", product: "copilot", sku: "s1", quantity: 1, unit_type: "seat", applied_cost_per_quantity: 10, gross_amount: 10, discount_amount: 0, net_amount: 10, organization: "org1", repository: "", username: "u1", workflow_path: "", cost_center_name: "", charge_scope: "user" },
+    ]);
+    const r = getUsageRecordsPaginated("2024-01-01", "2024-01-31", 1, 10, "date", "asc", undefined, undefined, ["ent1"]);
+    expect(r.total).toBe(1);
+  });
+
+  it("getPremiumRequestsPaginated with enterpriseSlugs", () => {
+    upsertPremiumRequests("ent1", [
+      { date: "2024-01-10", product: "copilot", sku: "p1", quantity: 100, unit_type: "token", applied_cost_per_quantity: 0.01, gross_amount: 1, discount_amount: 0, net_amount: 1, username: "u1", organization: "org1", model: "gpt-4", exceeds_quota: "FALSE", total_monthly_quota: 500, charge_scope: "user" },
+    ]);
+    const r = getPremiumRequestsPaginated("2024-01-01", "2024-01-31", 1, 10, "date", "asc", undefined, undefined, ["ent1"]);
+    expect(r.total).toBe(1);
+  });
+
+  it("getPremiumUserSummary with enterpriseSlugs", () => {
+    upsertPremiumRequests("ent1", [
+      { date: "2024-01-10", product: "copilot", sku: "p1", quantity: 100, unit_type: "token", applied_cost_per_quantity: 0.01, gross_amount: 1, discount_amount: 0, net_amount: 1, username: "u1", organization: "org1", model: "gpt-4", exceeds_quota: "FALSE", total_monthly_quota: 500, charge_scope: "user" },
+    ]);
+    const rows = getPremiumUserSummary("2024-01-01", "2024-01-31", undefined, ["ent1"]);
+    expect(rows.length).toBe(1);
+  });
+
+  it("getPremiumModelSummary with enterpriseSlugs", () => {
+    upsertPremiumRequests("ent1", [
+      { date: "2024-01-10", product: "copilot", sku: "p1", quantity: 100, unit_type: "token", applied_cost_per_quantity: 0.01, gross_amount: 1, discount_amount: 0, net_amount: 1, username: "u1", organization: "org1", model: "gpt-4", exceeds_quota: "FALSE", total_monthly_quota: 500, charge_scope: "user" },
+    ]);
+    const rows = getPremiumModelSummary("2024-01-01", "2024-01-31", undefined, ["ent1"]);
+    expect(rows.length).toBe(1);
+  });
+
+  it("getCostCenterBreakdown with enterpriseSlugs", () => {
+    upsertUsageRecords("ent1", [
+      { date: "2024-01-10", product: "copilot", sku: "s1", quantity: 1, unit_type: "seat", applied_cost_per_quantity: 10, gross_amount: 10, discount_amount: 0, net_amount: 10, organization: "org1", repository: "", username: "u1", workflow_path: "", cost_center_name: "cc1", charge_scope: "user" },
+    ]);
+    const rows = getCostCenterBreakdown("2024-01-01", "2024-01-31", undefined, ["ent1"]);
+    expect(rows.length).toBe(1);
+  });
+
+  it("getRepositoryBreakdown with enterpriseSlugs", () => {
+    upsertUsageRecords("ent1", [
+      { date: "2024-01-10", product: "copilot", sku: "s1", quantity: 1, unit_type: "seat", applied_cost_per_quantity: 10, gross_amount: 10, discount_amount: 0, net_amount: 10, organization: "org1", repository: "org1/repo1", username: "u1", workflow_path: "", cost_center_name: "", charge_scope: "user" },
+    ]);
+    const rows = getRepositoryBreakdown("2024-01-01", "2024-01-31", undefined, 20, ["ent1"]);
+    expect(rows.length).toBe(1);
+  });
+
+  it("getPremiumDailyTrend with enterpriseSlugs", () => {
+    upsertPremiumRequests("ent1", [
+      { date: "2024-01-10", product: "copilot", sku: "p1", quantity: 100, unit_type: "token", applied_cost_per_quantity: 0.01, gross_amount: 1, discount_amount: 0, net_amount: 1, username: "u1", organization: "org1", model: "gpt-4", exceeds_quota: "FALSE", total_monthly_quota: 500, charge_scope: "user" },
+    ]);
+    const rows = getPremiumDailyTrend("2024-01-01", "2024-01-31", undefined, ["ent1"]);
+    expect(rows.length).toBe(1);
+  });
+
+  it("updateBillingSyncState without enterpriseSlug uses empty string fallback", () => {
+    updateBillingSyncState("detailed", "2024-01-10T00:00:00Z", "2024-01-01", "2024-01-10", "ok");
+    const state = getBillingSyncState("detailed", "");
+    expect(state).not.toBeNull();
+    expect(state!.status).toBe("ok");
+  });
 });
