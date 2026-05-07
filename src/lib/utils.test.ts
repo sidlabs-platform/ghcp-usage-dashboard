@@ -1,5 +1,35 @@
 import { describe, it, expect } from "vitest";
-import { formatNumber, formatPercent, formatDelta, formatMinutes, getDateRange, datesBetween, parseAndClampDays, MAX_DAYS } from "./utils";
+import { cn, formatNumber, formatPercent, formatDelta, formatMinutes, safeNum, getDateRange, datesBetween, parseAndClampDays, MAX_DAYS } from "./utils";
+
+// ── cn ──────────────────────────────────────────────────────────────────
+
+describe("cn", () => {
+  it("merges class names", () => {
+    expect(cn("px-2", "py-1")).toBe("px-2 py-1");
+  });
+
+  it("handles conditional classes", () => {
+    expect(cn("base", false && "hidden", "text-sm")).toBe("base text-sm");
+  });
+});
+
+// ── safeNum ──────────────────────────────────────────────────────────────
+
+describe("safeNum", () => {
+  it("returns value when valid number", () => {
+    expect(safeNum(42)).toBe(42);
+  });
+
+  it("returns fallback for null/undefined/NaN", () => {
+    expect(safeNum(null)).toBe(0);
+    expect(safeNum(undefined)).toBe(0);
+    expect(safeNum(NaN)).toBe(0);
+  });
+
+  it("uses custom fallback", () => {
+    expect(safeNum(null, -1)).toBe(-1);
+  });
+});
 
 // ── formatNumber ──────────────────────────────────────────────────────
 
@@ -21,6 +51,12 @@ describe("formatNumber", () => {
     expect(formatNumber(999)).toBe("999");
     expect(formatNumber(42)).toBe("42");
   });
+
+  it("returns '0' for null/undefined/NaN inputs", () => {
+    expect(formatNumber(null as any)).toBe("0");
+    expect(formatNumber(undefined as any)).toBe("0");
+    expect(formatNumber(NaN)).toBe("0");
+  });
 });
 
 // ── formatPercent ─────────────────────────────────────────────────────
@@ -34,6 +70,11 @@ describe("formatPercent", () => {
   it("formats with custom decimals", () => {
     expect(formatPercent(66.6667, 2)).toBe("66.67%");
     expect(formatPercent(100, 0)).toBe("100%");
+  });
+
+  it("returns '0%' for null/NaN", () => {
+    expect(formatPercent(null as any)).toBe("0%");
+    expect(formatPercent(NaN)).toBe("0%");
   });
 });
 
@@ -56,6 +97,11 @@ describe("formatDelta", () => {
     const result = formatDelta(100, 0);
     expect(result.value).toBe("N/A");
     expect(result.positive).toBe(true);
+  });
+
+  it("returns N/A for null/NaN inputs", () => {
+    expect(formatDelta(null as any, 100).value).toBe("N/A");
+    expect(formatDelta(100, null as any).value).toBe("N/A");
   });
 
   it("handles no change", () => {
@@ -82,6 +128,11 @@ describe("formatMinutes", () => {
   it("formats minutes >= 1440 as Xd", () => {
     expect(formatMinutes(1440)).toBe("1.0d");
     expect(formatMinutes(2880)).toBe("2.0d");
+  });
+
+  it("returns '0m' for null/NaN", () => {
+    expect(formatMinutes(null as any)).toBe("0m");
+    expect(formatMinutes(NaN)).toBe("0m");
   });
 });
 

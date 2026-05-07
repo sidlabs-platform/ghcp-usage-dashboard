@@ -180,4 +180,19 @@ describe("aggregateSeparatedMetrics", () => {
     const result = aggregateSeparatedMetrics(records);
     expect(result.totalLocAdded).toBe(0);
   });
+
+  it("handles null numeric fields in aggregation (|| 0 fallbacks)", () => {
+    const records = [{
+      totals_by_feature: [
+        { feature: "code_completion", loc_suggested_to_add_sum: null, loc_added_sum: null, code_generation_activity_count: null, code_acceptance_activity_count: null, loc_deleted_sum: 0, user_initiated_interaction_count: 0, loc_suggested_to_delete_sum: 0 },
+        { feature: "agent_edit", loc_added_sum: null, loc_deleted_sum: null, loc_suggested_to_add_sum: 0, loc_suggested_to_delete_sum: 0, code_generation_activity_count: 0, code_acceptance_activity_count: 0, user_initiated_interaction_count: 0 },
+      ],
+    }] as any[];
+    const result = aggregateSeparatedMetrics(records);
+    expect(result.completion.locSuggested).toBe(0);
+    expect(result.completion.locAccepted).toBe(0);
+    expect(result.completion.codeGenCount).toBe(0);
+    expect(result.agent.locAdded).toBe(0);
+    expect(result.agent.locDeleted).toBe(0);
+  });
 });

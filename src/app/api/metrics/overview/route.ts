@@ -6,6 +6,7 @@ import {
   getChatModeSums,
   getAdoptionStats,
   getActiveUsersDailyTrend,
+  getActiveUsersRollingTrend,
   getCompletionDailyTrend,
   getFeatureUsageDaily,
   estimateRowCount,
@@ -62,13 +63,13 @@ async function handler(request: NextRequest) {
       const userTrendRows = getActiveUsersDailyTrend(start, end, allowedLoginsArray, enterpriseSlugs);
 
       if (hasFilter) {
-        // For filtered view, compute WAU by looking at 7-day windows
-        const dailyCounts = userTrendRows.map((r) => ({ day: r.day, daily: r.daily }));
-        activeUsersTrend = dailyCounts.map((d) => ({
-          day: d.day,
-          daily: d.daily,
-          weekly: d.daily, // simplified; WAU requires user-level dedup across days
-          monthly: d.daily,
+        // For filtered view, use rolling window calculations for WAU/MAU
+        const rollingTrendRows = getActiveUsersRollingTrend(start, end, allowedLoginsArray, enterpriseSlugs);
+        activeUsersTrend = rollingTrendRows.map((r) => ({
+          day: r.day,
+          daily: r.daily,
+          weekly: r.weekly,
+          monthly: r.monthly,
         }));
       } else {
         // For aggregated (no enterprise data), use the aggregated daily summary
@@ -76,15 +77,16 @@ async function handler(request: NextRequest) {
           ? aggregated.map((d) => ({
               day: d.day,
               daily: d.daily_active_users,
-              weekly: d.daily_active_users,
-              monthly: d.daily_active_users,
+              weekly: d.weekly_active_users,
+              monthly: d.monthly_active_users,
             }))
-          : userTrendRows.map((r) => ({
+          : (console.warn(`[overview] Aggregated summary empty for range ${start}-${end}, using DAU fallback`),
+             userTrendRows.map((r) => ({
               day: r.day,
               daily: r.daily,
               weekly: r.daily,
               monthly: r.daily,
-            }));
+            })));
       }
 
       // Acceptance rate trend via SQL (completion-only, uses json_each)

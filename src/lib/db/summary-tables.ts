@@ -207,7 +207,7 @@ export function refreshTeamSummary(periodStart: string, periodEnd: string, enter
         COUNT(DISTINCT CASE WHEN u.used_cli = 1 THEN u.user_login END) as cli_users,
         COUNT(DISTINCT CASE WHEN u.used_copilot_code_review_active = 1 THEN u.user_login END) as code_review_users
       FROM team_memberships tm
-      INNER JOIN user_daily_metrics u ON tm.user_login = u.user_login AND u.day >= ? AND u.day <= ?${enterpriseFilter}
+      INNER JOIN user_daily_metrics u ON tm.user_login = u.user_login AND u.day >= ? AND u.day <= ?${enterpriseFilter.replace('enterprise_slug', 'u.enterprise_slug')}
       GROUP BY tm.team_slug, tm.source, u.enterprise_slug
     ) m ON t.team_slug = m.team_slug AND t.source = m.source
   `).run(periodStart, periodEnd, totalDays, now, periodStart, periodEnd, ...extraParams);

@@ -809,6 +809,71 @@ export function getActiveUsersDailyTrend(
   return db.prepare(sql).all(startDay, endDay, ...filter.params, ...ef.params) as ActiveUsersDailyRow[];
 }
 
+export interface ActiveUsersRollingRow {
+  day: string;
+  daily: number;
+  weekly: number;
+  monthly: number;
+  cliUsers: number;
+}
+
+/**
+ * Active users with rolling 7-day (WAU) and 30-day (MAU) window counts.
+ *
+ * For each day in the range, computes:
+ * - daily: unique users on that day
+ * - weekly: unique users in 7-day window ending on that day
+ * - monthly: unique users in 30-day window ending on that day
+ * - cliUsers: CLI users on that day
+ *
+ * Uses DISTINCT user counting within rolling windows to properly deduplicate
+ * users appearing on multiple days within each window period.
+ *
+ * Supports filtering by:
+ * - allowedLogins: team/org membership filter (applies to all queries)
+ * - enterpriseSlugs: enterprise/account filter (applies to all queries)
+ *
+ * Edge cases:
+ * - Single-day ranges: Each day has rolling windows constrained to available data
+ * - Empty filters: Returns empty result set
+ * - Date range start: Earlier days have windows < 7/30 days if fewer historical days exist
+ */
+export function getActiveUsersRollingTrend(
+  startDay: string,
+  endDay: string,
+  allowedLogins?: string[],
+  enterpriseSlugs?: string[],
+): ActiveUsersRollingRow[] {
+  const db = getDb();
+  const filter = buildLoginFilter(allowedLogins ?? []);
+  const ef = buildEnterpriseFilter(enterpriseSlugs);
+  
+  const sql = `
+    SELECT
+      m.day,
+      COUNT(DISTINCT m.user_login) as daily,
+      -- Rolling 7-day distinct user count (WAU)
+      (SELECT COUNT(DISTINCT w.user_login)
+       FROM user_daily_metrics w
+       WHERE w.day BETWEEN date(m.day, '-6 days') AND m.day${ef.clause}
+       ${filter.clause}
+      ) as weekly,
+      -- Rolling 30-day distinct user count (MAU)
+      (SELECT COUNT(DISTINCT mo.user_login)
+       FROM user_daily_metrics mo
+       WHERE mo.day BETWEEN date(m.day, '-29 days') AND m.day${ef.clause}
+       ${filter.clause}
+      ) as monthly,
+      COUNT(DISTINCT CASE WHEN m.used_cli = 1 THEN m.user_login END) as cliUsers
+    FROM user_daily_metrics m
+    WHERE m.day >= ? AND m.day <= ?${ef.clause}${filter.clause}
+    GROUP BY m.day
+    ORDER BY m.day ASC
+  `;
+  
+  return db.prepare(sql).all(startDay, endDay, ...ef.params, ...filter.params) as ActiveUsersRollingRow[];
+}
+
 // ── Feature usage daily (SQL, structured columns) ─────────────────────
 
 export interface FeatureUsageDailyRow {

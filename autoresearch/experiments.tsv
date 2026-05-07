@@ -1,0 +1,79 @@
+experiment_id	timestamp	program	description	result	coverage_before	coverage_after	notes
+exp-001	2026-05-06T17:24:23Z	test-coverage	memory-cache.test.ts: get/set/TTL/eviction/invalidation (10 tests)	kept	4.71	5.83	+1.12% statements
+76	2026-05-07T01:13:23	billing-client: no-download-URLs + fetchPremiumRequestReport	KEEP	83.32	+0.10
+77	2026-05-07T01:16:13	metrics-repo: PR merge + weightedMedian + empty orgSlugs	KEEP	83.65	+0.33
+78	2026-05-07T01:21:25	api-base: adaptiveRateDelay 200ms delay test	KEEP	83.72	+0.07
+79	2026-05-07T01:23:24	sync-service: org-only mode user fetch + error	KEEP	84.16	+0.44
+80	2026-05-07T01:26:32	ghas-sync: autofix success/rejected enrichment	KEEP	84.30	+0.14
+81	2026-05-07T01:29:37	billing-sync: premium error + formatError non-Error	KEEP	84.52	+0.22
+82	2026-05-07T01:36:39	sync-service: syncTeams modes + incrementalSync gap	KEEP	85.28	+0.76
+83	2026-05-07T01:38:29	sync-service: empty enterprises + seats error	KEEP	85.35	+0.07
+84	2026-05-07T01:43:57	sync-scheduler: incrementalSync failure + config-disabled mid-run	KEEP	85.49	+0.14
+85	2026-05-07T01:45:34	api-base: fetchNDJSON streaming body path	KEEP	85.92	+0.43
+86	2026-05-07T01:46:34	api-base: 429 retry test for PaginatedWithCutoff	KEEP	86.09	+0.17
+87	2026-05-07T01:47:33	api-base: 403 error + multi-page PaginatedWithCutoff	KEEP	86.20	+0.11
+88	2026-05-07T01:50:38	metrics-client: unrecognized record + org-28-day no-links	KEEP	86.34	+0.14
+90	2026-05-07T01:54:24	dashboard-config: cache-hit + organizations-override	REVERT	86.42	+0.00
+91	2026-05-07T01:56:03	teams-client: org/enterprise member error handling	KEEP	86.51	+0.09
+92	2026-05-07T01:57:51	billing-repo: enterprise-slug + scopeOrgs KPI filters	KEEP	86.75	+0.24
+93	2026-05-07T01:59:11	billing-repo: combined scope + empty allowedLogins	KEEP	86.81	+0.06
+94	2026-05-07T02:03:22	app-auth: mock jose class, cover minting/caching/validation	KEEP	87.29	+0.48
+2026-05-07T02:11:15	api-base: adaptiveRateDelay low-quota wait-until-reset path test	keep	87.70	74.25	91.27	89.74
+2026-05-07T02:12:22	api-base: cursorPaginatedWithCutoff 204 empty return test	keep	87.73	74.30	91.27	89.74
+2026-05-07T02:13:29	api-base: paginated .seats extraction + 204 branch tests	keep	87.80	74.52	91.27	89.77
+2026-05-07T02:17:54	auto-sync-scheduler: GHAS + billing sync error path tests	keep	87.87	74.63	91.27	89.85
+2026-05-07T02:20:23	metrics-repo: getAllOrgMetrics PR merge for first-org-no-PR path	keep	87.96	74.68	91.27	89.96
+2026-05-07T02:21:47	summary-tables: enterprise-scoped refreshDailyAggregate test	keep	88.00	74.85	91.27	89.99
+2026-05-07T02:24:02	summary-tables: enterprise-scoped refreshDailyAggregateRange test	keep	88.00	74.95	91.27	89.99
+2026-05-07T02:26:25	billing-repo: org+scopeOrgs intersection filter with overlap test	keep	88.10	75.01	91.48	90.10
+2026-05-07T02:27:27	billing-repo: premium org+scopeOrgs intersection filter test	keep	88.29	75.12	91.88	90.28
+104	2026-05-07T02:36:38.5620718+05:30	ghas-repo getDependabotDaily fixed/dismissed/severity/ecosystem coverage	KEEP	88.43	75.23	92.29	90.28
+105	2026-05-07T02:37:35.4461794+05:30	ghas-repo getSecretScanningDaily resolved/resolution_counts coverage	KEEP	88.52	75.28	92.49	90.28
+106	2026-05-07T02:39:24.2791382+05:30	billing-repo premium empty org+scopeOrgs and empty allowedLogins branches	KEEP	88.66	75.39	92.49	90.43
+107	2026-05-07T02:45:33.3176412+05:30	ghas-sync-service fullGhasSync without slug (getConfiguredEnterprises branch)	KEEP	88.69	75.44	92.69	90.46
+108	2026-05-07T02:46:46.7450364+05:30	billing-sync-service detailed usage error + refreshAggregates error	KEEP	88.95	75.82	92.69	90.75
+109	2026-05-07T02:49:07.5334679+05:30	billing-client CSV parser escaped double-quote branch	KEEP	89.02	75.88	92.69	90.83
+110	2026-05-07T02:50:26.9211614+05:30	billing-client createReport with enterpriseSlug auth branch	KEEP	89.09	75.93	92.69	90.9
+111	2026-05-07T02:53:21.0714612+05:30	csv fetchAllPages non-array dataExtractor error branches	KEEP	89.15	76.04	92.69	90.97
+112	2026-05-07T02:54:44.0821015+05:30	seats-client null seats field and enterprise null page branches	KEEP	89.18	76.20	92.69	90.97
+113	2026-05-07T02:55:53.9651371+05:30	memory-cache expired entry eviction during LRU scan	KEEP	89.25	76.26	92.69	91.04
+114	2026-05-07T02:57:09.8406911+05:30	with-cache non-JSON response body fallback branch	KEEP	89.28	76.26	92.69	91.08
+115	2026-05-07T02:58:35.0521693+05:30	scope-filter same-enterprise multiple composite teams grouping	KEEP	89.32	76.31	92.69	91.08
+117	2026-05-07 03:01	aggregation-queries: getAdoptionStats with enterpriseSlugs (no delta)	revert	89.41	76.42	92.90	91.15
+118	2026-05-07 03:03	dashboard-config: deepMerge non-object metrics key branch	keep	89.41	76.47	92.90	91.15
+119	2026-05-07 03:05	enterprise-config: getEnterpriseAuth empty app env branch	keep	89.41	76.53	92.90	91.15
+120	2026-05-07 03:07	ghas-repo: recomputeSecretScanningDaily empty scope early return	keep	89.45	76.58	92.90	91.15
+121	2026-05-07 03:08	metrics-repo: getAllOrgMetrics null numeric field ?? 0 branches	keep	89.45	77.23	92.90	91.15
+122	2026-05-07 03:10	metrics-repo: getFilteredOrgMetrics null numeric field ?? 0 branches	keep	89.48	77.94	92.90	91.15
+123	2026-05-07 03:11	metrics-repo: weightedMedian zero-weight average branch	keep	89.55	78.10	92.90	91.22
+124	2026-05-07 03:12	metrics-repo: weightedMedian a==null and both-null branches	keep	89.61	78.31	92.90	91.22
+125	2026-05-07 03:14	metrics-repo: totals_by_cli and agent_edit upsert/retrieve paths	keep	89.61	78.69	92.90	91.22
+126	2026-05-07 03:15	metrics-repo: enterprise totals_by_cli and pull_requests paths	keep	89.61	78.86	92.90	91.22
+127	2026-05-07 03:16	metrics-repo: org totals_by_cli upsert/retrieve path	keep	89.61	78.91	92.90	91.22
+128	2026-05-07 03:20	enterprise-context: missing organizations config branch	keep	89.61	79.02	92.90	91.22
+129	2026-05-07 03:23	sync-service incrementalSync no-orgs and syncDay userMetrics disabled	KEEP	89.61	79.07	92.90	91.22
+130	2026-05-07 03:25	billing-client no-token, multiline CSV, null download_urls branches	KEEP	89.65	79.72	92.90	91.22
+131	2026-05-07 03:27	autofix rethrow, recordSync null day, getLatestSyncDay null branches	KEEP	89.68	79.89	92.90	91.26
+132	2026-05-07 03:28	dashboard-config isCopilotSubEnabled copilot.enabled=false	KEEP	89.71	79.94	92.90	91.26
+133	2026-05-07 03:30	sync-service syncTeams enterprise/org API error handling	KEEP	89.78	79.94	92.90	91.33
+134	2026-05-07 03:31	sync-service syncBilling and refreshAllSummaries error paths	KEEP	89.84	79.94	92.90	91.40
+135	2026-05-07 03:32	sync-service 28-day fallback enterprise/org error paths	KEEP	89.91	79.94	92.90	91.48
+136	2026-05-07 03:40	ghas-sync outdated autofix status and invalid repo_full_name branches	KEEP	89.91	80.00	92.69	91.44
+171	2026-05-07T07:58:40.8440630+05:30	test(ghas-repo): null repository and null severity fallbacks	KEEP	90.34	86.55	92.69	91.77
+172	2026-05-07T08:00:22.4405396+05:30	test(ghas-repo): null repository in dependabot + secret scanning upserts	KEEP	90.34	86.66	92.69	91.77
+173	2026-05-07T08:02:17.4584210+05:30	test(dashboard-config): ?? fallback for copilot sub + billing sub	KEEP	90.34	86.66	92.69	91.77
+174	2026-05-07T08:03:47.6974530+05:30	test(metrics-repo): batchUpsert || [] fallback for undefined JSON fields	KEEP	90.34	86.88	92.69	91.77
+175	2026-05-07T08:04:44.7609704+05:30	test(metrics-repo): batchUpsert empty records early return	KEEP	90.37	86.93	92.69	91.77
+176	2026-05-07T08:06:01.7594728+05:30	test(ghas-aggregation): prevAvg=0 flat + undefined ecosystem_counts	KEEP	90.37	87.04	92.69	91.77
+177	2026-05-07T08:10:01.5918843+05:30	test(metrics-client): truthy report no download_links + missing endpoints	KEEP	90.44	87.20	92.69	91.77
+178	2026-05-07T08:14:55.3722713+05:30	test(utils): null/NaN guard branches in formatNumber + formatPercent	KEEP	90.50	87.31	92.69	91.77
+179	2026-05-07T08:15:52.8779020+05:30	test(utils): null/NaN guards in formatDelta + formatMinutes	KEEP	90.57	87.42	92.69	91.77
+180	2026-05-07T08:17:41.3074954+05:30	test(auto-sync): msUntilNextRun next-day scheduling branch	KEEP	90.57	87.42	92.69	91.77
+181	2026-05-07T08:20:31.0318240+05:30	test(billing-repo): enterprise slug filter tests for 6 query functions	KEEP	90.83	87.64	92.69	91.77
+182	2026-05-07T08:22:32.6202897+05:30	test(billing-repo): enterprise slug paginated/summary/breakdown + sync fallback	KEEP	91.29	88.07	92.69	91.77
+183	2026-05-07T08:26:29.3697191+05:30	test(metrics-repo): upsertUserDay undefined JSON + resolveEnterpriseId fallback + weightedMedian null	KEEP	91.29	88.4	92.69	91.77
+184	2026-05-07T08:28:22.9308310+05:30	test(ghas-sync): fullGhasSync without enterpriseSlug fallback	KEEP	91.33	88.5	92.9	91.8
+185	2026-05-07T08:32:46.9772356+05:30	fix(summary-tables): disambiguate enterprise_slug in team summary JOIN + test	KEEP	91.36	88.61	92.9	91.84
+186	2026-05-07T08:34:36.5491992+05:30	test(enterprise-config): empty enterprises (none) + undefined organizations fallback	KEEP	91.36	88.78	92.9	91.84
+187	2026-05-07T08:39:16.9245086+05:30	test(sync-service): non-Error throw + 28-day fallback data present	KEEP	91.36	88.78	92.9	91.84
+188	2026-05-07T08:41:31.8971772+05:30	test(query-client): cover singleton pattern	KEEP	91.52	88.88	93.1	92.02

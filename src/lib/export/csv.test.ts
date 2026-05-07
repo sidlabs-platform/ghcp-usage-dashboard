@@ -1,5 +1,5 @@
-import { describe, it, expect } from "vitest";
-import { arrayToCSV, type CSVColumn, type ExportMetadata } from "./csv";
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { arrayToCSV, fetchAllPages, type CSVColumn, type ExportMetadata } from "./csv";
 
 // ── escapeCSVValue (tested indirectly through arrayToCSV) ─────────────
 
@@ -133,5 +133,67 @@ describe("arrayToCSV", () => {
     const metadata: ExportMetadata = { reportName: "=HYPERLINK(...)" };
     const csv = arrayToCSV([], columns, metadata);
     expect(csv).toContain(`Report,"'=HYPERLINK(...)"`);
+  });
+});
+
+// ── fetchAllPages ─────────────────────────────────────────────────────
+
+describe("fetchAllPages", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("fetches single page of data", async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ data: [{ id: 1 }, { id: 2 }], pagination: { totalPages: 1 } }),
+    });
+    vi.stubGlobal("fetch", mockFetch);
+    const result = await fetchAllPages("/api/test", new URLSearchParams(), (json) => json.data);
+    expect(result).toEqual([{ id: 1 }, { id: 2 }]);
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("fetches multiple pages", async () => {
+    const mockFetch = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ data: [{ id: 1 }], pagination: { totalPages: 2 } }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ data: [{ id: 2 }], pagination: { totalPages: 2 } }),
+      });
+    vi.stubGlobal("fetch", mockFetch);
+    const result = await fetchAllPages("/api/test", new URLSearchParams(), (json) => json.data);
+    expect(result).toEqual([{ id: 1 }, { id: 2 }]);
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("throws on non-ok response", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false, status: 500 }));
+    await expect(fetchAllPages("/api/test", new URLSearchParams(), (j) => j.data)).rejects.toThrow("HTTP 500");
+  });
+
+  it("throws when dataExtractor returns non-array on first page", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ data: "not-array", pagination: { totalPages: 1 } }),
+    }));
+    await expect(fetchAllPages("/api/test", new URLSearchParams(), (j) => j.data)).rejects.toThrow("invalid data format");
+  });
+
+  it("throws when dataExtractor returns non-array on subsequent page", async () => {
+    const mockFetch = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ data: [{ id: 1 }], pagination: { totalPages: 2 } }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ data: "bad" }),
+      });
+    vi.stubGlobal("fetch", mockFetch);
+    await expect(fetchAllPages("/api/test", new URLSearchParams(), (j) => j.data)).rejects.toThrow("invalid data format (page 2)");
   });
 });
