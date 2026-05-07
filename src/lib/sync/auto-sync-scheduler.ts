@@ -15,7 +15,7 @@ import {
 } from "@/lib/db/metrics-repo";
 import { cache } from "@/lib/cache/memory-cache";
 
-const BACKFILL_RANGE = parseInt(process.env.BACKFILL_DAYS || "90", 10);
+const BACKFILL_RANGE = parseInt(process.env.BACKFILL_DAYS || "90", 10) || 90;
 
 let timer: ReturnType<typeof setTimeout> | null = null;
 let lastAutoSyncAt: string | null = null;

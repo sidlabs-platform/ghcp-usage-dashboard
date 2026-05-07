@@ -31,7 +31,7 @@ import {
 import { getConfiguredEnterprises, getResolvedOrgsForEnterprise } from "@/lib/config/enterprise-config";
 import { getEnterpriseContext, updateEnterpriseRegistry } from "./enterprise-context";
 
-const BACKFILL_DAYS = parseInt(process.env.BACKFILL_DAYS || "90", 10);
+const BACKFILL_DAYS = parseInt(process.env.BACKFILL_DAYS || "90", 10) || 90;
 
 export interface SyncProgress {
   phase: string;
@@ -476,7 +476,7 @@ export async function fullSync(
 
   // Refresh pre-aggregated summary tables ONCE after all enterprises
   onProgress?.({ phase: "summaries", current: 0, total: 1, message: "Refreshing summary tables..." });
-  const BACKFILL_RANGE = parseInt(process.env.BACKFILL_DAYS || "90", 10);
+  const BACKFILL_RANGE = parseInt(process.env.BACKFILL_DAYS || "90", 10) || 90;
   const summaryEnd = new Date();
   summaryEnd.setDate(summaryEnd.getDate() - 1);
   const summaryStart = new Date(summaryEnd);

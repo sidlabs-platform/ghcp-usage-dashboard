@@ -82,3 +82,4 @@ exp-001	2026-05-06T17:24:23Z	test-coverage	memory-cache.test.ts: get/set/TTL/evi
 192	2026-05-07T16:47:14+05:30	bug-hunting	fix(database): log unexpected migration errors instead of swallowing	REVERT	92.25	92.16	-0.09 stmts; new branches untestable without real SQLite
 193	2026-05-07T16:48:21+05:30	bug-hunting	fix(api-base): guard updateRateLimit parseInt against NaN	KEEP	92.25	92.26	+0.01 stmts
 194	2026-05-07T16:49:22+05:30	bug-hunting	fix(billing-usage): validate chargeScope query param	KEEP	92.26	92.26	stable coverage; real input validation fix
+195	2026-05-07T16:52:57+05:30	bug-hunting	fix(pagination): guard parseInt for page/pageSize against NaN across 6 files	KEEP	92.26	92.26	branches 89.97->89.88 (new NaN guard paths); fixes real NaN-in-SQL bug
