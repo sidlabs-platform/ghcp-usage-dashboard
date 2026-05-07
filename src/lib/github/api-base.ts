@@ -207,7 +207,8 @@ export async function githubFetch<T>(path: string, retries = 3, authMode?: AuthM
 
     if (resp.status === 429 || resp.status >= 500) {
       const retryAfter = resp.headers.get("retry-after");
-      const waitMs = retryAfter ? parseInt(retryAfter) * 1000 : Math.pow(2, attempt) * 1000;
+      const parsed = retryAfter ? parseInt(retryAfter, 10) : NaN;
+      const waitMs = Number.isFinite(parsed) && parsed > 0 ? parsed * 1000 : Math.pow(2, attempt) * 1000;
       console.warn(`GitHub API ${resp.status} on ${path}, retrying in ${waitMs}ms (attempt ${attempt + 1}/${retries})`);
       await sleep(waitMs);
       continue;
@@ -336,8 +337,9 @@ export async function githubFetchPaginatedWithCutoff<
       if (resp.status === 204) break;
       if (resp.status === 429 || resp.status >= 500) {
         const retryAfter = resp.headers.get("retry-after");
-        const waitMs = retryAfter
-          ? parseInt(retryAfter) * 1000
+        const parsedRetry = retryAfter ? parseInt(retryAfter, 10) : NaN;
+        const waitMs = Number.isFinite(parsedRetry) && parsedRetry > 0
+          ? parsedRetry * 1000
           : Math.pow(2, page % 3) * 1000;
         console.warn(`GitHub API ${resp.status}, retrying in ${waitMs}ms`);
         await sleep(waitMs);
@@ -400,8 +402,9 @@ export async function githubFetchCursorPaginatedWithCutoff<
       if (resp.status === 204) break;
       if (resp.status === 429 || resp.status >= 500) {
         const retryAfter = resp.headers.get("retry-after");
-        const waitMs = retryAfter
-          ? parseInt(retryAfter) * 1000
+        const parsedRetry = retryAfter ? parseInt(retryAfter, 10) : NaN;
+        const waitMs = Number.isFinite(parsedRetry) && parsedRetry > 0
+          ? parsedRetry * 1000
           : Math.pow(2, i % 3) * 1000;
         console.warn(`GitHub API ${resp.status}, retrying in ${waitMs}ms`);
         await sleep(waitMs);

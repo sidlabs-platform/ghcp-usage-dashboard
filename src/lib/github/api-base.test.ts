@@ -105,6 +105,16 @@ describe("githubFetch", () => {
     expect(mockFetch).toHaveBeenCalledTimes(2);
   });
 
+  it("falls back to exponential backoff when retry-after is non-numeric", async () => {
+    const mockFetch = fetch as unknown as ReturnType<typeof vi.fn>;
+    mockFetch
+      .mockResolvedValueOnce({ ok: false, status: 429, headers: new Map([["retry-after", "not-a-number"]]) })
+      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ ok: true }), headers: new Map() });
+    const result = await githubFetch<{ ok: boolean }>("/orgs/my-org/info");
+    expect(result.ok).toBe(true);
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+  });
+
   it("throws after exhausting retries on 500", async () => {
     const mockFetch = fetch as unknown as ReturnType<typeof vi.fn>;
     mockFetch.mockResolvedValue({ ok: false, status: 500, headers: new Map() });
