@@ -51,6 +51,12 @@ describe("formatNumber", () => {
     expect(formatNumber(999)).toBe("999");
     expect(formatNumber(42)).toBe("42");
   });
+
+  it("returns '0' for null/undefined/NaN inputs", () => {
+    expect(formatNumber(null as any)).toBe("0");
+    expect(formatNumber(undefined as any)).toBe("0");
+    expect(formatNumber(NaN)).toBe("0");
+  });
 });
 
 // ── formatPercent ─────────────────────────────────────────────────────
@@ -64,6 +70,11 @@ describe("formatPercent", () => {
   it("formats with custom decimals", () => {
     expect(formatPercent(66.6667, 2)).toBe("66.67%");
     expect(formatPercent(100, 0)).toBe("100%");
+  });
+
+  it("returns '0%' for null/NaN", () => {
+    expect(formatPercent(null as any)).toBe("0%");
+    expect(formatPercent(NaN)).toBe("0%");
   });
 });
 
