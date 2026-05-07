@@ -88,6 +88,11 @@ describe("seats-repo", () => {
       const result = getSeatsPaginated(2, 2, "user_login", "asc", undefined, ["acme"]);
       expect(result.seats.length).toBe(2);
     });
+
+    it("defaults to last_activity_at when sortField is invalid", () => {
+      const result = getSeatsPaginated(1, 10, "invalid_field" as any, "desc", undefined, ["acme"]);
+      expect(result.seats.length).toBeGreaterThan(0);
+    });
   });
 
   describe("getSeatStats", () => {
