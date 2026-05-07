@@ -25,6 +25,12 @@ export async function GET(request: NextRequest) {
         ? (process.env.GITHUB_ENTERPRISE || "")
         : (getResolvedOrgs()[0] || "");
     }
+    if (!scopeId) {
+      return NextResponse.json(
+        { error: "No scopeId could be resolved. Configure GITHUB_ENTERPRISE or GITHUB_ORG." },
+        { status: 400 },
+      );
+    }
 
     const daily = getSecretScanningDaily(scope, scopeId, start, end);
     const fixRate = computeFixRate(daily.map(d => ({ opened: d.opened, fixed: d.resolved })));
