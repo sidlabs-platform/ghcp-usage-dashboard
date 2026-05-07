@@ -99,6 +99,11 @@ describe("formatDelta", () => {
     expect(result.positive).toBe(true);
   });
 
+  it("returns N/A for null/NaN inputs", () => {
+    expect(formatDelta(null as any, 100).value).toBe("N/A");
+    expect(formatDelta(100, null as any).value).toBe("N/A");
+  });
+
   it("handles no change", () => {
     const result = formatDelta(100, 100);
     expect(result.value).toBe("+0.0%");
@@ -123,6 +128,11 @@ describe("formatMinutes", () => {
   it("formats minutes >= 1440 as Xd", () => {
     expect(formatMinutes(1440)).toBe("1.0d");
     expect(formatMinutes(2880)).toBe("2.0d");
+  });
+
+  it("returns '0m' for null/NaN", () => {
+    expect(formatMinutes(null as any)).toBe("0m");
+    expect(formatMinutes(NaN)).toBe("0m");
   });
 });
 

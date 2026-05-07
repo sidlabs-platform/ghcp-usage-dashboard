@@ -66,3 +66,4 @@ exp-001	2026-05-06T17:24:23Z	test-coverage	memory-cache.test.ts: get/set/TTL/evi
 175	2026-05-07T08:04:44.7609704+05:30	test(metrics-repo): batchUpsert empty records early return	KEEP	90.37	86.93	92.69	91.77
 176	2026-05-07T08:06:01.7594728+05:30	test(ghas-aggregation): prevAvg=0 flat + undefined ecosystem_counts	KEEP	90.37	87.04	92.69	91.77
 177	2026-05-07T08:10:01.5918843+05:30	test(metrics-client): truthy report no download_links + missing endpoints	KEEP	90.44	87.20	92.69	91.77
+178	2026-05-07T08:14:55.3722713+05:30	test(utils): null/NaN guard branches in formatNumber + formatPercent	KEEP	90.50	87.31	92.69	91.77
