@@ -91,6 +91,24 @@ describe("app-auth (with env + mocked jose)", () => {
     await expect(getInstallationToken()).rejects.toThrow("Failed to create installation token");
   });
 
+  it("getInstallationToken throws on missing token in response", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ expires_at: new Date().toISOString() }),
+    }));
+    const { getInstallationToken } = await import("./app-auth");
+    await expect(getInstallationToken()).rejects.toThrow("missing token or expires_at");
+  });
+
+  it("getInstallationToken throws on unparseable expires_at", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ token: "ghs_test", expires_at: "not-a-date" }),
+    }));
+    const { getInstallationToken } = await import("./app-auth");
+    await expect(getInstallationToken()).rejects.toThrow("unparseable expires_at");
+  });
+
   it("validateAppAuth succeeds after successful mint", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
       ok: true,

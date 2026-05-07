@@ -131,11 +131,24 @@ async function mintInstallationToken(config: AppConfig): Promise<CachedToken> {
     );
   }
 
-  const data = (await resp.json()) as { token: string; expires_at: string };
+  const data = (await resp.json()) as { token?: string; expires_at?: string };
+
+  if (!data.token || !data.expires_at) {
+    throw new Error(
+      `Invalid installation token response: missing token or expires_at`
+    );
+  }
+
+  const expiresAt = new Date(data.expires_at).getTime();
+  if (Number.isNaN(expiresAt)) {
+    throw new Error(
+      `Invalid installation token response: unparseable expires_at "${data.expires_at}"`
+    );
+  }
 
   return {
     token: data.token,
-    expiresAt: new Date(data.expires_at).getTime(),
+    expiresAt,
   };
 }
 
