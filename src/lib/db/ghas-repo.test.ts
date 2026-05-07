@@ -73,6 +73,16 @@ describe("upsertCodeScanningAlerts", () => {
     expect(row.state).toBe("fixed");
     expect(row.autofix_status).toBe("available");
   });
+
+  it("handles null repository and null severity gracefully", () => {
+    upsertCodeScanningAlerts("ent1", "org", "null-org", [
+      { number: 99, repository: null, state: "open", rule: { id: "r2", severity: null, security_severity_level: null }, tool: { name: "CodeQL" }, created_at: "2024-01-12T00:00:00Z", updated_at: "2024-01-12T00:00:00Z", fixed_at: null, dismissed_at: null, dismissed_reason: null, autofix: { status: "none" } },
+    ] as any[]);
+    const rows = db.prepare("SELECT * FROM ghas_code_scanning_alerts WHERE scope_id = 'null-org'").all() as any[];
+    expect(rows).toHaveLength(1);
+    expect(rows[0].repo_full_name).toBe("unknown");
+    expect(rows[0].severity).toBeNull();
+  });
 });
 
 describe("upsertSecretScanningAlerts", () => {
