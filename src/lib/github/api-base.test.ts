@@ -172,6 +172,19 @@ describe("fetchNDJSON", () => {
     expect(result).toHaveLength(2);
     expect(result[1].a).toBe(2);
   });
+
+  it("skips malformed NDJSON lines instead of throwing", async () => {
+    const mockFetch = fetch as unknown as ReturnType<typeof vi.fn>;
+    const body = '{"a":1}\nNOT_JSON\n{"a":3}\n';
+    mockFetch.mockResolvedValue({ ok: true, text: () => Promise.resolve(body), body: null });
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const result = await fetchNDJSON<{ a: number }>("https://storage.example.com/data.ndjson");
+    expect(result).toHaveLength(2);
+    expect(result[0].a).toBe(1);
+    expect(result[1].a).toBe(3);
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("Skipping malformed line"));
+    warnSpy.mockRestore();
+  });
 });
 
 describe("githubFetchPaginated", () => {

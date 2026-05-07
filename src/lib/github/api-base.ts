@@ -267,6 +267,18 @@ export async function fetchNDJSON<T>(downloadUrl: string): Promise<T[]> {
   }
 
   const results: T[] = [];
+  let skipped = 0;
+
+  function safeParse(line: string): void {
+    const trimmed = line.trim();
+    if (!trimmed) return;
+    try {
+      results.push(JSON.parse(trimmed) as T);
+    } catch {
+      skipped++;
+      console.warn(`[fetchNDJSON] Skipping malformed line: ${trimmed.slice(0, 120)}`);
+    }
+  }
 
   // Use streaming if body is available, otherwise fall back to text
   if (resp.body) {
@@ -280,31 +292,23 @@ export async function fetchNDJSON<T>(downloadUrl: string): Promise<T[]> {
 
       buffer += decoder.decode(value, { stream: true });
       const lines = buffer.split("\n");
-      // Keep incomplete last line in buffer
       buffer = lines.pop() || "";
 
       for (const line of lines) {
-        const trimmed = line.trim();
-        if (trimmed) {
-          results.push(JSON.parse(trimmed) as T);
-        }
+        safeParse(line);
       }
     }
 
-    // Process remaining buffer
-    const remaining = buffer.trim();
-    if (remaining) {
-      results.push(JSON.parse(remaining) as T);
-    }
+    safeParse(buffer);
   } else {
-    // Fallback: load entire response as text
     const text = await resp.text();
     for (const line of text.split("\n")) {
-      const trimmed = line.trim();
-      if (trimmed) {
-        results.push(JSON.parse(trimmed) as T);
-      }
+      safeParse(line);
     }
+  }
+
+  if (skipped > 0) {
+    console.warn(`[fetchNDJSON] Skipped ${skipped} malformed line(s) out of ${results.length + skipped}`);
   }
 
   return results;
