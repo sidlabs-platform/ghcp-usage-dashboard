@@ -340,6 +340,11 @@ describe("batchUpsertUserDayMetrics", () => {
     expect(row.totals_by_ide).toBe("[]");
     expect(row.totals_by_feature).toBe("[]");
   });
+
+  it("returns 0 for empty records array", () => {
+    const count = batchUpsertUserDayMetrics("ent1", []);
+    expect(count).toBe(0);
+  });
 });
 
 describe("getUserMetricsByLogin", () => {
