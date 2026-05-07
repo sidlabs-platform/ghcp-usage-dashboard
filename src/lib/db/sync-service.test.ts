@@ -292,4 +292,28 @@ describe("sync-service", () => {
     expect(result.daysSynced).toBe(0);
     expect(result.daysSkipped).toBeGreaterThanOrEqual(2);
   });
+
+  it("syncDay handles non-Error enterprise throws (String fallback)", async () => {
+    (metricsClient.getEnterpriseDailyReport as ReturnType<typeof vi.fn>).mockRejectedValue("raw string error");
+    const result = await syncDay("test-ent", "2025-01-01");
+    expect(result.enterprise).toBe(0);
+  });
+
+  it("fullSync uses 28-day enterprise fallback when no existing data", async () => {
+    (hasEnterpriseDataForRange as ReturnType<typeof vi.fn>).mockReturnValue(false);
+    (metricsClient.getEnterprise28DayReport as ReturnType<typeof vi.fn>).mockResolvedValue([{ day: "2025-01-01" }]);
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    await fullSync();
+    expect(metricsClient.getEnterprise28DayReport).toHaveBeenCalled();
+    logSpy.mockRestore();
+  });
+
+  it("fullSync uses 28-day org fallback when no existing org data", async () => {
+    (hasOrgDataForRange as ReturnType<typeof vi.fn>).mockReturnValue(false);
+    (metricsClient.getOrg28DayReport as ReturnType<typeof vi.fn>).mockResolvedValue([{ day: "2025-01-01" }]);
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    await fullSync();
+    expect(metricsClient.getOrg28DayReport).toHaveBeenCalled();
+    logSpy.mockRestore();
+  });
 });
