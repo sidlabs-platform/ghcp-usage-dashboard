@@ -623,3 +623,43 @@ describe("mapUserRow JSON null fallback", () => {
     expect(results[0].agent_edit).toBeUndefined();
   });
 });
+
+describe("upsertUserDayMetrics with undefined JSON array fields", () => {
+  it("uses || [] fallback for totals_by_ide/feature/language_feature/model_feature/language_model", () => {
+    upsertUserDayMetrics("ent1", {
+      day: "2024-08-01", enterprise_id: "e1", user_id: 7777, user_login: "undefined-json-user",
+      code_generation_activity_count: 0, code_acceptance_activity_count: 0,
+      user_initiated_interaction_count: 0,
+      loc_suggested_to_add_sum: 0, loc_suggested_to_delete_sum: 0,
+      loc_added_sum: 0, loc_deleted_sum: 0,
+      totals_by_ide: undefined as any, totals_by_feature: undefined as any,
+      totals_by_language_feature: undefined as any, totals_by_model_feature: undefined as any,
+      totals_by_language_model: undefined as any,
+    } as any);
+    const rows = getUserMetricsByLogin("undefined-json-user", "2024-08-01", "2024-08-01");
+    expect(rows).toHaveLength(1);
+    expect(rows[0].totals_by_ide).toEqual([]);
+  });
+});
+
+describe("resolveEnterpriseId fallback to enterprise_daily_metrics", () => {
+  it("returns enterprise_id from enterprise_daily_metrics when user_daily_metrics is empty for slug", () => {
+    db.prepare(`INSERT OR REPLACE INTO enterprise_daily_metrics (enterprise_slug, day, enterprise_id, daily_active_users, weekly_active_users, monthly_active_users, monthly_active_agent_users, monthly_active_chat_users, daily_active_cli_users, code_generation_activity_count, code_acceptance_activity_count, user_initiated_interaction_count, loc_suggested_to_add_sum, loc_suggested_to_delete_sum, loc_added_sum, loc_deleted_sum, totals_by_ide, totals_by_feature, totals_by_language_feature, totals_by_model_feature, totals_by_language_model, pull_requests, raw_json) VALUES (?, ?, ?, 0,0,0,0,0,0,0,0,0,0,0,0,0,'[]','[]','[]','[]','[]',NULL,'{}')`)
+      .run("fallback-ent", "2024-08-01", "eid-999");
+    const result = resolveEnterpriseId(["fallback-ent"]);
+    expect(result).toBe("eid-999");
+  });
+});
+
+describe("getAllOrgMetrics weightedMedian with null median_minutes_to_merge", () => {
+  it("handles null median on one org and valid on another (same day)", () => {
+    const prWithMedian = JSON.stringify({ total_created: 2, total_reviewed: 1, total_merged: 3, total_suggestions: 0, total_applied_suggestions: 0, total_created_by_copilot: 0, total_reviewed_by_copilot: 0, total_merged_created_by_copilot: 0, total_merged_reviewed_by_copilot: 0, total_copilot_suggestions: 0, total_copilot_applied_suggestions: 0, median_minutes_to_merge: 30, median_minutes_to_merge_copilot_authored: null, median_minutes_to_merge_copilot_reviewed: null });
+    const prNoMedian = JSON.stringify({ total_created: 1, total_reviewed: 1, total_merged: 2, total_suggestions: 0, total_applied_suggestions: 0, total_created_by_copilot: 0, total_reviewed_by_copilot: 0, total_merged_created_by_copilot: 0, total_merged_reviewed_by_copilot: 0, total_copilot_suggestions: 0, total_copilot_applied_suggestions: 0, median_minutes_to_merge: null, median_minutes_to_merge_copilot_authored: 10, median_minutes_to_merge_copilot_reviewed: null });
+    db.prepare(`INSERT OR REPLACE INTO org_daily_metrics (enterprise_slug, day, org_slug, enterprise_id, daily_active_users, weekly_active_users, monthly_active_users, monthly_active_agent_users, monthly_active_chat_users, daily_active_cli_users, code_generation_activity_count, code_acceptance_activity_count, user_initiated_interaction_count, loc_suggested_to_add_sum, loc_suggested_to_delete_sum, loc_added_sum, loc_deleted_sum, totals_by_ide, totals_by_feature, totals_by_language_feature, totals_by_model_feature, totals_by_language_model, pull_requests, raw_json) VALUES (?, ?, ?, ?, 5,5,5,0,0,0,10,5,0,0,0,0,0,'[]','[]','[]','[]','[]',?,'{}')`).run("ent1", "2024-08-10", "wm-org1", "e1", prWithMedian);
+    db.prepare(`INSERT OR REPLACE INTO org_daily_metrics (enterprise_slug, day, org_slug, enterprise_id, daily_active_users, weekly_active_users, monthly_active_users, monthly_active_agent_users, monthly_active_chat_users, daily_active_cli_users, code_generation_activity_count, code_acceptance_activity_count, user_initiated_interaction_count, loc_suggested_to_add_sum, loc_suggested_to_delete_sum, loc_added_sum, loc_deleted_sum, totals_by_ide, totals_by_feature, totals_by_language_feature, totals_by_model_feature, totals_by_language_model, pull_requests, raw_json) VALUES (?, ?, ?, ?, 3,3,3,0,0,0,5,2,0,0,0,0,0,'[]','[]','[]','[]','[]',?,'{}')`).run("ent1", "2024-08-10", "wm-org2", "e1", prNoMedian);
+    const results = getAllOrgMetrics("2024-08-10", "2024-08-10");
+    expect(results).toHaveLength(1);
+    expect(results[0].pull_requests!.median_minutes_to_merge).toBe(30);
+    expect(results[0].pull_requests!.median_minutes_to_merge_copilot_authored).toBe(10);
+  });
+});
