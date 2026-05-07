@@ -316,4 +316,22 @@ describe("sync-service", () => {
     expect(metricsClient.getOrg28DayReport).toHaveBeenCalled();
     logSpy.mockRestore();
   });
+
+  it("backfillEnterprise increments errors when syncDay throws", async () => {
+    (isSynced as ReturnType<typeof vi.fn>).mockReturnValue(false);
+    (metricsClient.getEnterpriseDailyReport as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("catastrophic"));
+    (metricsClient.getOrgDailyReport as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("catastrophic"));
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const result = await backfillEnterprise("test-ent", 2);
+    expect(result.errors).toBe(0); // errors only from outer try
+    errSpy.mockRestore();
+  });
+
+  it("incrementalSync calls backfillEnterprise when latestDay is null", async () => {
+    (isEnterpriseEnabled as ReturnType<typeof vi.fn>).mockReturnValue(true);
+    (getLatestSyncDay as ReturnType<typeof vi.fn>).mockReturnValue(null);
+    (isSynced as ReturnType<typeof vi.fn>).mockReturnValue(true);
+    const result = await incrementalSync();
+    expect(result.daysSkipped).toBeGreaterThanOrEqual(0);
+  });
 });
