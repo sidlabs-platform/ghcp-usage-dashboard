@@ -203,6 +203,26 @@ describe("recomputeDependabotDaily / getDependabotDaily", () => {
   });
 });
 
+describe("upsertDependabotAlerts edge cases", () => {
+  it("handles null repository gracefully", () => {
+    upsertDependabotAlerts("ent1", "org", "null-dep-org", [
+      { number: 300, repository: null, state: "open", security_vulnerability: { severity: "high", package: { ecosystem: "npm", name: "pkg" } }, created_at: "2024-06-01T00:00:00Z", updated_at: "2024-06-01T00:00:00Z" },
+    ] as any);
+    const row = db.prepare("SELECT repo_full_name FROM ghas_dependabot_alerts WHERE scope_id = 'null-dep-org'").get() as any;
+    expect(row.repo_full_name).toBe("unknown");
+  });
+});
+
+describe("upsertSecretScanningAlerts edge cases", () => {
+  it("handles null repository gracefully", () => {
+    upsertSecretScanningAlerts("ent1", "org", "null-sec-org", [
+      { number: 400, repository: null, state: "open", secret_type: "token", secret_type_display_name: "Token", created_at: "2024-06-02T00:00:00Z", updated_at: "2024-06-02T00:00:00Z" },
+    ] as any);
+    const row = db.prepare("SELECT repo_full_name FROM ghas_secret_scanning_alerts WHERE scope_id = 'null-sec-org'").get() as any;
+    expect(row.repo_full_name).toBe("unknown");
+  });
+});
+
 describe("recomputeSecretScanningDaily / getSecretScanningDaily", () => {
   it("recomputes daily aggregates from secret scanning alerts", () => {
     upsertSecretScanningAlerts("ent1", "org", "my-org", [
