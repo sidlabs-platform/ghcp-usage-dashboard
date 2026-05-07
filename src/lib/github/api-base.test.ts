@@ -149,6 +149,19 @@ describe("fetchNDJSON", () => {
     expect(result).toHaveLength(3);
     expect(result[2].a).toBe(3);
   });
+
+  it("handles remaining buffer without trailing newline in streaming", async () => {
+    const mockFetch = fetch as unknown as ReturnType<typeof vi.fn>;
+    const encoder = new TextEncoder();
+    // Last chunk does NOT end with \n so remaining buffer has content
+    const chunks = [encoder.encode('{"a":1}\n{"a":2}')];
+    let idx = 0;
+    const mockReader = { read: vi.fn(async () => idx < chunks.length ? { done: false, value: chunks[idx++] } : { done: true, value: undefined }) };
+    mockFetch.mockResolvedValue({ ok: true, body: { getReader: () => mockReader } });
+    const result = await fetchNDJSON<{ a: number }>("https://storage.example.com/data.ndjson");
+    expect(result).toHaveLength(2);
+    expect(result[1].a).toBe(2);
+  });
 });
 
 describe("githubFetchPaginated", () => {
@@ -202,6 +215,12 @@ describe("githubFetchPaginated", () => {
     mockFetch.mockResolvedValue({ ok: false, status: 204, headers: new Map() });
     const result = await githubFetchPaginated("/orgs/my-org/teams");
     expect(result).toEqual([]);
+  });
+
+  it("throws on non-204 error status", async () => {
+    const mockFetch = fetch as unknown as ReturnType<typeof vi.fn>;
+    mockFetch.mockResolvedValue({ ok: false, status: 403, headers: new Map() });
+    await expect(githubFetchPaginated("/orgs/my-org/teams")).rejects.toThrow("GitHub API error 403");
   });
 });
 
