@@ -78,6 +78,11 @@ describe("computeTrendDirection", () => {
     const values = [...Array(7).fill(0), ...Array(7).fill(5)];
     expect(computeTrendDirection(values)).toBe("up");
   });
+
+  it("returns flat when prev avg is 0 and recent avg is also 0", () => {
+    const values = Array(14).fill(0);
+    expect(computeTrendDirection(values)).toBe("flat");
+  });
 });
 
 describe("getTopEcosystems", () => {
@@ -95,6 +100,14 @@ describe("getTopEcosystems", () => {
       { ecosystem: "npm", count: 20 },
       { ecosystem: "pip", count: 15 },
     ]);
+  });
+
+  it("handles undefined ecosystem_counts via ?? fallback", () => {
+    const data: DependabotDaily[] = [
+      { ...makeDepDaily("2024-01-01"), ecosystem_counts: undefined } as any,
+    ];
+    const result = getTopEcosystems(data);
+    expect(result).toEqual([]);
   });
 });
 
