@@ -81,6 +81,16 @@ describe("extractChatModeCounts", () => {
     ] as any[];
     expect(extractChatModeCounts(features).edit).toBe(10);
   });
+
+  it("handles null/undefined user_initiated_interaction_count via || 0", () => {
+    const features = [
+      { feature: "chat_panel_ask_mode", user_initiated_interaction_count: null },
+      { feature: "chat_panel_agent_mode", user_initiated_interaction_count: undefined },
+    ] as any[];
+    const result = extractChatModeCounts(features);
+    expect(result.ask).toBe(0);
+    expect(result.agent).toBe(0);
+  });
 });
 
 describe("sync lock", () => {
@@ -661,5 +671,15 @@ describe("getAllOrgMetrics weightedMedian with null median_minutes_to_merge", ()
     expect(results).toHaveLength(1);
     expect(results[0].pull_requests!.median_minutes_to_merge).toBe(30);
     expect(results[0].pull_requests!.median_minutes_to_merge_copilot_authored).toBe(10);
+  });
+});
+
+describe("getAllOrgMetrics daily_active_cli_users null fallback", () => {
+  it("aggregates correctly when daily_active_cli_users is NULL in DB", () => {
+    db.prepare(`INSERT OR REPLACE INTO org_daily_metrics (enterprise_slug, day, org_slug, enterprise_id, daily_active_users, weekly_active_users, monthly_active_users, monthly_active_agent_users, monthly_active_chat_users, daily_active_cli_users, code_generation_activity_count, code_acceptance_activity_count, user_initiated_interaction_count, loc_suggested_to_add_sum, loc_suggested_to_delete_sum, loc_added_sum, loc_deleted_sum, totals_by_ide, totals_by_feature, totals_by_language_feature, totals_by_model_feature, totals_by_language_model, pull_requests, raw_json) VALUES (?, ?, ?, ?, 2,2,2,0,0,NULL,1,1,0,0,0,0,0,'[]','[]','[]','[]','[]',NULL,'{}')`).run("ent1", "2024-09-01", "cli-null-org1", "e1");
+    db.prepare(`INSERT OR REPLACE INTO org_daily_metrics (enterprise_slug, day, org_slug, enterprise_id, daily_active_users, weekly_active_users, monthly_active_users, monthly_active_agent_users, monthly_active_chat_users, daily_active_cli_users, code_generation_activity_count, code_acceptance_activity_count, user_initiated_interaction_count, loc_suggested_to_add_sum, loc_suggested_to_delete_sum, loc_added_sum, loc_deleted_sum, totals_by_ide, totals_by_feature, totals_by_language_feature, totals_by_model_feature, totals_by_language_model, pull_requests, raw_json) VALUES (?, ?, ?, ?, 3,3,3,0,0,NULL,2,2,0,0,0,0,0,'[]','[]','[]','[]','[]',NULL,'{}')`).run("ent1", "2024-09-01", "cli-null-org2", "e1");
+    const results = getAllOrgMetrics("2024-09-01", "2024-09-01");
+    expect(results).toHaveLength(1);
+    expect(results[0].daily_active_cli_users).toBe(0);
   });
 });
