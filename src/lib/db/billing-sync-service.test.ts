@@ -107,4 +107,23 @@ describe("billing-sync-service", () => {
     const result = await syncBilling("test-ent");
     expect(result.errors.some(e => e.includes("daily aggregates"))).toBe(true);
   });
+
+  it("syncBilling uses sync state lastEnd for summarized incremental fetch", async () => {
+    // Simulate existing sync state with last_report_end far enough back
+    (getBillingSyncState as ReturnType<typeof vi.fn>).mockImplementation((type: string) => {
+      if (type === "summarized") return { status: "ok", last_report_end: "2024-01-01", last_report_start: "2023-06-01" };
+      return null;
+    });
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    await syncBilling("test-ent");
+    expect(mockFetchUsage).toHaveBeenCalled();
+    logSpy.mockRestore();
+  });
+
+  it("syncBilling skips premium when sub-toggle off", async () => {
+    mockSubEnabled.mockImplementation((key: string) => key !== "premiumRequests");
+    const result = await syncBilling("test-ent");
+    expect(mockFetchPremium).not.toHaveBeenCalled();
+    expect(result.premiumRecords).toBe(0);
+  });
 });
