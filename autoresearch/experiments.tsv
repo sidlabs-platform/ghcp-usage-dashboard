@@ -87,3 +87,4 @@ exp-001	2026-05-06T17:24:23Z	test-coverage	memory-cache.test.ts: get/set/TTL/evi
 197	2026-05-07T16:57:29+05:30	bug-hunting	fix(pagination): guard buildOrderBy against empty allowedColumns	KEEP	92.26	92.26	stable; prevents ORDER BY undefined
 198	2026-05-07T17:01:23+05:30	bug-hunting	fix(security-routes): return 400 when scopeId cannot be resolved	KEEP	92.26	92.26	stable; prevents silent empty results from misconfiguration
 199	2026-05-07T17:05:30+05:30	bug-hunting	fix(seats-repo): skip seats with null/missing assignee + regression tests	KEEP	92.26	92.27	+0.01 stmts; prevents TypeError on deleted-user seats
+200	2026-05-07T17:09:59+05:30	bug-hunting	fix(billing-client): guard listReports against null API response	KEEP	92.27	92.27	stable; prevents TypeError on 204 response
