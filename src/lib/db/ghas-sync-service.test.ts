@@ -183,4 +183,10 @@ describe("ghas-sync-service", () => {
     expect(Object.keys(result.categories)).toHaveLength(3);
     expect(Object.keys(result.categories).every(k => k.startsWith("org:"))).toBe(true);
   });
+
+  it("fullGhasSync without enterpriseSlug uses getConfiguredEnterprises", async () => {
+    const result = await fullGhasSync();
+    expect(Object.keys(result.categories).length).toBeGreaterThan(0);
+    expect(result.errors).toBe(0);
+  });
 });
