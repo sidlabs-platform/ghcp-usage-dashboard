@@ -60,3 +60,4 @@ exp-001	2026-05-06T17:24:23Z	test-coverage	memory-cache.test.ts: get/set/TTL/evi
 135	2026-05-07 03:32	sync-service 28-day fallback enterprise/org error paths	KEEP	89.91	79.94	92.90	91.48
 136	2026-05-07 03:40	ghas-sync outdated autofix status and invalid repo_full_name branches	KEEP	89.91	80.00	92.69	91.44
 171	2026-05-07T07:58:40.8440630+05:30	test(ghas-repo): null repository and null severity fallbacks	KEEP	90.34	86.55	92.69	91.77
+172	2026-05-07T08:00:22.4405396+05:30	test(ghas-repo): null repository in dependabot + secret scanning upserts	KEEP	90.34	86.66	92.69	91.77

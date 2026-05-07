@@ -259,4 +259,22 @@ describe("dashboard-config (with config file)", () => {
     vi.setSystemTime(Date.now() + 100 * 60 * 1000);
     expect(isCodeScanningAutofixEnabled()).toBe(true);
   });
+
+  it("isCopilotSubEnabled defaults to true when sub-key is undefined", () => {
+    mockReadFileSync.mockReturnValue(JSON.stringify({
+      metrics: { copilot: { enabled: true } },
+    }));
+    vi.setSystemTime(Date.now() + 110 * 60 * 1000);
+    expect(isCopilotSubEnabled("teams")).toBe(true);
+  });
+
+  it("isBillingSubEnabled defaults to true when premiumRequests is undefined", () => {
+    mockReadFileSync.mockReturnValue(JSON.stringify({
+      metrics: { billing: { enabled: true } },
+    }));
+    vi.setSystemTime(Date.now() + 120 * 60 * 1000);
+    process.env.GITHUB_ENTERPRISE = "test-ent";
+    expect(isBillingSubEnabled("premiumRequests")).toBe(true);
+    delete process.env.GITHUB_ENTERPRISE;
+  });
 });
