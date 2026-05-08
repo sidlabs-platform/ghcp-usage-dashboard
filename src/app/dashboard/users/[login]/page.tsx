@@ -225,7 +225,10 @@ export default function UserDetailPage() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!login) return;
+    if (!login) {
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     setError(null);
 

@@ -203,10 +203,10 @@ export default function TeamDetailPage() {
                       <td className="py-2 text-right">{safeNum(m.acceptanceRate).toFixed(1)}%</td>
                       <td className="py-2">
                         <div className="flex gap-1 flex-wrap">
-                          {m.usedAgent === 1 && <Badge variant="default">Agent</Badge>}
-                          {m.usedChat === 1 && <Badge variant="secondary">Chat</Badge>}
-                          {m.usedCli === 1 && <Badge variant="success">CLI</Badge>}
-                          {m.usedCodeReview === 1 && <Badge variant="warning">Code Review</Badge>}
+                                                    {!!m.usedAgent && <Badge variant="default">Agent</Badge>}
+                          {!!m.usedChat && <Badge variant="secondary">Chat</Badge>}
+                          {!!m.usedCli && <Badge variant="success">CLI</Badge>}
+                          {!!m.usedCodeReview && <Badge variant="warning">Code Review</Badge>}
                         </div>
                       </td>
                     </tr>

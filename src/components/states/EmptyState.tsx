@@ -24,7 +24,7 @@ export function EmptyState({ icon: Icon, title, description, action }: EmptyStat
             {action.label} →
           </Link>
         ) : (
-          <button onClick={action.onClick} className="text-sm font-medium text-[hsl(var(--primary))] hover:underline">
+          <button type="button" onClick={action.onClick} className="text-sm font-medium text-[hsl(var(--primary))] hover:underline">
             {action.label}
           </button>
         )
