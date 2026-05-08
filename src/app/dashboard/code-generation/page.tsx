@@ -104,7 +104,7 @@ export default function CodeGenerationPage() {
           title="Total LoC Changed"
           value={kpis.totalLocChanged}
           icon={<Code2 className="h-4 w-4" />}
-          subtitle="Completion + Agent (90 days)"
+          subtitle={`Completion + Agent (${days} days)`}
         />
         <MetricCard
           title="Completion Acceptance"

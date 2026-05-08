@@ -80,7 +80,6 @@ const FEATURE_COLORS = [
 const featureExportColumns: CSVColumn[] = [
   { key: "feature", label: "Feature", format: (row) => featureLabel(row.feature) },
   { key: "interactions", label: "Interactions" },
-  { key: "interactions", label: "Code Generations" },
   { key: "acceptances", label: "Acceptances" },
   { key: "locAdded", label: "LoC Added" },
 ];
@@ -231,14 +230,14 @@ export default function CopilotFeaturesPage() {
           title="Agent Adoption"
           value={kpis.agentAdoptionPct}
           format="percent"
-          icon={<MessageSquare className="h-4 w-4" />}
+          icon={<Bot className="h-4 w-4" />}
           subtitle="Users with agent activity"
         />
         <MetricCard
           title="Chat Adoption"
           value={kpis.chatAdoptionPct}
           format="percent"
-          icon={<Terminal className="h-4 w-4" />}
+          icon={<MessageSquare className="h-4 w-4" />}
           subtitle="Users with chat activity"
         />
       </div>

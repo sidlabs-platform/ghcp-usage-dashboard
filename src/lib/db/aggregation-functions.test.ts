@@ -254,7 +254,7 @@ describe("getFeatureBreakdown", () => {
     const breakdown = getFeatureBreakdown("2024-01-01", "2024-01-31");
     expect(breakdown.length).toBeGreaterThanOrEqual(2);
     const comp = breakdown.find((r) => r.feature === "code_completion");
-    expect(comp!.interactions).toBe(10); // code_generation_activity_count
+    expect(comp!.interactions).toBe(20); // user_initiated_interaction_count
     expect(comp!.locAdded).toBe(50);
   });
 });

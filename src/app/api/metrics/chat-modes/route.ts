@@ -57,15 +57,18 @@ export async function GET(request: Request) {
     const totalInteractions = featureDistribution.reduce((s, f) => s + f.interactions, 0);
     const totalActivity = featureDistribution.reduce((s, f) => s + f.interactions + f.acceptances, 0);
     const topFeature = featureDistribution.length > 0 ? featureDistribution[0].feature : "N/A";
-    const totalUniqueUsers = adoption.totalUsers || 1;
+    const totalUniqueUsers = adoption.totalUsers;
 
     const kpis = {
       totalInteractions,
       totalActivity,
       topFeature,
-      agentAdoptionPct: Number(((adoption.agentUsers / totalUniqueUsers) * 100).toFixed(1)),
-      chatAdoptionPct: Number((((adoption.totalUsers - adoption.cliUsers) / totalUniqueUsers) * 100).toFixed(1)),
-      cliAdoptionPct: Number(((adoption.cliUsers / totalUniqueUsers) * 100).toFixed(1)),
+      agentAdoptionPct: totalUniqueUsers > 0
+        ? Number(((adoption.agentUsers / totalUniqueUsers) * 100).toFixed(1)) : 0,
+      chatAdoptionPct: totalUniqueUsers > 0
+        ? Number(((adoption.chatUsers / totalUniqueUsers) * 100).toFixed(1)) : 0,
+      cliAdoptionPct: totalUniqueUsers > 0
+        ? Number(((adoption.cliUsers / totalUniqueUsers) * 100).toFixed(1)) : 0,
     };
 
     return NextResponse.json({ dailyTrend, featureDistribution, adoptionTrend, kpis }, {

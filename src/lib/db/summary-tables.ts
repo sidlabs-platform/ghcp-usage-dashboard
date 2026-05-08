@@ -90,6 +90,8 @@ export function refreshDailyAggregate(day: string, enterpriseSlug?: string): voi
     SELECT
       enterprise_slug,
       ? as day,
+      -- total_users and active_users are identical at daily granularity
+      -- (every row in user_daily_metrics is an active user for that day)
       COUNT(DISTINCT user_login) as total_users,
       COUNT(DISTINCT user_login) as active_users,
       COALESCE(SUM(loc_added_sum), 0),
@@ -102,8 +104,12 @@ export function refreshDailyAggregate(day: string, enterpriseSlug?: string): voi
       COUNT(DISTINCT CASE WHEN used_cli = 1 THEN user_login END),
       COUNT(DISTINCT CASE WHEN used_copilot_coding_agent = 1 THEN user_login END),
       COUNT(DISTINCT CASE WHEN used_copilot_code_review_active = 1 THEN user_login END),
+      -- completion_loc_suggested: approximate (includes all features, not just completions)
       COALESCE(SUM(loc_suggested_to_add_sum), 0),
+      -- completion_loc_accepted: approximate (same as loc_added for now)
       COALESCE(SUM(loc_added_sum), 0),
+      -- agent_loc_added: not computed at daily aggregate level (requires json_each)
+      -- TODO: use json_each(totals_by_feature) to extract feature-specific LOC
       0,
       ? as computed_at
     FROM user_daily_metrics
@@ -181,15 +187,16 @@ export function refreshTeamSummary(periodStart: string, periodEnd: string, enter
         THEN ROUND(CAST(m.total_code_accept AS REAL) / m.total_code_gen * 100, 1)
         ELSE 0
       END,
-      CASE WHEN COALESCE(m.active_members, 0) > 0 THEN ROUND(CAST(m.agent_users AS REAL) / m.active_members * 100, 1) ELSE 0 END,
-      CASE WHEN COALESCE(m.active_members, 0) > 0 THEN ROUND(CAST(m.chat_users AS REAL) / m.active_members * 100, 1) ELSE 0 END,
-      CASE WHEN COALESCE(m.active_members, 0) > 0 THEN ROUND(CAST(m.cli_users AS REAL) / m.active_members * 100, 1) ELSE 0 END,
-      CASE WHEN COALESCE(m.active_members, 0) > 0 THEN ROUND(CAST(m.code_review_users AS REAL) / m.active_members * 100, 1) ELSE 0 END,
+      CASE WHEN COALESCE(t.member_count, 0) > 0 THEN ROUND(CAST(m.agent_users AS REAL) / t.member_count * 100, 1) ELSE 0 END,
+      CASE WHEN COALESCE(t.member_count, 0) > 0 THEN ROUND(CAST(m.chat_users AS REAL) / t.member_count * 100, 1) ELSE 0 END,
+      CASE WHEN COALESCE(t.member_count, 0) > 0 THEN ROUND(CAST(m.cli_users AS REAL) / t.member_count * 100, 1) ELSE 0 END,
+      CASE WHEN COALESCE(t.member_count, 0) > 0 THEN ROUND(CAST(m.code_review_users AS REAL) / t.member_count * 100, 1) ELSE 0 END,
       ? as computed_at
     FROM (
       SELECT team_slug, team_name, MAX(source) as source, org_slug, COUNT(DISTINCT user_login) as member_count
       FROM team_memberships
-      GROUP BY team_slug, source
+      WHERE 1=1${enterpriseFilter.replace('enterprise_slug', 'enterprise_slug')}
+      GROUP BY team_slug, source, org_slug, team_name
     ) t
     LEFT JOIN (
       SELECT
@@ -210,7 +217,7 @@ export function refreshTeamSummary(periodStart: string, periodEnd: string, enter
       INNER JOIN user_daily_metrics u ON tm.user_login = u.user_login AND u.day >= ? AND u.day <= ?${enterpriseFilter.replace('enterprise_slug', 'u.enterprise_slug')}
       GROUP BY tm.team_slug, tm.source, u.enterprise_slug
     ) m ON t.team_slug = m.team_slug AND t.source = m.source
-  `).run(periodStart, periodEnd, totalDays, now, periodStart, periodEnd, ...extraParams);
+  `).run(periodStart, periodEnd, totalDays, now, ...extraParams, periodStart, periodEnd, ...extraParams);
 
   return result.changes;
 }
