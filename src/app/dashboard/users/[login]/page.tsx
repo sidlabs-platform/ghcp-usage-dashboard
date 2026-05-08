@@ -9,7 +9,7 @@ import { MetricCard } from "@/components/cards/MetricCard";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { formatNumber } from "@/lib/utils";
-import { CHART_COLORS, FEATURE_LABELS } from "@/lib/constants";
+import { CHART_COLORS, FEATURE_LABELS, CHAT_MODE_LABELS, CHAT_MODE_COLORS } from "@/lib/constants";
 import {
   ArrowLeft, Calendar, MessageSquare, CheckCircle,
   FileCode, FileCheck, FileX, Bot, Terminal, Sparkles,
@@ -107,35 +107,11 @@ interface UserDetailData {
 
 // ── Helpers ───────────────────────────────────────────────────────────
 
-const CHAT_MODE_COLORS: Record<string, string> = {
-  agent: CHART_COLORS.agent,
-  ask: CHART_COLORS.ask,
-  edit: CHART_COLORS.edit,
-  plan: CHART_COLORS.plan,
-  custom: CHART_COLORS.custom,
-  unknown: CHART_COLORS.unknown,
-};
-
-const CHAT_MODE_LABELS: Record<string, string> = {
-  agent: "Agent",
-  ask: "Ask",
-  edit: "Edit",
-  plan: "Plan",
-  custom: "Custom",
-  unknown: "Unknown",
-};
-
 const tooltipStyle = {
   backgroundColor: "hsl(var(--card))",
   border: "1px solid hsl(var(--border))",
   borderRadius: "8px",
 };
-
-function formatCompact(v: number): string {
-  if (v >= 1_000_000) return `${(v / 1_000_000).toFixed(1)}M`;
-  if (v >= 1_000) return `${(v / 1_000).toFixed(1)}k`;
-  return String(v);
-}
 
 function SectionHeader({ children }: { children: React.ReactNode }) {
   return (
@@ -432,11 +408,11 @@ function CliStatsCard({ data }: { data: CliStats }) {
           </div>
           <div>
             <p className="text-xs font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wide">Prompt Tokens</p>
-            <p className="text-2xl font-bold mt-1">{formatCompact(data.promptTokens)}</p>
+            <p className="text-2xl font-bold mt-1">{formatNumber(data.promptTokens)}</p>
           </div>
           <div>
             <p className="text-xs font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wide">Output Tokens</p>
-            <p className="text-2xl font-bold mt-1">{formatCompact(data.outputTokens)}</p>
+            <p className="text-2xl font-bold mt-1">{formatNumber(data.outputTokens)}</p>
           </div>
         </div>
       </CardContent>
@@ -586,7 +562,7 @@ export default function UserDetailPage() {
             {data.summary.usedChat && <Badge variant="secondary">Chat</Badge>}
             {data.summary.usedCli && <Badge variant="success">CLI</Badge>}
             {data.summary.usedCodeReview && <Badge variant="warning">Code Review</Badge>}
-            {data.summary.usedCodingAgent && <Badge variant="default">Coding Agent</Badge>}
+            {data.summary.usedCodingAgent && <Badge variant="secondary">Coding Agent</Badge>}
             {data.summary.usedCodeReviewPassive && <Badge variant="warning">Code Review (Passive)</Badge>}
           </div>
 
