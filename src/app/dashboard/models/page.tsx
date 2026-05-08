@@ -77,7 +77,7 @@ export default function ModelsPage() {
     return (
       <div>
         <PageHeader title="Model Statistics" description="AI model usage distribution across features and languages" />
-        <div className="flex h-64items-center justify-center rounded-xl border bg-[hsl(var(--card))] text-sm text-red-500">
+        <div className="flex h-64 items-center justify-center rounded-xl border bg-[hsl(var(--card))] text-sm text-red-500">
           {error ?? "Failed to load data"}
         </div>
       </div>

@@ -265,7 +265,7 @@ function EmptyState() {
     <div>
       <PageHeader title="Code Generation & Activity" description="Lines of code suggested vs accepted, by language and feature" />
       <div className="flex h-64 items-center justify-center rounded-xl border bg-[hsl(var(--card))] text-sm text-[hsl(var(--muted-foreground))]">
-        No data available.Sync enterprise metrics first.
+        No data available. Sync enterprise metrics first.
       </div>
     </div>
   );

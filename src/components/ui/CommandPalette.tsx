@@ -193,11 +193,15 @@ export default function CommandPalette() {
       switch (e.key) {
         case "ArrowDown":
           e.preventDefault();
-          setSelectedIndex((i) => (i + 1) % flatList.length);
+          if (flatList.length > 0) {
+            setSelectedIndex((i) => (i + 1) % flatList.length);
+          }
           break;
         case "ArrowUp":
           e.preventDefault();
-          setSelectedIndex((i) => (i - 1 + flatList.length) % flatList.length);
+          if (flatList.length > 0) {
+            setSelectedIndex((i) => (i - 1 + flatList.length) % flatList.length);
+          }
           break;
         case "Enter":
           e.preventDefault();

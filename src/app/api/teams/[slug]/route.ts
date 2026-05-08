@@ -17,12 +17,12 @@ interface MemberRow {
   usedCodeReview: number;
 }
 
-async function handler(
-  request: NextRequest,
-  { params }: { params: Promise<{ slug: string }> },
-) {
+async function handler(request: NextRequest) {
   try {
-    const { slug } = await params;
+    const slug = decodeURIComponent(request.nextUrl.pathname.split("/").pop() || "");
+    if (!slug) {
+      return NextResponse.json({ error: "Missing slug parameter" }, { status: 400 });
+    }
     const searchParams = request.nextUrl.searchParams;
 
     const daysResult = parseAndClampDays(searchParams.get("days"), 7);
@@ -107,8 +107,5 @@ async function handler(
 }
 
 export const GET = withTimeout(
-  withCache(
-    handler as (request: NextRequest) => Promise<NextResponse>,
-    CACHE_TTL.MEDIUM,
-  ),
+  withCache(handler, CACHE_TTL.MEDIUM),
 );

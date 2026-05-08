@@ -114,7 +114,7 @@ export default function PullRequestsPage() {
     return (
       <div>
         <PageHeader title="Pull Request Impact" description="Copilot-authored and reviewed pull request impact metrics" />
-        <div className="flex h-64 flex-col items-center justify-centergap-3 text-sm text-[hsl(var(--muted-foreground))]">
+        <div className="flex h-64 flex-col items-center justify-center gap-3 text-sm text-[hsl(var(--muted-foreground))]">
           <GitPullRequest className="h-10 w-10 opacity-40" />
           <div className="text-center">
             <p className="font-medium">No pull request data available</p>

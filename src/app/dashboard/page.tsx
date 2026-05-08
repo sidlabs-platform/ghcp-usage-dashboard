@@ -64,6 +64,7 @@ export default function DashboardOverview() {
   const [error, setError] = useState<string | null>(null);
   const [securityData, setSecurityData] = useState<any>(null);
   const [securityEnabled, setSecurityEnabled] = useState(false);
+  const [pageVisibility, setPageVisibility] = useState<Record<string, boolean>>({});
 
   const kpiRef = useRef<HTMLDivElement>(null);
   const chartsRef = useRef<HTMLDivElement>(null);
@@ -79,6 +80,7 @@ export default function DashboardOverview() {
           config?.metrics?.dependabot?.enabled ||
           config?.metrics?.secretScanning?.enabled;
         setSecurityEnabled(enabled);
+        if (config?.pageVisibility) setPageVisibility(config.pageVisibility);
       })
       .catch(() => {});
   }, []);
@@ -259,67 +261,36 @@ export default function DashboardOverview() {
       </div>
 
       {/* Quick Links to Analytics */}
-      <section className="mt-8">
-        <h3 className="text-sm font-medium text-[hsl(var(--muted-foreground))] mb-3">Explore Analytics</h3>
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
-          <Link href="/dashboard/code-generation" className="group rounded-xl border p-4 hover:bg-[hsl(var(--accent))] transition-colors">
-            <div className="flex items-center gap-2 mb-1">
-              <Code2 className="h-4 w-4 text-[hsl(var(--primary))]" />
-              <span className="text-sm font-semibold">Code Generation</span>
+      {(() => {
+        const isVisible = (key: string) => Object.keys(pageVisibility).length === 0 || pageVisibility[key] !== false;
+        const quickLinks = [
+          { href: "/dashboard/code-generation", visKey: "codeGeneration", icon: <Code2 className="h-4 w-4 text-[hsl(var(--primary))]" />, label: "Code Generation", desc: "LoC suggested vs accepted, language breakdown" },
+          { href: "/dashboard/chat-modes", visKey: "chatModes", icon: <Sparkles className="h-4 w-4 text-violet-500" />, label: "Copilot Features", desc: "Chat, Agent, and feature adoption trends" },
+          { href: "/dashboard/models", visKey: "models", icon: <Brain className="h-4 w-4 text-amber-500" />, label: "Model Statistics", desc: "AI model usage across features and languages" },
+          { href: "/dashboard/cli", visKey: "cli", icon: <Terminal className="h-4 w-4 text-emerald-500" />, label: "CLI Analytics", desc: "Session activity, users, and token consumption" },
+          { href: "/dashboard/pull-requests", visKey: "pullRequests", icon: <GitPullRequest className="h-4 w-4 text-orange-500" />, label: "Pull Requests", desc: "Copilot-authored and reviewed PR metrics" },
+          { href: "/dashboard/teams", visKey: "teams", icon: <Users className="h-4 w-4 text-sky-500" />, label: "Team Analytics", desc: "Adoption and usage leaderboard by team" },
+          { href: "/dashboard/ide-languages", visKey: "ideLanguages", icon: <Monitor className="h-4 w-4 text-indigo-500" />, label: "IDE & Languages", desc: "Editor and programming language breakdown" },
+          { href: "/dashboard/billing", visKey: "billing", icon: <Receipt className="h-4 w-4 text-rose-500" />, label: "Billing", desc: "Cost summary and spend breakdown" },
+        ].filter((l) => isVisible(l.visKey));
+        if (quickLinks.length === 0) return null;
+        return (
+          <section className="mt-8">
+            <h3 className="text-sm font-medium text-[hsl(var(--muted-foreground))] mb-3">Explore Analytics</h3>
+            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+              {quickLinks.map((link) => (
+                <Link key={link.href} href={link.href} className="group rounded-xl border p-4 hover:bg-[hsl(var(--accent))] transition-colors">
+                  <div className="flex items-center gap-2 mb-1">
+                    {link.icon}
+                    <span className="text-sm font-semibold">{link.label}</span>
+                  </div>
+                  <p className="text-xs text-[hsl(var(--muted-foreground))]">{link.desc}</p>
+                </Link>
+              ))}
             </div>
-            <p className="text-xs text-[hsl(var(--muted-foreground))]">LoC suggested vs accepted, language breakdown</p>
-          </Link>
-          <Link href="/dashboard/chat-modes" className="group rounded-xl border p-4 hover:bg-[hsl(var(--accent))] transition-colors">
-            <div className="flex items-center gap-2 mb-1">
-              <Sparkles className="h-4 w-4 text-violet-500" />
-              <span className="text-sm font-semibold">Copilot Features</span>
-            </div>
-            <p className="text-xs text-[hsl(var(--muted-foreground))]">Chat, Agent, and feature adoption trends</p>
-          </Link>
-          <Link href="/dashboard/models" className="group rounded-xl border p-4 hover:bg-[hsl(var(--accent))] transition-colors">
-            <div className="flex items-center gap-2 mb-1">
-              <Brain className="h-4 w-4 text-amber-500" />
-              <span className="text-sm font-semibold">Model Statistics</span>
-            </div>
-            <p className="text-xs text-[hsl(var(--muted-foreground))]">AI model usage across features and languages</p>
-          </Link>
-          <Link href="/dashboard/cli" className="group rounded-xl border p-4 hover:bg-[hsl(var(--accent))] transition-colors">
-            <div className="flex items-center gap-2 mb-1">
-              <Terminal className="h-4 w-4 text-emerald-500" />
-              <span className="text-sm font-semibold">CLI Analytics</span>
-            </div>
-            <p className="text-xs text-[hsl(var(--muted-foreground))]">Session activity, users, and token consumption</p>
-          </Link>
-          <Link href="/dashboard/pull-requests" className="group rounded-xl border p-4 hover:bg-[hsl(var(--accent))] transition-colors">
-            <div className="flex items-center gap-2 mb-1">
-              <GitPullRequest className="h-4 w-4 text-orange-500" />
-              <span className="text-sm font-semibold">Pull Requests</span>
-            </div>
-            <p className="text-xs text-[hsl(var(--muted-foreground))]">Copilot-authored and reviewed PR metrics</p>
-          </Link>
-          <Link href="/dashboard/teams" className="group rounded-xl border p-4 hover:bg-[hsl(var(--accent))] transition-colors">
-            <div className="flex items-center gap-2 mb-1">
-              <Users className="h-4 w-4 text-sky-500" />
-              <span className="text-sm font-semibold">Team Analytics</span>
-            </div>
-            <p className="text-xs text-[hsl(var(--muted-foreground))]">Adoption and usage leaderboard by team</p>
-          </Link>
-          <Link href="/dashboard/ide-languages" className="group rounded-xl border p-4 hover:bg-[hsl(var(--accent))] transition-colors">
-            <div className="flex items-center gap-2 mb-1">
-              <Monitor className="h-4 w-4 text-indigo-500" />
-              <span className="text-sm font-semibold">IDE & Languages</span>
-            </div>
-            <p className="text-xs text-[hsl(var(--muted-foreground))]">Editor and programming language breakdown</p>
-          </Link>
-          <Link href="/dashboard/billing" className="group rounded-xl border p-4 hover:bg-[hsl(var(--accent))] transition-colors">
-            <div className="flex items-center gap-2 mb-1">
-              <Receipt className="h-4 w-4 text-rose-500" />
-              <span className="text-sm font-semibold">Billing</span>
-            </div>
-            <p className="text-xs text-[hsl(var(--muted-foreground))]">Cost summary and spend breakdown</p>
-          </Link>
-        </div>
-      </section>
+          </section>
+        );
+      })()}
 
       {/* Security Summary */}
       {securityData?.summary && (

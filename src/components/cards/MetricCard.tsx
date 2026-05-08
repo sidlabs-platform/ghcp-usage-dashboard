@@ -40,7 +40,7 @@ export function MetricCard({
         : formatNumber(value);
 
   return (
-    <Card className={cn("relative overflow-hidden", accent && `border-l-3 ${accentColors[accent]}`, className)}>
+    <Card className={cn("relative overflow-hidden", accent && `border-l-[3px] ${accentColors[accent]}`, className)}>
       <div className="p-6">
         <div className="flex items-center justify-between">
           <p className="text-sm font-medium text-[hsl(var(--muted-foreground))]">{title}</p>
