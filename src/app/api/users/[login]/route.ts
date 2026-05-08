@@ -123,6 +123,7 @@ async function handler(request: NextRequest) {
     const efParams = scope.enterpriseSlugs ?? [];
 
     // Daily activity (with per-day agent LOC extracted from agent_edit JSON)
+    // Use CASE WHEN json_valid() to guard against empty/malformed agent_edit values
     const dailyActivity = db.prepare(`
       SELECT day,
         COALESCE(code_generation_activity_count, 0) AS codeGen,
@@ -132,8 +133,8 @@ async function handler(request: NextRequest) {
         COALESCE(loc_suggested_to_delete_sum, 0) AS locSuggestedDelete,
         COALESCE(loc_deleted_sum, 0) AS locDeleted,
         COALESCE(user_initiated_interaction_count, 0) AS interactions,
-        COALESCE(json_extract(agent_edit, '$.loc_added_sum'), 0) AS agentLocAdded,
-        COALESCE(json_extract(agent_edit, '$.loc_deleted_sum'), 0) AS agentLocDeleted
+        CASE WHEN json_valid(agent_edit) THEN COALESCE(json_extract(agent_edit, '$.loc_added_sum'), 0) ELSE 0 END AS agentLocAdded,
+        CASE WHEN json_valid(agent_edit) THEN COALESCE(json_extract(agent_edit, '$.loc_deleted_sum'), 0) ELSE 0 END AS agentLocDeleted
       FROM user_daily_metrics
       WHERE user_login = ? AND day BETWEEN ? AND ?${efClause}
       ORDER BY day ASC
