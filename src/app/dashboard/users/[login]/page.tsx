@@ -148,7 +148,8 @@ function LoadingSkeleton() {
 // ── Chart Components ──────────────────────────────────────────────────
 
 function LocTrendChart({ data }: { data: DailyActivity[] }) {
-  // Compute completion-only LOC by subtracting agent contributions
+  // Approximate completion-only LOC by subtracting per-day agent contributions.
+  // The summary cards use precise json_each(totals_by_feature) decomposition.
   const chartData = useMemo(() => data.map((d) => ({
     day: d.day,
     locSuggested: d.locSuggested,
@@ -184,7 +185,7 @@ function LocTrendChart({ data }: { data: DailyActivity[] }) {
               />
               <Area
                 type="monotone" dataKey="agentLocAdded" name="Agent LoC Added"
-                stroke={CHART_COLORS.agent ?? "#8b5cf6"} fill={CHART_COLORS.agent ?? "#8b5cf6"}
+                stroke={CHART_COLORS.agent} fill={CHART_COLORS.agent}
                 fillOpacity={0.10} strokeWidth={1.5} strokeDasharray="4 2"
               />
               <Area

@@ -6,13 +6,6 @@ import { withCache } from "@/lib/cache/with-cache";
 import { withTimeout } from "@/lib/api/timeout";
 import { CACHE_TTL } from "@/lib/cache/memory-cache";
 
-// SQL IN-clause for completion features (org-level and user-level names)
-const COMPLETION_FEATURES_SQL = [
-  "code_completion", "inline_chat", "chat_panel",
-  "chat_panel_ask_mode", "chat_panel_edit_mode", "chat_panel_plan_mode",
-  "chat_panel_agent_mode", "chat_panel_custom_mode", "chat_panel_unknown_mode",
-];
-
 interface DailyActivity {
   day: string;
   codeGen: number;
@@ -193,7 +186,6 @@ async function handler(request: NextRequest) {
     `).get(decodedLogin, start, end, ...efParams) as { agentLocAdded: number; agentLocDeleted: number } | undefined;
 
     // Completion-only LOC and acceptance from totals_by_feature (excludes agent_edit)
-    const featurePlaceholders = COMPLETION_FEATURES_SQL.map(() => "?").join(",");
     const completionLocRow = db.prepare(`
       SELECT
         COALESCE(SUM(json_extract(j.value, '$.loc_suggested_to_add_sum')), 0) AS compLocSuggested,
@@ -204,8 +196,8 @@ async function handler(request: NextRequest) {
       FROM user_daily_metrics u, json_each(u.totals_by_feature) j
       WHERE u.user_login = ? AND u.day BETWEEN ? AND ?
         AND u.totals_by_feature IS NOT NULL AND u.totals_by_feature != '[]'
-        AND json_extract(j.value, '$.feature') IN (${featurePlaceholders})${efClause}
-    `).get(decodedLogin, start, end, ...COMPLETION_FEATURES_SQL, ...efParams) as {
+        AND COALESCE(json_extract(j.value, '$.feature'), '') != 'agent_edit'${efClause}
+    `).get(decodedLogin, start, end, ...efParams) as {
       compLocSuggested: number;
       compLocAccepted: number;
       compLocDeleted: number;
@@ -237,6 +229,7 @@ async function handler(request: NextRequest) {
       summary = {
         totalActiveDays: summaryRow.totalActiveDays,
         // Backward-compatible aliases (deprecated — use completion-specific fields)
+        // NOTE: totalLocAccepted intentionally includes agent LOC for backward compat
         totalLocAdded: summaryRow.totalLocSuggested,
         totalLocAccepted: summaryRow.totalLocAccepted,
         totalLocSuggestedDelete: summaryRow.totalLocSuggestedDelete,
@@ -261,14 +254,15 @@ async function handler(request: NextRequest) {
       };
     }
 
-    // Top languages
+    // Top languages (excludes agent_edit to show completion-only language metrics)
     const topLanguages = db.prepare(`
       SELECT
         j.value->>'language' AS language,
         SUM(CAST(COALESCE(j.value->>'code_generation_activity_count', '0') AS INTEGER)) AS suggestions,
         SUM(CAST(COALESCE(j.value->>'code_acceptance_activity_count', '0') AS INTEGER)) AS acceptances
       FROM user_daily_metrics u, json_each(u.totals_by_language_feature) j
-      WHERE u.user_login = ? AND u.day BETWEEN ? AND ?${efClause}
+      WHERE u.user_login = ? AND u.day BETWEEN ? AND ?
+        AND COALESCE(j.value->>'feature', '') != 'agent_edit'${efClause}
       GROUP BY language
       ORDER BY suggestions DESC
       LIMIT 10
