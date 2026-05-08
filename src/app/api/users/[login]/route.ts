@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/db/database";
 import { parseAndClampDays, getDateRange } from "@/lib/utils";
+import { parseScopeFilter } from "@/lib/api/scope-filter";
 import { withCache } from "@/lib/cache/with-cache";
 import { withTimeout } from "@/lib/api/timeout";
 import { CACHE_TTL } from "@/lib/cache/memory-cache";
@@ -100,6 +101,18 @@ async function handler(request: NextRequest) {
       return NextResponse.json({ error: "Invalid login parameter" }, { status: 400 });
     }
 
+    // Scope filtering: honour teams/orgs/enterprises params
+    const scope = parseScopeFilter(params);
+    if (scope.allowedLogins && !scope.allowedLogins.has(decodedLogin)) {
+      return NextResponse.json({ error: "User not found in selected scope" }, { status: 404 });
+    }
+
+    // Enterprise filter clause applied to all queries
+    const efClause = scope.enterpriseSlugs?.length
+      ? ` AND enterprise_slug IN (${scope.enterpriseSlugs.map(() => "?").join(",")})`
+      : "";
+    const efParams = scope.enterpriseSlugs ?? [];
+
     // Daily activity
     const dailyActivity = db.prepare(`
       SELECT day,
@@ -111,9 +124,9 @@ async function handler(request: NextRequest) {
         COALESCE(loc_deleted_sum, 0) AS locDeleted,
         COALESCE(user_initiated_interaction_count, 0) AS interactions
       FROM user_daily_metrics
-      WHERE user_login = ? AND day BETWEEN ? AND ?
+      WHERE user_login = ? AND day BETWEEN ? AND ?${efClause}
       ORDER BY day ASC
-    `).all(decodedLogin, start, end) as DailyActivity[];
+    `).all(decodedLogin, start, end, ...efParams) as DailyActivity[];
 
     // Summary (enhanced with LoC delete, agent LoC, coding agent, code review passive)
     const summaryRow = db.prepare(`
@@ -133,8 +146,8 @@ async function handler(request: NextRequest) {
         MAX(CASE WHEN used_copilot_coding_agent = 1 THEN 1 ELSE 0 END) AS usedCodingAgent,
         MAX(CASE WHEN used_copilot_code_review_passive = 1 THEN 1 ELSE 0 END) AS usedCodeReviewPassive
       FROM user_daily_metrics
-      WHERE user_login = ? AND day BETWEEN ? AND ?
-    `).get(decodedLogin, start, end) as {
+      WHERE user_login = ? AND day BETWEEN ? AND ?${efClause}
+    `).get(decodedLogin, start, end, ...efParams) as {
       totalActiveDays: number;
       totalLocAdded: number;
       totalLocAccepted: number;
@@ -158,8 +171,8 @@ async function handler(request: NextRequest) {
         COALESCE(SUM(json_extract(agent_edit, '$.loc_deleted_sum')), 0) AS agentLocDeleted
       FROM user_daily_metrics
       WHERE user_login = ? AND day BETWEEN ? AND ?
-        AND agent_edit IS NOT NULL AND agent_edit != ''
-    `).get(decodedLogin, start, end) as { agentLocAdded: number; agentLocDeleted: number } | undefined;
+        AND agent_edit IS NOT NULL AND agent_edit != ''${efClause}
+    `).get(decodedLogin, start, end, ...efParams) as { agentLocAdded: number; agentLocDeleted: number } | undefined;
 
     let summary: UserSummary | null = null;
     if (summaryRow && summaryRow.totalActiveDays > 0) {
@@ -194,11 +207,11 @@ async function handler(request: NextRequest) {
         SUM(CAST(COALESCE(j.value->>'code_generation_activity_count', '0') AS INTEGER)) AS suggestions,
         SUM(CAST(COALESCE(j.value->>'code_acceptance_activity_count', '0') AS INTEGER)) AS acceptances
       FROM user_daily_metrics u, json_each(u.totals_by_language_feature) j
-      WHERE u.user_login = ? AND u.day BETWEEN ? AND ?
+      WHERE u.user_login = ? AND u.day BETWEEN ? AND ?${efClause}
       GROUP BY language
       ORDER BY suggestions DESC
       LIMIT 10
-    `).all(decodedLogin, start, end) as TopLanguage[];
+    `).all(decodedLogin, start, end, ...efParams) as TopLanguage[];
 
     // Top models
     const topModels = db.prepare(`
@@ -206,11 +219,11 @@ async function handler(request: NextRequest) {
         j.value->>'model' AS model,
         SUM(CAST(COALESCE(j.value->>'user_initiated_interaction_count', '0') AS INTEGER)) AS interactions
       FROM user_daily_metrics u, json_each(u.totals_by_model_feature) j
-      WHERE u.user_login = ? AND u.day BETWEEN ? AND ?
+      WHERE u.user_login = ? AND u.day BETWEEN ? AND ?${efClause}
       GROUP BY model
       ORDER BY interactions DESC
       LIMIT 10
-    `).all(decodedLogin, start, end) as TopModel[];
+    `).all(decodedLogin, start, end, ...efParams) as TopModel[];
 
     // IDE usage
     const ideUsage = db.prepare(`
@@ -218,10 +231,10 @@ async function handler(request: NextRequest) {
         j.value->>'ide' AS ide,
         SUM(CAST(COALESCE(j.value->>'user_initiated_interaction_count', '0') AS INTEGER)) AS interactions
       FROM user_daily_metrics u, json_each(u.totals_by_ide) j
-      WHERE u.user_login = ? AND u.day BETWEEN ? AND ?
+      WHERE u.user_login = ? AND u.day BETWEEN ? AND ?${efClause}
       GROUP BY ide
       ORDER BY interactions DESC
-    `).all(decodedLogin, start, end) as IdeUsage[];
+    `).all(decodedLogin, start, end, ...efParams) as IdeUsage[];
 
     // Feature usage from totals_by_feature JSON
     const featureUsage = db.prepare(`
@@ -233,10 +246,10 @@ async function handler(request: NextRequest) {
         COALESCE(SUM(json_extract(j.value, '$.loc_added_sum')), 0) AS locAdded
       FROM user_daily_metrics u, json_each(u.totals_by_feature) j
       WHERE u.user_login = ? AND u.day BETWEEN ? AND ?
-        AND u.totals_by_feature IS NOT NULL AND u.totals_by_feature != '[]'
+        AND u.totals_by_feature IS NOT NULL AND u.totals_by_feature != '[]'${efClause}
       GROUP BY feature
       ORDER BY interactions DESC
-    `).all(decodedLogin, start, end) as FeatureUsageRow[];
+    `).all(decodedLogin, start, end, ...efParams) as FeatureUsageRow[];
 
     // Chat mode breakdown
     const chatModesRow = db.prepare(`
@@ -248,8 +261,8 @@ async function handler(request: NextRequest) {
         COALESCE(SUM(chat_panel_custom_mode), 0) AS custom,
         COALESCE(SUM(chat_panel_unknown_mode), 0) AS unknown
       FROM user_daily_metrics
-      WHERE user_login = ? AND day BETWEEN ? AND ?
-    `).get(decodedLogin, start, end) as ChatModes | undefined;
+      WHERE user_login = ? AND day BETWEEN ? AND ?${efClause}
+    `).get(decodedLogin, start, end, ...efParams) as ChatModes | undefined;
 
     const chatModes: ChatModes = chatModesRow ?? { agent: 0, ask: 0, edit: 0, plan: 0, custom: 0, unknown: 0 };
 
@@ -263,11 +276,12 @@ async function handler(request: NextRequest) {
         COALESCE(SUM(json_extract(totals_by_cli, '$.token_usage.output_tokens_sum')), 0) AS outputTokens
       FROM user_daily_metrics
       WHERE user_login = ? AND day BETWEEN ? AND ?
-        AND totals_by_cli IS NOT NULL AND totals_by_cli != ''
-    `).get(decodedLogin, start, end) as CliStats | undefined;
+        AND totals_by_cli IS NOT NULL AND totals_by_cli != ''${efClause}
+    `).get(decodedLogin, start, end, ...efParams) as CliStats | undefined;
 
     const cliStats: CliStats | null =
-      cliStatsRow && cliStatsRow.sessions > 0 ? cliStatsRow : null;
+      cliStatsRow && (cliStatsRow.sessions > 0 || cliStatsRow.requests > 0 || cliStatsRow.promptTokens > 0)
+        ? cliStatsRow : null;
 
     return NextResponse.json({
       user: decodedLogin,

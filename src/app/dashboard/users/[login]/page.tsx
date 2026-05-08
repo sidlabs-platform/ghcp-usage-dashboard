@@ -532,12 +532,12 @@ export default function UserDetailPage() {
             />
             <MetricCard
               title="LoC Deleted"
-              value={data.summary.totalLocDeleted + data.summary.totalLocSuggestedDelete}
+              value={data.summary.totalLocDeleted}
               icon={<FileX className="h-4 w-4" />}
               accent="red"
               subtitle={`${formatNumber(data.summary.totalLocSuggestedDelete)} suggested · ${formatNumber(data.summary.totalLocDeleted)} accepted`}
             />
-            {data.summary.agentLocAdded > 0 ? (
+            {data.summary.agentLocAdded > 0 || data.summary.agentLocDeleted > 0 ? (
               <MetricCard
                 title="Agent LoC"
                 value={data.summary.agentLocAdded}
