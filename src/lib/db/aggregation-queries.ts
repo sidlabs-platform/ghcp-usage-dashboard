@@ -586,8 +586,10 @@ export function getFeatureDailyTrend(
 
 // ── Completion vs Agent daily trend (SQL via json_each) ───────────────
 
-const COMPLETION_FEATURES_SQL = "('code_completion','inline_chat','chat_panel')";
-const AGENT_FEATURES_SQL = "('agent_edit')";
+// Use exclusion-based classification: anything that is NOT agent_edit is a completion feature.
+// This handles both org-level ('chat_panel') and user-level ('chat_panel_ask_mode', etc.) names.
+const IS_COMPLETION_SQL = "json_extract(j.value, '$.feature') != 'agent_edit'";
+const IS_AGENT_SQL = "json_extract(j.value, '$.feature') = 'agent_edit'";
 
 /** Daily completion vs agent LOC metrics aggregated via json_each */
 export function getCompletionDailyTrend(
@@ -602,17 +604,17 @@ export function getCompletionDailyTrend(
   const sql = `
     SELECT
       u.day,
-      COALESCE(SUM(CASE WHEN json_extract(j.value, '$.feature') IN ${COMPLETION_FEATURES_SQL}
+      COALESCE(SUM(CASE WHEN ${IS_COMPLETION_SQL}
         THEN json_extract(j.value, '$.loc_suggested_to_add_sum') ELSE 0 END), 0) as completionSuggested,
-      COALESCE(SUM(CASE WHEN json_extract(j.value, '$.feature') IN ${COMPLETION_FEATURES_SQL}
+      COALESCE(SUM(CASE WHEN ${IS_COMPLETION_SQL}
         THEN json_extract(j.value, '$.loc_added_sum') ELSE 0 END), 0) as completionAccepted,
-      COALESCE(SUM(CASE WHEN json_extract(j.value, '$.feature') IN ${AGENT_FEATURES_SQL}
+      COALESCE(SUM(CASE WHEN ${IS_AGENT_SQL}
         THEN json_extract(j.value, '$.loc_added_sum') ELSE 0 END), 0) as agentAdded,
-      COALESCE(SUM(CASE WHEN json_extract(j.value, '$.feature') IN ${AGENT_FEATURES_SQL}
+      COALESCE(SUM(CASE WHEN ${IS_AGENT_SQL}
         THEN json_extract(j.value, '$.loc_deleted_sum') ELSE 0 END), 0) as agentDeleted,
-      COALESCE(SUM(CASE WHEN json_extract(j.value, '$.feature') IN ${COMPLETION_FEATURES_SQL}
+      COALESCE(SUM(CASE WHEN ${IS_COMPLETION_SQL}
         THEN json_extract(j.value, '$.code_generation_activity_count') ELSE 0 END), 0) as compGenCount,
-      COALESCE(SUM(CASE WHEN json_extract(j.value, '$.feature') IN ${COMPLETION_FEATURES_SQL}
+      COALESCE(SUM(CASE WHEN ${IS_COMPLETION_SQL}
         THEN json_extract(j.value, '$.code_acceptance_activity_count') ELSE 0 END), 0) as compAcceptCount
     FROM user_daily_metrics u, json_each(u.totals_by_feature) j
     WHERE u.day >= ? AND u.day <= ?
@@ -637,17 +639,17 @@ export function getCompletionTotals(
   const sql = `
     SELECT
       '' as day,
-      COALESCE(SUM(CASE WHEN json_extract(j.value, '$.feature') IN ${COMPLETION_FEATURES_SQL}
+      COALESCE(SUM(CASE WHEN ${IS_COMPLETION_SQL}
         THEN json_extract(j.value, '$.loc_suggested_to_add_sum') ELSE 0 END), 0) as completionSuggested,
-      COALESCE(SUM(CASE WHEN json_extract(j.value, '$.feature') IN ${COMPLETION_FEATURES_SQL}
+      COALESCE(SUM(CASE WHEN ${IS_COMPLETION_SQL}
         THEN json_extract(j.value, '$.loc_added_sum') ELSE 0 END), 0) as completionAccepted,
-      COALESCE(SUM(CASE WHEN json_extract(j.value, '$.feature') IN ${AGENT_FEATURES_SQL}
+      COALESCE(SUM(CASE WHEN ${IS_AGENT_SQL}
         THEN json_extract(j.value, '$.loc_added_sum') ELSE 0 END), 0) as agentAdded,
-      COALESCE(SUM(CASE WHEN json_extract(j.value, '$.feature') IN ${AGENT_FEATURES_SQL}
+      COALESCE(SUM(CASE WHEN ${IS_AGENT_SQL}
         THEN json_extract(j.value, '$.loc_deleted_sum') ELSE 0 END), 0) as agentDeleted,
-      COALESCE(SUM(CASE WHEN json_extract(j.value, '$.feature') IN ${COMPLETION_FEATURES_SQL}
+      COALESCE(SUM(CASE WHEN ${IS_COMPLETION_SQL}
         THEN json_extract(j.value, '$.code_generation_activity_count') ELSE 0 END), 0) as compGenCount,
-      COALESCE(SUM(CASE WHEN json_extract(j.value, '$.feature') IN ${COMPLETION_FEATURES_SQL}
+      COALESCE(SUM(CASE WHEN ${IS_COMPLETION_SQL}
         THEN json_extract(j.value, '$.code_acceptance_activity_count') ELSE 0 END), 0) as compAcceptCount
     FROM user_daily_metrics u, json_each(u.totals_by_feature) j
     WHERE u.day >= ? AND u.day <= ?
