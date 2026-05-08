@@ -4,6 +4,8 @@ import {
   extractAgentMetrics,
   separateMetrics,
   aggregateSeparatedMetrics,
+  isCompletionFeature,
+  isAgentFeature,
 } from "./separate-metrics";
 import type { TotalsByFeature } from "@/lib/types/metrics";
 
@@ -25,6 +27,41 @@ function makeFeature(
     ...overrides,
   };
 }
+
+// ── isCompletionFeature / isAgentFeature ──────────────────────────────
+
+describe("isCompletionFeature", () => {
+  it("matches org-level completion features", () => {
+    expect(isCompletionFeature("code_completion")).toBe(true);
+    expect(isCompletionFeature("inline_chat")).toBe(true);
+    expect(isCompletionFeature("chat_panel")).toBe(true);
+  });
+
+  it("matches user-level chat_panel_* modes", () => {
+    expect(isCompletionFeature("chat_panel_ask_mode")).toBe(true);
+    expect(isCompletionFeature("chat_panel_edit_mode")).toBe(true);
+    expect(isCompletionFeature("chat_panel_plan_mode")).toBe(true);
+    expect(isCompletionFeature("chat_panel_agent_mode")).toBe(true);
+    expect(isCompletionFeature("chat_panel_custom_mode")).toBe(true);
+    expect(isCompletionFeature("chat_panel_unknown_mode")).toBe(true);
+  });
+
+  it("rejects agent_edit and unknown features", () => {
+    expect(isCompletionFeature("agent_edit")).toBe(false);
+    expect(isCompletionFeature("unknown_feature")).toBe(false);
+  });
+});
+
+describe("isAgentFeature", () => {
+  it("matches agent_edit", () => {
+    expect(isAgentFeature("agent_edit")).toBe(true);
+  });
+
+  it("rejects completion features", () => {
+    expect(isAgentFeature("code_completion")).toBe(false);
+    expect(isAgentFeature("chat_panel_agent_mode")).toBe(false);
+  });
+});
 
 // ── extractCompletionMetrics ──────────────────────────────────────────
 
@@ -96,6 +133,19 @@ describe("extractCompletionMetrics", () => {
       makeFeature("code_completion", { code_generation_activity_count: 0, code_acceptance_activity_count: 0 }),
     ];
     expect(extractCompletionMetrics(features).acceptanceRate).toBe(0);
+  });
+
+  it("includes user-level chat_panel_* modes as completion features", () => {
+    const features = [
+      makeFeature("chat_panel_ask_mode", { loc_added_sum: 15, loc_suggested_to_add_sum: 20, code_generation_activity_count: 8, code_acceptance_activity_count: 5 }),
+      makeFeature("chat_panel_edit_mode", { loc_added_sum: 10, loc_suggested_to_add_sum: 12, code_generation_activity_count: 6, code_acceptance_activity_count: 4 }),
+      makeFeature("agent_edit", { loc_added_sum: 500, code_generation_activity_count: 50, code_acceptance_activity_count: 0 }),
+    ];
+    const result = extractCompletionMetrics(features);
+    expect(result.locAccepted).toBe(25); // 15 + 10, agent excluded
+    expect(result.locSuggested).toBe(32); // 20 + 12, agent excluded
+    expect(result.codeGenCount).toBe(14); // 8 + 6, agent excluded
+    expect(result.codeAcceptCount).toBe(9); // 5 + 4, agent excluded
   });
 });
 
@@ -179,6 +229,40 @@ describe("aggregateSeparatedMetrics", () => {
     const records = [{ totals_by_feature: undefined }] as any[];
     const result = aggregateSeparatedMetrics(records);
     expect(result.totalLocAdded).toBe(0);
+  });
+
+  it("regression: completion accepted never exceeds suggested when agent is excluded", () => {
+    // Scenario: user with heavy agent usage — top-level loc_added > loc_suggested
+    const records = [{
+      totals_by_feature: [
+        makeFeature("code_completion", {
+          loc_suggested_to_add_sum: 100,
+          loc_added_sum: 25,
+          code_generation_activity_count: 50,
+          code_acceptance_activity_count: 12,
+        }),
+        makeFeature("agent_edit", {
+          loc_suggested_to_add_sum: 0, // always 0 per GitHub API
+          loc_added_sum: 2342,
+          loc_deleted_sum: 947,
+          code_generation_activity_count: 1,
+          code_acceptance_activity_count: 0, // always 0 for agent
+        }),
+      ],
+    }] as any[];
+
+    const result = aggregateSeparatedMetrics(records);
+    // Completion-only: accepted (25) should NOT exceed suggested (100)
+    expect(result.completion.locAccepted).toBeLessThanOrEqual(result.completion.locSuggested);
+    expect(result.completion.locSuggested).toBe(100);
+    expect(result.completion.locAccepted).toBe(25);
+    // Agent separate
+    expect(result.agent.locAdded).toBe(2342);
+    expect(result.agent.locDeleted).toBe(947);
+    // Acceptance rate: completion-only (12/50 = 24%), NOT deflated by agent
+    expect(result.completion.acceptanceRate).toBe(24); // 12/50 * 100
+    // Total includes both
+    expect(result.totalLocAdded).toBe(2367); // 25 + 2342
   });
 
   it("handles null numeric fields in aggregation (|| 0 fallbacks)", () => {

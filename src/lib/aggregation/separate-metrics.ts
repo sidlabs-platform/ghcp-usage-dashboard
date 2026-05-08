@@ -23,8 +23,19 @@ export interface SeparatedMetrics {
   totalLocAdded: number; // completion accepted + agent added
 }
 
-const COMPLETION_FEATURES = new Set(["code_completion", "inline_chat", "chat_panel"]);
-const AGENT_FEATURES = new Set(["agent_edit"]);
+/** Check if a feature is a completion/chat feature (not agent_edit).
+ *  Handles both org-level ("chat_panel") and user-level ("chat_panel_ask_mode", etc.) names. */
+export function isCompletionFeature(feature: string): boolean {
+  return feature === "code_completion"
+    || feature === "inline_chat"
+    || feature === "chat_panel"
+    || feature.startsWith("chat_panel_");
+}
+
+/** Check if a feature is an agent edit feature */
+export function isAgentFeature(feature: string): boolean {
+  return feature === "agent_edit";
+}
 
 /** Extract completion-only metrics from totals_by_feature array */
 export function extractCompletionMetrics(features: TotalsByFeature[]): CompletionMetrics {
@@ -34,7 +45,7 @@ export function extractCompletionMetrics(features: TotalsByFeature[]): Completio
   let codeAcceptCount = 0;
 
   for (const f of features) {
-    if (COMPLETION_FEATURES.has(f.feature)) {
+    if (isCompletionFeature(f.feature)) {
       locSuggested += f.loc_suggested_to_add_sum || 0;
       locAccepted += f.loc_added_sum || 0;
       codeGenCount += f.code_generation_activity_count || 0;
@@ -57,7 +68,7 @@ export function extractAgentMetrics(features: TotalsByFeature[]): AgentMetrics {
   let locDeleted = 0;
 
   for (const f of features) {
-    if (AGENT_FEATURES.has(f.feature)) {
+    if (isAgentFeature(f.feature)) {
       locAdded += f.loc_added_sum || 0;
       locDeleted += f.loc_deleted_sum || 0;
     }
@@ -86,13 +97,13 @@ export function aggregateSeparatedMetrics(records: UserDayRecord[]): SeparatedMe
   for (const r of records) {
     const features = r.totals_by_feature || [];
     for (const f of features) {
-      if (COMPLETION_FEATURES.has(f.feature)) {
+      if (isCompletionFeature(f.feature)) {
         compLocSuggested += f.loc_suggested_to_add_sum || 0;
         compLocAccepted += f.loc_added_sum || 0;
         compGenCount += f.code_generation_activity_count || 0;
         compAcceptCount += f.code_acceptance_activity_count || 0;
       }
-      if (AGENT_FEATURES.has(f.feature)) {
+      if (isAgentFeature(f.feature)) {
         agentLocAdded += f.loc_added_sum || 0;
         agentLocDeleted += f.loc_deleted_sum || 0;
       }

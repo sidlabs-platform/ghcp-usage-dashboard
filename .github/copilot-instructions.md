@@ -56,3 +56,37 @@ This is a Next.js 15 (App Router) TypeScript dashboard for GitHub Copilot enterp
 - JSDoc on exported functions
 - Use `COALESCE(SUM(...), 0)` for nullable SQL aggregations
 - Sort results consistently (by day ASC, by count DESC)
+
+### LOC Metric Semantics (Critical)
+Understanding GitHub Copilot API metric definitions is essential. These come from the **current Copilot Usage Metrics API** (NDJSON reports), not the legacy metrics API.
+
+#### Top-Level LOC Fields (per user-day or per org-day)
+- `loc_suggested_to_add_sum` — Lines Copilot **suggested** adding. Sums across all features, but `agent_edit` **always contributes 0** because agent writes directly to files without showing suggestions.
+- `loc_added_sum` — Lines **actually added** to the editor. Includes completion accepted + chat applies + **agent_edit file writes**. This is a superset — it can exceed `loc_suggested_to_add_sum` when agents are active.
+- `loc_suggested_to_delete_sum` — Lines suggested for deletion (future support, currently always 0).
+- `loc_deleted_sum` — Lines deleted from the editor (primarily from agent_edit).
+
+#### Why `loc_added_sum` Can Exceed `loc_suggested_to_add_sum`
+The `agent_edit` feature writes code directly to files without showing suggestions. In `totals_by_feature`:
+```json
+{ "feature": "agent_edit", "loc_suggested_to_add_sum": 0, "loc_added_sum": 2342 }
+```
+When aggregated at the top level, agent writes inflate `loc_added_sum` while `loc_suggested_to_add_sum` stays unaffected. **This is expected GitHub API behavior, not a data error.**
+
+#### Acceptance Rate
+- Formula: `code_acceptance_activity_count / code_generation_activity_count × 100`
+- This is an **event-count ratio**, NOT a LOC ratio.
+- `agent_edit` has `code_acceptance_activity_count = 0` always, but may have non-zero `code_generation_activity_count` — which deflates the top-level acceptance rate.
+- **Always compute acceptance rate from completion features only** (code_completion, inline_chat, chat_panel*) to avoid deflation from agent activity.
+
+#### Feature Classification Rules
+Use `isCompletionFeature()` and `isAgentFeature()` from `src/lib/aggregation/separate-metrics.ts`:
+- **Completion features**: `code_completion`, `inline_chat`, `chat_panel`, and all `chat_panel_*` modes (user-level data uses mode-specific names like `chat_panel_ask_mode`, `chat_panel_edit_mode`, etc.)
+- **Agent features**: `agent_edit`
+- **Important**: At org/enterprise level, the feature name is `chat_panel` (aggregate). At user level, it's broken into `chat_panel_ask_mode`, `chat_panel_edit_mode`, etc. Code must handle both.
+
+#### Rules for Displaying LOC Metrics
+- **Never display raw top-level `loc_added_sum` as "LoC Accepted"** — it includes agent writes
+- Use `json_each(totals_by_feature)` or `separate-metrics.ts` helpers to compute **completion-only** LOC
+- Show "Agent LoC" separately from completion metrics
+- When filtering `totals_by_language_feature`, exclude `agent_edit` rows to avoid inflating per-language totals

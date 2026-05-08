@@ -6,6 +6,13 @@ import { withCache } from "@/lib/cache/with-cache";
 import { withTimeout } from "@/lib/api/timeout";
 import { CACHE_TTL } from "@/lib/cache/memory-cache";
 
+// SQL IN-clause for completion features (org-level and user-level names)
+const COMPLETION_FEATURES_SQL = [
+  "code_completion", "inline_chat", "chat_panel",
+  "chat_panel_ask_mode", "chat_panel_edit_mode", "chat_panel_plan_mode",
+  "chat_panel_agent_mode", "chat_panel_custom_mode", "chat_panel_unknown_mode",
+];
+
 interface DailyActivity {
   day: string;
   codeGen: number;
@@ -15,11 +22,15 @@ interface DailyActivity {
   locSuggestedDelete: number;
   locDeleted: number;
   interactions: number;
+  agentLocAdded: number;
+  agentLocDeleted: number;
 }
 
 interface UserSummary {
   totalActiveDays: number;
+  /** @deprecated Use totalLocSuggested — kept for backward compatibility */
   totalLocAdded: number;
+  /** @deprecated Use completionLocAccepted — kept for backward compatibility */
   totalLocAccepted: number;
   totalLocSuggestedDelete: number;
   totalLocDeleted: number;
@@ -29,6 +40,11 @@ interface UserSummary {
   acceptanceRate: number;
   agentLocAdded: number;
   agentLocDeleted: number;
+  // Completion-only fields (excludes agent_edit)
+  totalLocSuggested: number;
+  completionLocAccepted: number;
+  completionLocDeleted: number;
+  completionAcceptanceRate: number;
   usedAgent: boolean;
   usedChat: boolean;
   usedCli: boolean;
@@ -113,7 +129,7 @@ async function handler(request: NextRequest) {
       : "";
     const efParams = scope.enterpriseSlugs ?? [];
 
-    // Daily activity
+    // Daily activity (with per-day agent LOC extracted from agent_edit JSON)
     const dailyActivity = db.prepare(`
       SELECT day,
         COALESCE(code_generation_activity_count, 0) AS codeGen,
@@ -122,17 +138,19 @@ async function handler(request: NextRequest) {
         COALESCE(loc_added_sum, 0) AS locAccepted,
         COALESCE(loc_suggested_to_delete_sum, 0) AS locSuggestedDelete,
         COALESCE(loc_deleted_sum, 0) AS locDeleted,
-        COALESCE(user_initiated_interaction_count, 0) AS interactions
+        COALESCE(user_initiated_interaction_count, 0) AS interactions,
+        COALESCE(json_extract(agent_edit, '$.loc_added_sum'), 0) AS agentLocAdded,
+        COALESCE(json_extract(agent_edit, '$.loc_deleted_sum'), 0) AS agentLocDeleted
       FROM user_daily_metrics
       WHERE user_login = ? AND day BETWEEN ? AND ?${efClause}
       ORDER BY day ASC
     `).all(decodedLogin, start, end, ...efParams) as DailyActivity[];
 
-    // Summary (enhanced with LoC delete, agent LoC, coding agent, code review passive)
+    // Summary — top-level aggregation (includes all features)
     const summaryRow = db.prepare(`
       SELECT
         COUNT(DISTINCT day) AS totalActiveDays,
-        COALESCE(SUM(loc_suggested_to_add_sum), 0) AS totalLocAdded,
+        COALESCE(SUM(loc_suggested_to_add_sum), 0) AS totalLocSuggested,
         COALESCE(SUM(loc_added_sum), 0) AS totalLocAccepted,
         COALESCE(SUM(loc_suggested_to_delete_sum), 0) AS totalLocSuggestedDelete,
         COALESCE(SUM(loc_deleted_sum), 0) AS totalLocDeleted,
@@ -149,7 +167,7 @@ async function handler(request: NextRequest) {
       WHERE user_login = ? AND day BETWEEN ? AND ?${efClause}
     `).get(decodedLogin, start, end, ...efParams) as {
       totalActiveDays: number;
-      totalLocAdded: number;
+      totalLocSuggested: number;
       totalLocAccepted: number;
       totalLocSuggestedDelete: number;
       totalLocDeleted: number;
@@ -174,23 +192,66 @@ async function handler(request: NextRequest) {
         AND agent_edit IS NOT NULL AND agent_edit != ''${efClause}
     `).get(decodedLogin, start, end, ...efParams) as { agentLocAdded: number; agentLocDeleted: number } | undefined;
 
+    // Completion-only LOC and acceptance from totals_by_feature (excludes agent_edit)
+    const featurePlaceholders = COMPLETION_FEATURES_SQL.map(() => "?").join(",");
+    const completionLocRow = db.prepare(`
+      SELECT
+        COALESCE(SUM(json_extract(j.value, '$.loc_suggested_to_add_sum')), 0) AS compLocSuggested,
+        COALESCE(SUM(json_extract(j.value, '$.loc_added_sum')), 0) AS compLocAccepted,
+        COALESCE(SUM(json_extract(j.value, '$.loc_deleted_sum')), 0) AS compLocDeleted,
+        COALESCE(SUM(json_extract(j.value, '$.code_generation_activity_count')), 0) AS compCodeGen,
+        COALESCE(SUM(json_extract(j.value, '$.code_acceptance_activity_count')), 0) AS compCodeAccept
+      FROM user_daily_metrics u, json_each(u.totals_by_feature) j
+      WHERE u.user_login = ? AND u.day BETWEEN ? AND ?
+        AND u.totals_by_feature IS NOT NULL AND u.totals_by_feature != '[]'
+        AND json_extract(j.value, '$.feature') IN (${featurePlaceholders})${efClause}
+    `).get(decodedLogin, start, end, ...COMPLETION_FEATURES_SQL, ...efParams) as {
+      compLocSuggested: number;
+      compLocAccepted: number;
+      compLocDeleted: number;
+      compCodeGen: number;
+      compCodeAccept: number;
+    } | undefined;
+
     let summary: UserSummary | null = null;
     if (summaryRow && summaryRow.totalActiveDays > 0) {
-      const rate = summaryRow.totalCodeGen > 0
+      const agentAdded = agentLocRow?.agentLocAdded ?? 0;
+      const agentDeleted = agentLocRow?.agentLocDeleted ?? 0;
+
+      // Prefer feature-level completion metrics; fall back to subtraction if unavailable
+      const compSuggested = completionLocRow?.compLocSuggested ?? summaryRow.totalLocSuggested;
+      const compAccepted = completionLocRow
+        ? completionLocRow.compLocAccepted
+        : Math.max(0, summaryRow.totalLocAccepted - agentAdded);
+      const compDeleted = completionLocRow
+        ? completionLocRow.compLocDeleted
+        : Math.max(0, summaryRow.totalLocDeleted - agentDeleted);
+      const compCodeGen = completionLocRow?.compCodeGen ?? summaryRow.totalCodeGen;
+      const compCodeAccept = completionLocRow?.compCodeAccept ?? summaryRow.totalCodeAccept;
+
+      const compRate = compCodeGen > 0 ? (compCodeAccept / compCodeGen) * 100 : 0;
+      const topLevelRate = summaryRow.totalCodeGen > 0
         ? (summaryRow.totalCodeAccept / summaryRow.totalCodeGen) * 100
         : 0;
+
       summary = {
         totalActiveDays: summaryRow.totalActiveDays,
-        totalLocAdded: summaryRow.totalLocAdded,
+        // Backward-compatible aliases (deprecated — use completion-specific fields)
+        totalLocAdded: summaryRow.totalLocSuggested,
         totalLocAccepted: summaryRow.totalLocAccepted,
         totalLocSuggestedDelete: summaryRow.totalLocSuggestedDelete,
         totalLocDeleted: summaryRow.totalLocDeleted,
         totalInteractions: summaryRow.totalInteractions,
         totalCodeGen: summaryRow.totalCodeGen,
         totalCodeAccept: summaryRow.totalCodeAccept,
-        acceptanceRate: Math.round(rate * 10) / 10,
-        agentLocAdded: agentLocRow?.agentLocAdded ?? 0,
-        agentLocDeleted: agentLocRow?.agentLocDeleted ?? 0,
+        acceptanceRate: Math.round(topLevelRate * 10) / 10,
+        agentLocAdded: agentAdded,
+        agentLocDeleted: agentDeleted,
+        // Completion-only fields (excludes agent_edit)
+        totalLocSuggested: compSuggested,
+        completionLocAccepted: compAccepted,
+        completionLocDeleted: compDeleted,
+        completionAcceptanceRate: Math.round(compRate * 10) / 10,
         usedAgent: summaryRow.usedAgent === 1,
         usedChat: summaryRow.usedChat === 1,
         usedCli: summaryRow.usedCli === 1,

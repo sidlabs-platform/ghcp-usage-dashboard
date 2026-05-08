@@ -475,7 +475,7 @@ export function getModelByLanguageBreakdown(
 
 // ── Language breakdown (SQL via json_each) ────────────────────────────
 
-/** Aggregate language usage from totals_by_language_feature */
+/** Aggregate language usage from totals_by_language_feature (excludes agent_edit) */
 export function getLanguageBreakdown(
   startDay: string,
   endDay: string,
@@ -494,6 +494,7 @@ export function getLanguageBreakdown(
     FROM user_daily_metrics u, json_each(u.totals_by_language_feature) j
     WHERE u.day >= ? AND u.day <= ?
       AND u.totals_by_language_feature IS NOT NULL AND u.totals_by_language_feature != '[]'
+      AND COALESCE(json_extract(j.value, '$.feature'), '') != 'agent_edit'
       ${filter.clause}${ef.clause}
     GROUP BY language
     ORDER BY locAdded DESC
@@ -502,7 +503,7 @@ export function getLanguageBreakdown(
   return db.prepare(sql).all(startDay, endDay, ...filter.params, ...ef.params, limit) as LanguageBreakdownRow[];
 }
 
-/** Full language breakdown with generations/acceptances from totals_by_language_feature */
+/** Full language breakdown with generations/acceptances from totals_by_language_feature (excludes agent_edit) */
 export function getLanguageByFeatureBreakdown(
   startDay: string,
   endDay: string,
@@ -522,6 +523,7 @@ export function getLanguageByFeatureBreakdown(
     FROM user_daily_metrics u, json_each(u.totals_by_language_feature) j
     WHERE u.day >= ? AND u.day <= ?
       AND u.totals_by_language_feature IS NOT NULL AND u.totals_by_language_feature != '[]'
+      AND COALESCE(json_extract(j.value, '$.feature'), '') != 'agent_edit'
       ${filter.clause}${ef.clause}
     GROUP BY language
     ORDER BY locAdded DESC
