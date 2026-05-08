@@ -10,7 +10,17 @@ interface MetricCardProps {
   icon?: React.ReactNode;
   className?: string;
   subtitle?: string;
+  accent?: "blue" | "green" | "amber" | "violet" | "red" | "teal";
 }
+
+const accentColors: Record<NonNullable<MetricCardProps["accent"]>, string> = {
+  blue: "border-l-blue-500",
+  green: "border-l-emerald-500",
+  amber: "border-l-amber-500",
+  violet: "border-l-violet-500",
+  red: "border-l-red-500",
+  teal: "border-l-teal-500",
+};
 
 export function MetricCard({
   title,
@@ -20,6 +30,7 @@ export function MetricCard({
   icon,
   className,
   subtitle,
+  accent,
 }: MetricCardProps) {
   const displayValue =
     typeof value === "string"
@@ -29,7 +40,7 @@ export function MetricCard({
         : formatNumber(value);
 
   return (
-    <Card className={cn("relative overflow-hidden", className)}>
+    <Card className={cn("relative overflow-hidden", accent && `border-l-[3px] ${accentColors[accent]}`, className)}>
       <div className="p-6">
         <div className="flex items-center justify-between">
           <p className="text-sm font-medium text-[hsl(var(--muted-foreground))]">{title}</p>

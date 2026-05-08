@@ -9,6 +9,7 @@ import { ScopeFilter } from "@/components/filters/ScopeFilter";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { CHART_COLORS, FEATURE_LABELS } from "@/lib/constants";
 import { formatNumber } from "@/lib/utils";
+import Link from "next/link";
 import { Sparkles, Bot, MessageSquare, Terminal } from "lucide-react";
 import { useTableSort } from "@/hooks/useTableSort";
 import { SortableHeader } from "@/components/tables/SortableHeader";
@@ -142,7 +143,7 @@ export default function CopilotFeaturesPage() {
       <div>
         <PageHeader
           title="Copilot Features"
-          description="Feature-level usage breakdown across code completions, chat modes, agent, and CLI"
+          description="Chat, Agent, CLI, and code review feature adoption and trends"
         />
         <div className="flex h-64 items-center justify-center text-sm text-[hsl(var(--muted-foreground))]">
           Loading feature metrics…
@@ -156,7 +157,7 @@ export default function CopilotFeaturesPage() {
       <div>
         <PageHeader
           title="Copilot Features"
-          description="Feature-level usage breakdown across code completions, chat modes, agent, and CLI"
+          description="Chat, Agent, CLI, and code review feature adoption and trends"
         />
         <div className="flex h-64 items-center justify-center text-sm text-red-500">
           {error ?? "Failed to load data"}
@@ -179,7 +180,7 @@ export default function CopilotFeaturesPage() {
     <div>
       <PageHeader
         title="Copilot Features"
-        description="Feature-level usage breakdown across code completions, chat modes, agent, and CLI"
+        description="Chat, Agent, CLI, and code review feature adoption and trends"
       >
         <ExportMenu
           csv={{
@@ -404,6 +405,24 @@ export default function CopilotFeaturesPage() {
           </div>
         </CardContent>
       </Card>
+
+      {/* Related Analytics */}
+      <section className="mt-8 pt-6 border-t">
+        <h3 className="text-sm font-medium text-[hsl(var(--muted-foreground))] mb-3">Related Analytics</h3>
+        <div className="flex flex-wrap gap-3">
+          <Link href="/dashboard/cli" className="text-sm text-[hsl(var(--primary))] hover:underline">
+            CLI Analytics →
+          </Link>
+          <span className="text-[hsl(var(--border))]">·</span>
+          <Link href="/dashboard/code-generation" className="text-sm text-[hsl(var(--primary))] hover:underline">
+            Code Generation →
+          </Link>
+          <span className="text-[hsl(var(--border))]">·</span>
+          <Link href="/dashboard/users" className="text-sm text-[hsl(var(--primary))] hover:underline">
+            User Explorer →
+          </Link>
+        </div>
+      </section>
     </div>
   );
 }

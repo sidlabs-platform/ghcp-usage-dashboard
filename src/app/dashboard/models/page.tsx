@@ -23,6 +23,7 @@ const ModelFeatureTable = dynamic(
   () => import("@/components/charts/ModelFeatureTable").then(m => ({ default: m.ModelFeatureTable })),
   { ssr: false, loading: () => <ChartSkeleton /> }
 );
+import Link from "next/link";
 import { Brain, Hash, Trophy, Percent } from "lucide-react";
 import type { ModelStatsResponse } from "@/app/api/metrics/models/route";
 
@@ -62,7 +63,7 @@ export default function ModelsPage() {
   if (loading) {
     return (
       <div>
-        <PageHeader title="Model Statistics" description="AI model usage across your enterprise" />
+        <PageHeader title="Model Statistics" description="AI model usage distribution across features and languages" />
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4 mb-8">
           {Array.from({ length: 4 }).map((_, i) => (
             <div key={i} className="h-28 animate-pulse rounded-xl bg-[hsl(var(--muted))]/50" />
@@ -75,7 +76,7 @@ export default function ModelsPage() {
   if (error || !data) {
     return (
       <div>
-        <PageHeader title="Model Statistics" description="AI model usage across your enterprise" />
+        <PageHeader title="Model Statistics" description="AI model usage distribution across features and languages" />
         <div className="flex h-64 items-center justify-center rounded-xl border bg-[hsl(var(--card))] text-sm text-red-500">
           {error ?? "Failed to load data"}
         </div>
@@ -99,7 +100,7 @@ export default function ModelsPage() {
     <div>
       <PageHeader
         title="Model Statistics"
-        description="AI model usage, trends, and feature breakdown across your enterprise"
+        description="AI model usage distribution across features and languages"
       >
         <ExportMenu
           pdf={{
@@ -191,6 +192,20 @@ export default function ModelsPage() {
           ))}
         </div>
       )}
+
+      {/* Related Analytics */}
+      <section className="mt-8 pt-6 border-t">
+        <h3 className="text-sm font-medium text-[hsl(var(--muted-foreground))] mb-3">Related Analytics</h3>
+        <div className="flex flex-wrap gap-3">
+          <Link href="/dashboard/code-generation" className="text-sm text-[hsl(var(--primary))] hover:underline">
+            Code Generation →
+          </Link>
+          <span className="text-[hsl(var(--border))]">·</span>
+          <Link href="/dashboard/chat-modes" className="text-sm text-[hsl(var(--primary))] hover:underline">
+            Copilot Features →
+          </Link>
+        </div>
+      </section>
     </div>
   );
 }

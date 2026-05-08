@@ -8,6 +8,7 @@ import { MetricCard } from "@/components/cards/MetricCard";
 import { ScopeFilter } from "@/components/filters/ScopeFilter";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import Link from "next/link";
 import { Users } from "lucide-react";
 import { PaginatedTable, type ColumnDef } from "@/components/tables/PaginatedTable";
 import { ExportMenu } from "@/components/ui/ExportMenu";
@@ -36,7 +37,9 @@ const teamColumns: ColumnDef<TeamSummary>[] = [
     label: "Team",
     render: (row) => (
       <>
-        <span className="font-medium">{row.teamName}</span>
+        <Link href={`/dashboard/teams/${row.teamSlug}`} className="font-medium text-[hsl(var(--primary))] hover:underline">
+          {row.teamName}
+        </Link>
         <Badge variant="outline" className="ml-2 text-[10px]">{row.source}</Badge>
       </>
     ),

@@ -164,7 +164,7 @@ export default function PremiumRequestsPage() {
   if (!enabled) {
     return (
       <div className="space-y-6">
-        <PageHeader title="Premium Requests" description="Billing reports are disabled" />
+        <PageHeader title="Premium Requests" description="Premium model request tracking, quotas, and per-user breakdown" />
         <div className="text-center py-16 text-[hsl(var(--muted-foreground))]">
           <Zap className="h-16 w-16 mx-auto mb-4 opacity-40" />
           <p className="text-sm">Enable billing in <code className="text-xs bg-[hsl(var(--accent))] px-1 py-0.5 rounded">dashboard-config.json</code>.</p>
@@ -176,7 +176,7 @@ export default function PremiumRequestsPage() {
   if (loading && !kpis) {
     return (
       <div className="space-y-6">
-        <PageHeader title="Premium Requests" description="AI model premium request analytics" />
+        <PageHeader title="Premium Requests" description="Premium model request tracking, quotas, and per-user breakdown" />
         <div className="grid gap-4 grid-cols-2 lg:grid-cols-4">
           {[...Array(4)].map((_, i) => <ChartSkeleton key={i} />)}
         </div>
@@ -200,7 +200,7 @@ export default function PremiumRequestsPage() {
 
   return (
     <div className="space-y-8">
-      <PageHeader title="Premium Requests" description="Premium request usage and quota analytics per user and model">
+      <PageHeader title="Premium Requests" description="Premium model request tracking, quotas, and per-user breakdown">
         <ExportMenu
           csv={{
             fetchUrl: "/api/billing/premium",
