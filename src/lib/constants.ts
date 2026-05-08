@@ -64,6 +64,15 @@ export const CHAT_MODE_LABELS: Record<string, string> = {
   unknown: "Unknown",
 };
 
+export const CHAT_MODE_COLORS: Record<string, string> = {
+  agent: CHART_COLORS.agent,
+  ask: CHART_COLORS.ask,
+  edit: CHART_COLORS.edit,
+  plan: CHART_COLORS.plan,
+  custom: CHART_COLORS.custom,
+  unknown: CHART_COLORS.unknown,
+};
+
 export const CHAT_MODE_ICONS: Record<string, string> = {
   ask: "MessageSquare",
   edit: "Pencil",
