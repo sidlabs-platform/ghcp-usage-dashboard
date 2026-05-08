@@ -270,6 +270,9 @@ export default function CommandPalette() {
     >
       <div
         className="w-full max-w-lg rounded-xl border shadow-2xl overflow-hidden"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Search dashboard pages"
         style={{
           backgroundColor: "hsl(var(--background))",
           borderColor: "hsl(var(--border))",

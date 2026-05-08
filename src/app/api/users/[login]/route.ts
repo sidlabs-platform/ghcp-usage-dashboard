@@ -41,7 +41,7 @@ interface TopModel {
 
 interface IdeUsage {
   ide: string;
-  users: number;
+  interactions: number;
 }
 
 async function handler(request: NextRequest) {
@@ -60,7 +60,12 @@ async function handler(request: NextRequest) {
     const { start, end } = getDateRange(days);
 
     const db = getDb();
-    const decodedLogin = decodeURIComponent(login);
+    let decodedLogin: string;
+    try {
+      decodedLogin = decodeURIComponent(login);
+    } catch {
+      return NextResponse.json({ error: "Invalid login parameter" }, { status: 400 });
+    }
 
     // Daily activity
     const dailyActivity = db.prepare(`
@@ -127,8 +132,8 @@ async function handler(request: NextRequest) {
     const topLanguages = db.prepare(`
       SELECT
         j.value->>'language' AS language,
-        SUM(CAST(COALESCE(j.value->>'code_suggestions', '0') AS INTEGER)) AS suggestions,
-        SUM(CAST(COALESCE(j.value->>'code_acceptances', '0') AS INTEGER)) AS acceptances
+        SUM(CAST(COALESCE(j.value->>'code_generation_activity_count', '0') AS INTEGER)) AS suggestions,
+        SUM(CAST(COALESCE(j.value->>'code_acceptance_activity_count', '0') AS INTEGER)) AS acceptances
       FROM user_daily_metrics u, json_each(u.totals_by_language_feature) j
       WHERE u.user_login = ? AND u.day BETWEEN ? AND ?
       GROUP BY language
@@ -140,7 +145,7 @@ async function handler(request: NextRequest) {
     const topModels = db.prepare(`
       SELECT
         j.value->>'model' AS model,
-        SUM(CAST(COALESCE(j.value->>'total_engaged_users', '0') AS INTEGER)) AS interactions
+        SUM(CAST(COALESCE(j.value->>'user_initiated_interaction_count', '0') AS INTEGER)) AS interactions
       FROM user_daily_metrics u, json_each(u.totals_by_model_feature) j
       WHERE u.user_login = ? AND u.day BETWEEN ? AND ?
       GROUP BY model
@@ -151,12 +156,12 @@ async function handler(request: NextRequest) {
     // IDE usage
     const ideUsage = db.prepare(`
       SELECT
-        j.value->>'name' AS ide,
-        SUM(CAST(COALESCE(j.value->>'total_engaged_users', '0') AS INTEGER)) AS users
+        j.value->>'ide' AS ide,
+        SUM(CAST(COALESCE(j.value->>'user_initiated_interaction_count', '0') AS INTEGER)) AS interactions
       FROM user_daily_metrics u, json_each(u.totals_by_ide) j
       WHERE u.user_login = ? AND u.day BETWEEN ? AND ?
       GROUP BY ide
-      ORDER BY users DESC
+      ORDER BY interactions DESC
     `).all(decodedLogin, start, end) as IdeUsage[];
 
     return NextResponse.json({

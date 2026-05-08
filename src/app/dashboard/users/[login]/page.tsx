@@ -51,7 +51,7 @@ interface TopModel {
 
 interface IdeUsage {
   ide: string;
-  users: number;
+  interactions: number;
 }
 
 interface UserDetailData {
@@ -187,7 +187,7 @@ function ModelsChart({ data }: { data: TopModel[] }) {
 
 function IdeUsageCard({ data }: { data: IdeUsage[] }) {
   if (data.length === 0) return null;
-  const max = Math.max(...data.map((d) => d.users), 1);
+  const max = Math.max(...data.map((d) => d.interactions), 1);
   return (
     <Card>
       <CardHeader>
@@ -202,12 +202,12 @@ function IdeUsageCard({ data }: { data: IdeUsage[] }) {
                 <div
                   className="h-full rounded-full transition-all"
                   style={{
-                    width: `${(item.users / max) * 100}%`,
+                    width: `${(item.interactions / max) * 100}%`,
                     backgroundColor: CHART_COLORS.info,
                   }}
                 />
               </div>
-              <span className="text-sm font-medium w-12 text-right">{item.users}</span>
+              <span className="text-sm font-medium w-12 text-right">{item.interactions}</span>
             </div>
           ))}
         </div>

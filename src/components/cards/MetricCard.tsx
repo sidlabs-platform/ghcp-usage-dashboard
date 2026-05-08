@@ -13,7 +13,7 @@ interface MetricCardProps {
   accent?: "blue" | "green" | "amber" | "violet" | "red" | "teal";
 }
 
-const accentColors: Record<string, string> = {
+const accentColors: Record<NonNullable<MetricCardProps["accent"]>, string> = {
   blue: "border-l-blue-500",
   green: "border-l-emerald-500",
   amber: "border-l-amber-500",

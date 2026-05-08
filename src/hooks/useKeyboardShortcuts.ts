@@ -32,7 +32,7 @@ export function useKeyboardShortcuts() {
       }
 
       // Number keys (without modifiers) → page shortcuts
-      if (!e.metaKey && !e.ctrlKey && !e.altKey && PAGE_SHORTCUTS[e.key]) {
+      if (!e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey && PAGE_SHORTCUTS[e.key]) {
         router.push(PAGE_SHORTCUTS[e.key]);
       }
     }
