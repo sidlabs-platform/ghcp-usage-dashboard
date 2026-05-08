@@ -44,6 +44,13 @@ This is a Next.js 15 (App Router) TypeScript dashboard for GitHub Copilot enterp
 - Use Vitest; test files co-located as `*.test.ts`
 - Run: `npm test`, `npm run test:coverage`
 
+### Backward Compatibility (Hard Rule)
+- **Never introduce changes that require a full data re-sync or re-fetch** — all schema changes, new tables, and new columns must work with existing local data
+- New features must degrade gracefully when underlying data is missing (e.g., a new detail page shows "No data available" instead of crashing)
+- Schema migrations must use `CREATE TABLE IF NOT EXISTS` and `ALTER TABLE ... ADD COLUMN` with defaults — never drop and recreate tables that hold synced data
+- New API routes must return valid empty responses (empty arrays, zero counts) when queried data does not yet exist — never 500 on missing data
+- The dashboard must remain fully usable immediately after a code update without any manual intervention (no re-sync, no DB reset, no env changes)
+
 ### Code Conventions
 - Follow existing naming: `getChatModeSums`, `getAdoptionStats`, `refreshDailyAggregate`
 - JSDoc on exported functions
