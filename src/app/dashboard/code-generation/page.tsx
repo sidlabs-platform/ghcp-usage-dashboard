@@ -23,6 +23,7 @@ const FeatureBreakdownChart = dynamic(
   () => import("@/components/charts/FeatureBreakdownChart").then(m => ({ default: m.FeatureBreakdownChart })),
   { ssr: false, loading: () => <ChartSkeleton /> }
 );
+import Link from "next/link";
 import { Code2, TrendingUp, FileCode, Percent } from "lucide-react";
 import { formatNumber } from "@/lib/utils";
 import type { CodeGenerationResponse } from "@/app/api/metrics/code-generation/route";
@@ -78,7 +79,7 @@ export default function CodeGenerationPage() {
     <div>
       <PageHeader
         title="Code Generation & Activity"
-        description="Lines of code, acceptance rates, and feature breakdown across your enterprise"
+        description="Lines of code suggested vs accepted, by language and feature"
       >
         <ExportMenu
           pdf={{
@@ -192,6 +193,24 @@ export default function CodeGenerationPage() {
 
         <FeatureBreakdownChart data={featureBreakdown} />
       </div>
+
+      {/* Related Analytics */}
+      <section className="mt-8 pt-6 border-t">
+        <h3 className="text-sm font-medium text-[hsl(var(--muted-foreground))] mb-3">Related Analytics</h3>
+        <div className="flex flex-wrap gap-3">
+          <Link href="/dashboard/models" className="text-sm text-[hsl(var(--primary))] hover:underline">
+            Model Statistics →
+          </Link>
+          <span className="text-[hsl(var(--border))]">·</span>
+          <Link href="/dashboard/ide-languages" className="text-sm text-[hsl(var(--primary))] hover:underline">
+            IDE & Languages →
+          </Link>
+          <span className="text-[hsl(var(--border))]">·</span>
+          <Link href="/dashboard/chat-modes" className="text-sm text-[hsl(var(--primary))] hover:underline">
+            Copilot Features →
+          </Link>
+        </div>
+      </section>
     </div>
   );
 }
@@ -228,7 +247,7 @@ function LoadingSkeleton() {
 function ErrorState({ message }: { message: string }) {
   return (
     <div>
-      <PageHeader title="Code Generation & Activity" />
+      <PageHeader title="Code Generation & Activity" description="Lines of code suggested vs accepted, by language and feature" />
       <div className="flex h-64 items-center justify-center rounded-xl border bg-[hsl(var(--card))] text-sm text-[hsl(var(--muted-foreground))]">
         <div className="text-center">
           <p className="font-medium text-red-500 mb-1">Failed to load metrics</p>
@@ -244,9 +263,9 @@ function ErrorState({ message }: { message: string }) {
 function EmptyState() {
   return (
     <div>
-      <PageHeader title="Code Generation & Activity" />
+      <PageHeader title="Code Generation & Activity" description="Lines of code suggested vs accepted, by language and feature" />
       <div className="flex h-64 items-center justify-center rounded-xl border bg-[hsl(var(--card))] text-sm text-[hsl(var(--muted-foreground))]">
-        No data available. Sync enterprise metrics first.
+        No data available.Sync enterprise metrics first.
       </div>
     </div>
   );

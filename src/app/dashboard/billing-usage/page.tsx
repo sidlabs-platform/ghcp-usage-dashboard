@@ -199,7 +199,7 @@ export default function MeteredUsagePage() {
   if (!enabled) {
     return (
       <div className="space-y-6">
-        <PageHeader title="Metered Usage" description="Billing reports are disabled" />
+        <PageHeader title="Metered Usage" description="Detailed metered usage records by product, org, and repository" />
         <div className="text-center py-16 text-[hsl(var(--muted-foreground))]">
           <DollarSign className="h-16 w-16 mx-auto mb-4 opacity-40" />
           <p className="text-sm">Enable billing in <code className="text-xs bg-[hsl(var(--accent))] px-1 py-0.5 rounded">dashboard-config.json</code>.</p>
@@ -222,7 +222,7 @@ export default function MeteredUsagePage() {
 
   return (
     <div className="space-y-8">
-      <PageHeader title="Metered Usage" description="Detailed metered billing usage across all products">
+      <PageHeader title="Metered Usage" description="Detailed metered usage records by product, org, and repository">
         <ExportMenu
           csv={{
             fetchUrl: "/api/billing/usage",

@@ -99,8 +99,8 @@ export default function BillingOverviewPage() {
   if (!enabled) {
     return (
       <div className="space-y-6">
-        <PageHeader title="Billing" description="Enterprise billing reports" />
-        <div className="text-center py-16 text-[hsl(var(--muted-foreground))]">
+        <PageHeader title="Billing" description="Cost summary and spend breakdown across products and orgs" />
+        <div className="text-center py-16text-[hsl(var(--muted-foreground))]">
           <Receipt className="h-16 w-16 mx-auto mb-4 opacity-40" />
           <p className="text-xl font-semibold mb-2">Billing reports are disabled</p>
           <p className="text-sm max-w-md mx-auto">
@@ -115,8 +115,8 @@ export default function BillingOverviewPage() {
   if (loading) {
     return (
       <div className="space-y-6">
-        <PageHeader title="Billing" description="Enterprise billing reports" />
-        <div className="grid gap-4 grid-cols-2 lg:grid-cols-4">
+        <PageHeader title="Billing" description="Cost summary and spend breakdown across products and orgs" />
+        <div className="grid gap-4grid-cols-2 lg:grid-cols-4">
           {[...Array(4)].map((_, i) => <ChartSkeleton key={i} />)}
         </div>
       </div>
@@ -131,7 +131,7 @@ export default function BillingOverviewPage() {
 
   return (
     <div className="space-y-8">
-      <PageHeader title="Billing" description="Enterprise billing overview — metered usage and cost analytics">
+      <PageHeader title="Billing" description="Cost summary and spend breakdown across products and orgs">
         <ExportMenu
           pdf={{
             sectionRefs: [kpiRef, chartsRef, breakdownRef, insightsRef],

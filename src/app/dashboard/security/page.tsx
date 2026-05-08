@@ -139,7 +139,7 @@ export default function SecurityPage() {
   if (loading) {
     return (
       <div className="space-y-6">
-        <PageHeader title="Security" description="GitHub Advanced Security metrics" />
+        <PageHeader title="Security" description="Code scanning, Dependabot, and secret scanning alert trends" />
         <div className="grid gap-4 grid-cols-2 lg:grid-cols-4">
           {[...Array(4)].map((_, i) => <ChartSkeleton key={i} />)}
         </div>
@@ -151,7 +151,7 @@ export default function SecurityPage() {
 
   return (
     <div className="space-y-8">
-      <PageHeader title="Security" description="GitHub Advanced Security metrics across your organization">
+      <PageHeader title="Security" description="Code scanning, Dependabot, and secret scanning alert trends">
         <ExportMenu
           pdf={{
             sectionRefs: [kpiRef, csRef, depRef, ssRef],

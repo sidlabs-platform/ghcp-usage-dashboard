@@ -18,6 +18,7 @@ const MergeTimeChart = dynamic(
   () => import("@/components/charts/MergeTimeChart").then(m => ({ default: m.MergeTimeChart })),
   { ssr: false, loading: () => <ChartSkeleton /> }
 );
+import Link from "next/link";
 import { GitPullRequest, GitMerge, Bot, Clock, Eye, CheckCircle } from "lucide-react";
 import { formatMinutes } from "@/lib/utils";
 
@@ -88,7 +89,7 @@ export default function PullRequestsPage() {
   if (loading) {
     return (
       <div>
-        <PageHeader title="Pull Request Impact" description="PR activity, merge times, and Copilot contribution" />
+        <PageHeader title="Pull Request Impact" description="Copilot-authored and reviewed pull request impact metrics" />
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 mb-8">
           {Array.from({ length: 6 }).map((_, i) => (
             <div key={i} className="h-28 animate-pulse rounded-xl bg-[hsl(var(--muted))]/50" />
@@ -101,7 +102,7 @@ export default function PullRequestsPage() {
   if (error || !data) {
     return (
       <div>
-        <PageHeader title="Pull Request Impact" description="PR activity, merge times, and Copilot contribution" />
+        <PageHeader title="Pull Request Impact" description="Copilot-authored and reviewed pull request impact metrics" />
         <div className="flex h-64 items-center justify-center text-sm text-red-500">
           {error ?? "Failed to load data"}
         </div>
@@ -112,8 +113,8 @@ export default function PullRequestsPage() {
   if (!data.hasData) {
     return (
       <div>
-        <PageHeader title="Pull Request Impact" description="PR activity, merge times, and Copilot contribution" />
-        <div className="flex h-64 flex-col items-center justify-center gap-3 text-sm text-[hsl(var(--muted-foreground))]">
+        <PageHeader title="Pull Request Impact" description="Copilot-authored and reviewed pull request impact metrics" />
+        <div className="flex h-64 flex-col items-center justify-centergap-3 text-sm text-[hsl(var(--muted-foreground))]">
           <GitPullRequest className="h-10 w-10 opacity-40" />
           <div className="text-center">
             <p className="font-medium">No pull request data available</p>
@@ -143,7 +144,7 @@ export default function PullRequestsPage() {
     <div>
       <PageHeader
         title="Pull Request Impact"
-        description="PR activity, merge times, and Copilot contribution"
+        description="Copilot-authored and reviewed pull request impact metrics"
       >
         <ExportMenu
           pdf={{
@@ -209,6 +210,24 @@ export default function PullRequestsPage() {
         <PRActivityChart data={data.daily} />
         <MergeTimeChart data={mergeTimeData} />
       </div>
+
+      {/* Related Analytics */}
+      <section className="mt-8 pt-6 border-t">
+        <h3 className="text-sm font-medium text-[hsl(var(--muted-foreground))] mb-3">Related Analytics</h3>
+        <div className="flex flex-wrap gap-3">
+          <Link href="/dashboard/code-generation" className="text-sm text-[hsl(var(--primary))] hover:underline">
+            Code Generation →
+          </Link>
+          <span className="text-[hsl(var(--border))]">·</span>
+          <Link href="/dashboard/users" className="text-sm text-[hsl(var(--primary))] hover:underline">
+            User Explorer →
+          </Link>
+          <span className="text-[hsl(var(--border))]">·</span>
+          <Link href="/dashboard/teams" className="text-sm text-[hsl(var(--primary))] hover:underline">
+            Team Analytics →
+          </Link>
+        </div>
+      </section>
     </div>
   );
 }

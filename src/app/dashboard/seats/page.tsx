@@ -6,6 +6,7 @@ import { MetricCard } from "@/components/cards/MetricCard";
 import { ScopeFilter } from "@/components/filters/ScopeFilter";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import Link from "next/link";
 import { CreditCard, UserCheck, UserX, Percent } from "lucide-react";
 import { useScope } from "@/contexts/ScopeContext";
 import { useQuery } from "@tanstack/react-query";
@@ -110,7 +111,7 @@ export default function SeatsPage() {
 
   return (
     <div>
-      <PageHeader title="Seat Management" description="Copilot license allocation and utilization">
+      <PageHeader title="Seat Management" description="License allocation, active vs inactive seat tracking">
         <ExportMenu
           csv={{
             fetchUrl: "/api/seats",
@@ -181,6 +182,20 @@ export default function SeatsPage() {
           />
         </CardContent>
       </Card>
+
+      {/* Related Analytics */}
+      <section className="mt-8 pt-6 border-t">
+        <h3 className="text-sm font-medium text-[hsl(var(--muted-foreground))] mb-3">Related Analytics</h3>
+        <div className="flex flex-wrap gap-3">
+          <Link href="/dashboard/users" className="text-sm text-[hsl(var(--primary))] hover:underline">
+            User Explorer →
+          </Link>
+          <span className="text-[hsl(var(--border))]">·</span>
+          <Link href="/dashboard/teams" className="text-sm text-[hsl(var(--primary))] hover:underline">
+            Team Analytics →
+          </Link>
+        </div>
+      </section>
     </div>
   );
 }

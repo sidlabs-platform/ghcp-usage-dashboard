@@ -8,6 +8,7 @@ import { MetricCard } from "@/components/cards/MetricCard";
 import { ScopeFilter } from "@/components/filters/ScopeFilter";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import Link from "next/link";
 import { Users } from "lucide-react";
 import { PaginatedTable, type ColumnDef } from "@/components/tables/PaginatedTable";
 import { ExportMenu } from "@/components/ui/ExportMenu";
@@ -32,7 +33,11 @@ interface UserRow {
 }
 
 const userColumns: ColumnDef<UserRow>[] = [
-  { key: "login", label: "User", render: (row) => <span className="font-medium">{row.login}</span> },
+  { key: "login", label: "User", render: (row) => (
+    <Link href={`/dashboard/users/${row.login}`} className="font-medium text-[hsl(var(--primary))] hover:underline">
+      {row.login}
+    </Link>
+  ) },
   { key: "activeDays", label: "Active Days", align: "right", render: (row) => row.activeDays },
   { key: "locAdded", label: "LoC Added", align: "right", render: (row) => formatNumber(row.locAdded) },
   { key: "interactions", label: "Interactions", align: "right", render: (row) => formatNumber(row.interactions) },

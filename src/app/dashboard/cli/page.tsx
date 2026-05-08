@@ -20,6 +20,7 @@ const CLITokenChart = dynamic(
   () => import("@/components/charts/CLITokenChart").then(m => ({ default: m.CLITokenChart })),
   { ssr: false, loading: () => <ChartSkeleton /> }
 );
+import Link from "next/link";
 import { Terminal, Activity, Zap, Hash } from "lucide-react";
 import { formatNumber } from "@/lib/utils";
 import { useTableSort } from "@/hooks/useTableSort";
@@ -107,7 +108,7 @@ export default function CLIPage() {
   if (loading) {
     return (
       <div>
-        <PageHeader title="CLI Analytics" description="Copilot CLI usage, sessions, and token consumption" />
+        <PageHeader title="CLI Analytics" description="CLI session activity, user counts, and token consumption" />
         <div className="flex h-64 items-center justify-center text-sm text-[hsl(var(--muted-foreground))]">
           Loading CLI metrics…
         </div>
@@ -118,7 +119,7 @@ export default function CLIPage() {
   if (error || !data) {
     return (
       <div>
-        <PageHeader title="CLI Analytics" description="Copilot CLI usage, sessions, and token consumption" />
+        <PageHeader title="CLI Analytics" description="CLI session activity, user counts, and token consumption" />
         <div className="flex h-64 items-center justify-center text-sm text-red-500">
           {error ?? "Failed to load data"}
         </div>
@@ -137,7 +138,7 @@ export default function CLIPage() {
     <div>
       <PageHeader
         title="CLI Analytics"
-        description="Copilot CLI usage, sessions, and token consumption"
+        description="CLI session activity, user counts, and token consumption"
       >
         <ExportMenu
           csv={{
@@ -244,6 +245,20 @@ export default function CLIPage() {
           )}
         </CardContent>
       </Card>
+
+      {/* Related Analytics */}
+      <section className="mt-8 pt-6 border-t">
+        <h3 className="text-sm font-medium text-[hsl(var(--muted-foreground))] mb-3">Related Analytics</h3>
+        <div className="flex flex-wrap gap-3">
+          <Link href="/dashboard/chat-modes" className="text-sm text-[hsl(var(--primary))] hover:underline">
+            Copilot Features →
+          </Link>
+          <span className="text-[hsl(var(--border))]">·</span>
+          <Link href="/dashboard/users" className="text-sm text-[hsl(var(--primary))] hover:underline">
+            User Explorer →
+          </Link>
+        </div>
+      </section>
     </div>
   );
 }
