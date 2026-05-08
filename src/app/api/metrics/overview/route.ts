@@ -100,7 +100,7 @@ async function handler(request: NextRequest) {
           suggested: r?.completionSuggested ?? 0,
           accepted: r?.completionAccepted ?? 0,
           agentAdded: r?.agentAdded ?? 0,
-          rate: r && r.completionSuggested > 0 ? (r.completionAccepted / r.completionSuggested) * 100 : 0,
+          rate: r && r.compGenCount > 0 ? (r.compAcceptCount / r.compGenCount) * 100 : 0,
         };
       });
 
@@ -144,19 +144,19 @@ async function handler(request: NextRequest) {
       if (hasFilter) {
         cliVsIde = userTrendRows.map((r) => ({
           day: r.day,
-          ideUsers: r.daily,
+          ideUsers: r.daily - r.cliUsers,
           cliUsers: r.cliUsers,
         }));
       } else {
         cliVsIde = aggregated.length > 0
           ? aggregated.map((d) => ({
               day: d.day,
-              ideUsers: d.daily_active_users,
+              ideUsers: d.daily_active_users - (d.daily_active_cli_users || 0),
               cliUsers: d.daily_active_cli_users || 0,
             }))
           : userTrendRows.map((r) => ({
               day: r.day,
-              ideUsers: r.daily,
+              ideUsers: r.daily - r.cliUsers,
               cliUsers: r.cliUsers,
             }));
       }
@@ -177,25 +177,29 @@ async function handler(request: NextRequest) {
           suggested: comp.locSuggested,
           accepted: comp.locAccepted,
           agentAdded: agent.locAdded,
-          rate: comp.locSuggested > 0 ? (comp.locAccepted / comp.locSuggested) * 100 : 0,
+          rate: comp.codeGenCount > 0 ? (comp.codeAcceptCount / comp.codeGenCount) * 100 : 0,
         };
       });
 
       featureUsage = metrics.map((d) => {
-        const completions = (d.totals_by_feature || []).find((f) => f.feature === "code_completion");
-        const chat = (d.totals_by_feature || []).find((f) => f.feature === "chat_panel");
+        const features = d.totals_by_feature || [];
+        const completionFeatures = features.filter((f) =>
+          ["code_completion", "inline_chat", "chat_panel"].includes(f.feature)
+        );
+        const chat = features.find((f) => f.feature === "chat_panel");
+        const agentFeature = features.find((f) => f.feature === "agent_edit");
         return {
           day: d.day,
-          completions: completions?.code_generation_activity_count || 0,
+          completions: completionFeatures.reduce((s, f) => s + (f.code_generation_activity_count || 0), 0),
           chat: chat?.user_initiated_interaction_count || 0,
-          agent: d.monthly_active_agent_users || 0,
+          agent: agentFeature?.code_generation_activity_count || 0, // daily activity count from JSON, not monthly rolling
           cli: d.daily_active_cli_users || 0,
         };
       });
 
       cliVsIde = metrics.map((d) => ({
         day: d.day,
-        ideUsers: d.daily_active_users,
+        ideUsers: d.daily_active_users - (d.daily_active_cli_users ?? 0),
         cliUsers: d.daily_active_cli_users || 0,
       }));
     }
@@ -228,7 +232,8 @@ async function handler(request: NextRequest) {
       deltas: {
         dau: prevTrend && latestTrend && prevTrend.daily > 0
           ? ((latestTrend.daily - prevTrend.daily) / prevTrend.daily) * 100 : 0,
-        wau: 0,
+        wau: prevTrend && latestTrend && prevTrend.weekly > 0
+          ? ((latestTrend.weekly - prevTrend.weekly) / prevTrend.weekly) * 100 : 0,
       },
     };
 
@@ -243,7 +248,7 @@ async function handler(request: NextRequest) {
       cliVsIde,
       dataAsOf: end,
       daysLoaded: totalDays,
-      dataSource: hasFilter ? "filtered-users" : (useAggregated ? "user-aggregated" : "enterprise"),
+      dataSource: hasFilter ? "filtered-users" : (resolvedId ? "enterprise" : (aggregated.length > 0 ? "aggregated" : "user-aggregated")),
       filtered: hasFilter || !!enterpriseSlugs,
     }, {
       headers: { "Cache-Control": "private, max-age=300, stale-while-revalidate=60" },

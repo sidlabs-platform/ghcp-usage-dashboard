@@ -15,6 +15,7 @@ export interface AdoptionStats {
   codingAgentUsers: number;
   codeReviewUsers: number;
   cliUsers: number;
+  chatUsers: number;
 }
 
 export interface UserSummary {
@@ -172,7 +173,8 @@ export function getAdoptionStats(
       COUNT(DISTINCT CASE WHEN used_agent = 1 THEN user_login END) as agentUsers,
       COUNT(DISTINCT CASE WHEN used_copilot_coding_agent = 1 THEN user_login END) as codingAgentUsers,
       COUNT(DISTINCT CASE WHEN used_copilot_code_review_active = 1 THEN user_login END) as codeReviewUsers,
-      COUNT(DISTINCT CASE WHEN used_cli = 1 THEN user_login END) as cliUsers
+      COUNT(DISTINCT CASE WHEN used_cli = 1 THEN user_login END) as cliUsers,
+      COUNT(DISTINCT CASE WHEN used_chat = 1 THEN user_login END) as chatUsers
     FROM user_daily_metrics
     WHERE day >= ? AND day <= ? ${filter.clause}${ef.clause}
   `;
@@ -543,7 +545,7 @@ export function getFeatureBreakdown(
     SELECT
       json_extract(j.value, '$.feature') as feature,
       COALESCE(SUM(json_extract(j.value, '$.loc_added_sum')), 0) as locAdded,
-      COALESCE(SUM(json_extract(j.value, '$.code_generation_activity_count')), 0) as interactions,
+      COALESCE(SUM(json_extract(j.value, '$.user_initiated_interaction_count')), 0) as interactions,
       COALESCE(SUM(json_extract(j.value, '$.code_acceptance_activity_count')), 0) as acceptances
     FROM user_daily_metrics u, json_each(u.totals_by_feature) j
     WHERE u.day >= ? AND u.day <= ?
@@ -871,7 +873,11 @@ export function getActiveUsersRollingTrend(
     ORDER BY m.day ASC
   `;
   
-  return db.prepare(sql).all(startDay, endDay, ...ef.params, ...filter.params) as ActiveUsersRollingRow[];
+  return db.prepare(sql).all(
+    ...ef.params, ...filter.params,              // for weekly subquery
+    ...ef.params, ...filter.params,              // for monthly subquery
+    startDay, endDay, ...ef.params, ...filter.params  // for outer WHERE
+  ) as ActiveUsersRollingRow[];
 }
 
 // ── Feature usage daily (SQL, structured columns) ─────────────────────

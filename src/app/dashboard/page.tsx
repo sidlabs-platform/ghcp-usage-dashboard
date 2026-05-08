@@ -210,7 +210,7 @@ export default function DashboardOverview() {
           subtitle={isFiltered ? "In selected scope" : "This calendar month"}
         />
         <MetricCard
-          title="IDE Agent Adoption"
+          title="Agent Adoption"
           value={kpis.agentAdoption}
           format="percent"
           icon={<Bot className="h-4 w-4" />}
