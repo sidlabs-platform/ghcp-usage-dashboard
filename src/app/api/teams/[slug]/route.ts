@@ -50,21 +50,39 @@ async function handler(request: NextRequest) {
       `SELECT COUNT(DISTINCT user_login) as cnt FROM team_memberships WHERE team_slug = ?`,
     ).get(slug) as { cnt: number };
 
-    // Get members with metrics from user_period_summary
+    // Aggregate member metrics directly from user_daily_metrics (works for any date range)
     const members = db.prepare(`
       SELECT 
         tm.user_login AS login,
-        COALESCE(ups.active_days, 0) AS activeDays,
-        COALESCE(ups.loc_added, 0) AS locAdded,
-        COALESCE(ups.interactions, 0) AS interactions,
-        COALESCE(ups.acceptance_rate, 0) AS acceptanceRate,
-        COALESCE(ups.used_agent, 0) AS usedAgent,
-        COALESCE(ups.used_chat, 0) AS usedChat,
-        COALESCE(ups.used_cli, 0) AS usedCli,
-        COALESCE(ups.used_code_review_active, 0) AS usedCodeReview
+        COALESCE(m.active_days, 0) AS activeDays,
+        COALESCE(m.loc_added, 0) AS locAdded,
+        COALESCE(m.interactions, 0) AS interactions,
+        CASE
+          WHEN COALESCE(m.code_gen, 0) > 0
+          THEN ROUND(CAST(m.code_accept AS REAL) / m.code_gen * 100, 1)
+          ELSE 0
+        END AS acceptanceRate,
+        COALESCE(m.used_agent, 0) AS usedAgent,
+        COALESCE(m.used_chat, 0) AS usedChat,
+        COALESCE(m.used_cli, 0) AS usedCli,
+        COALESCE(m.used_code_review, 0) AS usedCodeReview
       FROM (SELECT DISTINCT user_login FROM team_memberships WHERE team_slug = ?) tm
-      LEFT JOIN user_period_summary ups 
-        ON ups.login = tm.user_login AND ups.period_start = ? AND ups.period_end = ?
+      LEFT JOIN (
+        SELECT
+          user_login,
+          COUNT(DISTINCT day) AS active_days,
+          SUM(loc_added_sum) AS loc_added,
+          SUM(user_initiated_interaction_count) AS interactions,
+          SUM(code_generation_activity_count) AS code_gen,
+          SUM(code_acceptance_activity_count) AS code_accept,
+          MAX(used_agent) AS used_agent,
+          MAX(used_chat) AS used_chat,
+          MAX(used_cli) AS used_cli,
+          MAX(used_copilot_code_review_active) AS used_code_review
+        FROM user_daily_metrics
+        WHERE day >= ? AND day <= ?
+        GROUP BY user_login
+      ) m ON m.user_login = tm.user_login
       ORDER BY activeDays DESC
     `).all(slug, start, end) as MemberRow[];
 
