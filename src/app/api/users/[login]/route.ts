@@ -177,10 +177,11 @@ async function handler(request: NextRequest) {
     } | undefined;
 
     // Agent LoC from agent_edit JSON
+    // Agent LoC from agent_edit JSON (guarded with json_valid for malformed data)
     const agentLocRow = db.prepare(`
       SELECT
-        COALESCE(SUM(json_extract(agent_edit, '$.loc_added_sum')), 0) AS agentLocAdded,
-        COALESCE(SUM(json_extract(agent_edit, '$.loc_deleted_sum')), 0) AS agentLocDeleted
+        COALESCE(SUM(CASE WHEN json_valid(agent_edit) THEN json_extract(agent_edit, '$.loc_added_sum') ELSE 0 END), 0) AS agentLocAdded,
+        COALESCE(SUM(CASE WHEN json_valid(agent_edit) THEN json_extract(agent_edit, '$.loc_deleted_sum') ELSE 0 END), 0) AS agentLocDeleted
       FROM user_daily_metrics
       WHERE user_login = ? AND day BETWEEN ? AND ?
         AND agent_edit IS NOT NULL AND agent_edit != ''${efClause}
