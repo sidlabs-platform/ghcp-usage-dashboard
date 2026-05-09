@@ -83,6 +83,8 @@ export const CHAT_MODE_ICONS: Record<string, string> = {
 };
 
 export const DATE_PRESETS = [
+  { label: "1 day", days: 1 },
+  { label: "2 days", days: 2 },
   { label: "7 days", days: 7 },
   { label: "14 days", days: 14 },
   { label: "28 days", days: 28 },

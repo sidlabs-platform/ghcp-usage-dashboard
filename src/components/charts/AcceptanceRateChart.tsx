@@ -11,8 +11,9 @@ import {
   Legend,
   ResponsiveContainer,
 } from "recharts";
-import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
+import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card";
 import { CHART_COLORS } from "@/lib/constants";
+import { ChartTooltip } from "@/components/charts/ChartTooltip";
 
 interface AcceptanceRateChartProps {
   data: {
@@ -28,26 +29,46 @@ function formatDate(dateStr: string) {
   return `${d.getMonth() + 1}/${d.getDate()}`;
 }
 
+function acceptanceValueFormatter(value: number, name: string): string {
+  if (name === "Rate") return `${value.toFixed(1)}%`;
+  return value.toLocaleString();
+}
+
 export function AcceptanceRateChart({ data }: AcceptanceRateChartProps) {
   return (
     <Card>
       <CardHeader>
         <CardTitle>Code Acceptance Rate</CardTitle>
+        <CardDescription>Completion-only LoC suggested vs accepted, with acceptance rate</CardDescription>
       </CardHeader>
       <CardContent>
         <ResponsiveContainer width="100%" height={350}>
           <ComposedChart data={data} margin={{ top: 5, right: 20, left: 0, bottom: 5 }}>
-            <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+            <defs>
+              <linearGradient id="grad-suggested" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor={CHART_COLORS.locSuggested} stopOpacity={0.2} />
+                <stop offset="100%" stopColor={CHART_COLORS.locSuggested} stopOpacity={0} />
+              </linearGradient>
+              <linearGradient id="grad-accepted" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor={CHART_COLORS.locAccepted} stopOpacity={0.25} />
+                <stop offset="100%" stopColor={CHART_COLORS.locAccepted} stopOpacity={0} />
+              </linearGradient>
+            </defs>
+            <CartesianGrid strokeDasharray="3 3" stroke="#94a3b820" vertical={false} />
             <XAxis
               dataKey="day"
               tickFormatter={formatDate}
               tick={{ fontSize: 12 }}
               stroke="#94a3b8"
+              tickLine={false}
+              axisLine={{ stroke: "#94a3b830" }}
             />
             <YAxis
               yAxisId="loc"
               tick={{ fontSize: 12 }}
               stroke="#94a3b8"
+              tickLine={false}
+              axisLine={false}
               tickFormatter={(v: number) =>
                 v >= 1000 ? `${(v / 1000).toFixed(0)}k` : String(v)
               }
@@ -58,24 +79,29 @@ export function AcceptanceRateChart({ data }: AcceptanceRateChartProps) {
               domain={[0, 100]}
               tick={{ fontSize: 12 }}
               stroke="#94a3b8"
+              tickLine={false}
+              axisLine={false}
               tickFormatter={(v: number) => `${v}%`}
             />
             <Tooltip
-              labelFormatter={(label) => `Date: ${label}`}
-              formatter={(value: number, name: string) => {
-                if (name === "Rate")
-                  return [`${value.toFixed(1)}%`, name];
-                return [value.toLocaleString(), name];
-              }}
+              content={
+                <ChartTooltip
+                  labelFormatter={(label) => `Date: ${label}`}
+                  valueFormatter={acceptanceValueFormatter}
+                />
+              }
             />
-            <Legend />
+            <Legend
+              iconType="circle"
+              iconSize={8}
+              wrapperStyle={{ fontSize: 12, paddingTop: 8 }}
+            />
             <Area
               yAxisId="loc"
               type="monotone"
               dataKey="suggested"
               name="Suggested LoC"
-              fill={CHART_COLORS.locSuggested}
-              fillOpacity={0.15}
+              fill="url(#grad-suggested)"
               stroke={CHART_COLORS.locSuggested}
               strokeWidth={2}
             />
@@ -84,8 +110,7 @@ export function AcceptanceRateChart({ data }: AcceptanceRateChartProps) {
               type="monotone"
               dataKey="accepted"
               name="Accepted LoC"
-              fill={CHART_COLORS.locAccepted}
-              fillOpacity={0.25}
+              fill="url(#grad-accepted)"
               stroke={CHART_COLORS.locAccepted}
               strokeWidth={2}
             />
@@ -97,7 +122,7 @@ export function AcceptanceRateChart({ data }: AcceptanceRateChartProps) {
               stroke={CHART_COLORS.success}
               strokeWidth={2}
               dot={false}
-              activeDot={{ r: 4 }}
+              activeDot={{ r: 4, strokeWidth: 0 }}
             />
           </ComposedChart>
         </ResponsiveContainer>

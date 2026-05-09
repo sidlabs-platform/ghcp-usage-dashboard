@@ -6,7 +6,8 @@ import Link from "next/link";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { MetricCard } from "@/components/cards/MetricCard";
 import { ScopeFilter } from "@/components/filters/ScopeFilter";
-import { ChartSkeleton } from "@/components/states/ChartSkeleton";
+import { ChartSkeleton, KPISkeleton } from "@/components/states/ChartSkeleton";
+import { Section } from "@/components/ui/Section";
 import { useDateRange } from "@/contexts/DateRangeContext";
 import { useScope } from "@/contexts/ScopeContext";
 import { CHART_COLORS } from "@/lib/constants";
@@ -32,7 +33,7 @@ const CLIvsIDEChart = dynamic(
   () => import("@/components/charts/CLIvsIDEChart").then(m => ({ default: m.CLIvsIDEChart })),
   { ssr: false, loading: () => <ChartSkeleton /> }
 );
-import { Users, UserCheck, Bot, Terminal, CreditCard, Activity, Eye, GitPullRequest, ShieldCheck, ShieldAlert, TrendingDown, Sparkles, Code2, Brain, Monitor, Receipt } from "lucide-react";
+import { Users, UserCheck, Bot, Terminal, CreditCard, Activity, Eye, GitPullRequest, ShieldAlert, TrendingDown, Sparkles, Code2, Brain, Monitor, Receipt, CalendarDays, CalendarRange, Calendar } from "lucide-react";
 
 interface OverviewData {
   kpis: {
@@ -44,8 +45,12 @@ interface OverviewData {
     codeReviewAdoption: number;
     cliUsers: number;
     licenseUtilization: number;
-    deltas: { dau: number; wau: number };
+    periodActiveUsers: number;
+    rollingWAU: number;
+    rollingMAU: number;
+    deltas: { dau: number; wau: number; period: number };
   };
+  dailyTrendValues: number[];
   activeUsersTrend: { day: string; daily: number; weekly: number; monthly: number }[];
   acceptanceRateTrend: { day: string; suggested: number; accepted: number; rate: number }[];
   chatModes: { ask: number; edit: number; plan: number; agent: number; custom: number; unknown: number };
@@ -58,7 +63,7 @@ interface OverviewData {
 
 export default function DashboardOverview() {
   const { days } = useDateRange();
-  const { selectedEntTeams, selectedOrgTeams, selectedOrgs, hasFilter, buildScopeParams } = useScope();
+  const { hasFilter, buildScopeParams } = useScope();
   const [data, setData] = useState<OverviewData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -119,14 +124,14 @@ export default function DashboardOverview() {
     return (
       <div>
         <PageHeader title="Executive Overview" description="Loading metrics..." />
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 mb-8">
-          {Array.from({ length: 6 }).map((_, i) => (
-            <div key={i} className="h-32 rounded-xl border bg-[hsl(var(--card))] animate-pulse" />
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-8 mb-8">
+          {Array.from({ length: 8 }).map((_, i) => (
+            <KPISkeleton key={i} />
           ))}
         </div>
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
           {Array.from({ length: 4 }).map((_, i) => (
-            <div key={i} className="h-96 rounded-xl border bg-[hsl(var(--card))] animate-pulse" />
+            <ChartSkeleton key={i} />
           ))}
         </div>
       </div>
@@ -154,6 +159,7 @@ export default function DashboardOverview() {
   if (!data) return null;
 
   const { kpis, activeUsersTrend, acceptanceRateTrend, chatModes, featureUsage, cliVsIde } = data;
+  const dailyTrendValues = data.dailyTrendValues;
   const isFiltered = data.filtered || hasFilter;
 
   const chatModeDonutData= [
@@ -190,75 +196,130 @@ export default function DashboardOverview() {
       <ScopeFilter />
 
       {/* KPI Cards */}
-      <div ref={kpiRef} className={`grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4 ${isFiltered ? "xl:grid-cols-7" : "xl:grid-cols-8"} mb-8`}>
-        <MetricCard
-          title="Daily Active Users"
-          value={kpis.dailyActiveUsers}
-          icon={<Users className="h-4 w-4" />}
-          delta={kpis.deltas.dau !== 0 ? { value: kpis.deltas.dau } : undefined}
-          subtitle="Yesterday"
-        />
-        <MetricCard
-          title="Weekly Active Users"
-          value={kpis.weeklyActiveUsers}
-          icon={<UserCheck className="h-4 w-4" />}
-          delta={kpis.deltas.wau !== 0 ? { value: kpis.deltas.wau } : undefined}
-          subtitle="Last 7 days"
-        />
-        <MetricCard
-          title="Monthly Active Users"
-          value={kpis.monthlyActiveUsers}
-          icon={<Users className="h-4 w-4" />}
-          subtitle={isFiltered ? "In selected scope" : "This calendar month"}
-        />
-        <MetricCard
-          title="Agent Adoption"
-          value={kpis.agentAdoption}
-          format="percent"
-          icon={<Bot className="h-4 w-4" />}
-          subtitle="% of active users"
-        />
-        <MetricCard
-          title="Coding Agent"
-          value={kpis.codingAgentAdoption}
-          format="percent"
-          icon={<GitPullRequest className="h-4 w-4" />}
-          subtitle="% using coding agent"
-        />
-        <MetricCard
-          title="Code Review"
-          value={kpis.codeReviewAdoption}
-          format="percent"
-          icon={<Eye className="h-4 w-4" />}
-          subtitle="% with active review"
-        />
-        <MetricCard
-          title="CLI Users"
-          value={kpis.cliUsers}
-          icon={<Terminal className="h-4 w-4" />}
-          subtitle="Yesterday"
-        />
-        {!isFiltered && (
+      <Section title="Key Metrics">
+        <div ref={kpiRef} className={`grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4 ${isFiltered ? "xl:grid-cols-7" : "xl:grid-cols-8"}`}>
           <MetricCard
-            title="License Utilization"
-            value={kpis.licenseUtilization}
-            format="percent"
-            icon={<CreditCard className="h-4 w-4" />}
-            subtitle="Active / total seats"
+            title="Daily Active Users"
+            value={kpis.dailyActiveUsers}
+            icon={<Users className="h-4 w-4" />}
+            delta={kpis.deltas.dau !== 0 ? { value: kpis.deltas.dau } : undefined}
+            subtitle="Yesterday"
+            accent="blue"
+            stagger={1}
+            trend={dailyTrendValues}
           />
-        )}
-      </div>
+          <MetricCard
+            title="Weekly Active Users"
+            value={kpis.weeklyActiveUsers}
+            icon={<UserCheck className="h-4 w-4" />}
+            delta={kpis.deltas.wau !== 0 ? { value: kpis.deltas.wau } : undefined}
+            subtitle="Last 7 days"
+            accent="violet"
+            stagger={2}
+            trend={dailyTrendValues}
+          />
+          <MetricCard
+            title="Monthly Active Users"
+            value={kpis.monthlyActiveUsers}
+            icon={<Users className="h-4 w-4" />}
+            subtitle={isFiltered ? "In selected scope" : "This calendar month"}
+            accent="green"
+            stagger={3}
+          />
+          <MetricCard
+            title="Agent Adoption"
+            value={kpis.agentAdoption}
+            format="percent"
+            icon={<Bot className="h-4 w-4" />}
+            subtitle="% of active users"
+            accent="amber"
+            stagger={4}
+          />
+          <MetricCard
+            title="Coding Agent"
+            value={kpis.codingAgentAdoption}
+            format="percent"
+            icon={<GitPullRequest className="h-4 w-4" />}
+            subtitle="% using coding agent"
+            accent="amber"
+            stagger={5}
+          />
+          <MetricCard
+            title="Code Review"
+            value={kpis.codeReviewAdoption}
+            format="percent"
+            icon={<Eye className="h-4 w-4" />}
+            subtitle="% with active review"
+            accent="teal"
+            stagger={6}
+          />
+          <MetricCard
+            title="CLI Users"
+            value={kpis.cliUsers}
+            icon={<Terminal className="h-4 w-4" />}
+            subtitle="Yesterday"
+            accent="green"
+            stagger={7}
+          />
+          {!isFiltered && (
+            <MetricCard
+              title="License Utilization"
+              value={kpis.licenseUtilization}
+              format="percent"
+              icon={<CreditCard className="h-4 w-4" />}
+              subtitle="Active / total seats"
+              accent="red"
+              stagger={8}
+            />
+          )}
+        </div>
+      </Section>
+
+      {/* Rolling Active Users */}
+      <Section title="Active Users (Selected Period)">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+          <MetricCard
+            title="Period Active Users"
+            value={kpis.periodActiveUsers}
+            icon={<Calendar className="h-4 w-4" />}
+            subtitle={`Unique in last ${days} day${days !== 1 ? "s" : ""}`}
+            accent="teal"
+            stagger={1}
+            trend={dailyTrendValues}
+          />
+          <MetricCard
+            title="Rolling WAU"
+            value={kpis.rollingWAU}
+            icon={<CalendarDays className="h-4 w-4" />}
+            subtitle="Trailing 7-day window"
+            accent="blue"
+            stagger={2}
+            trend={dailyTrendValues}
+          />
+          <MetricCard
+            title="Rolling MAU"
+            value={kpis.rollingMAU}
+            icon={<CalendarRange className="h-4 w-4" />}
+            subtitle="Trailing 30-day window"
+            accent="violet"
+            stagger={3}
+            trend={dailyTrendValues}
+          />
+        </div>
+      </Section>
 
       {/* Charts grid */}
-      <div ref={chartsRef} className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-        <ActiveUsersTrendChart data={activeUsersTrend} />
-        <AcceptanceRateChart data={acceptanceRateTrend} />
-        <ChatModeDonutChart data={chatModeDonutData} />
-        <FeatureUsageStackedChart data={featureUsage} />
-        <div className="lg:col-span-2">
-          <CLIvsIDEChart data={cliVsIde} />
+      <Section title="Trends & Analytics">
+        <div ref={chartsRef} className="grid grid-cols-1 gap-6 lg:grid-cols-2 animate-fade-in-up">
+          <ActiveUsersTrendChart data={activeUsersTrend} />
+          <AcceptanceRateChart data={acceptanceRateTrend} />
+          <ChatModeDonutChart data={chatModeDonutData} />
+          <FeatureUsageStackedChart data={featureUsage} />
+          <div className="lg:col-span-2">
+            <CLIvsIDEChart data={cliVsIde} />
+          </div>
         </div>
-      </div>
+      </Section>
 
       {/* Quick Links to Analytics */}
       {(() => {
@@ -275,30 +336,32 @@ export default function DashboardOverview() {
         ].filter((l) => isVisible(l.visKey));
         if (quickLinks.length === 0) return null;
         return (
-          <section className="mt-8">
-            <h3 className="text-sm font-medium text-[hsl(var(--muted-foreground))] mb-3">Explore Analytics</h3>
+          <Section title="Explore Analytics">
             <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
               {quickLinks.map((link) => (
-                <Link key={link.href} href={link.href} className="group rounded-xl border p-4 hover:bg-[hsl(var(--accent))] transition-colors">
-                  <div className="flex items-center gap-2 mb-1">
-                    {link.icon}
+                <Link
+                  key={link.href}
+                  href={link.href}
+                  className="group rounded-xl border p-4 transition-all duration-200 hover:bg-[hsl(var(--accent))] hover:-translate-y-0.5 hover:shadow-[var(--card-hover-shadow)]"
+                >
+                  <div className="flex items-center gap-2.5 mb-1.5">
+                    <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-[hsl(var(--muted))] group-hover:bg-[hsl(var(--background))] transition-colors">
+                      {link.icon}
+                    </div>
                     <span className="text-sm font-semibold">{link.label}</span>
                   </div>
-                  <p className="text-xs text-[hsl(var(--muted-foreground))]">{link.desc}</p>
+                  <p className="text-xs text-[hsl(var(--muted-foreground))] leading-relaxed pl-[42px]">{link.desc}</p>
                 </Link>
               ))}
             </div>
-          </section>
+          </Section>
         );
       })()}
 
       {/* Security Summary */}
       {securityData?.summary && (
-        <section ref={securityRef} className="space-y-4 mt-8">
-          <h2 className="text-lg font-semibold flex items-center gap-2">
-            <ShieldCheck className="h-5 w-5" /> Security Overview
-          </h2>
-          <div className="grid gap-4 grid-cols-2 lg:grid-cols-4">
+        <Section title="Security Overview">
+          <div ref={securityRef} className="grid gap-4 grid-cols-2 lg:grid-cols-4">
             <MetricCard
               title="Open Alerts"
               value={securityData.summary.totalOpenAlerts}
@@ -326,7 +389,7 @@ export default function DashboardOverview() {
               View Full Security Dashboard →
             </Link>
           </div>
-        </section>
+        </Section>
       )}
     </div>
   );
