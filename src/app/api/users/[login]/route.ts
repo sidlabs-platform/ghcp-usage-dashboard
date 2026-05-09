@@ -229,8 +229,9 @@ async function handler(request: NextRequest) {
 
       summary = {
         totalActiveDays: summaryRow.totalActiveDays,
-        // Backward-compatible aliases (deprecated — use completion-specific fields)
-        // NOTE: totalLocAccepted intentionally includes agent LOC for backward compat
+        // Backward-compatible aliases — values unchanged from prior API version.
+        // totalLocAdded was always SUM(loc_suggested_to_add_sum) despite the misleading name.
+        // totalLocAccepted was always SUM(loc_added_sum) which includes agent writes.
         totalLocAdded: summaryRow.totalLocSuggested,
         totalLocAccepted: summaryRow.totalLocAccepted,
         totalLocSuggestedDelete: summaryRow.totalLocSuggestedDelete,
