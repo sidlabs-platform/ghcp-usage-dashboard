@@ -12,6 +12,7 @@ import { useDateRange } from "@/contexts/DateRangeContext";
 import { useScope } from "@/contexts/ScopeContext";
 import { CHART_COLORS } from "@/lib/constants";
 import { ExportMenu } from "@/components/ui/ExportMenu";
+import type { OverviewData } from "@/lib/types/metrics";
 
 const ActiveUsersTrendChart = dynamic(
   () => import("@/components/charts/ActiveUsersTrendChart").then(m => ({ default: m.ActiveUsersTrendChart })),
@@ -34,32 +35,6 @@ const CLIvsIDEChart = dynamic(
   { ssr: false, loading: () => <ChartSkeleton /> }
 );
 import { Users, UserCheck, Bot, Terminal, CreditCard, Activity, Eye, GitPullRequest, ShieldAlert, TrendingDown, Sparkles, Code2, Brain, Monitor, Receipt, CalendarDays, CalendarRange, Calendar } from "lucide-react";
-
-interface OverviewData {
-  kpis: {
-    dailyActiveUsers: number;
-    weeklyActiveUsers: number;
-    monthlyActiveUsers: number;
-    agentAdoption: number;
-    codingAgentAdoption: number;
-    codeReviewAdoption: number;
-    cliUsers: number;
-    licenseUtilization: number;
-    periodActiveUsers: number;
-    rollingWAU: number;
-    rollingMAU: number;
-    deltas: { dau: number; wau: number; period: number };
-  };
-  dailyTrendValues: number[];
-  activeUsersTrend: { day: string; daily: number; weekly: number; monthly: number }[];
-  acceptanceRateTrend: { day: string; suggested: number; accepted: number; rate: number }[];
-  chatModes: { ask: number; edit: number; plan: number; agent: number; custom: number; unknown: number };
-  featureUsage: { day: string; completions: number; chat: number; agent: number; cli: number }[];
-  cliVsIde: { day: string; ideUsers: number; cliUsers: number }[];
-  dataAsOf: string;
-  daysLoaded: number;
-  filtered?: boolean;
-}
 
 export default function DashboardOverview() {
   const { days } = useDateRange();
@@ -159,7 +134,7 @@ export default function DashboardOverview() {
   if (!data) return null;
 
   const { kpis, activeUsersTrend, acceptanceRateTrend, chatModes, featureUsage, cliVsIde } = data;
-  const dailyTrendValues = data.dailyTrendValues;
+  const dailyTrendValues = data.dailyTrendValues ?? [];
   const isFiltered = data.filtered || hasFilter;
 
   const chatModeDonutData= [
@@ -280,7 +255,7 @@ export default function DashboardOverview() {
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
           <MetricCard
             title="Period Active Users"
-            value={kpis.periodActiveUsers}
+            value={kpis.periodActiveUsers ?? 0}
             icon={<Calendar className="h-4 w-4" />}
             subtitle={`Unique in last ${days} day${days !== 1 ? "s" : ""}`}
             accent="teal"
@@ -289,7 +264,7 @@ export default function DashboardOverview() {
           />
           <MetricCard
             title="Rolling WAU"
-            value={kpis.rollingWAU}
+            value={kpis.rollingWAU ?? 0}
             icon={<CalendarDays className="h-4 w-4" />}
             subtitle="Trailing 7-day window"
             accent="blue"
@@ -298,7 +273,7 @@ export default function DashboardOverview() {
           />
           <MetricCard
             title="Rolling MAU"
-            value={kpis.rollingMAU}
+            value={kpis.rollingMAU ?? 0}
             icon={<CalendarRange className="h-4 w-4" />}
             subtitle="Trailing 30-day window"
             accent="violet"

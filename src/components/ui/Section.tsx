@@ -16,7 +16,7 @@ export function Section({ title, description, children, className }: SectionProp
           {title}
         </h2>
         {description && (
-          <p className="text-xs text-[hsl(var(--muted-foreground)/0.7)]">{description}</p>
+          <p className="text-xs text-[hsl(var(--muted-foreground) / 0.7)]">{description}</p>
         )}
         <div
           className="h-px w-full"

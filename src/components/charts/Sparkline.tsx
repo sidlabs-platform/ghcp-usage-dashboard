@@ -1,5 +1,6 @@
 "use client";
 
+import { useId } from "react";
 import { AreaChart, Area, ResponsiveContainer } from "recharts";
 
 interface SparklineProps {
@@ -15,8 +16,9 @@ export function Sparkline({
   height = 40,
   className,
 }: SparklineProps) {
+  const id = useId();
   const chartData = data.map((v) => ({ v }));
-  const gradientId = `spark-${color.replace("#", "")}`;
+  const gradientId = `spark-${id}`;
 
   return (
     <div className={className}>

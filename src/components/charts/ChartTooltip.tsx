@@ -23,7 +23,9 @@ export function ChartTooltip({
 }: ChartTooltipProps) {
   if (!active || !payload?.length) return null;
 
-  const formattedLabel = labelFormatter ? labelFormatter(String(label)) : label;
+  const formattedLabel = label != null
+    ? (labelFormatter ? labelFormatter(String(label)) : label)
+    : undefined;
 
   return (
     <div className="rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] shadow-xl p-3">

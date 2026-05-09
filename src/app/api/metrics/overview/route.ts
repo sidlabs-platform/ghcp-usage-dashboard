@@ -235,7 +235,6 @@ async function handler(request: NextRequest) {
           ? ((latestTrend.daily - prevTrend.daily) / prevTrend.daily) * 100 : 0,
         wau: prevTrend && latestTrend && prevTrend.weekly > 0
           ? ((latestTrend.weekly - prevTrend.weekly) / prevTrend.weekly) * 100 : 0,
-        period: 0,
       },
     };
 
