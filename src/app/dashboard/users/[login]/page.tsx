@@ -30,6 +30,8 @@ interface DailyActivity {
   locSuggestedDelete: number;
   locDeleted: number;
   interactions: number;
+  agentLocAdded: number;
+  agentLocDeleted: number;
 }
 
 interface UserSummary {
@@ -44,6 +46,11 @@ interface UserSummary {
   acceptanceRate: number;
   agentLocAdded: number;
   agentLocDeleted: number;
+  // Completion-only fields (excludes agent_edit)
+  totalLocSuggested: number;
+  completionLocAccepted: number;
+  completionLocDeleted: number;
+  completionAcceptanceRate: number;
   usedAgent: boolean;
   usedChat: boolean;
   usedCli: boolean;
@@ -141,6 +148,17 @@ function LoadingSkeleton() {
 // ── Chart Components ──────────────────────────────────────────────────
 
 function LocTrendChart({ data }: { data: DailyActivity[] }) {
+  // Approximate completion-only LOC by subtracting per-day agent contributions.
+  // The summary cards use precise json_each(totals_by_feature) decomposition.
+  const chartData = useMemo(() => data.map((d) => ({
+    day: d.day,
+    locSuggested: d.locSuggested,
+    completionLocAccepted: Math.max(0, d.locAccepted - d.agentLocAdded),
+    agentLocAdded: d.agentLocAdded,
+    locSuggestedDelete: d.locSuggestedDelete,
+    completionLocDeleted: Math.max(0, d.locDeleted - d.agentLocDeleted),
+  })), [data]);
+
   return (
     <Card>
       <CardHeader>
@@ -149,21 +167,26 @@ function LocTrendChart({ data }: { data: DailyActivity[] }) {
       <CardContent>
         <div className="h-80">
           <ResponsiveContainer width="100%" height="100%">
-            <AreaChart data={data} margin={{ top: 10, right: 30, left: 0, bottom: 0 }}>
+            <AreaChart data={chartData} margin={{ top: 10, right: 30, left: 0, bottom: 0 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
               <XAxis dataKey="day" tick={{ fontSize: 12 }} stroke="hsl(var(--muted-foreground))" />
               <YAxis tick={{ fontSize: 12 }} stroke="hsl(var(--muted-foreground))" />
               <Tooltip contentStyle={tooltipStyle} />
               <Legend />
               <Area
-                type="monotone" dataKey="locSuggested" name="LoC Suggested (Add)"
+                type="monotone" dataKey="locSuggested" name="LoC Suggested"
                 stroke={CHART_COLORS.locSuggested} fill={CHART_COLORS.locSuggested}
                 fillOpacity={0.15} strokeWidth={2}
               />
               <Area
-                type="monotone" dataKey="locAccepted" name="LoC Accepted (Add)"
+                type="monotone" dataKey="completionLocAccepted" name="LoC Accepted (Completions)"
                 stroke={CHART_COLORS.locAccepted} fill={CHART_COLORS.locAccepted}
                 fillOpacity={0.15} strokeWidth={2}
+              />
+              <Area
+                type="monotone" dataKey="agentLocAdded" name="Agent LoC Added"
+                stroke={CHART_COLORS.agent} fill={CHART_COLORS.agent}
+                fillOpacity={0.10} strokeWidth={1.5} strokeDasharray="4 2"
               />
               <Area
                 type="monotone" dataKey="locSuggestedDelete" name="LoC Suggested (Delete)"
@@ -171,7 +194,7 @@ function LocTrendChart({ data }: { data: DailyActivity[] }) {
                 fillOpacity={0.08} strokeWidth={1.5} strokeDasharray="4 2"
               />
               <Area
-                type="monotone" dataKey="locDeleted" name="LoC Deleted"
+                type="monotone" dataKey="completionLocDeleted" name="LoC Deleted (Completions)"
                 stroke={CHART_COLORS.locDeleted} fill={CHART_COLORS.locDeleted}
                 fillOpacity={0.08} strokeWidth={1.5} strokeDasharray="4 2"
               />
@@ -508,7 +531,7 @@ export default function UserDetailPage() {
             />
             <MetricCard
               title="Acceptance Rate"
-              value={data.summary.acceptanceRate}
+              value={data.summary.completionAcceptanceRate}
               format="percent"
               icon={<CheckCircle className="h-4 w-4" />}
               accent="green"
@@ -520,22 +543,24 @@ export default function UserDetailPage() {
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
             <MetricCard
               title="LoC Suggested"
-              value={data.summary.totalLocAdded}
+              value={data.summary.totalLocSuggested}
               icon={<FileCode className="h-4 w-4" />}
               accent="blue"
+              subtitle="Completions only"
             />
             <MetricCard
               title="LoC Accepted"
-              value={data.summary.totalLocAccepted}
+              value={data.summary.completionLocAccepted}
               icon={<FileCheck className="h-4 w-4" />}
               accent="green"
+              subtitle="Completions only"
             />
             <MetricCard
               title="LoC Deleted"
-              value={data.summary.totalLocDeleted}
+              value={data.summary.completionLocDeleted}
               icon={<FileX className="h-4 w-4" />}
               accent="red"
-              subtitle={`${formatNumber(data.summary.totalLocSuggestedDelete)} suggested · ${formatNumber(data.summary.totalLocDeleted)} accepted`}
+              subtitle={`${formatNumber(data.summary.totalLocSuggestedDelete)} suggested`}
             />
             {data.summary.agentLocAdded > 0 || data.summary.agentLocDeleted > 0 ? (
               <MetricCard

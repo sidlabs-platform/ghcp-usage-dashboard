@@ -12,7 +12,7 @@ import {
   estimateRowCount,
 } from "@/lib/db/aggregation-queries";
 import { getDateRange, parseAndClampDays } from "@/lib/utils";
-import { extractCompletionMetrics, extractAgentMetrics } from "@/lib/aggregation/separate-metrics";
+import { extractCompletionMetrics, extractAgentMetrics, isCompletionFeature, isAgentFeature } from "@/lib/aggregation/separate-metrics";
 import { withCache } from "@/lib/cache/with-cache";
 import { withTimeout } from "@/lib/api/timeout";
 import { CACHE_TTL } from "@/lib/cache/memory-cache";
@@ -183,11 +183,9 @@ async function handler(request: NextRequest) {
 
       featureUsage = metrics.map((d) => {
         const features = d.totals_by_feature || [];
-        const completionFeatures = features.filter((f) =>
-          ["code_completion", "inline_chat", "chat_panel"].includes(f.feature)
-        );
-        const chat = features.find((f) => f.feature === "chat_panel");
-        const agentFeature = features.find((f) => f.feature === "agent_edit");
+        const completionFeatures = features.filter((f) => isCompletionFeature(f.feature));
+        const chat = features.find((f) => f.feature === "chat_panel" || f.feature.startsWith("chat_panel_"));
+        const agentFeature = features.find((f) => isAgentFeature(f.feature));
         return {
           day: d.day,
           completions: completionFeatures.reduce((s, f) => s + (f.code_generation_activity_count || 0), 0),
