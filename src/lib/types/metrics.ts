@@ -213,3 +213,33 @@ export interface ReportResponse {
   report_start_day?: string;
   report_end_day?: string;
 }
+
+// ── Overview page response ────────────────────────────────────────────
+
+export interface OverviewKpis {
+  dailyActiveUsers: number;
+  weeklyActiveUsers: number;
+  monthlyActiveUsers: number;
+  agentAdoption: number;
+  codingAgentAdoption: number;
+  codeReviewAdoption: number;
+  cliUsers: number;
+  licenseUtilization: number;
+  periodActiveUsers: number;
+  rollingWAU: number;
+  rollingMAU: number;
+  deltas: { dau: number; wau: number };
+}
+
+export interface OverviewData {
+  kpis: OverviewKpis;
+  dailyTrendValues?: number[];
+  activeUsersTrend: { day: string; daily: number; weekly: number; monthly: number }[];
+  acceptanceRateTrend: { day: string; suggested: number; accepted: number; rate: number }[];
+  chatModes: { ask: number; edit: number; plan: number; agent: number; custom: number; unknown: number };
+  featureUsage: { day: string; completions: number; chat: number; agent: number; cli: number }[];
+  cliVsIde: { day: string; ideUsers: number; cliUsers: number }[];
+  dataAsOf: string;
+  daysLoaded: number;
+  filtered?: boolean;
+}

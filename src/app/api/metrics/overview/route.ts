@@ -227,6 +227,9 @@ async function handler(request: NextRequest) {
       licenseUtilization: hasFilter
         ? -1 // Indicate N/A when filtered
         : (seatStats.total > 0 ? (seatStats.active30d / seatStats.total) * 100 : 0),
+      periodActiveUsers: adoption.totalUsers,
+      rollingWAU: latestTrend?.weekly || 0,
+      rollingMAU: latestTrend?.monthly || 0,
       deltas: {
         dau: prevTrend && latestTrend && prevTrend.daily > 0
           ? ((latestTrend.daily - prevTrend.daily) / prevTrend.daily) * 100 : 0,
@@ -239,6 +242,7 @@ async function handler(request: NextRequest) {
 
     return NextResponse.json({
       kpis,
+      dailyTrendValues: activeUsersTrend.map(t => t.daily),
       activeUsersTrend,
       acceptanceRateTrend,
       chatModes,

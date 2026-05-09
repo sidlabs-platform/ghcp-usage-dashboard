@@ -1,7 +1,8 @@
 "use client";
 
 import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } from "recharts";
-import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
+import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card";
+import { ChartTooltip } from "@/components/charts/ChartTooltip";
 
 interface ChatModeDonutChartProps {
   data: { name: string; value: number; color: string }[];
@@ -38,11 +39,37 @@ function renderLabel({ cx, cy, midAngle, innerRadius, outerRadius, percent, name
   );
 }
 
+function CenterLabel({ data }: { data: ChatModeDonutChartProps["data"] }) {
+  const total = data.reduce((sum, d) => sum + d.value, 0);
+  return (
+    <text
+      x="50%"
+      y="50%"
+      textAnchor="middle"
+      dominantBaseline="central"
+      className="fill-[hsl(var(--card-foreground))]"
+    >
+      <tspan
+        x="50%"
+        dy="-0.6em"
+        fontSize={11}
+        className="fill-[hsl(var(--muted-foreground))]"
+      >
+        Total
+      </tspan>
+      <tspan x="50%" dy="1.4em" fontSize={18} fontWeight={600}>
+        {total.toLocaleString()}
+      </tspan>
+    </text>
+  );
+}
+
 export function ChatModeDonutChart({ data }: ChatModeDonutChartProps) {
   return (
     <Card>
       <CardHeader>
         <CardTitle>Chat Mode Breakdown</CardTitle>
+        <CardDescription>Distribution of chat panel interactions by mode</CardDescription>
       </CardHeader>
       <CardContent>
         {data.length === 0 ? (
@@ -62,17 +89,24 @@ export function ChatModeDonutChart({ data }: ChatModeDonutChartProps) {
                 dataKey="value"
                 label={renderLabel}
                 labelLine={false}
+                strokeWidth={0}
               >
                 {data.map((entry, index) => (
-                  <Cell key={`cell-${index}`} fill={entry.color} />
+                  <Cell
+                    key={`cell-${index}`}
+                    fill={entry.color}
+                    fillOpacity={0.85}
+                  />
                 ))}
               </Pie>
               <Tooltip
-                formatter={(value: number, name: string) => [
-                  value.toLocaleString(),
-                  name,
-                ]}
+                content={
+                  <ChartTooltip
+                    valueFormatter={(v) => v.toLocaleString()}
+                  />
+                }
               />
+              <CenterLabel data={data} />
             </PieChart>
           </ResponsiveContainer>
         )}

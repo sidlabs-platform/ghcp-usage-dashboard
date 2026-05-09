@@ -10,8 +10,9 @@ import {
   Legend,
   ResponsiveContainer,
 } from "recharts";
-import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
+import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card";
 import { CHART_COLORS } from "@/lib/constants";
+import { ChartTooltip } from "@/components/charts/ChartTooltip";
 
 interface FeatureUsageStackedChartProps {
   data: {
@@ -40,32 +41,50 @@ export function FeatureUsageStackedChart({ data }: FeatureUsageStackedChartProps
     <Card>
       <CardHeader>
         <CardTitle>Feature Usage Over Time</CardTitle>
+        <CardDescription>Stacked daily activity across Copilot features</CardDescription>
       </CardHeader>
       <CardContent>
         <ResponsiveContainer width="100%" height={350}>
           <AreaChart data={data} margin={{ top: 5, right: 20, left: 0, bottom: 5 }}>
-            <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+            <defs>
+              {AREAS.map((area) => (
+                <linearGradient key={area.key} id={`grad-feature-${area.key}`} x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stopColor={area.color} stopOpacity={0.45} />
+                  <stop offset="100%" stopColor={area.color} stopOpacity={0.08} />
+                </linearGradient>
+              ))}
+            </defs>
+            <CartesianGrid strokeDasharray="3 3" stroke="#94a3b820" vertical={false} />
             <XAxis
               dataKey="day"
               tickFormatter={formatDate}
               tick={{ fontSize: 12 }}
               stroke="#94a3b8"
+              tickLine={false}
+              axisLine={{ stroke: "#94a3b830" }}
             />
             <YAxis
               tick={{ fontSize: 12 }}
               stroke="#94a3b8"
+              tickLine={false}
+              axisLine={false}
               tickFormatter={(v: number) =>
                 v >= 1000 ? `${(v / 1000).toFixed(0)}k` : String(v)
               }
             />
             <Tooltip
-              labelFormatter={(label) => `Date: ${label}`}
-              formatter={(value: number, name: string) => [
-                value.toLocaleString(),
-                name,
-              ]}
+              content={
+                <ChartTooltip
+                  labelFormatter={(label) => `Date: ${label}`}
+                  valueFormatter={(v) => v.toLocaleString()}
+                />
+              }
             />
-            <Legend />
+            <Legend
+              iconType="circle"
+              iconSize={8}
+              wrapperStyle={{ fontSize: 12, paddingTop: 8 }}
+            />
             {AREAS.map((area) => (
               <Area
                 key={area.key}
@@ -73,8 +92,7 @@ export function FeatureUsageStackedChart({ data }: FeatureUsageStackedChartProps
                 dataKey={area.key}
                 name={area.name}
                 stackId="1"
-                fill={area.color}
-                fillOpacity={0.4}
+                fill={`url(#grad-feature-${area.key})`}
                 stroke={area.color}
                 strokeWidth={1.5}
               />
