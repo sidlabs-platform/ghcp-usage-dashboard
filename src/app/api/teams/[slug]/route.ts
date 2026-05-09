@@ -50,41 +50,59 @@ async function handler(request: NextRequest) {
       `SELECT COUNT(DISTINCT user_login) as cnt FROM team_memberships WHERE team_slug = ?`,
     ).get(slug) as { cnt: number };
 
-    // Aggregate member metrics directly from user_daily_metrics (works for any date range)
+    // Aggregate member metrics directly from user_daily_metrics, scoped to team members.
+    // Acceptance rate uses completion-only features (excludes agent_edit) via json_each.
     const members = db.prepare(`
-      SELECT 
-        tm.user_login AS login,
-        COALESCE(m.active_days, 0) AS activeDays,
-        COALESCE(m.loc_added, 0) AS locAdded,
-        COALESCE(m.interactions, 0) AS interactions,
+      WITH team_logins AS (
+        SELECT DISTINCT user_login FROM team_memberships WHERE team_slug = ?
+      ),
+      member_metrics AS (
+        SELECT
+          udm.user_login,
+          COUNT(DISTINCT udm.day) AS active_days,
+          SUM(udm.loc_added_sum) AS loc_added,
+          SUM(udm.user_initiated_interaction_count) AS interactions,
+          MAX(udm.used_agent) AS used_agent,
+          MAX(udm.used_chat) AS used_chat,
+          MAX(udm.used_cli) AS used_cli,
+          MAX(udm.used_copilot_code_review_active) AS used_code_review
+        FROM user_daily_metrics udm
+        INNER JOIN team_logins tl ON tl.user_login = udm.user_login
+        WHERE udm.day >= ? AND udm.day <= ?
+        GROUP BY udm.user_login
+      ),
+      completion_rates AS (
+        SELECT
+          udm.user_login,
+          COALESCE(SUM(json_extract(j.value, '$.code_generation_activity_count')), 0) AS comp_gen,
+          COALESCE(SUM(json_extract(j.value, '$.code_acceptance_activity_count')), 0) AS comp_accept
+        FROM user_daily_metrics udm
+        INNER JOIN team_logins tl ON tl.user_login = udm.user_login,
+        json_each(udm.totals_by_feature) j
+        WHERE udm.day >= ? AND udm.day <= ?
+          AND udm.totals_by_feature IS NOT NULL AND udm.totals_by_feature != '[]'
+          AND COALESCE(json_extract(j.value, '$.feature'), '') != 'agent_edit'
+        GROUP BY udm.user_login
+      )
+      SELECT
+        tl.user_login AS login,
+        COALESCE(mm.active_days, 0) AS activeDays,
+        COALESCE(mm.loc_added, 0) AS locAdded,
+        COALESCE(mm.interactions, 0) AS interactions,
         CASE
-          WHEN COALESCE(m.code_gen, 0) > 0
-          THEN ROUND(CAST(m.code_accept AS REAL) / m.code_gen * 100, 1)
+          WHEN COALESCE(cr.comp_gen, 0) > 0
+          THEN ROUND(CAST(cr.comp_accept AS REAL) / cr.comp_gen * 100, 1)
           ELSE 0
         END AS acceptanceRate,
-        COALESCE(m.used_agent, 0) AS usedAgent,
-        COALESCE(m.used_chat, 0) AS usedChat,
-        COALESCE(m.used_cli, 0) AS usedCli,
-        COALESCE(m.used_code_review, 0) AS usedCodeReview
-      FROM (SELECT DISTINCT user_login FROM team_memberships WHERE team_slug = ?) tm
-      LEFT JOIN (
-        SELECT
-          user_login,
-          COUNT(DISTINCT day) AS active_days,
-          SUM(loc_added_sum) AS loc_added,
-          SUM(user_initiated_interaction_count) AS interactions,
-          SUM(code_generation_activity_count) AS code_gen,
-          SUM(code_acceptance_activity_count) AS code_accept,
-          MAX(used_agent) AS used_agent,
-          MAX(used_chat) AS used_chat,
-          MAX(used_cli) AS used_cli,
-          MAX(used_copilot_code_review_active) AS used_code_review
-        FROM user_daily_metrics
-        WHERE day >= ? AND day <= ?
-        GROUP BY user_login
-      ) m ON m.user_login = tm.user_login
+        COALESCE(mm.used_agent, 0) AS usedAgent,
+        COALESCE(mm.used_chat, 0) AS usedChat,
+        COALESCE(mm.used_cli, 0) AS usedCli,
+        COALESCE(mm.used_code_review, 0) AS usedCodeReview
+      FROM team_logins tl
+      LEFT JOIN member_metrics mm ON mm.user_login = tl.user_login
+      LEFT JOIN completion_rates cr ON cr.user_login = tl.user_login
       ORDER BY activeDays DESC
-    `).all(slug, start, end) as MemberRow[];
+    `).all(slug, start, end, start, end) as MemberRow[];
 
     // Calculate aggregates from members
     const totalLocAdded = members.reduce((s, m) => s + m.locAdded, 0);
