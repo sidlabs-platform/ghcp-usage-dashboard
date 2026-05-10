@@ -8,9 +8,30 @@ import {
   isAppAuthConfiguredForEnterprise,
   getInstallationTokenForEnterprise,
 } from "./app-auth";
+import { sanitizeForLog } from "@/lib/sanitize";
 
 const GITHUB_API_BASE = process.env.GITHUB_API_BASE || "https://api.github.com";
 const API_VERSION = "2026-03-10";
+
+// ── Allowed-origin set for SSRF protection ────────────────────────────
+
+const ALLOWED_ORIGINS: Set<string> = new Set();
+try { ALLOWED_ORIGINS.add(new URL(GITHUB_API_BASE).origin); } catch { /* env misconfigured — will fail at fetch time */ }
+ALLOWED_ORIGINS.add("https://api.github.com");
+
+/** Throws if the URL's origin is not in the allowed set. Pre-signed download URLs are exempt. */
+function assertAllowedOrigin(url: string, authMode: AuthMode): void {
+  if (authMode === "none") return; // pre-signed URLs are allowed
+  try {
+    const parsed = new URL(url);
+    if (!ALLOWED_ORIGINS.has(parsed.origin)) {
+      throw new Error(`Blocked request to disallowed origin: ${sanitizeForLog(parsed.origin)}`);
+    }
+  } catch (e) {
+    if (e instanceof Error && e.message.startsWith("Blocked")) throw e;
+    throw new Error(`Invalid URL: ${sanitizeForLog(url.slice(0, 120))}`);
+  }
+}
 
 // ── Auth mode abstraction ─────────────────────────────────────────────
 
@@ -40,14 +61,10 @@ function getToken(): string {
 export function resolveAuthMode(path: string, enterpriseSlug?: string): AuthMode {
   // Absolute non-GitHub URLs (e.g., pre-signed download links) need no auth
   if (path.startsWith("http")) {
-    const isGitHub =
-      path.startsWith(GITHUB_API_BASE) ||
-      path.startsWith("https://api.github.com");
-    if (!isGitHub) return "none";
-    // Extract pathname from absolute GitHub URL
     try {
-      const url = new URL(path);
-      path = url.pathname;
+      const parsed = new URL(path);
+      if (!ALLOWED_ORIGINS.has(parsed.origin)) return "none";
+      path = parsed.pathname;
     } catch {
       // If URL parsing fails, fall through to path-based detection
     }
@@ -56,8 +73,21 @@ export function resolveAuthMode(path: string, enterpriseSlug?: string): AuthMode
   // Enterprise endpoints → always PAT
   if (path.startsWith("/enterprises/")) return "pat";
 
-  // If enterpriseSlug provided, check if that enterprise has App auth
+  // If enterpriseSlug provided, validate it and check if that enterprise has App auth
   if (enterpriseSlug) {
+    // Defense-in-depth: only trust known enterprise slugs
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const { getEnterpriseSlugs } = require("@/lib/config/enterprise-config") as {
+        getEnterpriseSlugs: () => string[];
+      };
+      const knownSlugs = getEnterpriseSlugs();
+      if (knownSlugs.length > 0 && !knownSlugs.includes(enterpriseSlug)) {
+        return "pat"; // Unknown slug — fall back to PAT
+      }
+    } catch {
+      // Config module unavailable (e.g., in unit tests) — skip validation
+    }
     return isAppAuthConfiguredForEnterprise(enterpriseSlug) ? "app" : "pat";
   }
 
@@ -178,7 +208,7 @@ async function adaptiveRateDelay(mode: AuthMode, enterpriseSlug?: string): Promi
   // Low quota: wait until reset
   const waitMs = Math.max(0, state.resetAt - Date.now() + 1000);
   if (waitMs > 0 && waitMs < 3600_000) {
-    const label = enterpriseSlug ? `${enterpriseSlug}:${mode}` : mode;
+    const label = enterpriseSlug ? `${sanitizeForLog(enterpriseSlug)}:${mode}` : mode;
     console.warn(`[Rate Limit] (${label}) Only ${state.remaining} requests remaining, waiting ${Math.round(waitMs / 1000)}s until reset`);
     await sleep(waitMs);
   }
@@ -196,6 +226,7 @@ export async function githubFetch<T>(path: string, retries = 3, authMode?: AuthM
   const mode = authMode ?? resolveAuthMode(path, enterpriseSlug);
   await ensureAuthReady(mode);
   const url = path.startsWith("http") ? path : `${GITHUB_API_BASE}${path}`;
+  assertAllowedOrigin(url, mode);
 
   for (let attempt = 0; attempt < retries; attempt++) {
     await adaptiveRateDelay(mode, enterpriseSlug);
@@ -211,7 +242,7 @@ export async function githubFetch<T>(path: string, retries = 3, authMode?: AuthM
       const retryAfter = resp.headers.get("retry-after");
       const parsed = retryAfter ? parseInt(retryAfter, 10) : NaN;
       const waitMs = Number.isFinite(parsed) && parsed > 0 ? parsed * 1000 : Math.pow(2, attempt) * 1000;
-      console.warn(`GitHub API ${resp.status} on ${path}, retrying in ${waitMs}ms (attempt ${attempt + 1}/${retries})`);
+      console.warn(`GitHub API ${resp.status} on ${sanitizeForLog(path)}, retrying in ${waitMs}ms (attempt ${attempt + 1}/${retries})`);
       await sleep(waitMs);
       continue;
     }
@@ -224,7 +255,7 @@ export async function githubFetch<T>(path: string, retries = 3, authMode?: AuthM
     throw new GitHubApiError(resp.status, path, body);
   }
 
-  throw new Error(`GitHub API failed after ${retries} retries on ${path}`);
+  throw new Error(`GitHub API failed after ${retries} retries on ${sanitizeForLog(path)}`);
 }
 
 export async function githubFetchPaginated<T>(path: string, perPage = 100, authMode?: AuthMode, enterpriseSlug?: string): Promise<T[]> {
@@ -236,16 +267,15 @@ export async function githubFetchPaginated<T>(path: string, perPage = 100, authM
   while (true) {
     const separator = path.includes("?") ? "&" : "?";
     const url = `${path}${separator}per_page=${perPage}&page=${page}`;
+    const fullUrl = url.startsWith("http") ? url : `${GITHUB_API_BASE}${url}`;
+    assertAllowedOrigin(fullUrl, mode);
     await adaptiveRateDelay(mode, enterpriseSlug);
     const hdrs = await headersForAuth(mode, enterpriseSlug);
-    const resp = await fetch(
-      url.startsWith("http") ? url : `${GITHUB_API_BASE}${url}`,
-      { headers: hdrs, cache: "no-store" }
-    );
+    const resp = await fetch(fullUrl, { headers: hdrs, cache: "no-store" });
 
     if (!resp.ok) {
       if (resp.status === 204) break;
-      throw new Error(`GitHub API error ${resp.status} on ${url}`);
+      throw new Error(`GitHub API error ${resp.status} on ${sanitizeForLog(url)}`);
     }
 
     updateRateLimit(resp, mode, enterpriseSlug);
@@ -278,7 +308,7 @@ export async function fetchNDJSON<T>(downloadUrl: string): Promise<T[]> {
       results.push(JSON.parse(trimmed) as T);
     } catch {
       skipped++;
-      console.warn(`[fetchNDJSON] Skipping malformed line: ${trimmed.slice(0, 120)}`);
+      console.warn(`[fetchNDJSON] Skipping malformed line: ${sanitizeForLog(trimmed.slice(0, 120))}`);
     }
   }
 
@@ -335,6 +365,7 @@ export async function githubFetchPaginatedWithCutoff<
     const separator = path.includes("?") ? "&" : "?";
     const url = `${path}${separator}per_page=${perPage}&page=${page}`;
     const fullUrl = url.startsWith("http") ? url : `${GITHUB_API_BASE}${url}`;
+    assertAllowedOrigin(fullUrl, mode);
     await adaptiveRateDelay(mode, enterpriseSlug);
     const hdrs = await headersForAuth(mode, enterpriseSlug);
     const resp = await fetch(fullUrl, { headers: hdrs, cache: "no-store" });
@@ -352,7 +383,7 @@ export async function githubFetchPaginatedWithCutoff<
         continue;
       }
       const body = await resp.text().catch(() => "");
-      throw new Error(`GitHub API error ${resp.status}: ${body}`);
+      throw new Error(`GitHub API error ${resp.status}: ${sanitizeForLog(body)}`);
     }
 
     const batch: T[] = await resp.json();
@@ -400,6 +431,7 @@ export async function githubFetchCursorPaginatedWithCutoff<
     const cursorParam: string = after ? `&after=${after}` : "";
     const url: string = `${path}${separator}per_page=${perPage}${cursorParam}`;
     const fullUrl: string = url.startsWith("http") ? url : `${GITHUB_API_BASE}${url}`;
+    assertAllowedOrigin(fullUrl, mode);
     await adaptiveRateDelay(mode, enterpriseSlug);
     const hdrs = await headersForAuth(mode, enterpriseSlug);
     const resp: Response = await fetch(fullUrl, { headers: hdrs, cache: "no-store" });
@@ -417,7 +449,7 @@ export async function githubFetchCursorPaginatedWithCutoff<
         continue;
       }
       const body = await resp.text().catch(() => "");
-      throw new Error(`GitHub API error ${resp.status}: ${body}`);
+      throw new Error(`GitHub API error ${resp.status}: ${sanitizeForLog(body)}`);
     }
 
     const batch: T[] = await resp.json();
