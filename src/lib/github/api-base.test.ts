@@ -485,3 +485,94 @@ describe("ensureAuthReady (app mode)", () => {
     expect(getInstallationToken).toHaveBeenCalled();
   });
 });
+
+describe("URL validation (SSRF protection)", () => {
+  it("rejects non-root-relative paths via githubFetch", async () => {
+    await expect(githubFetch("orgs/my-org/info")).rejects.toThrow("root-relative");
+  });
+
+  it("rejects protocol-relative URLs via githubFetch", async () => {
+    await expect(githubFetch("//evil.com/path")).rejects.toThrow("root-relative");
+  });
+
+  it("rejects disallowed absolute URLs via githubFetch", async () => {
+    // With explicit auth mode "pat" to force origin check (not "none")
+    await expect(githubFetch("https://evil.com/api/data", 1, "pat")).rejects.toThrow("disallowed origin");
+  });
+
+  it("allows GitHub API absolute URLs via githubFetch", async () => {
+    mockIsApp.mockReturnValue(true);
+    (getInstallationToken as ReturnType<typeof vi.fn>).mockResolvedValue("app-token");
+    (validateAppAuth as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+    const mockFetch = fetch as unknown as ReturnType<typeof vi.fn>;
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ ok: true }),
+      headers: new Map(),
+    });
+    // Uses "app" mode (avoiding rate limit state from prior "pat" tests)
+    const result = await githubFetch<{ ok: boolean }>("https://api.github.com/orgs/my-org/info");
+    expect(result.ok).toBe(true);
+  });
+
+  it("allows pre-signed download URLs with mode=none", async () => {
+    const mockFetch = fetch as unknown as ReturnType<typeof vi.fn>;
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ data: "blob" }),
+      headers: new Map(),
+    });
+    // Pre-signed URLs resolve to "none" auth mode and bypass origin check
+    const result = await githubFetch<{ data: string }>(
+      "https://storage.azure.com/some-presigned-url",
+      1, "none"
+    );
+    expect(result.data).toBe("blob");
+  });
+  it("rejects malformed absolute URLs with contextual error", async () => {
+    await expect(githubFetch("http://", 1, "pat")).rejects.toThrow("Invalid URL");
+  });
+});
+
+describe("enterprise slug validation in auth context", () => {
+  it("passes validated slug to fetch when enterprise slug is known", async () => {
+    mockIsAppEnt.mockReturnValue(true);
+    (validateAppAuth as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+    const mockFetch = fetch as unknown as ReturnType<typeof vi.fn>;
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ data: "ok" }),
+      headers: new Map(),
+    });
+    // In test env, enterprise config module uses try/catch fallback, slug passes through
+    const result = await githubFetch<{ data: string }>("/orgs/my-org/info", 1, undefined, "ent1");
+    expect(result.data).toBe("ok");
+    // Verify App auth was used (slug was validated and app auth resolved)
+    expect(mockIsAppEnt).toHaveBeenCalledWith("ent1");
+  });
+
+  it("falls back to global PAT for unknown slug via resolveAuthMode", () => {
+    // When enterprise config module is available with known slugs, unknown slugs
+    // should fall back to "pat". In test env, config module catches and returns slug as-is,
+    // so we test the exported resolveAuthMode behavior.
+    expect(resolveAuthMode("/orgs/my-org/info", "any-slug")).toBe("pat");
+  });
+
+  it("rejects unknown slug when enterprise config has known slugs", async () => {
+    // Mock the enterprise-config module to return a fixed set of known slugs
+    const origRequire = globalThis.require;
+    const mockModule = {
+      getEnterpriseSlugs: () => ["known-ent-1", "known-ent-2"],
+    };
+    // Temporarily override require to return our mock for enterprise-config
+    vi.doMock("@/lib/config/enterprise-config", () => mockModule);
+    // Re-import to pick up the mock
+    const { resolveAuthMode: freshResolve } = await import("./api-base");
+    // Unknown slug should fall back to PAT without enterprise context
+    expect(freshResolve("/orgs/my-org/info", "evil-slug")).toBe("pat");
+    // Known slug should proceed to enterprise-level auth check
+    mockIsAppEnt.mockReturnValue(true);
+    expect(freshResolve("/orgs/my-org/info", "known-ent-1")).toBe("app");
+    vi.doUnmock("@/lib/config/enterprise-config");
+  });
+});
