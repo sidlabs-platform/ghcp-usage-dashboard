@@ -8,9 +8,8 @@ import {
   isAppAuthConfiguredForEnterprise,
   getInstallationTokenForEnterprise,
 } from "./app-auth";
-import { sanitizeForLog } from "@/lib/sanitize";
 
-const GITHUB_API_BASE = process.env.GITHUB_API_BASE || "https://api.github.com";
+const GITHUB_API_BASE= process.env.GITHUB_API_BASE || "https://api.github.com";
 const API_VERSION = "2026-03-10";
 
 // ── Allowed-origin set for SSRF protection ────────────────────────────
@@ -25,11 +24,11 @@ function assertAllowedOrigin(url: string, authMode: AuthMode): void {
   try {
     const parsed = new URL(url);
     if (!ALLOWED_ORIGINS.has(parsed.origin)) {
-      throw new Error(`Blocked request to disallowed origin: ${sanitizeForLog(parsed.origin)}`);
+      throw new Error(`Blocked request to disallowed origin: ${parsed.origin.replace(/\n|\r/g, "")}`);
     }
   } catch (e) {
     if (e instanceof Error && e.message.startsWith("Blocked")) throw e;
-    throw new Error(`Invalid URL: ${sanitizeForLog(url.slice(0, 120))}`);
+    throw new Error(`Invalid URL: ${url.slice(0, 120).replace(/\n|\r/g, "")}`);
   }
 }
 
@@ -208,8 +207,8 @@ async function adaptiveRateDelay(mode: AuthMode, enterpriseSlug?: string): Promi
   // Low quota: wait until reset
   const waitMs = Math.max(0, state.resetAt - Date.now() + 1000);
   if (waitMs > 0 && waitMs < 3600_000) {
-    const label = enterpriseSlug ? `${sanitizeForLog(enterpriseSlug)}:${mode}` : mode;
-    console.warn(`[Rate Limit] (${label}) Only ${state.remaining} requests remaining, waiting ${Math.round(waitMs / 1000)}s until reset`);
+    const label = enterpriseSlug ? `${enterpriseSlug.replace(/\n|\r/g, "")}:${mode}` : mode;
+    console.warn("[Rate Limit] (%s) Only %d requests remaining, waiting %ds until reset", label, state.remaining, Math.round(waitMs / 1000));
     await sleep(waitMs);
   }
 }
@@ -242,7 +241,7 @@ export async function githubFetch<T>(path: string, retries = 3, authMode?: AuthM
       const retryAfter = resp.headers.get("retry-after");
       const parsed = retryAfter ? parseInt(retryAfter, 10) : NaN;
       const waitMs = Number.isFinite(parsed) && parsed > 0 ? parsed * 1000 : Math.pow(2, attempt) * 1000;
-      console.warn(`GitHub API ${resp.status} on ${sanitizeForLog(path)}, retrying in ${waitMs}ms (attempt ${attempt + 1}/${retries})`);
+      console.warn("GitHub API %d on %s, retrying in %dms (attempt %d/%d)", resp.status, path.replace(/\n|\r/g, ""), waitMs, attempt + 1, retries);
       await sleep(waitMs);
       continue;
     }
@@ -255,7 +254,7 @@ export async function githubFetch<T>(path: string, retries = 3, authMode?: AuthM
     throw new GitHubApiError(resp.status, path, body);
   }
 
-  throw new Error(`GitHub API failed after ${retries} retries on ${sanitizeForLog(path)}`);
+  throw new Error(`GitHub API failed after ${retries} retries on ${path.replace(/\n|\r/g, "")}`);
 }
 
 export async function githubFetchPaginated<T>(path: string, perPage = 100, authMode?: AuthMode, enterpriseSlug?: string): Promise<T[]> {
@@ -275,7 +274,7 @@ export async function githubFetchPaginated<T>(path: string, perPage = 100, authM
 
     if (!resp.ok) {
       if (resp.status === 204) break;
-      throw new Error(`GitHub API error ${resp.status} on ${sanitizeForLog(url)}`);
+      throw new Error(`GitHub API error ${resp.status} on ${url.replace(/\n|\r/g, "")}`);
     }
 
     updateRateLimit(resp, mode, enterpriseSlug);
@@ -308,7 +307,7 @@ export async function fetchNDJSON<T>(downloadUrl: string): Promise<T[]> {
       results.push(JSON.parse(trimmed) as T);
     } catch {
       skipped++;
-      console.warn(`[fetchNDJSON] Skipping malformed line: ${sanitizeForLog(trimmed.slice(0, 120))}`);
+      console.warn("[fetchNDJSON] Skipping malformed line: %s", trimmed.slice(0, 120).replace(/\n|\r/g, ""));
     }
   }
 
@@ -383,7 +382,7 @@ export async function githubFetchPaginatedWithCutoff<
         continue;
       }
       const body = await resp.text().catch(() => "");
-      throw new Error(`GitHub API error ${resp.status}: ${sanitizeForLog(body)}`);
+      throw new Error(`GitHub API error ${resp.status}: ${body.replace(/\n|\r/g, "")}`);
     }
 
     const batch: T[] = await resp.json();
@@ -449,7 +448,7 @@ export async function githubFetchCursorPaginatedWithCutoff<
         continue;
       }
       const body = await resp.text().catch(() => "");
-      throw new Error(`GitHub API error ${resp.status}: ${sanitizeForLog(body)}`);
+      throw new Error(`GitHub API error ${resp.status}: ${body.replace(/\n|\r/g, "")}`);
     }
 
     const batch: T[] = await resp.json();
