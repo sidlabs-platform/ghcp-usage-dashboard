@@ -42,11 +42,13 @@ export async function GET(request: Request) {
     fs.existsSync(path.join(schemaDir, f))
   );
 
-  // Check dashboard config exists
+  // Check dashboard config exists (non-fatal — runtime falls back to defaults)
   const configPath = path.join(process.cwd(), "dashboard-config.json");
   checks.dashboardConfig = fs.existsSync(configPath);
 
-  const allHealthy = Object.values(checks).every(Boolean);
+  // dashboardConfig is informational only — don't fail readiness when missing
+  const requiredChecks = { dataDir: checks.dataDir, schemaFiles: checks.schemaFiles };
+  const allHealthy = Object.values(requiredChecks).every(Boolean);
 
   return NextResponse.json(
     { status: allHealthy ? "ok" : "degraded", checks },

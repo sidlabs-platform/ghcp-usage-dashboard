@@ -70,6 +70,18 @@ spec:
                   key: {{ $key }}
             {{- end }}
             {{- end }}
+            {{- if .Values.existingSecret }}
+            {{- /* When using an existing secret, inject all expected keys from it */}}
+            {{- $secretKeys := list "GITHUB_TOKEN" "GITHUB_APP_ID" "GITHUB_APP_PRIVATE_KEY" "GITHUB_APP_INSTALLATION_ID" }}
+            {{- range $key := $secretKeys }}
+            - name: {{ $key }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "ghcp-usage-dashboard.secretName" $ }}
+                  key: {{ $key }}
+                  optional: true
+            {{- end }}
+            {{- else }}
             {{- range $key, $value := .Values.secret }}
             {{- if $value }}
             - name: {{ $key }}
@@ -77,6 +89,7 @@ spec:
                 secretKeyRef:
                   name: {{ include "ghcp-usage-dashboard.secretName" $ }}
                   key: {{ $key }}
+            {{- end }}
             {{- end }}
             {{- end }}
           volumeMounts:
