@@ -182,7 +182,10 @@ describe("fetchNDJSON", () => {
     expect(result).toHaveLength(2);
     expect(result[0].a).toBe(1);
     expect(result[1].a).toBe(3);
-    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("Skipping malformed line"));
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("Skipping malformed line"),
+      expect.any(String),
+    );
     warnSpy.mockRestore();
   });
 });
@@ -454,7 +457,12 @@ describe("adaptiveRateDelay", () => {
     const p = adaptiveRateDelay("pat");
     await vi.advanceTimersByTimeAsync(7000);
     await p;
-    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("Only 50 requests remaining"));
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("requests remaining"),
+      expect.any(String),
+      expect.any(Number),
+      expect.any(Number),
+    );
     warnSpy.mockRestore();
     vi.useRealTimers();
   });

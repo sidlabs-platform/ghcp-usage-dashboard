@@ -80,7 +80,7 @@ export async function syncDay(
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       recordSync(enterpriseSlug, "enterprise", enterpriseSlug, day, 0, "error", msg);
-      console.error(`[${enterpriseSlug}] Failed to sync enterprise data for ${day}:`, msg);
+      console.error("[%s] Failed to sync enterprise data for %s: %s", enterpriseSlug.replace(/\n|\r/g, ""), day, msg.replace(/\n|\r/g, ""));
     }
   }
 
@@ -98,7 +98,7 @@ export async function syncDay(
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
           recordSync(enterpriseSlug, "users", enterpriseSlug, day, 0, "error", msg);
-          console.error(`[${enterpriseSlug}] Failed to sync user data for ${day}:`, msg);
+          console.error("[%s] Failed to sync user data for %s: %s", enterpriseSlug.replace(/\n|\r/g, ""), day, msg.replace(/\n|\r/g, ""));
         }
       }
     } else {
@@ -119,7 +119,7 @@ export async function syncDay(
           } catch (err) {
             const msg = err instanceof Error ? err.message : String(err);
             recordSync(enterpriseSlug, "users", org, day, 0, "error", msg);
-            console.error(`[${enterpriseSlug}] Failed to sync user data for org ${org} on ${day}:`, msg);
+            console.error("[%s] Failed to sync user data for org %s on %s: %s", enterpriseSlug.replace(/\n|\r/g, ""), org.replace(/\n|\r/g, ""), day, msg.replace(/\n|\r/g, ""));
           }
         }
       })));
@@ -141,7 +141,7 @@ export async function syncDay(
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         recordSync(enterpriseSlug, "org", org, day, 0, "error", msg);
-        console.error(`[${enterpriseSlug}] Failed to sync org ${org} data for ${day}:`, msg);
+        console.error("[%s] Failed to sync org %s data for %s: %s", enterpriseSlug.replace(/\n|\r/g, ""), org.replace(/\n|\r/g, ""), day, msg.replace(/\n|\r/g, ""));
       }
     }
   })));
@@ -203,7 +203,7 @@ export async function backfillEnterprise(
       daysSynced++;
     } catch (err) {
       errors++;
-      console.error(`[${enterpriseSlug}] Error syncing ${day}:`, err);
+      console.error("[%s] Error syncing %s:", enterpriseSlug.replace(/\n|\r/g, ""), day, err);
     }
   }));
 
@@ -251,7 +251,7 @@ async function incrementalSyncEnterprise(
   }
 
   if (latestDays.length === 0) {
-    console.warn(`[Sync] [${enterpriseSlug}] No enterprise and no orgs configured — nothing to sync`);
+    console.warn("[Sync] [%s] No enterprise and no orgs configured — nothing to sync", enterpriseSlug.replace(/\n|\r/g, ""));
     return { daysSynced: 0, daysSkipped: 0 };
   }
 
@@ -334,7 +334,7 @@ async function syncSeatsForEnterprise(slug: string): Promise<number> {
       total += seats.length;
       recordSync(slug, "seats", org, null, seats.length);
     } catch (err) {
-      console.error(`[${slug}] Failed to sync seats for ${org}:`, err);
+      console.error("[%s] Failed to sync seats for %s:", slug.replace(/\n|\r/g, ""), org.replace(/\n|\r/g, ""), err);
     }
   }
 
@@ -371,7 +371,7 @@ async function syncTeamsForEnterprise(slug: string): Promise<number> {
       total += entTeams.length;
       recordSync(slug, "teams", slug, null, entTeams.length);
     } catch (err) {
-      console.error(`[${slug}] Failed to sync enterprise teams:`, err);
+      console.error("[%s] Failed to sync enterprise teams:", slug.replace(/\n|\r/g, ""), err);
     }
   }
 
@@ -383,7 +383,7 @@ async function syncTeamsForEnterprise(slug: string): Promise<number> {
       total += orgTeams.length;
       recordSync(slug, "teams", org, null, orgTeams.length);
     } catch (err) {
-      console.error(`[${slug}] Failed to sync teams for ${org}:`, err);
+      console.error("[%s] Failed to sync teams for %s:", slug.replace(/\n|\r/g, ""), org.replace(/\n|\r/g, ""), err);
     }
   }
 
@@ -463,7 +463,7 @@ export async function fullSync(
         onProgress?.({ phase: "billing", current: p.current, total: p.total, message: p.message, enterpriseSlug: slug });
       });
     } catch (err) {
-      console.error(`[Sync] [${slug}] Billing sync failed:`, err);
+      console.error("[Sync] [%s] Billing sync failed:", slug.replace(/\n|\r/g, ""), err);
     }
 
     enterpriseResults.push({
@@ -531,14 +531,14 @@ async function sync28DayFallback(
     try {
       const data = await metricsClient.getEnterprise28DayReport(enterpriseSlug, enterpriseSlug);
       if (data.length > 0) {
-        console.log(`[Sync] [${enterpriseSlug}] 28-day enterprise fallback: ${data.length} day-totals received`);
+        console.log("[Sync] [%s] 28-day enterprise fallback: %d day-totals received", enterpriseSlug.replace(/\n|\r/g, ""), data.length);
         for (const record of data) {
           upsertEnterpriseDayMetrics(enterpriseSlug, record);
           recordSync(enterpriseSlug, "enterprise", enterpriseSlug, record.day, 1, "success");
         }
       }
     } catch (err) {
-      console.error(`[Sync] [${enterpriseSlug}] 28-day enterprise fallback failed:`, err);
+      console.error("[Sync] [%s] 28-day enterprise fallback failed:", enterpriseSlug.replace(/\n|\r/g, ""), err);
     }
   }
 
@@ -551,14 +551,14 @@ async function sync28DayFallback(
     try {
       const data = await metricsClient.getOrg28DayReport(org, enterpriseSlug);
       if (data.length > 0) {
-        console.log(`[Sync] [${enterpriseSlug}] 28-day org fallback for ${org}: ${data.length} day-totals received`);
+        console.log("[Sync] [%s] 28-day org fallback for %s: %d day-totals received", enterpriseSlug.replace(/\n|\r/g, ""), org.replace(/\n|\r/g, ""), data.length);
         for (const record of data) {
           upsertOrgDayMetrics(enterpriseSlug, org, record);
           recordSync(enterpriseSlug, "org", org, record.day, 1, "success");
         }
       }
     } catch (err) {
-      console.error(`[Sync] [${enterpriseSlug}] 28-day org fallback failed for ${org}:`, err);
+      console.error("[Sync] [%s] 28-day org fallback failed for %s:", enterpriseSlug.replace(/\n|\r/g, ""), org.replace(/\n|\r/g, ""), err);
     }
   }
 }

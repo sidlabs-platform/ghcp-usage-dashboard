@@ -195,7 +195,7 @@ export function refreshTeamSummary(periodStart: string, periodEnd: string, enter
     FROM (
       SELECT team_slug, team_name, MAX(source) as source, org_slug, COUNT(DISTINCT user_login) as member_count
       FROM team_memberships
-      WHERE 1=1${enterpriseFilter.replace('enterprise_slug', 'enterprise_slug')}
+      WHERE 1=1${enterpriseFilter}
       GROUP BY team_slug, source, org_slug, team_name
     ) t
     LEFT JOIN (
