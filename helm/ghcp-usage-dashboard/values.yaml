@@ -1,0 +1,167 @@
+# GHCP Usage Dashboard — Helm Values
+# ====================================
+
+replicaCount: 1
+
+image:
+  repository: ghcp-usage-dashboard
+  pullPolicy: IfNotPresent
+  # Overrides the image tag (default is the chart appVersion)
+  tag: ""
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+# ── Service Account ───────────────────────────────────────
+serviceAccount:
+  create: true
+  automount: true
+  annotations: {}
+  name: ""
+
+# ── Pod-level settings ────────────────────────────────────
+podAnnotations: {}
+podLabels: {}
+
+podSecurityContext:
+  fsGroup: 1001
+  fsGroupChangePolicy: OnRootMismatch
+
+securityContext:
+  runAsNonRoot: true
+  runAsUser: 1001
+  runAsGroup: 1001
+  readOnlyRootFilesystem: false
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+
+# ── Service ───────────────────────────────────────────────
+service:
+  type: ClusterIP
+  port: 80
+
+# ── Ingress ───────────────────────────────────────────────
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+    # kubernetes.io/ingress.class: nginx
+    # cert-manager.io/cluster-issuer: letsencrypt-prod
+  hosts:
+    - host: ghcp-dashboard.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+  #  - secretName: ghcp-dashboard-tls
+  #    hosts:
+  #      - ghcp-dashboard.example.com
+
+# ── Resources ─────────────────────────────────────────────
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+
+# ── Probes ────────────────────────────────────────────────
+startupProbe:
+  httpGet:
+    path: /api/health
+    port: http
+  failureThreshold: 30
+  periodSeconds: 5
+
+livenessProbe:
+  httpGet:
+    path: /api/health
+    port: http
+  initialDelaySeconds: 5
+  periodSeconds: 30
+  timeoutSeconds: 5
+  failureThreshold: 3
+
+readinessProbe:
+  httpGet:
+    path: /api/health?ready=1
+    port: http
+  initialDelaySeconds: 5
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 3
+
+# ── Autoscaling (disabled by default — SQLite is single-writer) ──
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 1
+  targetCPUUtilizationPercentage: 80
+
+# ── Persistence (SQLite data volume) ─────────────────────
+persistence:
+  enabled: true
+  storageClass: ""
+  accessModes:
+    - ReadWriteOnce
+  size: 5Gi
+  annotations: {}
+  # Use an existing PVC instead of creating a new one
+  existingClaim: ""
+
+# ── Environment Variables ─────────────────────────────────
+# Non-sensitive configuration (stored in ConfigMap)
+env:
+  GITHUB_ENTERPRISE: ""
+  GITHUB_ORGS: ""
+  BACKFILL_DAYS: "90"
+  # GITHUB_API_BASE: "https://api.github.com"
+
+# Sensitive values (stored in Secret)
+secret:
+  GITHUB_TOKEN: ""
+  # GITHUB_APP_ID: ""
+  # GITHUB_APP_PRIVATE_KEY: ""
+  # GITHUB_APP_INSTALLATION_ID: ""
+
+# Use an existing Secret instead of creating one from values above.
+# The secret must contain the keys referenced in the deployment env vars.
+existingSecret: ""
+
+# ── Dashboard Configuration ───────────────────────────────
+# Override dashboard-config.json content. If empty, uses the default
+# config baked into the Docker image.
+dashboardConfig: {}
+  # metrics:
+  #   copilot:
+  #     enabled: true
+  #     enterprise: true
+  #     userMetrics: true
+  #     seats: true
+  #     teams: true
+  #   codeScanning:
+  #     enabled: true
+  #   dependabot:
+  #     enabled: true
+  #   secretScanning:
+  #     enabled: true
+  #   billing:
+  #     enabled: true
+  #     meteredUsage: true
+  #     premiumRequests: true
+
+# ── Scheduling ────────────────────────────────────────────
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+# ── Deployment strategy ───────────────────────────────────
+# Recreate ensures no two pods access the SQLite DB simultaneously
+strategy:
+  type: Recreate
+
+terminationGracePeriodSeconds: 60

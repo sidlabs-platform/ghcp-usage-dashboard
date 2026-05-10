@@ -1,0 +1,40 @@
+# ── Build artifacts & dependencies ──
+node_modules/
+.next/
+out/
+build/
+.turbo/
+tsconfig.tsbuildinfo
+
+# ── Data (SQLite DB — mounted at runtime, never baked into image) ──
+data/
+
+# ── Git ──
+.git/
+.gitignore
+
+# ── Secrets & local env ──
+.env*
+*.pem
+
+# ── IDE / OS ──
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# ── Testing & coverage ──
+coverage/
+vitest.config.mts
+
+# ── Development worktrees ──
+.worktrees/
+
+# ── Docs & misc ──
+docs/
+README.md
+claude.md
+autoresearch/
+
+# ── Debug logs ──
+npm-debug.log*
