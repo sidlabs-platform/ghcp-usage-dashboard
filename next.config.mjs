@@ -1,5 +1,6 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  output: "standalone",
   compress: true,
   serverExternalPackages: ["better-sqlite3"],
   webpack: (config, { isServer }) => {

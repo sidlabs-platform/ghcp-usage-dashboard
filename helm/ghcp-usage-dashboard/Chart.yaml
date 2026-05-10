@@ -1,0 +1,14 @@
+apiVersion: v2
+name: ghcp-usage-dashboard
+description: GitHub Copilot Usage Dashboard — enterprise metrics visualization
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - github
+  - copilot
+  - metrics
+  - dashboard
+home: https://github.com/sidlabs-platform/ghcp-usage-dashboard
+maintainers:
+  - name: sidlabs-platform
