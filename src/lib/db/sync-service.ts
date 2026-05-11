@@ -25,11 +25,12 @@ import { upsertAllTeams } from "./teams-repo";
 import { datesBetween } from "@/lib/utils";
 import { syncBilling } from "./billing-sync-service";
 import {
-  isEnterpriseEnabled,
-  isCopilotSubEnabled,
-} from "@/lib/config/dashboard-config";
-import { getConfiguredEnterprises, getResolvedOrgsForEnterprise } from "@/lib/config/enterprise-config";
+  getConfiguredEnterprises, getResolvedOrgsForEnterprise, getEnterpriseConfig,
+  isCopilotSubEnabledForEnterprise, isCopilotSubEnabledForAnyEnterprise,
+} from "@/lib/config/enterprise-config";
 import { getEnterpriseContext, updateEnterpriseRegistry } from "./enterprise-context";
+import { orgsClient } from "@/lib/github/orgs-client";
+import { upsertEnterpriseOrgs, clearEnterpriseOrgs } from "./orgs-repo";
 
 const BACKFILL_DAYS = parseInt(process.env.BACKFILL_DAYS || "90", 10) || 90;
 
@@ -56,6 +57,62 @@ export interface MultiEnterpriseSyncResult {
   enterprises: EnterpriseSyncResult[];
 }
 
+// ── Org auto-discovery ────────────────────────────────────────────────
+
+/**
+ * When an enterprise has no explicit `organizations.include` list,
+ * fetch all orgs from the GitHub API and cache them in enterprise_orgs.
+ * If include is non-empty, persist those as `configured` for consistency.
+ * Returns the number of orgs discovered/persisted.
+ */
+async function discoverOrgsIfNeeded(
+  enterpriseSlug: string,
+  onProgress?: (progress: SyncProgress) => void,
+): Promise<number> {
+  const config = getEnterpriseConfig(enterpriseSlug);
+  const include = config.organizations?.include ?? [];
+
+  if (include.length > 0) {
+    // Explicit org list — persist as 'configured' for cache consistency
+    upsertEnterpriseOrgs(enterpriseSlug, include, "configured");
+    return include.length;
+  }
+
+  // Auto-discover from enterprise API
+  onProgress?.({
+    phase: "org-discovery",
+    current: 0,
+    total: 1,
+    message: `[${enterpriseSlug}] Discovering organizations from enterprise API...`,
+    enterpriseSlug,
+  });
+
+  try {
+    const apiOrgs = await orgsClient.listEnterpriseOrgs(enterpriseSlug, enterpriseSlug);
+    const orgSlugs = apiOrgs.map((o) => o.login);
+
+    // Clear old discovered orgs and re-populate
+    clearEnterpriseOrgs(enterpriseSlug, "discovered");
+    if (orgSlugs.length > 0) {
+      upsertEnterpriseOrgs(enterpriseSlug, orgSlugs, "discovered");
+    }
+
+    console.log(
+      "[Sync] [%s] Auto-discovered %d organization(s) from enterprise API",
+      enterpriseSlug.replace(/\n|\r/g, ""),
+      orgSlugs.length,
+    );
+    return orgSlugs.length;
+  } catch (err) {
+    console.warn(
+      "[Sync] [%s] Org auto-discovery failed (continuing with cached orgs): %s",
+      enterpriseSlug.replace(/\n|\r/g, ""),
+      err instanceof Error ? err.message : String(err),
+    );
+    return 0;
+  }
+}
+
 // ── Sync a single day ─────────────────────────────────────────────────
 
 export async function syncDay(
@@ -64,11 +121,11 @@ export async function syncDay(
   onProgress?: (progress: SyncProgress) => void
 ): Promise<{ enterprise: number; users: number; orgs: Record<string, number> }> {
   const orgs = getResolvedOrgsForEnterprise(enterpriseSlug);
-  const userMetricsEnabled = isCopilotSubEnabled("userMetrics");
+  const userMetricsEnabled = isCopilotSubEnabledForEnterprise(enterpriseSlug, "userMetrics");
   const result = { enterprise: 0, users: 0, orgs: {} as Record<string, number> };
 
   // 1. Enterprise aggregate (skipped when enterprise is disabled)
-  if (isEnterpriseEnabled() && !isSynced(enterpriseSlug, "enterprise", enterpriseSlug, day)) {
+  if (isCopilotSubEnabledForEnterprise(enterpriseSlug, "enterprise") && !isSynced(enterpriseSlug, "enterprise", enterpriseSlug, day)) {
     onProgress?.({ phase: "enterprise", day, current: 0, total: 1, message: `[${enterpriseSlug}] Fetching enterprise metrics for ${day}`, enterpriseSlug });
     try {
       const data = await metricsClient.getEnterpriseDailyReport(enterpriseSlug, day, enterpriseSlug);
@@ -86,8 +143,7 @@ export async function syncDay(
 
   // 2. User-level metrics (skipped when userMetrics is disabled)
   if (userMetricsEnabled) {
-    if (isEnterpriseEnabled()) {
-      // Enterprise mode: fetch user data at enterprise scope
+    if (isCopilotSubEnabledForEnterprise(enterpriseSlug, "enterprise")) {
       if (!isSynced(enterpriseSlug, "users", enterpriseSlug, day)) {
         onProgress?.({ phase: "users", day, current: 0, total: 1, message: `[${enterpriseSlug}] Fetching user metrics for ${day}`, enterpriseSlug });
         try {
@@ -158,7 +214,7 @@ export async function backfillEnterprise(
 ): Promise<{ daysSynced: number; daysSkipped: number; errors: number }> {
   const numDays = days || BACKFILL_DAYS;
   const orgs = getResolvedOrgsForEnterprise(enterpriseSlug);
-  const userMetricsEnabled = isCopilotSubEnabled("userMetrics");
+  const userMetricsEnabled = isCopilotSubEnabledForEnterprise(enterpriseSlug, "userMetrics");
 
   // Calculate date range: from (today - numDays) to yesterday
   const yesterday = new Date();
@@ -178,8 +234,8 @@ export async function backfillEnterprise(
   const dayLimit = pLimit(3);
   const dayPromises = allDays.map((day, i) => dayLimit(async () => {
     // Determine if this day is already fully synced
-    const entSynced = isEnterpriseEnabled() ? isSynced(enterpriseSlug, "enterprise", enterpriseSlug, day) : true;
-    const userSynced = !userMetricsEnabled || (isEnterpriseEnabled()
+    const entSynced = isCopilotSubEnabledForEnterprise(enterpriseSlug, "enterprise") ? isSynced(enterpriseSlug, "enterprise", enterpriseSlug, day) : true;
+    const userSynced = !userMetricsEnabled || (isCopilotSubEnabledForEnterprise(enterpriseSlug, "enterprise")
       ? isSynced(enterpriseSlug, "users", enterpriseSlug, day)
       : orgs.every((org) => isSynced(enterpriseSlug, "users", org, day)));
     const orgSynced = orgs.every((org) => isSynced(enterpriseSlug, "org", org, day));
@@ -238,12 +294,15 @@ async function incrementalSyncEnterprise(
   enterpriseSlug: string,
   onProgress?: (progress: SyncProgress) => void
 ): Promise<{ daysSynced: number; daysSkipped: number }> {
+  // Refresh org list (auto-discovers when include is empty)
+  await discoverOrgsIfNeeded(enterpriseSlug, onProgress);
+
   const orgs = getResolvedOrgsForEnterprise(enterpriseSlug);
 
   // Find the minimum latest sync day across all relevant scopes.
   // This ensures no org/scope falls behind.
   const latestDays: (string | null)[] = [];
-  if (isEnterpriseEnabled()) {
+  if (isCopilotSubEnabledForEnterprise(enterpriseSlug, "enterprise")) {
     latestDays.push(getLatestSyncDay(enterpriseSlug, "enterprise", enterpriseSlug));
   }
   for (const org of orgs) {
@@ -342,7 +401,7 @@ async function syncSeatsForEnterprise(slug: string): Promise<number> {
 }
 
 export async function syncSeats(): Promise<number> {
-  if (!isCopilotSubEnabled("seats")) {
+  if (!isCopilotSubEnabledForAnyEnterprise("seats")) {
     console.log("[Sync] Seats sync disabled by config");
     return 0;
   }
@@ -351,6 +410,7 @@ export async function syncSeats(): Promise<number> {
   let total = 0;
 
   for (const ent of enterprises) {
+    if (!isCopilotSubEnabledForEnterprise(ent.slug, "seats")) continue;
     total += await syncSeatsForEnterprise(ent.slug);
   }
 
@@ -364,7 +424,7 @@ async function syncTeamsForEnterprise(slug: string): Promise<number> {
   let total = 0;
 
   // Enterprise teams (only when enterprise mode is on)
-  if (isEnterpriseEnabled()) {
+  if (isCopilotSubEnabledForEnterprise(slug, "enterprise")) {
     try {
       const entTeams = await teamsClient.getEnterpriseTeamsWithMembers(slug, slug);
       upsertAllTeams(slug, entTeams);
@@ -391,7 +451,7 @@ async function syncTeamsForEnterprise(slug: string): Promise<number> {
 }
 
 export async function syncTeams(): Promise<number> {
-  if (!isCopilotSubEnabled("teams")) {
+  if (!isCopilotSubEnabledForAnyEnterprise("teams")) {
     console.log("[Sync] Teams sync disabled by config");
     return 0;
   }
@@ -400,6 +460,7 @@ export async function syncTeams(): Promise<number> {
   let total = 0;
 
   for (const ent of enterprises) {
+    if (!isCopilotSubEnabledForEnterprise(ent.slug, "teams")) continue;
     total += await syncTeamsForEnterprise(ent.slug);
   }
 
@@ -432,9 +493,13 @@ export async function fullSync(
     void getEnterpriseContext(slug);
     updateEnterpriseRegistry(slug, slug, entConfig.displayName);
 
+    // Discover orgs (auto-discovers from API when include is empty)
+    await discoverOrgsIfNeeded(slug, onProgress);
+    heartbeatSyncLock();
+
     // Teams
     let entTeams = 0;
-    if (isCopilotSubEnabled("teams")) {
+    if (isCopilotSubEnabledForEnterprise(slug, "teams")) {
       onProgress?.({ phase: "teams", current: 0, total: 1, message: `[${slug}] Syncing team memberships...`, enterpriseSlug: slug });
       entTeams = await syncTeamsForEnterprise(slug);
     }
@@ -442,7 +507,7 @@ export async function fullSync(
 
     // Seats
     let entSeats = 0;
-    if (isCopilotSubEnabled("seats")) {
+    if (isCopilotSubEnabledForEnterprise(slug, "seats")) {
       onProgress?.({ phase: "seats", current: 0, total: 1, message: `[${slug}] Syncing seat data...`, enterpriseSlug: slug });
       entSeats = await syncSeatsForEnterprise(slug);
     }
@@ -526,7 +591,7 @@ async function sync28DayFallback(
   const endStr = yesterday.toISOString().split("T")[0];
 
   // Enterprise 28-day fallback (only when enterprise mode is on)
-  if (isEnterpriseEnabled() && !hasEnterpriseDataForRange(enterpriseSlug, startStr, endStr, [enterpriseSlug])) {
+  if (isCopilotSubEnabledForEnterprise(enterpriseSlug, "enterprise") && !hasEnterpriseDataForRange(enterpriseSlug, startStr, endStr, [enterpriseSlug])) {
     onProgress?.({ phase: "fallback", current: 0, total: 1, message: `[${enterpriseSlug}] Trying enterprise 28-day report as fallback...`, enterpriseSlug });
     try {
       const data = await metricsClient.getEnterprise28DayReport(enterpriseSlug, enterpriseSlug);

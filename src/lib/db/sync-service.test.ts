@@ -44,14 +44,21 @@ vi.mock("./teams-repo", () => ({ upsertAllTeams: vi.fn() }));
 vi.mock("@/lib/utils", () => ({ datesBetween: vi.fn(() => ["2025-01-01"]) }));
 vi.mock("./billing-sync-service", () => ({ syncBilling: vi.fn(async () => ({ usageRecords: 0, premiumRecords: 0, errors: [] })) }));
 
-vi.mock("@/lib/config/dashboard-config", () => ({
-  isEnterpriseEnabled: vi.fn(() => true),
-  isCopilotSubEnabled: vi.fn(() => true),
-}));
-
 vi.mock("@/lib/config/enterprise-config", () => ({
   getConfiguredEnterprises: vi.fn(() => [{ slug: "test-ent", displayName: "Test" }]),
   getResolvedOrgsForEnterprise: vi.fn(() => ["test-org"]),
+  getEnterpriseConfig: vi.fn(() => ({ slug: "test-ent", displayName: "Test", organizations: { include: [], exclude: [] } })),
+  isCopilotSubEnabledForEnterprise: vi.fn(() => true),
+  isCopilotSubEnabledForAnyEnterprise: vi.fn(() => true),
+}));
+
+vi.mock("@/lib/github/orgs-client", () => ({
+  orgsClient: { listEnterpriseOrgs: vi.fn(async () => []) },
+}));
+
+vi.mock("./orgs-repo", () => ({
+  upsertEnterpriseOrgs: vi.fn(),
+  clearEnterpriseOrgs: vi.fn(),
 }));
 
 vi.mock("./enterprise-context", () => ({
@@ -60,18 +67,19 @@ vi.mock("./enterprise-context", () => ({
 }));
 
 import { syncDay, syncSeats, syncTeams, fullSync, backfill, incrementalSync, backfillEnterprise } from "./sync-service";
-import { isCopilotSubEnabled, isEnterpriseEnabled } from "@/lib/config/dashboard-config";
 import { isSynced, getLatestSyncDay, hasEnterpriseDataForRange, hasOrgDataForRange } from "./metrics-repo";
 import { metricsClient } from "@/lib/github/metrics-client";
 import { seatsClient } from "@/lib/github/seats-client";
 import { teamsClient } from "@/lib/github/teams-client";
-import { getConfiguredEnterprises, getResolvedOrgsForEnterprise } from "@/lib/config/enterprise-config";
+import { getConfiguredEnterprises, getResolvedOrgsForEnterprise, getEnterpriseConfig, isCopilotSubEnabledForEnterprise, isCopilotSubEnabledForAnyEnterprise } from "@/lib/config/enterprise-config";
+import { orgsClient } from "@/lib/github/orgs-client";
+import { upsertEnterpriseOrgs } from "./orgs-repo";
 
 describe("sync-service", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    (isCopilotSubEnabled as ReturnType<typeof vi.fn>).mockReturnValue(true);
-    (isEnterpriseEnabled as ReturnType<typeof vi.fn>).mockReturnValue(true);
+    (isCopilotSubEnabledForEnterprise as ReturnType<typeof vi.fn>).mockReturnValue(true);
+    (isCopilotSubEnabledForAnyEnterprise as ReturnType<typeof vi.fn>).mockReturnValue(true);
     (hasEnterpriseDataForRange as ReturnType<typeof vi.fn>).mockReturnValue(true);
     (hasOrgDataForRange as ReturnType<typeof vi.fn>).mockReturnValue(true);
     (getConfiguredEnterprises as ReturnType<typeof vi.fn>).mockReturnValue([{ slug: "test-ent", displayName: "Test" }]);
@@ -100,7 +108,7 @@ describe("sync-service", () => {
   });
 
   it("syncSeats returns 0 when disabled", async () => {
-    (isCopilotSubEnabled as ReturnType<typeof vi.fn>).mockReturnValue(false);
+    (isCopilotSubEnabledForAnyEnterprise as ReturnType<typeof vi.fn>).mockReturnValue(false);
     const result = await syncSeats();
     expect(result).toBe(0);
   });
@@ -111,7 +119,7 @@ describe("sync-service", () => {
   });
 
   it("syncDay org-only mode fetches user metrics per org", async () => {
-    (isEnterpriseEnabled as ReturnType<typeof vi.fn>).mockReturnValue(false);
+    (isCopilotSubEnabledForEnterprise as ReturnType<typeof vi.fn>).mockImplementation((_s: string, key: string) => key !== "enterprise");
     (isSynced as ReturnType<typeof vi.fn>).mockReturnValue(false);
     (metricsClient.getOrgUserDailyReport as ReturnType<typeof vi.fn>)
       .mockResolvedValue([{ login: "org-u1" }, { login: "org-u2" }]);
@@ -122,7 +130,7 @@ describe("sync-service", () => {
   });
 
   it("syncDay org-only handles org user fetch errors", async () => {
-    (isEnterpriseEnabled as ReturnType<typeof vi.fn>).mockReturnValue(false);
+    (isCopilotSubEnabledForEnterprise as ReturnType<typeof vi.fn>).mockImplementation((_s: string, key: string) => key !== "enterprise");
     (isSynced as ReturnType<typeof vi.fn>).mockReturnValue(false);
     (metricsClient.getOrgUserDailyReport as ReturnType<typeof vi.fn>)
       .mockRejectedValue(new Error("org user error"));
@@ -131,7 +139,7 @@ describe("sync-service", () => {
   });
 
   it("syncTeams returns 0 when disabled", async () => {
-    (isCopilotSubEnabled as ReturnType<typeof vi.fn>)
+    (isCopilotSubEnabledForAnyEnterprise as ReturnType<typeof vi.fn>)
       .mockImplementation((k: string) => k !== "teams");
     const result = await syncTeams();
     expect(result).toBe(0);
@@ -143,7 +151,7 @@ describe("sync-service", () => {
   });
 
   it("syncTeams only fetches org teams when enterprise disabled", async () => {
-    (isEnterpriseEnabled as ReturnType<typeof vi.fn>).mockReturnValue(false);
+    (isCopilotSubEnabledForEnterprise as ReturnType<typeof vi.fn>).mockImplementation((_s: string, key: string) => key !== "enterprise");
     const result = await syncTeams();
     expect(result).toBe(1); // only org teams
   });
@@ -252,7 +260,7 @@ describe("sync-service", () => {
   });
 
   it("fullSync skips teams and seats when disabled", async () => {
-    (isCopilotSubEnabled as ReturnType<typeof vi.fn>).mockImplementation((sub: string) => {
+    (isCopilotSubEnabledForEnterprise as ReturnType<typeof vi.fn>).mockImplementation((_s: string, sub: string) => {
       if (sub === "teams" || sub === "seats") return false;
       return true;
     });
@@ -269,15 +277,15 @@ describe("sync-service", () => {
   });
 
   it("incrementalSync returns 0 when enterprise disabled and no orgs", async () => {
-    (isEnterpriseEnabled as ReturnType<typeof vi.fn>).mockReturnValue(false);
+    (isCopilotSubEnabledForEnterprise as ReturnType<typeof vi.fn>).mockImplementation((_s: string, key: string) => key !== "enterprise");
     (getResolvedOrgsForEnterprise as ReturnType<typeof vi.fn>).mockReturnValue([]);
     const result = await incrementalSync();
     expect(result.daysSynced).toBe(0);
   });
 
   it("syncDay skips user metrics when userMetrics disabled", async () => {
-    (isCopilotSubEnabled as ReturnType<typeof vi.fn>)
-      .mockImplementation((k: string) => k !== "userMetrics");
+    (isCopilotSubEnabledForEnterprise as ReturnType<typeof vi.fn>)
+      .mockImplementation((_s: string, k: string) => k !== "userMetrics");
     (isSynced as ReturnType<typeof vi.fn>).mockReturnValue(false);
     (metricsClient.getEnterpriseDailyReport as ReturnType<typeof vi.fn>)
       .mockResolvedValue([{ day: "2025-01-01" }]);
@@ -328,10 +336,57 @@ describe("sync-service", () => {
   });
 
   it("incrementalSync calls backfillEnterprise when latestDay is null", async () => {
-    (isEnterpriseEnabled as ReturnType<typeof vi.fn>).mockReturnValue(true);
+    (isCopilotSubEnabledForEnterprise as ReturnType<typeof vi.fn>).mockReturnValue(true);
     (getLatestSyncDay as ReturnType<typeof vi.fn>).mockReturnValue(null);
     (isSynced as ReturnType<typeof vi.fn>).mockReturnValue(true);
     const result = await incrementalSync();
     expect(result.daysSkipped).toBeGreaterThanOrEqual(0);
+  });
+
+  it("fullSync discovers orgs when include is empty", async () => {
+    (getEnterpriseConfig as ReturnType<typeof vi.fn>).mockReturnValue({
+      slug: "test-ent",
+      displayName: "Test",
+      organizations: { include: [], exclude: [] },
+    });
+    (orgsClient.listEnterpriseOrgs as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { login: "discovered-org-1", id: 1 },
+      { login: "discovered-org-2", id: 2 },
+    ]);
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    await fullSync();
+    expect(orgsClient.listEnterpriseOrgs).toHaveBeenCalledWith("test-ent", "test-ent");
+    expect(upsertEnterpriseOrgs).toHaveBeenCalledWith(
+      "test-ent",
+      ["discovered-org-1", "discovered-org-2"],
+      "discovered",
+    );
+    logSpy.mockRestore();
+  });
+
+  it("fullSync skips discovery when include is non-empty", async () => {
+    (getEnterpriseConfig as ReturnType<typeof vi.fn>).mockReturnValue({
+      slug: "test-ent",
+      displayName: "Test",
+      organizations: { include: ["org-a"], exclude: [] },
+    });
+    await fullSync();
+    expect(orgsClient.listEnterpriseOrgs).not.toHaveBeenCalled();
+    expect(upsertEnterpriseOrgs).toHaveBeenCalledWith("test-ent", ["org-a"], "configured");
+  });
+
+  it("fullSync handles discovery API error gracefully", async () => {
+    (getEnterpriseConfig as ReturnType<typeof vi.fn>).mockReturnValue({
+      slug: "test-ent",
+      displayName: "Test",
+      organizations: { include: [], exclude: [] },
+    });
+    (orgsClient.listEnterpriseOrgs as ReturnType<typeof vi.fn>).mockRejectedValue(
+      new Error("enterprise orgs API down"),
+    );
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const result = await fullSync();
+    expect(result.enterprises).toHaveLength(1);
+    warnSpy.mockRestore();
   });
 });

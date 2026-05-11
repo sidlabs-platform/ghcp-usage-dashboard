@@ -2,7 +2,7 @@
 // Supports incremental sync via per-report-type sync state tracking
 
 import { billingClient } from "@/lib/github/billing-client";
-import { getEffectiveBillingEnabled, isBillingSubEnabled } from "@/lib/config/dashboard-config";
+import { isBillingEnabledForEnterprise, isBillingSubEnabledForEnterprise } from "@/lib/config/enterprise-config";
 import {
   upsertUsageRecords,
   upsertPremiumRequests,
@@ -207,7 +207,7 @@ export async function syncBilling(
   enterpriseSlug: string,
   onProgress?: (p: BillingSyncProgress) => void,
 ): Promise<{ usageRecords: number; premiumRecords: number; errors: string[] }> {
-  if (!getEffectiveBillingEnabled()) {
+  if (!isBillingEnabledForEnterprise(enterpriseSlug)) {
     console.log("[Billing Sync] Billing is disabled (enterprise off or billing metric disabled), skipping");
     return { usageRecords: 0, premiumRecords: 0, errors: [] };
   }
@@ -218,12 +218,12 @@ export async function syncBilling(
 
   // Compute totalSteps dynamically based on enabled sub-toggles
   let totalSteps = 1; // aggregation always runs
-  if (isBillingSubEnabled("meteredUsage")) totalSteps += 2; // summarized + detailed
-  if (isBillingSubEnabled("premiumRequests")) totalSteps += 1;
+  if (isBillingSubEnabledForEnterprise(enterpriseSlug, "meteredUsage")) totalSteps += 2; // summarized + detailed
+  if (isBillingSubEnabledForEnterprise(enterpriseSlug, "premiumRequests")) totalSteps += 1;
   let step = 0;
 
   // ── Summarized usage ────────────────────────────────────────────────
-  if (isBillingSubEnabled("meteredUsage")) {
+  if (isBillingSubEnabledForEnterprise(enterpriseSlug, "meteredUsage")) {
     try {
       step++;
       onProgress?.({
@@ -265,7 +265,7 @@ export async function syncBilling(
   }
 
   // ── Premium requests ────────────────────────────────────────────────
-  if (isBillingSubEnabled("premiumRequests")) {
+  if (isBillingSubEnabledForEnterprise(enterpriseSlug, "premiumRequests")) {
     try {
       step++;
       onProgress?.({

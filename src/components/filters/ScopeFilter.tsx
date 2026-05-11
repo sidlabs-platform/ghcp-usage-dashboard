@@ -198,7 +198,22 @@ export function ScopeFilter({ orgOnly = false }: ScopeFilterProps) {
     isMultiEnterprise,
   } = useScope();
 
-  const { enterprises, enterpriseTeams, orgTeams, orgs } = filterOptions;
+  const { enterprises, enterpriseTeams: allEntTeams, orgTeams: allOrgTeams, orgs: allOrgs } = filterOptions;
+
+  // When specific enterprises are selected, filter orgs and teams to only those enterprises.
+  // Items without enterpriseSlug (legacy data) are included if only one enterprise is configured.
+  const matchesEnterprise = (slug: string | undefined) =>
+    slug ? selectedEnterprises.includes(slug) : enterprises.length <= 1;
+
+  const enterpriseTeams = selectedEnterprises.length > 0
+    ? allEntTeams.filter((t) => matchesEnterprise(t.enterpriseSlug))
+    : allEntTeams;
+  const orgTeams = selectedEnterprises.length > 0
+    ? allOrgTeams.filter((t) => matchesEnterprise(t.enterpriseSlug))
+    : allOrgTeams;
+  const orgs = selectedEnterprises.length > 0
+    ? allOrgs.filter((o) => matchesEnterprise(o.enterpriseSlug))
+    : allOrgs;
 
   // Determine current mode based on selections
   const mode: ScopeMode =

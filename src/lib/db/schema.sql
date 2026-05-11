@@ -190,3 +190,12 @@ CREATE INDEX IF NOT EXISTS idx_user_daily_metrics_slug ON user_daily_metrics(ent
 CREATE INDEX IF NOT EXISTS idx_copilot_seats_slug ON copilot_seats(enterprise_slug, org_slug, user_login);
 CREATE INDEX IF NOT EXISTS idx_team_memberships_slug ON team_memberships(enterprise_slug, team_slug, user_login);
 CREATE INDEX IF NOT EXISTS idx_sync_log_slug ON sync_log(enterprise_slug, scope, scope_id, day);
+
+-- Auto-discovered (or configured) organization cache per enterprise
+CREATE TABLE IF NOT EXISTS enterprise_orgs (
+  enterprise_slug TEXT NOT NULL,
+  org_slug TEXT NOT NULL,
+  source TEXT NOT NULL DEFAULT 'discovered',
+  last_synced_at TEXT,
+  PRIMARY KEY (enterprise_slug, org_slug)
+);

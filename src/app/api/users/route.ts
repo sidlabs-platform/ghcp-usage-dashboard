@@ -26,8 +26,9 @@ async function handler(request: NextRequest) {
     const filter = parseScopeFilter(params);
     const { enterpriseSlugs } = filter;
     const allowedLogins = filter.allowedLogins ? Array.from(filter.allowedLogins) : undefined;
+    const includeInactive = params.get("includeInactive") === "true";
 
-    const result = getUserSummariesPaginated(start, end, page, pageSize, sort, sortDir, search, allowedLogins, enterpriseSlugs);
+    const result = getUserSummariesPaginated(start, end, page, pageSize, sort, sortDir, search, allowedLogins, enterpriseSlugs, includeInactive);
 
     return NextResponse.json({
       users: result.users,

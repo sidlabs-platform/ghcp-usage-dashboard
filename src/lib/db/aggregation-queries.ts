@@ -249,6 +249,32 @@ export interface PaginatedUserSummaries {
   total: number;
 }
 
+type RawUserRow = {
+  login: string; activeDays: number; locAdded: number; locDeleted: number;
+  interactions: number; codeGen: number; codeAccept: number;
+  usedAgent: number; usedChat: number; usedCli: number;
+  usedCodeReviewActive: number; usedCodeReviewPassive: number; usedCodingAgent: number;
+};
+
+function mapUserRow(r: RawUserRow): UserSummary {
+  return {
+    login: r.login,
+    activeDays: r.activeDays,
+    locAdded: r.locAdded,
+    locDeleted: r.locDeleted,
+    interactions: r.interactions,
+    codeGen: r.codeGen,
+    codeAccept: r.codeAccept,
+    acceptanceRate: r.codeGen > 0 ? Number(((r.codeAccept / r.codeGen) * 100).toFixed(1)) : 0,
+    usedAgent: r.usedAgent === 1,
+    usedChat: r.usedChat === 1,
+    usedCli: r.usedCli === 1,
+    usedCodeReviewActive: r.usedCodeReviewActive === 1,
+    usedCodeReviewPassive: r.usedCodeReviewPassive === 1,
+    usedCodingAgent: r.usedCodingAgent === 1,
+  };
+}
+
 export function getUserSummariesPaginated(
   startDay: string,
   endDay: string,
@@ -259,6 +285,7 @@ export function getUserSummariesPaginated(
   search?: string,
   allowedLogins?: string[],
   enterpriseSlugs?: string[],
+  includeInactive?: boolean,
 ): PaginatedUserSummaries {
   const db = getDb();
   const filter = buildLoginFilter(allowedLogins ?? []);
@@ -268,7 +295,7 @@ export function getUserSummariesPaginated(
 
   // Allowed sort columns (prevent SQL injection)
   const sortColumns: Record<string, string> = {
-    login: "user_login",
+    login: "login",
     activeDays: "activeDays",
     locAdded: "locAdded",
     interactions: "interactions",
@@ -278,6 +305,85 @@ export function getUserSummariesPaginated(
   const sqlSort = sortColumns[sortField] || "activeDays";
   const sqlDir = sortDir === "asc" ? "ASC" : "DESC";
 
+  if (includeInactive) {
+    // Build filter clauses for the copilot_seats table (uses same column names)
+    const seatsFilter = buildLoginFilter(allowedLogins ?? []);
+    const seatsEf = buildEnterpriseFilter(enterpriseSlugs);
+    const seatsSearchClause = search ? `AND user_login LIKE ?` : "";
+    const seatsSearchParam = search ? [`%${search}%`] : [];
+
+    // Active users CTE params: startDay, endDay, filter, search, ef
+    const activeParams = [startDay, endDay, ...filter.params, ...searchParam, ...ef.params];
+    // Inactive users CTE params: seatsFilter, seatsSearch, seatsEf, then NOT IN subquery: startDay, endDay, filter, ef
+    const inactiveParams = [
+      ...seatsFilter.params, ...seatsSearchParam, ...seatsEf.params,
+      startDay, endDay, ...filter.params, ...ef.params,
+    ];
+
+    const cteSql = `
+      WITH active_users AS (
+        SELECT
+          user_login AS login,
+          COUNT(DISTINCT day) AS activeDays,
+          COALESCE(SUM(loc_added_sum), 0) AS locAdded,
+          COALESCE(SUM(loc_deleted_sum), 0) AS locDeleted,
+          COALESCE(SUM(user_initiated_interaction_count), 0) AS interactions,
+          COALESCE(SUM(code_generation_activity_count), 0) AS codeGen,
+          COALESCE(SUM(code_acceptance_activity_count), 0) AS codeAccept,
+          MAX(used_agent) AS usedAgent,
+          MAX(used_chat) AS usedChat,
+          MAX(used_cli) AS usedCli,
+          MAX(used_copilot_code_review_active) AS usedCodeReviewActive,
+          MAX(used_copilot_code_review_passive) AS usedCodeReviewPassive,
+          MAX(used_copilot_coding_agent) AS usedCodingAgent
+        FROM user_daily_metrics
+        WHERE day >= ? AND day <= ? ${filter.clause} ${searchClause}${ef.clause}
+        GROUP BY user_login
+      ),
+      inactive_users AS (
+        SELECT DISTINCT
+          user_login AS login,
+          0 AS activeDays,
+          0 AS locAdded,
+          0 AS locDeleted,
+          0 AS interactions,
+          0 AS codeGen,
+          0 AS codeAccept,
+          0 AS usedAgent,
+          0 AS usedChat,
+          0 AS usedCli,
+          0 AS usedCodeReviewActive,
+          0 AS usedCodeReviewPassive,
+          0 AS usedCodingAgent
+        FROM copilot_seats
+        WHERE 1=1 ${seatsFilter.clause} ${seatsSearchClause}${seatsEf.clause}
+          AND user_login NOT IN (
+            SELECT DISTINCT user_login FROM user_daily_metrics
+            WHERE day >= ? AND day <= ? ${filter.clause}${ef.clause}
+          )
+      ),
+      all_users AS (
+        SELECT * FROM active_users
+        UNION ALL
+        SELECT * FROM inactive_users
+      )
+    `;
+
+    const allParams = [...activeParams, ...inactiveParams];
+
+    const countSql = `${cteSql} SELECT COUNT(*) AS total FROM all_users`;
+    const countRow = db.prepare(countSql).get(...allParams) as { total: number };
+
+    const offset = (page - 1) * pageSize;
+    const dataSql = `${cteSql} SELECT * FROM all_users ORDER BY ${sqlSort} ${sqlDir} LIMIT ? OFFSET ?`;
+    const rows = db.prepare(dataSql).all(...allParams, pageSize, offset) as RawUserRow[];
+
+    const users = rows.map(mapUserRow);
+
+    return { users, total: countRow.total };
+  }
+
+  // Default path: active users only (existing behavior)
   const baseSql = `
     FROM user_daily_metrics
     WHERE day >= ? AND day <= ? ${filter.clause} ${searchClause}${ef.clause}
@@ -314,29 +420,9 @@ export function getUserSummariesPaginated(
     LIMIT ? OFFSET ?
   `;
   const offset = (page - 1) * pageSize;
-  const rows = db.prepare(dataSql).all(...baseParams, pageSize, offset) as Array<{
-    login: string; activeDays: number; locAdded: number; locDeleted: number;
-    interactions: number; codeGen: number; codeAccept: number;
-    usedAgent: number; usedChat: number; usedCli: number;
-    usedCodeReviewActive: number; usedCodeReviewPassive: number; usedCodingAgent: number;
-  }>;
+  const rows = db.prepare(dataSql).all(...baseParams, pageSize, offset) as RawUserRow[];
 
-  const users = rows.map((r) => ({
-    login: r.login,
-    activeDays: r.activeDays,
-    locAdded: r.locAdded,
-    locDeleted: r.locDeleted,
-    interactions: r.interactions,
-    codeGen: r.codeGen,
-    codeAccept: r.codeAccept,
-    acceptanceRate: r.codeGen > 0 ? Number(((r.codeAccept / r.codeGen) * 100).toFixed(1)) : 0,
-    usedAgent: r.usedAgent === 1,
-    usedChat: r.usedChat === 1,
-    usedCli: r.usedCli === 1,
-    usedCodeReviewActive: r.usedCodeReviewActive === 1,
-    usedCodeReviewPassive: r.usedCodeReviewPassive === 1,
-    usedCodingAgent: r.usedCodingAgent === 1,
-  }));
+  const users = rows.map(mapUserRow);
 
   return { users, total: countRow.total };
 }

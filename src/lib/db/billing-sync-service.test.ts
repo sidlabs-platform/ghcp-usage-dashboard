@@ -7,9 +7,9 @@ vi.mock("@/lib/github/billing-client", () => ({
   },
 }));
 
-vi.mock("@/lib/config/dashboard-config", () => ({
-  getEffectiveBillingEnabled: vi.fn(() => true),
-  isBillingSubEnabled: vi.fn(() => true),
+vi.mock("@/lib/config/enterprise-config", () => ({
+  isBillingEnabledForEnterprise: vi.fn(() => true),
+  isBillingSubEnabledForEnterprise: vi.fn(() => true),
 }));
 
 vi.mock("./billing-repo", () => ({
@@ -22,11 +22,11 @@ vi.mock("./billing-repo", () => ({
 
 import { syncBilling } from "./billing-sync-service";
 import { billingClient } from "@/lib/github/billing-client";
-import { getEffectiveBillingEnabled, isBillingSubEnabled } from "@/lib/config/dashboard-config";
+import { isBillingEnabledForEnterprise, isBillingSubEnabledForEnterprise } from "@/lib/config/enterprise-config";
 import { refreshBillingDailyAggregates, getBillingSyncState } from "./billing-repo";
 
-const mockBillingEnabled = getEffectiveBillingEnabled as ReturnType<typeof vi.fn>;
-const mockSubEnabled = isBillingSubEnabled as ReturnType<typeof vi.fn>;
+const mockBillingEnabled = isBillingEnabledForEnterprise as ReturnType<typeof vi.fn>;
+const mockSubEnabled = isBillingSubEnabledForEnterprise as ReturnType<typeof vi.fn>;
 const mockFetchUsage = billingClient.fetchUsageReport as ReturnType<typeof vi.fn>;
 const mockFetchPremium = billingClient.fetchPremiumRequestReport as ReturnType<typeof vi.fn>;
 
@@ -62,7 +62,7 @@ describe("billing-sync-service", () => {
   });
 
   it("skips metered usage when sub-toggle off", async () => {
-    mockSubEnabled.mockImplementation((key: string) => key !== "meteredUsage");
+    mockSubEnabled.mockImplementation((_slug: string, key: string) => key !== "meteredUsage");
     const result = await syncBilling("test-ent");
     expect(mockFetchUsage).not.toHaveBeenCalled();
     expect(result.premiumRecords).toBe(1);
@@ -79,7 +79,7 @@ describe("billing-sync-service", () => {
   });
 
   it("handles premium_request errors independently", async () => {
-    mockSubEnabled.mockImplementation((key: string) => key === "premiumRequests");
+    mockSubEnabled.mockImplementation((_slug: string, key: string) => key === "premiumRequests");
     mockFetchPremium.mockRejectedValue(new Error("premium timeout"));
     const result = await syncBilling("test-ent");
     expect(result.premiumRecords).toBe(0);
@@ -96,7 +96,7 @@ describe("billing-sync-service", () => {
   });
 
   it("handles detailed usage sync error", async () => {
-    mockSubEnabled.mockImplementation((key: string) => key === "meteredUsage");
+    mockSubEnabled.mockImplementation((_slug: string, key: string) => key === "meteredUsage");
     mockFetchUsage.mockResolvedValueOnce([]).mockRejectedValueOnce(new Error("detailed fail"));
     const result = await syncBilling("test-ent");
     expect(result.errors.some(e => e.includes("detailed"))).toBe(true);
@@ -121,7 +121,7 @@ describe("billing-sync-service", () => {
   });
 
   it("syncBilling skips premium when sub-toggle off", async () => {
-    mockSubEnabled.mockImplementation((key: string) => key !== "premiumRequests");
+    mockSubEnabled.mockImplementation((_slug: string, key: string) => key !== "premiumRequests");
     const result = await syncBilling("test-ent");
     expect(mockFetchPremium).not.toHaveBeenCalled();
     expect(result.premiumRecords).toBe(0);

@@ -14,6 +14,8 @@ export interface CopilotMetricConfig {
   seats?: boolean;
   /** Sync team memberships. */
   teams?: boolean;
+  /** Show pull request metrics page. PR data is embedded in daily metrics — this toggles page visibility. */
+  pullRequests?: boolean;
 }
 
 export interface BillingMetricConfig {
@@ -177,7 +179,7 @@ export function isEnterpriseEnabled(): boolean {
 
 // --- Copilot sub-toggle helpers ---
 
-export function isCopilotSubEnabled(sub: "enterprise" | "userMetrics" | "seats" | "teams"): boolean {
+export function isCopilotSubEnabled(sub: "enterprise" | "userMetrics" | "seats" | "teams" | "pullRequests"): boolean {
   const config = getDashboardConfig();
   if (!config.metrics.copilot.enabled) return false;
   if (sub === "enterprise") return isEnterpriseEnabled();
@@ -204,13 +206,30 @@ export function isBillingSubEnabled(sub: "meteredUsage" | "premiumRequests"): bo
 export function getResolvedOrgs(): string[] {
   const config = getDashboardConfig();
 
-  // Multi-enterprise mode: aggregate orgs from all configured enterprises
+  // Multi-enterprise mode: resolve orgs per enterprise (include list + DB cache + exclude)
   if (config.enterprises && config.enterprises.length > 0) {
     const allOrgs = new Set<string>();
     for (const ent of config.enterprises) {
       const include = ent.organizations?.include ?? [];
       const exclude = new Set((ent.organizations?.exclude ?? []).map((o) => o.toLowerCase()));
-      for (const org of include) {
+
+      let entOrgs: string[];
+      if (include.length > 0) {
+        entOrgs = [...include];
+      } else {
+        // Fall back to auto-discovered orgs cached in DB
+        try {
+          // eslint-disable-next-line @typescript-eslint/no-require-imports
+          const { getEnterpriseOrgs } = require("@/lib/db/orgs-repo") as {
+            getEnterpriseOrgs: (slug: string) => string[];
+          };
+          entOrgs = getEnterpriseOrgs(ent.slug);
+        } catch {
+          entOrgs = [];
+        }
+      }
+
+      for (const org of entOrgs) {
         if (!exclude.has(org.toLowerCase())) {
           allOrgs.add(org);
         }
@@ -222,6 +241,22 @@ export function getResolvedOrgs(): string[] {
   // Legacy single-enterprise mode
   const envOrgs = process.env.GITHUB_ORGS;
   let orgs = envOrgs ? envOrgs.split(",").map((o) => o.trim()).filter(Boolean) : [];
+
+  // When GITHUB_ORGS is blank, fall back to DB-cached auto-discovered orgs
+  if (orgs.length === 0) {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const { getEnterpriseOrgs } = require("@/lib/db/orgs-repo") as {
+        getEnterpriseOrgs: (slug: string) => string[];
+      };
+      const legacySlug = process.env.GITHUB_ENTERPRISE;
+      if (legacySlug) {
+        orgs = getEnterpriseOrgs(legacySlug);
+      }
+    } catch {
+      // DB not initialized yet — return empty
+    }
+  }
 
   const orgConfig = config.organizations ?? {};
 

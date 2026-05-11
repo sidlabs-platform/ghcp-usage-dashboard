@@ -18,8 +18,13 @@ import {
   getOpenCodeScanningAlerts,
 } from "./ghas-repo";
 import { getDb } from "./database";
-import { isMetricEnabled, getSecurityConfig, isEnterpriseEnabled, isCodeScanningAutofixEnabled } from "@/lib/config/dashboard-config";
-import { getConfiguredEnterprises, getResolvedOrgsForEnterprise } from "@/lib/config/enterprise-config";
+import { getSecurityConfig } from "@/lib/config/dashboard-config";
+import {
+  getConfiguredEnterprises, getResolvedOrgsForEnterprise,
+  isMetricEnabledForEnterprise, isCopilotSubEnabledForEnterprise,
+  isCodeScanningAutofixEnabledForEnterprise,
+} from "@/lib/config/enterprise-config";
+import type { MetricCategory } from "@/lib/config/dashboard-config";
 import type { AutofixStatusResponse } from "@/lib/github/code-scanning-client";
 
 // ── Helpers ───────────────────────────────────────────────────────────
@@ -129,7 +134,7 @@ async function syncCategory(
     : category === "secret_scanning" ? "secretScanning"
     : "dependabot";
 
-  if (!isMetricEnabled(configKey as any)) {
+  if (!isMetricEnabledForEnterprise(enterpriseSlug, configKey as MetricCategory)) {
     return { alertsFetched: 0, isIncremental: false };
   }
 
@@ -179,7 +184,7 @@ async function syncCategory(
       upsertCodeScanningAlerts(enterpriseSlug, scope, scopeId, alerts);
 
       // Enrich with autofix status if enabled (optional, per-alert API calls)
-      if (isCodeScanningAutofixEnabled()) {
+      if (isCodeScanningAutofixEnabledForEnterprise(enterpriseSlug)) {
         await enrichAutofixStatuses(enterpriseSlug, scope, scopeId, onProgress);
         // Promote fixed alerts that had autofix available → committed
         promoteAutofixCommitted(enterpriseSlug, scope, scopeId);
@@ -269,7 +274,7 @@ async function syncGhasForEnterprise(
   let errors = 0;
 
   // Sync enterprise-level (only when enterprise mode is on)
-  if (isEnterpriseEnabled()) {
+  if (isCopilotSubEnabledForEnterprise(enterpriseSlug, "enterprise")) {
     for (const category of categories) {
       try {
         const key = `enterprise:${enterpriseSlug}:${category}`;

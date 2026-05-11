@@ -81,6 +81,44 @@ export function ScopeProvider({ children }: { children: ReactNode }) {
     }
   }, [filterData]);
 
+  // Prune org/team selections that don't belong to the currently selected enterprises.
+  // Uses functional state updates to avoid stale closure issues.
+  useEffect(() => {
+    if (selectedEnterprises.length === 0) return;
+
+    const opts = filterOptions; // capture ref for closures below
+
+    setSelectedOrgTeams((prev) => {
+      const pruned = prev.filter((slug) => {
+        const team = opts.orgTeams.find((t) => {
+          const qualifiedSlug = t.enterpriseSlug ? `${t.enterpriseSlug}:${t.slug}` : t.slug;
+          return qualifiedSlug === slug || t.slug === slug;
+        });
+        return team && team.enterpriseSlug && selectedEnterprises.includes(team.enterpriseSlug);
+      });
+      return pruned.length === prev.length ? prev : pruned;
+    });
+
+    setSelectedEntTeams((prev) => {
+      const pruned = prev.filter((slug) => {
+        const team = opts.enterpriseTeams.find((t) => {
+          const qualifiedSlug = t.enterpriseSlug ? `${t.enterpriseSlug}:${t.slug}` : t.slug;
+          return qualifiedSlug === slug || t.slug === slug;
+        });
+        return team && team.enterpriseSlug && selectedEnterprises.includes(team.enterpriseSlug);
+      });
+      return pruned.length === prev.length ? prev : pruned;
+    });
+
+    setSelectedOrgs((prev) => {
+      const pruned = prev.filter((slug) => {
+        const org = opts.orgs.find((o) => o.slug === slug);
+        return org && org.enterpriseSlug && selectedEnterprises.includes(org.enterpriseSlug);
+      });
+      return pruned.length === prev.length ? prev : pruned;
+    });
+  }, [selectedEnterprises, filterOptions]);
+
   const clearAll = useCallback(() => {
     setSelectedEnterprises([]);
     setSelectedEntTeams([]);

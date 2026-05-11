@@ -2,7 +2,8 @@
 // Uses chained setTimeout (not setInterval) for drift-free scheduling.
 // Respects the existing sync lock to prevent concurrent syncs.
 
-import { getAutoSyncConfig, isMetricEnabled, getEffectiveBillingEnabled } from "@/lib/config/dashboard-config";
+import { getAutoSyncConfig } from "@/lib/config/dashboard-config";
+import { isMetricEnabledForAnyEnterprise } from "@/lib/config/enterprise-config";
 import { incrementalSync } from "@/lib/db/sync-service";
 import { refreshAllSummaries } from "@/lib/db/summary-tables";
 import { fullGhasSync } from "@/lib/db/ghas-sync-service";
@@ -102,7 +103,7 @@ async function executeAutoSync(): Promise<void> {
       }
 
       // Run GHAS sync if any security metrics are enabled
-      const ghasEnabled = isMetricEnabled("codeScanning") || isMetricEnabled("dependabot") || isMetricEnabled("secretScanning");
+      const ghasEnabled = isMetricEnabledForAnyEnterprise("codeScanning") || isMetricEnabledForAnyEnterprise("dependabot") || isMetricEnabledForAnyEnterprise("secretScanning");
       if (ghasEnabled) {
         try {
           console.log("[AutoSync] Starting GHAS sync...");
@@ -114,7 +115,7 @@ async function executeAutoSync(): Promise<void> {
       }
 
       // Run billing sync for each configured enterprise
-      if (getEffectiveBillingEnabled()) {
+      if (isMetricEnabledForAnyEnterprise("billing")) {
         const slugs = getEnterpriseSlugs();
         for (const slug of slugs) {
           try {

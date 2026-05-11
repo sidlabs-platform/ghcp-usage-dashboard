@@ -43,22 +43,22 @@ vi.mock("./database", () => ({
 }));
 
 vi.mock("@/lib/config/dashboard-config", () => ({
-  isMetricEnabled: vi.fn(() => true),
   getSecurityConfig: vi.fn(() => ({ backfillDays: 90 })),
-  isEnterpriseEnabled: vi.fn(() => true),
-  isCodeScanningAutofixEnabled: vi.fn(() => false),
 }));
 
 vi.mock("@/lib/config/enterprise-config", () => ({
   getConfiguredEnterprises: vi.fn(() => [{ slug: "test-ent" }]),
   getResolvedOrgsForEnterprise: vi.fn(() => ["test-org"]),
+  isMetricEnabledForEnterprise: vi.fn(() => true),
+  isCopilotSubEnabledForEnterprise: vi.fn(() => true),
+  isCodeScanningAutofixEnabledForEnterprise: vi.fn(() => false),
 }));
 
 // Stub setTimeout to resolve immediately (the 2s inter-category delays)
 vi.stubGlobal("setTimeout", (fn: () => void) => { fn(); return 0; });
 
 import { fullGhasSync, incrementalGhasSync } from "./ghas-sync-service";
-import { isMetricEnabled, isCodeScanningAutofixEnabled } from "@/lib/config/dashboard-config";
+import { isMetricEnabledForEnterprise, isCopilotSubEnabledForEnterprise, isCodeScanningAutofixEnabledForEnterprise } from "@/lib/config/enterprise-config";
 import { codeScanningClient } from "@/lib/github/code-scanning-client";
 import { dependabotClient } from "@/lib/github/dependabot-client";
 import { secretScanningClient } from "@/lib/github/secret-scanning-client";
@@ -67,8 +67,8 @@ import { getGhasSyncState, getOpenCodeScanningAlerts } from "./ghas-repo";
 describe("ghas-sync-service", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    (isMetricEnabled as ReturnType<typeof vi.fn>).mockReturnValue(true);
-    (isCodeScanningAutofixEnabled as ReturnType<typeof vi.fn>).mockReturnValue(false);
+    (isMetricEnabledForEnterprise as ReturnType<typeof vi.fn>).mockReturnValue(true);
+    (isCodeScanningAutofixEnabledForEnterprise as ReturnType<typeof vi.fn>).mockReturnValue(false);
     (codeScanningClient.getEnterpriseAlerts as ReturnType<typeof vi.fn>).mockResolvedValue([]);
     (codeScanningClient.getOrgAlerts as ReturnType<typeof vi.fn>).mockResolvedValue([]);
     (codeScanningClient.getAlertAutofixStatus as ReturnType<typeof vi.fn>).mockResolvedValue(null);
@@ -85,7 +85,7 @@ describe("ghas-sync-service", () => {
   });
 
   it("skips disabled categories", async () => {
-    (isMetricEnabled as ReturnType<typeof vi.fn>).mockReturnValue(false);
+    (isMetricEnabledForEnterprise as ReturnType<typeof vi.fn>).mockReturnValue(false);
     const result = await fullGhasSync(undefined, "test-ent");
     for (const v of Object.values(result.categories)) {
       expect(v.alertsFetched).toBe(0);
@@ -119,7 +119,7 @@ describe("ghas-sync-service", () => {
   });
 
   it("enriches autofix when enabled", async () => {
-    (isCodeScanningAutofixEnabled as ReturnType<typeof vi.fn>).mockReturnValue(true);
+    (isCodeScanningAutofixEnabledForEnterprise as ReturnType<typeof vi.fn>).mockReturnValue(true);
     (getOpenCodeScanningAlerts as ReturnType<typeof vi.fn>).mockReturnValue([
       { alert_number: 1, repo_full_name: "org/repo" },
     ]);
@@ -128,7 +128,7 @@ describe("ghas-sync-service", () => {
   });
 
   it("enrichAutofixStatuses maps success status to available", async () => {
-    (isCodeScanningAutofixEnabled as ReturnType<typeof vi.fn>).mockReturnValue(true);
+    (isCodeScanningAutofixEnabledForEnterprise as ReturnType<typeof vi.fn>).mockReturnValue(true);
     (codeScanningClient.getEnterpriseAlerts as ReturnType<typeof vi.fn>).mockResolvedValue([]);
     (codeScanningClient.getOrgAlerts as ReturnType<typeof vi.fn>).mockResolvedValue([]);
     (getOpenCodeScanningAlerts as ReturnType<typeof vi.fn>).mockReturnValue([
@@ -141,7 +141,7 @@ describe("ghas-sync-service", () => {
   });
 
   it("enrichAutofixStatuses handles rejected API calls", async () => {
-    (isCodeScanningAutofixEnabled as ReturnType<typeof vi.fn>).mockReturnValue(true);
+    (isCodeScanningAutofixEnabledForEnterprise as ReturnType<typeof vi.fn>).mockReturnValue(true);
     (codeScanningClient.getEnterpriseAlerts as ReturnType<typeof vi.fn>).mockResolvedValue([]);
     (codeScanningClient.getOrgAlerts as ReturnType<typeof vi.fn>).mockResolvedValue([]);
     (getOpenCodeScanningAlerts as ReturnType<typeof vi.fn>).mockReturnValue([
@@ -154,7 +154,7 @@ describe("ghas-sync-service", () => {
   });
 
   it("enrichAutofixStatuses maps outdated status to available", async () => {
-    (isCodeScanningAutofixEnabled as ReturnType<typeof vi.fn>).mockReturnValue(true);
+    (isCodeScanningAutofixEnabledForEnterprise as ReturnType<typeof vi.fn>).mockReturnValue(true);
     (codeScanningClient.getEnterpriseAlerts as ReturnType<typeof vi.fn>).mockResolvedValue([]);
     (getOpenCodeScanningAlerts as ReturnType<typeof vi.fn>).mockReturnValue([
       { alert_number: 20, repo_full_name: "org/repo" },
@@ -166,7 +166,7 @@ describe("ghas-sync-service", () => {
   });
 
   it("enrichAutofixStatuses skips alerts with invalid repo_full_name", async () => {
-    (isCodeScanningAutofixEnabled as ReturnType<typeof vi.fn>).mockReturnValue(true);
+    (isCodeScanningAutofixEnabledForEnterprise as ReturnType<typeof vi.fn>).mockReturnValue(true);
     (codeScanningClient.getEnterpriseAlerts as ReturnType<typeof vi.fn>).mockResolvedValue([]);
     (getOpenCodeScanningAlerts as ReturnType<typeof vi.fn>).mockReturnValue([
       { alert_number: 5, repo_full_name: "no-slash" },
@@ -176,8 +176,7 @@ describe("ghas-sync-service", () => {
   });
 
   it("skips enterprise-level sync when enterprise mode disabled", async () => {
-    const { isEnterpriseEnabled } = await import("@/lib/config/dashboard-config");
-    (isEnterpriseEnabled as ReturnType<typeof vi.fn>).mockReturnValue(false);
+    (isCopilotSubEnabledForEnterprise as ReturnType<typeof vi.fn>).mockImplementation((_s: string, key: string) => key !== "enterprise");
     const result = await fullGhasSync(undefined, "test-ent");
     // Only org-level categories (3), not enterprise-level
     expect(Object.keys(result.categories)).toHaveLength(3);
