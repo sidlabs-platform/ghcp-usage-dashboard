@@ -18,20 +18,6 @@ const ALLOWED_ORIGINS: Set<string> = new Set();
 try { ALLOWED_ORIGINS.add(new URL(GITHUB_API_BASE).origin); } catch { /* env misconfigured — will fail at fetch time */ }
 ALLOWED_ORIGINS.add("https://api.github.com");
 
-/** Throws if the URL's origin is not in the allowed set. Pre-signed download URLs are exempt. */
-function assertAllowedOrigin(url: string, authMode: AuthMode): void {
-  if (authMode === "none") return; // pre-signed URLs are allowed
-  try {
-    const parsed = new URL(url);
-    if (!ALLOWED_ORIGINS.has(parsed.origin)) {
-      throw new Error(`Blocked request to disallowed origin: ${parsed.origin.replace(/\n|\r/g, "")}`);
-    }
-  } catch (e) {
-    if (e instanceof Error && e.message.startsWith("Blocked")) throw e;
-    throw new Error(`Invalid URL: ${url.slice(0, 120).replace(/\n|\r/g, "")}`);
-  }
-}
-
 // ── Auth mode abstraction ─────────────────────────────────────────────
 
 export type AuthMode = "pat" | "app" | "none";
@@ -51,6 +37,138 @@ function getToken(): string {
   return token;
 }
 
+// ── Enterprise slug lookup ─────────────────────────────────────────────
+
+// Lazy-resolved reference to enterprise config; false = resolution failed permanently
+let _getEnterpriseSlugs: (() => string[]) | null | false = null;
+
+/**
+ * @internal For testing: inject a custom enterprise slugs provider.
+ * Pass null to reset to the default (require-based) resolution.
+ */
+export function _setEnterpriseSlugsForTesting(fn: (() => string[]) | null): void {
+  _getEnterpriseSlugs = fn;
+}
+
+function getEnterpriseSlugsInternal(): string[] {
+  if (_getEnterpriseSlugs === false) return [];
+  if (_getEnterpriseSlugs) return _getEnterpriseSlugs();
+
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const mod = require("@/lib/config/enterprise-config") as {
+      getEnterpriseSlugs: () => string[];
+    };
+    _getEnterpriseSlugs = mod.getEnterpriseSlugs;
+    return _getEnterpriseSlugs();
+  } catch {
+    _getEnterpriseSlugs = false;
+    return [];
+  }
+}
+
+/**
+ * Look up an enterprise slug in the server configuration.
+ * Returns the server-owned slug string from config if found, or undefined.
+ * This breaks the taint chain: the returned value comes from the config
+ * array, not from the user-provided input.
+ */
+function lookupConfiguredSlug(slug?: string): string | undefined {
+  if (!slug) return undefined;
+  const knownSlugs = getEnterpriseSlugsInternal();
+  return knownSlugs.find(s => s === slug);
+}
+
+// ── Validated URL construction ────────────────────────────────────────
+
+/**
+ * Construct a validated URL from a path or absolute URL.
+ * Ensures the URL's origin is in the allowed set (unless authMode is "none").
+ * For relative paths, enforces root-relative format and constructs against GITHUB_API_BASE.
+ */
+function buildValidatedUrl(pathOrUrl: string, mode: AuthMode): string {
+  if (pathOrUrl.startsWith("http")) {
+    let parsed: URL;
+    try {
+      parsed = new URL(pathOrUrl);
+    } catch {
+      throw new Error(`Invalid URL: ${pathOrUrl.slice(0, 120).replace(/\n|\r/g, "")}`);
+    }
+    if (mode !== "none" && !ALLOWED_ORIGINS.has(parsed.origin)) {
+      throw new Error(`Blocked request to disallowed origin: ${parsed.origin.replace(/\n|\r/g, "")}`);
+    }
+    return parsed.href;
+  }
+
+  if (!pathOrUrl.startsWith("/") || pathOrUrl.startsWith("//")) {
+    throw new Error(`GitHub API path must be root-relative (start with /): ${pathOrUrl.slice(0, 120).replace(/\n|\r/g, "")}`);
+  }
+
+  // Use string concatenation to preserve GHES path prefixes (e.g., /api/v3),
+  // then parse to normalize and validate the result.
+  const fullUrl = `${GITHUB_API_BASE}${pathOrUrl}`;
+  let parsed: URL;
+  try {
+    parsed = new URL(fullUrl);
+  } catch {
+    throw new Error(`Invalid constructed URL: ${fullUrl.slice(0, 120).replace(/\n|\r/g, "")}`);
+  }
+  if (!ALLOWED_ORIGINS.has(parsed.origin)) {
+    throw new Error(`Constructed URL escapes allowed origin: ${parsed.origin.replace(/\n|\r/g, "")}`);
+  }
+  return parsed.href;
+}
+
+// ── Auth context resolution ───────────────────────────────────────────
+
+interface AuthContext {
+  mode: AuthMode;
+  enterpriseSlug?: string;
+}
+
+/**
+ * Resolve auth mode and validate enterprise slug in one step.
+ * Returns a context with the resolved mode and only a validated enterprise slug.
+ * The slug is checked against server config so control-flow decisions
+ * are based on server-controlled data, not raw user input.
+ */
+function resolveAuthContext(path: string, enterpriseSlug?: string): AuthContext {
+  // Absolute non-GitHub URLs (e.g., pre-signed download links) need no auth
+  if (path.startsWith("http")) {
+    try {
+      const parsed = new URL(path);
+      if (!ALLOWED_ORIGINS.has(parsed.origin)) return { mode: "none" };
+      path = parsed.pathname;
+    } catch {
+      // If URL parsing fails, fall through to path-based detection
+    }
+  }
+
+  // Look up enterprise slug in server config (returns server-owned string or undefined)
+  const configuredSlug = lookupConfiguredSlug(enterpriseSlug);
+
+  // If slug was provided but not found in config, fall back to global PAT
+  if (enterpriseSlug && !configuredSlug) {
+    return { mode: "pat" };
+  }
+
+  // Enterprise endpoints → always PAT
+  if (path.startsWith("/enterprises/")) {
+    return { mode: "pat", enterpriseSlug: configuredSlug };
+  }
+
+  // If valid enterprise context (server-owned slug), check for enterprise-level App auth
+  if (configuredSlug) {
+    return {
+      mode: isAppAuthConfiguredForEnterprise(configuredSlug) ? "app" : "pat",
+      enterpriseSlug: configuredSlug,
+    };
+  }
+
+  // Everything else (/orgs/, /repos/, /app/, etc.) → App auth if configured
+  return { mode: isAppAuthConfigured() ? "app" : "pat" };
+}
+
 /**
  * Resolve auth mode from a URL path.
  * - Non-GitHub absolute URLs (pre-signed Azure/S3) → "none"
@@ -58,40 +176,25 @@ function getToken(): string {
  * - All other GitHub API paths → "app" if configured, else "pat"
  */
 export function resolveAuthMode(path: string, enterpriseSlug?: string): AuthMode {
-  // Absolute non-GitHub URLs (e.g., pre-signed download links) need no auth
-  if (path.startsWith("http")) {
-    try {
-      const parsed = new URL(path);
-      if (!ALLOWED_ORIGINS.has(parsed.origin)) return "none";
-      path = parsed.pathname;
-    } catch {
-      // If URL parsing fails, fall through to path-based detection
-    }
+  return resolveAuthContext(path, enterpriseSlug).mode;
+}
+
+/**
+ * Resolve auth context, optionally overriding mode with caller-provided value.
+ * Validates enterprise slug in both paths to prevent drift.
+ */
+function resolveOrOverrideContext(
+  path: string,
+  authMode?: AuthMode,
+  enterpriseSlug?: string,
+): AuthContext {
+  if (authMode) {
+    return {
+      mode: authMode,
+      enterpriseSlug: lookupConfiguredSlug(enterpriseSlug),
+    };
   }
-
-  // Enterprise endpoints → always PAT
-  if (path.startsWith("/enterprises/")) return "pat";
-
-  // If enterpriseSlug provided, validate it and check if that enterprise has App auth
-  if (enterpriseSlug) {
-    // Defense-in-depth: only trust known enterprise slugs
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const { getEnterpriseSlugs } = require("@/lib/config/enterprise-config") as {
-        getEnterpriseSlugs: () => string[];
-      };
-      const knownSlugs = getEnterpriseSlugs();
-      if (knownSlugs.length > 0 && !knownSlugs.includes(enterpriseSlug)) {
-        return "pat"; // Unknown slug — fall back to PAT
-      }
-    } catch {
-      // Config module unavailable (e.g., in unit tests) — skip validation
-    }
-    return isAppAuthConfiguredForEnterprise(enterpriseSlug) ? "app" : "pat";
-  }
-
-  // Everything else (/orgs/, /repos/, /app/, etc.) → App auth if configured
-  return isAppAuthConfigured() ? "app" : "pat";
+  return resolveAuthContext(path, enterpriseSlug);
 }
 
 async function headersForAuth(mode: AuthMode, enterpriseSlug?: string): Promise<Record<string, string>> {
@@ -222,16 +325,15 @@ export class GitHubApiError extends Error {
 }
 
 export async function githubFetch<T>(path: string, retries = 3, authMode?: AuthMode, enterpriseSlug?: string): Promise<T> {
-  const mode = authMode ?? resolveAuthMode(path, enterpriseSlug);
-  await ensureAuthReady(mode);
-  const url = path.startsWith("http") ? path : `${GITHUB_API_BASE}${path}`;
-  assertAllowedOrigin(url, mode);
+  const ctx = resolveOrOverrideContext(path, authMode, enterpriseSlug);
+  await ensureAuthReady(ctx.mode);
+  const url = buildValidatedUrl(path, ctx.mode);
 
   for (let attempt = 0; attempt < retries; attempt++) {
-    await adaptiveRateDelay(mode, enterpriseSlug);
-    const hdrs = await headersForAuth(mode, enterpriseSlug);
+    await adaptiveRateDelay(ctx.mode, ctx.enterpriseSlug);
+    const hdrs = await headersForAuth(ctx.mode, ctx.enterpriseSlug);
     const resp = await fetch(url, { headers: hdrs, cache: "no-store" });
-    updateRateLimit(resp, mode, enterpriseSlug);
+    updateRateLimit(resp, ctx.mode, ctx.enterpriseSlug);
 
     if (resp.ok) {
       return resp.json() as Promise<T>;
@@ -258,26 +360,25 @@ export async function githubFetch<T>(path: string, retries = 3, authMode?: AuthM
 }
 
 export async function githubFetchPaginated<T>(path: string, perPage = 100, authMode?: AuthMode, enterpriseSlug?: string): Promise<T[]> {
-  const mode = authMode ?? resolveAuthMode(path, enterpriseSlug);
-  await ensureAuthReady(mode);
+  const ctx = resolveOrOverrideContext(path, authMode, enterpriseSlug);
+  await ensureAuthReady(ctx.mode);
   const all: T[] = [];
   let page = 1;
 
   while (true) {
     const separator = path.includes("?") ? "&" : "?";
-    const url = `${path}${separator}per_page=${perPage}&page=${page}`;
-    const fullUrl = url.startsWith("http") ? url : `${GITHUB_API_BASE}${url}`;
-    assertAllowedOrigin(fullUrl, mode);
-    await adaptiveRateDelay(mode, enterpriseSlug);
-    const hdrs = await headersForAuth(mode, enterpriseSlug);
+    const pageUrl = `${path}${separator}per_page=${perPage}&page=${page}`;
+    const fullUrl = buildValidatedUrl(pageUrl, ctx.mode);
+    await adaptiveRateDelay(ctx.mode, ctx.enterpriseSlug);
+    const hdrs = await headersForAuth(ctx.mode, ctx.enterpriseSlug);
     const resp = await fetch(fullUrl, { headers: hdrs, cache: "no-store" });
 
     if (!resp.ok) {
       if (resp.status === 204) break;
-      throw new Error(`GitHub API error ${resp.status} on ${url.replace(/\n|\r/g, "")}`);
+      throw new Error(`GitHub API error ${resp.status} on ${pageUrl.replace(/\n|\r/g, "")}`);
     }
 
-    updateRateLimit(resp, mode, enterpriseSlug);
+    updateRateLimit(resp, ctx.mode, ctx.enterpriseSlug);
 
     const data = await resp.json();
     const items = Array.isArray(data) ? data : data.seats || data.members || [];
@@ -354,19 +455,18 @@ export async function githubFetchPaginatedWithCutoff<
   authMode?: AuthMode,
   enterpriseSlug?: string,
 ): Promise<T[]> {
-  const mode = authMode ?? resolveAuthMode(path, enterpriseSlug);
-  await ensureAuthReady(mode);
+  const ctx = resolveOrOverrideContext(path, authMode, enterpriseSlug);
+  await ensureAuthReady(ctx.mode);
   const all: T[] = [];
   let page = 1;
   const MAX_PAGES = 500;
 
   while (page <= MAX_PAGES) {
     const separator = path.includes("?") ? "&" : "?";
-    const url = `${path}${separator}per_page=${perPage}&page=${page}`;
-    const fullUrl = url.startsWith("http") ? url : `${GITHUB_API_BASE}${url}`;
-    assertAllowedOrigin(fullUrl, mode);
-    await adaptiveRateDelay(mode, enterpriseSlug);
-    const hdrs = await headersForAuth(mode, enterpriseSlug);
+    const pageUrl = `${path}${separator}per_page=${perPage}&page=${page}`;
+    const fullUrl = buildValidatedUrl(pageUrl, ctx.mode);
+    await adaptiveRateDelay(ctx.mode, ctx.enterpriseSlug);
+    const hdrs = await headersForAuth(ctx.mode, ctx.enterpriseSlug);
     const resp = await fetch(fullUrl, { headers: hdrs, cache: "no-store" });
 
     if (!resp.ok) {
@@ -386,7 +486,7 @@ export async function githubFetchPaginatedWithCutoff<
     }
 
     const batch: T[] = await resp.json();
-    updateRateLimit(resp, mode, enterpriseSlug);
+    updateRateLimit(resp, ctx.mode, ctx.enterpriseSlug);
     if (!batch || batch.length === 0) break;
 
     if (cutoffDate) {
@@ -419,8 +519,8 @@ export async function githubFetchCursorPaginatedWithCutoff<
   authMode?: AuthMode,
   enterpriseSlug?: string,
 ): Promise<T[]> {
-  const mode = authMode ?? resolveAuthMode(path, enterpriseSlug);
-  await ensureAuthReady(mode);
+  const ctx = resolveOrOverrideContext(path, authMode, enterpriseSlug);
+  await ensureAuthReady(ctx.mode);
   const all: T[] = [];
   let after: string | null = null;
   const MAX_ITERATIONS = 500;
@@ -428,11 +528,10 @@ export async function githubFetchCursorPaginatedWithCutoff<
   for (let i = 0; i < MAX_ITERATIONS; i++) {
     const separator: string = path.includes("?") ? "&" : "?";
     const cursorParam: string = after ? `&after=${after}` : "";
-    const url: string = `${path}${separator}per_page=${perPage}${cursorParam}`;
-    const fullUrl: string = url.startsWith("http") ? url : `${GITHUB_API_BASE}${url}`;
-    assertAllowedOrigin(fullUrl, mode);
-    await adaptiveRateDelay(mode, enterpriseSlug);
-    const hdrs = await headersForAuth(mode, enterpriseSlug);
+    const pageUrl: string = `${path}${separator}per_page=${perPage}${cursorParam}`;
+    const fullUrl: string = buildValidatedUrl(pageUrl, ctx.mode);
+    await adaptiveRateDelay(ctx.mode, ctx.enterpriseSlug);
+    const hdrs = await headersForAuth(ctx.mode, ctx.enterpriseSlug);
     const resp: Response = await fetch(fullUrl, { headers: hdrs, cache: "no-store" });
 
     if (!resp.ok) {
@@ -452,7 +551,7 @@ export async function githubFetchCursorPaginatedWithCutoff<
     }
 
     const batch: T[] = await resp.json();
-    updateRateLimit(resp, mode, enterpriseSlug);
+    updateRateLimit(resp, ctx.mode, ctx.enterpriseSlug);
     if (!batch || batch.length === 0) break;
 
     if (cutoffDate) {

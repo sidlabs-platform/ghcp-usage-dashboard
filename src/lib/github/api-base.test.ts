@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterAll } from "vitest";
 
 vi.mock("./app-auth", () => ({
   isAppAuthConfigured: vi.fn(() => false),
@@ -9,17 +9,24 @@ vi.mock("./app-auth", () => ({
   getInstallationTokenForEnterprise: vi.fn(),
 }));
 
-import { resolveAuthMode, githubFetch, githubFetchPaginated, githubFetchPaginatedWithCutoff, githubFetchCursorPaginatedWithCutoff, fetchNDJSON, GitHubApiError } from "./api-base";
+import { resolveAuthMode, githubFetch, githubFetchPaginated, githubFetchPaginatedWithCutoff, githubFetchCursorPaginatedWithCutoff, fetchNDJSON, GitHubApiError, _setEnterpriseSlugsForTesting } from "./api-base";
 import { isAppAuthConfigured, isAppAuthConfiguredForEnterprise, getInstallationToken, validateAppAuth } from "./app-auth";
 
 const mockIsApp = isAppAuthConfigured as ReturnType<typeof vi.fn>;
 const mockIsAppEnt = isAppAuthConfiguredForEnterprise as ReturnType<typeof vi.fn>;
 
+const TEST_SLUGS = ["ent1", "known-ent-1", "known-ent-2"];
+
 beforeEach(() => {
   mockIsApp.mockReset().mockReturnValue(false);
   mockIsAppEnt.mockReset().mockReturnValue(false);
+  _setEnterpriseSlugsForTesting(() => TEST_SLUGS);
   vi.stubGlobal("fetch", vi.fn());
   process.env.GITHUB_TOKEN = "test-token-123";
+});
+
+afterAll(() => {
+  _setEnterpriseSlugsForTesting(null);
 });
 
 describe("resolveAuthMode", () => {
@@ -483,5 +490,94 @@ describe("ensureAuthReady (app mode)", () => {
     expect(result.data).toBe("ok");
     expect(validateAppAuth).toHaveBeenCalled();
     expect(getInstallationToken).toHaveBeenCalled();
+  });
+});
+
+describe("URL validation (SSRF protection)", () => {
+  it("rejects non-root-relative paths via githubFetch", async () => {
+    await expect(githubFetch("orgs/my-org/info")).rejects.toThrow("root-relative");
+  });
+
+  it("rejects protocol-relative URLs via githubFetch", async () => {
+    await expect(githubFetch("//evil.com/path")).rejects.toThrow("root-relative");
+  });
+
+  it("rejects disallowed absolute URLs via githubFetch", async () => {
+    // With explicit auth mode "pat" to force origin check (not "none")
+    await expect(githubFetch("https://evil.com/api/data", 1, "pat")).rejects.toThrow("disallowed origin");
+  });
+
+  it("allows GitHub API absolute URLs via githubFetch", async () => {
+    mockIsApp.mockReturnValue(true);
+    (getInstallationToken as ReturnType<typeof vi.fn>).mockResolvedValue("app-token");
+    (validateAppAuth as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+    const mockFetch = fetch as unknown as ReturnType<typeof vi.fn>;
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ ok: true }),
+      headers: new Map(),
+    });
+    // Uses "app" mode (avoiding rate limit state from prior "pat" tests)
+    const result = await githubFetch<{ ok: boolean }>("https://api.github.com/orgs/my-org/info");
+    expect(result.ok).toBe(true);
+  });
+
+  it("allows pre-signed download URLs with mode=none", async () => {
+    const mockFetch = fetch as unknown as ReturnType<typeof vi.fn>;
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ data: "blob" }),
+      headers: new Map(),
+    });
+    // Pre-signed URLs resolve to "none" auth mode and bypass origin check
+    const result = await githubFetch<{ data: string }>(
+      "https://storage.azure.com/some-presigned-url",
+      1, "none"
+    );
+    expect(result.data).toBe("blob");
+  });
+  it("rejects malformed absolute URLs with contextual error", async () => {
+    await expect(githubFetch("http://", 1, "pat")).rejects.toThrow("Invalid URL");
+  });
+});
+
+describe("enterprise slug validation in auth context", () => {
+  it("passes validated slug to fetch when enterprise slug is known", async () => {
+    mockIsAppEnt.mockReturnValue(true);
+    (validateAppAuth as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+    const mockFetch = fetch as unknown as ReturnType<typeof vi.fn>;
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ data: "ok" }),
+      headers: new Map(),
+    });
+    const result = await githubFetch<{ data: string }>("/orgs/my-org/info", 1, undefined, "ent1");
+    expect(result.data).toBe("ok");
+    expect(mockIsAppEnt).toHaveBeenCalledWith("ent1");
+  });
+
+  it("falls back to global PAT for unknown slug", () => {
+    // "any-slug" is not in the configured list ["ent1", "known-ent-1", "known-ent-2"]
+    expect(resolveAuthMode("/orgs/my-org/info", "any-slug")).toBe("pat");
+  });
+
+  it("rejects unknown slug and accepts known slug", () => {
+    // Unknown slug → PAT fallback
+    expect(resolveAuthMode("/orgs/my-org/info", "evil-slug")).toBe("pat");
+    // Known slug with app auth configured → app
+    mockIsAppEnt.mockReturnValue(true);
+    expect(resolveAuthMode("/orgs/my-org/info", "known-ent-1")).toBe("app");
+  });
+
+  it("falls back to global PAT when no enterprises are configured", () => {
+    _setEnterpriseSlugsForTesting(() => []);
+    // Empty config → slug can't be validated → PAT fallback
+    expect(resolveAuthMode("/orgs/my-org/info", "any-slug")).toBe("pat");
+  });
+
+  it("falls back to default auth when no slug is provided", () => {
+    expect(resolveAuthMode("/orgs/my-org/info")).toBe("pat");
+    mockIsApp.mockReturnValue(true);
+    expect(resolveAuthMode("/orgs/my-org/info")).toBe("app");
   });
 });
