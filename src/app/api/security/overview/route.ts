@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getCodeScanningDaily, getDependabotDaily, getSecretScanningDaily, getSecurityOverview, computeMTTR } from "@/lib/db/ghas-repo";
 import { computeSecuritySummary, formatMTTR } from "@/lib/aggregation/ghas-aggregation";
 import { isMetricEnabled, isEnterpriseEnabled, getResolvedOrgs } from "@/lib/config/dashboard-config";
+import { resolveDefaultScope } from "@/lib/config/enterprise-config";
 import { getDateRange, parseAndClampDays } from "@/lib/utils";
 
 export async function GET(request: NextRequest) {
@@ -14,13 +15,18 @@ export async function GET(request: NextRequest) {
     const days = daysResult.days;
     const { start, end } = getDateRange(days);
 
-    // Resolve scope: defaults to enterprise when available, otherwise first org
-    let scope = params.get("scope") || (isEnterpriseEnabled() ? "enterprise" : "org");
+    // Resolve scope: use query params, then enterprise config, then first org
+    let scope = params.get("scope") || "";
     let scopeId = params.get("scopeId") || "";
-    if (!scopeId) {
-      scopeId = isEnterpriseEnabled()
-        ? (process.env.GITHUB_ENTERPRISE || "")
-        : (getResolvedOrgs()[0] || "");
+    if (!scope || !scopeId) {
+      if (isEnterpriseEnabled()) {
+        const defaults = resolveDefaultScope();
+        scope = scope || defaults.scope;
+        scopeId = scopeId || defaults.scopeId;
+      } else {
+        scope = scope || "org";
+        scopeId = scopeId || (getResolvedOrgs()[0] || "");
+      }
     }
     if (!scopeId) {
       return NextResponse.json(

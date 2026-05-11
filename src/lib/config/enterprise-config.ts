@@ -206,3 +206,17 @@ export function getResolvedOrgsForEnterprise(slug: string): string[] {
 export function resetEnterpriseConfigCache(): void {
   invalidateCache();
 }
+
+/**
+ * Resolve a default scope + scopeId for API routes that need a fallback.
+ * In multi-enterprise mode, defaults to the first enterprise slug.
+ * In legacy mode, uses GITHUB_ENTERPRISE env var.
+ * Falls back to the first resolved org if enterprise mode is off.
+ */
+export function resolveDefaultScope(): { scope: string; scopeId: string } {
+  const enterprises = getConfiguredEnterprises();
+  if (enterprises.length > 0) {
+    return { scope: "enterprise", scopeId: enterprises[0].slug };
+  }
+  return { scope: "org", scopeId: "" };
+}

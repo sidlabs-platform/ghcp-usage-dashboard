@@ -156,10 +156,15 @@ export function isCodeScanningAutofixEnabled(): boolean {
 
 let _enterpriseWarned = false;
 
-/** Returns true when enterprise mode is effectively enabled (config + env var present). */
+/** Returns true when enterprise mode is effectively enabled (config + env var present, or multi-enterprise configured). */
 export function isEnterpriseEnabled(): boolean {
   const config = getDashboardConfig();
   if (!(config.metrics.copilot.enterprise ?? true)) return false;
+
+  // Multi-enterprise mode: enterprises defined in dashboard-config.json
+  if (config.enterprises && config.enterprises.length > 0) return true;
+
+  // Legacy single-enterprise mode: require env var
   if (!process.env.GITHUB_ENTERPRISE) {
     if (config.metrics.copilot.enterprise === true && !_enterpriseWarned) {
       console.warn("[Config] copilot.enterprise=true but GITHUB_ENTERPRISE env var is missing — treating as disabled");
@@ -195,12 +200,29 @@ export function isBillingSubEnabled(sub: "meteredUsage" | "premiumRequests"): bo
 
 // --- Organization helpers ---
 
-/** Resolve effective org list: GITHUB_ORGS filtered by config include/exclude. */
+/** Resolve effective org list: GITHUB_ORGS filtered by config include/exclude, or aggregated from all enterprises in multi-enterprise mode. */
 export function getResolvedOrgs(): string[] {
+  const config = getDashboardConfig();
+
+  // Multi-enterprise mode: aggregate orgs from all configured enterprises
+  if (config.enterprises && config.enterprises.length > 0) {
+    const allOrgs = new Set<string>();
+    for (const ent of config.enterprises) {
+      const include = ent.organizations?.include ?? [];
+      const exclude = new Set((ent.organizations?.exclude ?? []).map((o) => o.toLowerCase()));
+      for (const org of include) {
+        if (!exclude.has(org.toLowerCase())) {
+          allOrgs.add(org);
+        }
+      }
+    }
+    return [...allOrgs];
+  }
+
+  // Legacy single-enterprise mode
   const envOrgs = process.env.GITHUB_ORGS;
   let orgs = envOrgs ? envOrgs.split(",").map((o) => o.trim()).filter(Boolean) : [];
 
-  const config = getDashboardConfig();
   const orgConfig = config.organizations ?? {};
 
   const include = orgConfig.include ?? [];
@@ -243,6 +265,11 @@ function deepMergeConfig(defaults: DashboardConfig, overrides: Partial<Dashboard
 
   if (overrides.autoSync) {
     result.autoSync = { ...(defaults.autoSync ?? { enabled: false, utcTime: "03:00" }), ...overrides.autoSync };
+  }
+
+  // Preserve multi-enterprise config (array, not deep-merged)
+  if (overrides.enterprises) {
+    result.enterprises = overrides.enterprises;
   }
 
   return result;

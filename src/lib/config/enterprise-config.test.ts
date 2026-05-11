@@ -8,6 +8,7 @@ import {
   getEnterpriseSlugs,
   getResolvedOrgsForEnterprise,
   resetEnterpriseConfigCache,
+  resolveDefaultScope,
 } from "./enterprise-config";
 import { getDashboardConfig } from "./dashboard-config";
 
@@ -205,6 +206,63 @@ describe("enterprise-config", () => {
       const first = getConfiguredEnterprises();
       const second = getConfiguredEnterprises();
       expect(second).toBe(first);
+    });
+  });
+
+  describe("resolveDefaultScope", () => {
+    it("returns first enterprise slug when enterprises are configured", () => {
+      // Restore default mock in case legacy tests overrode it
+      mockGetDashboardConfig.mockReturnValue({
+        enterprises: [
+          {
+            slug: "acme-corp",
+            displayName: "Acme Corp",
+            tokenEnvVar: "ACME_TOKEN",
+            organizations: { include: ["org-a", "org-b"], exclude: ["org-b"] },
+          },
+          {
+            slug: "beta-inc",
+            displayName: "Beta Inc",
+            tokenEnvVar: "BETA_TOKEN",
+            organizations: { include: ["org-x"] },
+          },
+        ],
+      } as any);
+      resetEnterpriseConfigCache();
+      const result = resolveDefaultScope();
+      expect(result).toEqual({ scope: "enterprise", scopeId: "acme-corp" });
+    });
+
+    it("returns org scope with empty scopeId when no enterprises configured", () => {
+      mockGetDashboardConfig.mockReturnValue({ enterprises: [] } as any);
+      resetEnterpriseConfigCache();
+      delete process.env.GITHUB_ENTERPRISE;
+      const result = resolveDefaultScope();
+      expect(result).toEqual({ scope: "org", scopeId: "" });
+      resetEnterpriseConfigCache();
+    });
+
+    it("returns single enterprise slug for single-enterprise config", () => {
+      mockGetDashboardConfig.mockReturnValue({
+        enterprises: [
+          { slug: "solo-ent", displayName: "Solo", tokenEnvVar: "SOLO_TOKEN" },
+        ],
+      } as any);
+      resetEnterpriseConfigCache();
+      const result = resolveDefaultScope();
+      expect(result).toEqual({ scope: "enterprise", scopeId: "solo-ent" });
+    });
+
+    it("falls back to legacy env var when no config enterprises", () => {
+      mockGetDashboardConfig.mockReturnValue({} as any);
+      resetEnterpriseConfigCache();
+      process.env.GITHUB_ENTERPRISE = "legacy-ent";
+      process.env.GITHUB_TOKEN = "ghp_legacy";
+      const result = resolveDefaultScope();
+      expect(result).toEqual({ scope: "enterprise", scopeId: "legacy-ent" });
+      delete process.env.GITHUB_ENTERPRISE;
+      delete process.env.GITHUB_TOKEN;
+      resetEnterpriseConfigCache();
     });
   });
 });
