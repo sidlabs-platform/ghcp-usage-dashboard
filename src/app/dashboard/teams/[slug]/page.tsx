@@ -8,6 +8,7 @@ import { useDateRange } from "@/contexts/DateRangeContext";
 import { MetricCard } from "@/components/cards/MetricCard";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { DateFilter } from "@/components/filters/DateFilter";
 import { Users, Activity, Code, TrendingUp, Bot, MessageSquare, Terminal } from "lucide-react";
 import { formatNumber, safeNum } from "@/lib/utils";
 
@@ -47,7 +48,7 @@ interface TeamDetailResponse {
 
 export default function TeamDetailPage() {
   const { slug } = useParams<{ slug: string }>();
-  const { days } = useDateRange();
+  const { mode, days, startDate, endDate } = useDateRange();
   const [data, setData] = useState<TeamDetailResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -56,7 +57,16 @@ export default function TeamDetailPage() {
     if (!slug) return;
     setLoading(true);
     setError(null);
-    fetch(`/api/teams/${encodeURIComponent(slug)}?days=${days}`)
+
+    const qp = new URLSearchParams();
+    if (mode === "custom") {
+      qp.set("startDate", startDate);
+      qp.set("endDate", endDate);
+    } else {
+      qp.set("days", String(days));
+    }
+
+    fetch(`/api/teams/${encodeURIComponent(slug)}?${qp}`)
       .then((res) => {
         if (!res.ok) throw new Error(`Failed to load team: ${res.status}`);
         return res.json();
@@ -64,7 +74,7 @@ export default function TeamDetailPage() {
       .then((json) => setData(json as TeamDetailResponse))
       .catch((err) => setError(err instanceof Error ? err.message : String(err)))
       .finally(() => setLoading(false));
-  }, [slug, days]);
+  }, [slug, mode, days, startDate, endDate]);
 
   if (loading) {
     return (
@@ -120,6 +130,7 @@ export default function TeamDetailPage() {
         title={team.name}
         description={team.org ? `Organization: ${team.org}` : "Enterprise team"}
       />
+      <DateFilter />
 
       {/* KPI Cards */}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-7 mb-8">

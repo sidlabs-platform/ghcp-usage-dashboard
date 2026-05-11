@@ -8,6 +8,7 @@ import { PageHeader } from "@/components/layout/PageHeader";
 import { MetricCard } from "@/components/cards/MetricCard";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { DateFilter } from "@/components/filters/DateFilter";
 import { formatNumber } from "@/lib/utils";
 import { CHART_COLORS, FEATURE_LABELS, CHAT_MODE_LABELS, CHAT_MODE_COLORS } from "@/lib/constants";
 import {
@@ -448,7 +449,7 @@ function CliStatsCard({ data }: { data: CliStats }) {
 export default function UserDetailPage() {
   const params = useParams();
   const login = typeof params.login === "string" ? decodeURIComponent(params.login) : "";
-  const { days } = useDateRange();
+  const { mode, days, startDate, endDate } = useDateRange();
   const [data, setData] = useState<UserDetailData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -461,7 +462,15 @@ export default function UserDetailPage() {
     setLoading(true);
     setError(null);
 
-    fetch(`/api/users/${encodeURIComponent(login)}?days=${days}`)
+    const qp = new URLSearchParams();
+    if (mode === "custom") {
+      qp.set("startDate", startDate);
+      qp.set("endDate", endDate);
+    } else {
+      qp.set("days", String(days));
+    }
+
+    fetch(`/api/users/${encodeURIComponent(login)}?${qp}`)
       .then((res) => {
         if (!res.ok) throw new Error(`Failed to fetch user data (${res.status})`);
         return res.json();
@@ -469,7 +478,7 @@ export default function UserDetailPage() {
       .then((json) => setData(json))
       .catch((err) => setError(err.message))
       .finally(() => setLoading(false));
-  }, [login, days]);
+  }, [login, mode, days, startDate, endDate]);
 
   const hasChatActivity = useMemo(() => {
     if (!data?.chatModes) return false;
@@ -488,6 +497,7 @@ export default function UserDetailPage() {
       </Link>
 
       <PageHeader title={login} description="Individual developer Copilot usage details" />
+      <DateFilter />
 
       {loading && <LoadingSkeleton />}
 

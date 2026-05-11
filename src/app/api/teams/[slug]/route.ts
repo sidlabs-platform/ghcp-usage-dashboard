@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/db/database";
-import { parseAndClampDays, getDateRange } from "@/lib/utils";
+import { parseDateRangeParams } from "@/lib/utils";
 import { withCache } from "@/lib/cache/with-cache";
 import { withTimeout } from "@/lib/api/timeout";
 import { CACHE_TTL } from "@/lib/cache/memory-cache";
@@ -25,11 +25,11 @@ async function handler(request: NextRequest) {
     }
     const searchParams = request.nextUrl.searchParams;
 
-    const daysResult = parseAndClampDays(searchParams.get("days"), 7);
-    if ("error" in daysResult) {
-      return NextResponse.json({ error: daysResult.error }, { status: 400 });
+    const rangeResult = parseDateRangeParams(searchParams, 7);
+    if ("error" in rangeResult) {
+      return NextResponse.json({ error: rangeResult.error }, { status: 400 });
     }
-    const { start, end } = getDateRange(daysResult.days);
+    const { start, end } = rangeResult;
 
     const db = getDb();
 

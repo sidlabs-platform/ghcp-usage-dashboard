@@ -15,7 +15,7 @@ export function Header() {
   const [syncing, setSyncing] = useState(false);
   const [syncStatus, setSyncStatus] = useState<string | null>(null);
   const [autoSyncInfo, setAutoSyncInfo] = useState<{ enabled: boolean; utcTime: string; nextRunAt: string | null } | null>(null);
-  const { days: selectedDays, setDays: setSelectedDays } = useDateRange();
+  const { mode, days: selectedDays, startDate, endDate, setDays: setSelectedDays } = useDateRange();
 
   useEffect(() => {
     const stored = localStorage.getItem("theme");
@@ -111,7 +111,7 @@ export function Header() {
               onClick={() => setSelectedDays(preset.days)}
               className={cn(
                 "rounded-md px-3 py-1.5 text-xs font-medium transition-colors",
-                selectedDays === preset.days
+                mode === "preset" && selectedDays === preset.days
                   ? "bg-[hsl(var(--background))] text-[hsl(var(--foreground))] shadow-sm"
                   : "text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))]"
               )}
@@ -120,6 +120,11 @@ export function Header() {
             </button>
           ))}
         </div>
+        {mode === "custom" && (
+          <Badge variant="outline" className="text-xs">
+            {startDate} — {endDate}
+          </Badge>
+        )}
 
         {/* Sync button */}
         <Button variant="outline" size="sm" onClick={triggerSync} disabled={syncing}>

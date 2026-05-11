@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/db/database";
-import { parseAndClampDays, getDateRange } from "@/lib/utils";
+import { parseDateRangeParams } from "@/lib/utils";
 import { parseScopeFilter } from "@/lib/api/scope-filter";
 import { withCache } from "@/lib/cache/with-cache";
 import { withTimeout } from "@/lib/api/timeout";
@@ -95,12 +95,11 @@ async function handler(request: NextRequest) {
     }
 
     const params = request.nextUrl.searchParams;
-    const daysResult = parseAndClampDays(params.get("days"), 7);
-    if ("error" in daysResult) {
-      return NextResponse.json({ error: daysResult.error }, { status: 400 });
+    const rangeResult = parseDateRangeParams(params, 7);
+    if ("error" in rangeResult) {
+      return NextResponse.json({ error: rangeResult.error }, { status: 400 });
     }
-    const { days } = daysResult;
-    const { start, end } = getDateRange(days);
+    const { start, end } = rangeResult;
 
     const db = getDb();
     let decodedLogin: string;
