@@ -9,6 +9,16 @@ vi.mock("fs", () => ({
   readFileSync: vi.fn(() => { throw new Error("ENOENT"); }),
 }));
 
+// Mock enterprise-config (not directly used, but may be required by other modules)
+vi.mock("@/lib/config/enterprise-config", () => ({
+  getResolvedOrgsForEnterprise: vi.fn(() => []),
+}));
+
+// Mock orgs-repo (used by getResolvedOrgs for DB fallback when include is empty)
+vi.mock("@/lib/db/orgs-repo", () => ({
+  getEnterpriseOrgs: vi.fn(() => []),
+}));
+
 import {
   getDashboardConfig,
   isMetricEnabled,

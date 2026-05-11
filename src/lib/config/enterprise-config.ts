@@ -1,6 +1,6 @@
 // Multi-enterprise configuration — server-only + client-safe types & helpers
 
-import { getDashboardConfig } from "./dashboard-config";
+import { getDashboardConfig, type MetricCategory } from "./dashboard-config";
 
 // ── Types ─────────────────────────────────────────────────────────────
 
@@ -21,6 +21,17 @@ export interface EnterpriseConfig {
     include?: string[];
     exclude?: string[];
   };
+  /** Per-enterprise metric overrides. When present, shallow-merges with global metrics config. */
+  metrics?: EnterpriseMetricOverrides;
+}
+
+/** Per-enterprise overrides for metric toggles. Each field is optional; when omitted the global config is used. */
+export interface EnterpriseMetricOverrides {
+  copilot?: { enabled?: boolean; enterprise?: boolean; userMetrics?: boolean; seats?: boolean; teams?: boolean; pullRequests?: boolean };
+  codeScanning?: { enabled?: boolean; autofix?: boolean };
+  dependabot?: { enabled?: boolean };
+  secretScanning?: { enabled?: boolean };
+  billing?: { enabled?: boolean; meteredUsage?: boolean; premiumRequests?: boolean };
 }
 
 /** Client-safe enterprise info (no auth details). */
@@ -190,9 +201,24 @@ export function getResolvedOrgsForEnterprise(slug: string): string[] {
   const include = orgConfig.include ?? [];
   const exclude = orgConfig.exclude ?? [];
 
-  // For multi-enterprise, orgs are defined per enterprise in config
-  // For legacy mode, orgs come from GITHUB_ORGS env var (already in include via synthesis)
-  let orgs = [...include];
+  let orgs: string[];
+
+  if (include.length > 0) {
+    // Explicit org list from config — use it directly
+    orgs = [...include];
+  } else {
+    // No explicit include list — fall back to auto-discovered orgs cached in DB
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const { getEnterpriseOrgs } = require("@/lib/db/orgs-repo") as {
+        getEnterpriseOrgs: (slug: string) => string[];
+      };
+      orgs = getEnterpriseOrgs(slug);
+    } catch {
+      // DB may not be initialized yet — return empty
+      orgs = [];
+    }
+  }
 
   if (exclude.length > 0) {
     const excludeSet = new Set(exclude.map((o) => o.toLowerCase()));
@@ -219,4 +245,158 @@ export function resolveDefaultScope(): { scope: string; scopeId: string } {
     return { scope: "enterprise", scopeId: enterprises[0].slug };
   }
   return { scope: "org", scopeId: "" };
+}
+
+// ── Per-enterprise metric resolution ──────────────────────────────────
+
+/**
+ * Check if a metric category is enabled for a specific enterprise.
+ * Shallow-merges enterprise overrides onto global config.
+ */
+export function isMetricEnabledForEnterprise(slug: string, category: MetricCategory): boolean {
+  const config = getDashboardConfig();
+  const globalEnabled = config.metrics[category]?.enabled ?? true;
+
+  const entConfig = getEnterpriseConfig(slug);
+  const override = entConfig.metrics?.[category];
+  if (override && typeof override.enabled === "boolean") {
+    return override.enabled;
+  }
+
+  return globalEnabled;
+}
+
+/**
+ * Check if a Copilot sub-toggle is enabled for a specific enterprise.
+ */
+export function isCopilotSubEnabledForEnterprise(
+  slug: string,
+  sub: "enterprise" | "userMetrics" | "seats" | "teams" | "pullRequests",
+): boolean {
+  if (!isMetricEnabledForEnterprise(slug, "copilot")) return false;
+
+  const config = getDashboardConfig();
+  const rawGlobal = (config.metrics.copilot as unknown as Record<string, unknown>)[sub];
+  const globalValue = typeof rawGlobal === "boolean" ? rawGlobal : true;
+
+  const entConfig = getEnterpriseConfig(slug);
+  const override = entConfig.metrics?.copilot;
+  if (override && typeof (override as Record<string, unknown>)[sub] === "boolean") {
+    return (override as Record<string, unknown>)[sub] as boolean;
+  }
+
+  return globalValue as boolean;
+}
+
+/**
+ * Check if billing is enabled for a specific enterprise.
+ */
+export function isBillingEnabledForEnterprise(slug: string): boolean {
+  // Billing requires enterprise mode to be enabled (billing API is enterprise-only)
+  if (!isCopilotSubEnabledForEnterprise(slug, "enterprise")) return false;
+  return isMetricEnabledForEnterprise(slug, "billing");
+}
+
+/**
+ * Check if a billing sub-toggle is enabled for a specific enterprise.
+ */
+export function isBillingSubEnabledForEnterprise(
+  slug: string,
+  sub: "meteredUsage" | "premiumRequests",
+): boolean {
+  if (!isBillingEnabledForEnterprise(slug)) return false;
+
+  const config = getDashboardConfig();
+  const rawGlobal = (config.metrics.billing as unknown as Record<string, unknown>)[sub];
+  const globalValue = typeof rawGlobal === "boolean" ? rawGlobal : true;
+
+  const entConfig = getEnterpriseConfig(slug);
+  const override = entConfig.metrics?.billing;
+  if (override && typeof (override as Record<string, unknown>)[sub] === "boolean") {
+    return (override as Record<string, unknown>)[sub] as boolean;
+  }
+
+  return globalValue as boolean;
+}
+
+/**
+ * Check if code scanning autofix is enabled for a specific enterprise.
+ */
+export function isCodeScanningAutofixEnabledForEnterprise(slug: string): boolean {
+  if (!isMetricEnabledForEnterprise(slug, "codeScanning")) return false;
+
+  const config = getDashboardConfig();
+  const globalAutofix = config.metrics.codeScanning?.autofix ?? false;
+
+  const entConfig = getEnterpriseConfig(slug);
+  const override = entConfig.metrics?.codeScanning;
+  if (override && typeof override.autofix === "boolean") {
+    return override.autofix;
+  }
+
+  return globalAutofix;
+}
+
+/**
+ * Returns true if a metric category is enabled for ANY configured enterprise.
+ * Used for page visibility — show a page if at least one enterprise has the metric enabled.
+ */
+export function isMetricEnabledForAnyEnterprise(category: MetricCategory): boolean {
+  const enterprises = getConfiguredEnterprises();
+  if (enterprises.length === 0) {
+    // Legacy mode — fall back to global config
+    const config = getDashboardConfig();
+    return config.metrics[category]?.enabled ?? true;
+  }
+  return enterprises.some((e) => isMetricEnabledForEnterprise(e.slug, category));
+}
+
+/**
+ * Returns true if a Copilot sub-toggle is enabled for ANY configured enterprise.
+ */
+export function isCopilotSubEnabledForAnyEnterprise(
+  sub: "enterprise" | "userMetrics" | "seats" | "teams" | "pullRequests",
+): boolean {
+  const enterprises = getConfiguredEnterprises();
+  if (enterprises.length === 0) {
+    const config = getDashboardConfig();
+    if (!config.metrics.copilot.enabled) return false;
+    const rawVal = (config.metrics.copilot as unknown as Record<string, unknown>)[sub];
+    return typeof rawVal === "boolean" ? rawVal : true;
+  }
+  return enterprises.some((e) => isCopilotSubEnabledForEnterprise(e.slug, sub));
+}
+
+/**
+ * Returns true if a billing sub-toggle is enabled for ANY configured enterprise.
+ */
+export function isBillingSubEnabledForAnyEnterprise(
+  sub: "meteredUsage" | "premiumRequests",
+): boolean {
+  const enterprises = getConfiguredEnterprises();
+  if (enterprises.length === 0) {
+    const config = getDashboardConfig();
+    if (!config.metrics.billing?.enabled) return false;
+    const rawVal = (config.metrics.billing as unknown as Record<string, unknown>)[sub];
+    return typeof rawVal === "boolean" ? rawVal : true;
+  }
+  return enterprises.some((e) => isBillingSubEnabledForEnterprise(e.slug, sub));
+}
+
+/**
+ * Client-safe per-enterprise effective metric settings.
+ * Returns the resolved enabled/disabled state for each metric category per enterprise.
+ */
+export function getClientEnterpriseMetrics(): Record<string, Record<string, boolean>> {
+  const result: Record<string, Record<string, boolean>> = {};
+  for (const ent of getConfiguredEnterprises()) {
+    result[ent.slug] = {
+      copilot: isMetricEnabledForEnterprise(ent.slug, "copilot"),
+      codeScanning: isMetricEnabledForEnterprise(ent.slug, "codeScanning"),
+      dependabot: isMetricEnabledForEnterprise(ent.slug, "dependabot"),
+      secretScanning: isMetricEnabledForEnterprise(ent.slug, "secretScanning"),
+      billing: isMetricEnabledForEnterprise(ent.slug, "billing"),
+    };
+  }
+  return result;
 }

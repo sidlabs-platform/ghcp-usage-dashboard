@@ -90,8 +90,50 @@ npm run dev
 | `appIdEnvVar` | No | Env var for GitHub App ID (enables App auth for org-level endpoints) |
 | `appPrivateKeyEnvVar` | No | Env var for GitHub App private key PEM |
 | `appInstallationIdEnvVar` | No | Env var for GitHub App installation ID |
-| `organizations.include` | No | Org slugs to sync for this enterprise. If empty, no org-level data is synced. |
-| `organizations.exclude` | No | Org slugs to exclude (subtracted from `include` list) |
+| `organizations.include` | No | Org slugs to sync for this enterprise. **If empty or omitted, all orgs are auto-discovered from the enterprise API on each sync.** |
+| `organizations.exclude` | No | Org slugs to exclude (subtracted from `include` list or from auto-discovered orgs) |
+| `metrics` | No | Per-enterprise metric overrides. Shallow-merges with global `metrics` config. See below. |
+
+### Per-enterprise metric overrides
+
+Each enterprise can override any global metric toggle. When a field is omitted, the global config value is used.
+
+```json
+{
+  "enterprises": [
+    {
+      "slug": "enterprise-one",
+      "displayName": "Enterprise One",
+      "tokenEnvVar": "GITHUB_TOKEN_ENT1",
+      "metrics": {
+        "copilot": { "pullRequests": false },
+        "codeScanning": { "enabled": false },
+        "billing": { "enabled": true, "premiumRequests": false }
+      }
+    },
+    {
+      "slug": "enterprise-two",
+      "displayName": "Enterprise Two",
+      "tokenEnvVar": "GITHUB_TOKEN_ENT2",
+      "metrics": {
+        "codeScanning": { "enabled": true, "autofix": true }
+      }
+    }
+  ]
+}
+```
+
+Available override fields:
+
+| Category | Fields |
+|----------|--------|
+| `copilot` | `enabled`, `enterprise`, `userMetrics`, `seats`, `teams`, `pullRequests` |
+| `codeScanning` | `enabled`, `autofix` |
+| `dependabot` | `enabled` |
+| `secretScanning` | `enabled` |
+| `billing` | `enabled`, `meteredUsage`, `premiumRequests` |
+
+**Page visibility**: A dashboard page is shown if the metric is enabled for **any** configured enterprise. For example, if code scanning is disabled globally but enabled for one enterprise, the security pages will still appear.
 
 ### Authentication per enterprise
 
@@ -143,9 +185,10 @@ Each enterprise's data is stored with its `enterprise_slug` as part of the prima
 ### Sync behavior
 
 - `fullSync()` iterates over all configured enterprises sequentially
+- **Organization auto-discovery**: If `organizations.include` is empty (or omitted), the sync fetches all orgs from `GET /enterprises/{slug}/organizations` and caches them in the `enterprise_orgs` DB table. The `exclude` array is still applied to filter out unwanted orgs.
 - Each enterprise's metrics, seats, teams, GHAS, and billing are synced independently
 - Summary tables are refreshed once after all enterprises complete
-- Incremental sync also loops over all enterprises
+- Incremental sync also loops over all enterprises and refreshes the org list
 
 ### Security API defaults
 
@@ -208,4 +251,4 @@ When security pages don't specify an explicit enterprise scope, the dashboard de
 | Billing disabled despite config | `copilot.enterprise` must be `true` for billing | Ensure enterprise mode is enabled |
 | Old data missing after switching slugs | Enterprise slug changed from legacy value | Use the same slug as the old `GITHUB_ENTERPRISE` value |
 | Security page shows wrong enterprise | Default scope picks first configured enterprise | Use scope filter in UI, or pass `?scope=enterprise&scopeId=<slug>` |
-| Orgs not showing in dashboard | `organizations.include` is empty | List org slugs in the enterprise config's `organizations.include` |
+| Orgs not showing in dashboard | `organizations.include` is empty and sync hasn't run yet | Run a full sync — orgs will be auto-discovered from the enterprise API |

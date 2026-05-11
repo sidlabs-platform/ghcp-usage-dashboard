@@ -35,9 +35,12 @@ interface UserRow {
 
 const userColumns: ColumnDef<UserRow>[] = [
   { key: "login", label: "User", render: (row) => (
-    <Link href={`/dashboard/users/${row.login}`} className="font-medium text-[hsl(var(--primary))] hover:underline">
-      {row.login}
-    </Link>
+    <div className="flex items-center gap-2">
+      <Link href={`/dashboard/users/${row.login}`} className="font-medium text-[hsl(var(--primary))] hover:underline">
+        {row.login}
+      </Link>
+      {row.activeDays === 0 && <Badge variant="secondary">Inactive</Badge>}
+    </div>
   ) },
   { key: "activeDays", label: "Active Days", align: "right", render: (row) => row.activeDays },
   { key: "locAdded", label: "LoC Added", align: "right", render: (row) => formatNumber(row.locAdded) },
@@ -84,6 +87,7 @@ export default function UsersPage() {
   const { mode, days, startDate, endDate } = useDateRange();
   const { hasFilter, buildScopeParams } = useScope();
   const [totalUsers, setTotalUsers] = useState(0);
+  const [includeInactive, setIncludeInactive] = useState(false);
 
   const extraParams = new URLSearchParams();
   if (mode === "custom") {
@@ -92,6 +96,7 @@ export default function UsersPage() {
   } else {
     extraParams.set("days", String(days));
   }
+  if (includeInactive) extraParams.set("includeInactive", "true");
   const scopeParams = buildScopeParams();
   scopeParams.forEach((v, k) => extraParams.set(k, v));
 
@@ -126,6 +131,18 @@ export default function UsersPage() {
           icon={<Users className="h-4 w-4" />}
           subtitle={hasFilter ? "In selected scope" : "With activity in period"}
         />
+      </div>
+
+      <div className="flex items-center gap-2 mb-4">
+        <label className="flex items-center gap-2 text-sm cursor-pointer">
+          <input
+            type="checkbox"
+            checked={includeInactive}
+            onChange={(e) => setIncludeInactive(e.target.checked)}
+            className="rounded border-gray-300"
+          />
+          <span className="text-[hsl(var(--muted-foreground))]">Include inactive seat holders</span>
+        </label>
       </div>
 
       <Card>

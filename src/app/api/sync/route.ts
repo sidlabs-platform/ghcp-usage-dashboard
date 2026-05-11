@@ -2,9 +2,8 @@ import { NextResponse } from "next/server";
 import { fullSync } from "@/lib/db/sync-service";
 import { fullGhasSync } from "@/lib/db/ghas-sync-service";
 import { getSyncStatus, acquireSyncLock, releaseSyncLock, isSyncLocked, clearEmptySyncEntries, forceReleaseSyncLock, getSyncLockInfo } from "@/lib/db/metrics-repo";
-import { isMetricEnabled } from "@/lib/config/dashboard-config";
 import { getAutoSyncStatus } from "@/lib/sync/auto-sync-scheduler";
-import { getClientEnterpriseList } from "@/lib/config/enterprise-config";
+import { getClientEnterpriseList, isMetricEnabledForAnyEnterprise } from "@/lib/config/enterprise-config";
 
 export async function POST(request: Request) {
   const { searchParams } = new URL(request.url);
@@ -51,7 +50,7 @@ export async function POST(request: Request) {
       }));
 
       // Run GHAS sync if any security metrics are enabled
-      const ghasEnabled = isMetricEnabled("codeScanning") || isMetricEnabled("dependabot") || isMetricEnabled("secretScanning");
+      const ghasEnabled = isMetricEnabledForAnyEnterprise("codeScanning") || isMetricEnabledForAnyEnterprise("dependabot") || isMetricEnabledForAnyEnterprise("secretScanning");
       if (ghasEnabled) {
         try {
           console.log("[Sync] Starting GHAS sync...");
