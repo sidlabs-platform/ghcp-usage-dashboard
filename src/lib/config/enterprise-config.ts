@@ -1,6 +1,7 @@
 // Multi-enterprise configuration — server-only + client-safe types & helpers
 
 import { getDashboardConfig, type MetricCategory } from "./dashboard-config";
+import { getDiscoveredOrgsFromDb } from "./orgs-resolver";
 
 // ── Types ─────────────────────────────────────────────────────────────
 
@@ -208,16 +209,7 @@ export function getResolvedOrgsForEnterprise(slug: string): string[] {
     orgs = [...include];
   } else {
     // No explicit include list — fall back to auto-discovered orgs cached in DB
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const { getEnterpriseOrgs } = require("@/lib/db/orgs-repo") as {
-        getEnterpriseOrgs: (slug: string) => string[];
-      };
-      orgs = getEnterpriseOrgs(slug);
-    } catch {
-      // DB may not be initialized yet — return empty
-      orgs = [];
-    }
+    orgs = getDiscoveredOrgsFromDb(slug);
   }
 
   if (exclude.length > 0) {
