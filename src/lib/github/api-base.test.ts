@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterAll } from "vitest";
 
 vi.mock("./app-auth", () => ({
   isAppAuthConfigured: vi.fn(() => false),
@@ -9,17 +9,24 @@ vi.mock("./app-auth", () => ({
   getInstallationTokenForEnterprise: vi.fn(),
 }));
 
-import { resolveAuthMode, githubFetch, githubFetchPaginated, githubFetchPaginatedWithCutoff, githubFetchCursorPaginatedWithCutoff, fetchNDJSON, GitHubApiError } from "./api-base";
+import { resolveAuthMode, githubFetch, githubFetchPaginated, githubFetchPaginatedWithCutoff, githubFetchCursorPaginatedWithCutoff, fetchNDJSON, GitHubApiError, _setEnterpriseSlugsForTesting } from "./api-base";
 import { isAppAuthConfigured, isAppAuthConfiguredForEnterprise, getInstallationToken, validateAppAuth } from "./app-auth";
 
 const mockIsApp = isAppAuthConfigured as ReturnType<typeof vi.fn>;
 const mockIsAppEnt = isAppAuthConfiguredForEnterprise as ReturnType<typeof vi.fn>;
 
+const TEST_SLUGS = ["ent1", "known-ent-1", "known-ent-2"];
+
 beforeEach(() => {
   mockIsApp.mockReset().mockReturnValue(false);
   mockIsAppEnt.mockReset().mockReturnValue(false);
+  _setEnterpriseSlugsForTesting(() => TEST_SLUGS);
   vi.stubGlobal("fetch", vi.fn());
   process.env.GITHUB_TOKEN = "test-token-123";
+});
+
+afterAll(() => {
+  _setEnterpriseSlugsForTesting(null);
 });
 
 describe("resolveAuthMode", () => {
@@ -544,35 +551,33 @@ describe("enterprise slug validation in auth context", () => {
       json: () => Promise.resolve({ data: "ok" }),
       headers: new Map(),
     });
-    // In test env, enterprise config module uses try/catch fallback, slug passes through
     const result = await githubFetch<{ data: string }>("/orgs/my-org/info", 1, undefined, "ent1");
     expect(result.data).toBe("ok");
-    // Verify App auth was used (slug was validated and app auth resolved)
     expect(mockIsAppEnt).toHaveBeenCalledWith("ent1");
   });
 
-  it("falls back to global PAT for unknown slug via resolveAuthMode", () => {
-    // When enterprise config module is available with known slugs, unknown slugs
-    // should fall back to "pat". In test env, config module catches and returns slug as-is,
-    // so we test the exported resolveAuthMode behavior.
+  it("falls back to global PAT for unknown slug", () => {
+    // "any-slug" is not in the configured list ["ent1", "known-ent-1", "known-ent-2"]
     expect(resolveAuthMode("/orgs/my-org/info", "any-slug")).toBe("pat");
   });
 
-  it("rejects unknown slug when enterprise config has known slugs", async () => {
-    // Mock the enterprise-config module to return a fixed set of known slugs
-    const origRequire = globalThis.require;
-    const mockModule = {
-      getEnterpriseSlugs: () => ["known-ent-1", "known-ent-2"],
-    };
-    // Temporarily override require to return our mock for enterprise-config
-    vi.doMock("@/lib/config/enterprise-config", () => mockModule);
-    // Re-import to pick up the mock
-    const { resolveAuthMode: freshResolve } = await import("./api-base");
-    // Unknown slug should fall back to PAT without enterprise context
-    expect(freshResolve("/orgs/my-org/info", "evil-slug")).toBe("pat");
-    // Known slug should proceed to enterprise-level auth check
+  it("rejects unknown slug and accepts known slug", () => {
+    // Unknown slug → PAT fallback
+    expect(resolveAuthMode("/orgs/my-org/info", "evil-slug")).toBe("pat");
+    // Known slug with app auth configured → app
     mockIsAppEnt.mockReturnValue(true);
-    expect(freshResolve("/orgs/my-org/info", "known-ent-1")).toBe("app");
-    vi.doUnmock("@/lib/config/enterprise-config");
+    expect(resolveAuthMode("/orgs/my-org/info", "known-ent-1")).toBe("app");
+  });
+
+  it("falls back to global PAT when no enterprises are configured", () => {
+    _setEnterpriseSlugsForTesting(() => []);
+    // Empty config → slug can't be validated → PAT fallback
+    expect(resolveAuthMode("/orgs/my-org/info", "any-slug")).toBe("pat");
+  });
+
+  it("falls back to default auth when no slug is provided", () => {
+    expect(resolveAuthMode("/orgs/my-org/info")).toBe("pat");
+    mockIsApp.mockReturnValue(true);
+    expect(resolveAuthMode("/orgs/my-org/info")).toBe("app");
   });
 });

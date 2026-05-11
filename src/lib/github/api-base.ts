@@ -37,25 +37,46 @@ function getToken(): string {
   return token;
 }
 
-// ── Enterprise slug validation ────────────────────────────────────────
+// ── Enterprise slug lookup ─────────────────────────────────────────────
+
+// Lazy-resolved reference to enterprise config; false = resolution failed permanently
+let _getEnterpriseSlugs: (() => string[]) | null | false = null;
 
 /**
- * Validate an enterprise slug against server-configured slugs.
- * Returns the slug if it matches known config, or null if unknown.
- * Returns the slug as-is when config is unavailable (unit tests) or empty.
+ * @internal For testing: inject a custom enterprise slugs provider.
+ * Pass null to reset to the default (require-based) resolution.
  */
-function validateEnterpriseSlug(slug: string): string | null {
+export function _setEnterpriseSlugsForTesting(fn: (() => string[]) | null): void {
+  _getEnterpriseSlugs = fn;
+}
+
+function getEnterpriseSlugsInternal(): string[] {
+  if (_getEnterpriseSlugs === false) return [];
+  if (_getEnterpriseSlugs) return _getEnterpriseSlugs();
+
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const { getEnterpriseSlugs } = require("@/lib/config/enterprise-config") as {
+    const mod = require("@/lib/config/enterprise-config") as {
       getEnterpriseSlugs: () => string[];
     };
-    const knownSlugs = getEnterpriseSlugs();
-    if (knownSlugs.length === 0) return slug;
-    return knownSlugs.includes(slug) ? slug : null;
+    _getEnterpriseSlugs = mod.getEnterpriseSlugs;
+    return _getEnterpriseSlugs();
   } catch {
-    return slug; // Config module unavailable (e.g., in unit tests)
+    _getEnterpriseSlugs = false;
+    return [];
   }
+}
+
+/**
+ * Look up an enterprise slug in the server configuration.
+ * Returns the server-owned slug string from config if found, or undefined.
+ * This breaks the taint chain: the returned value comes from the config
+ * array, not from the user-provided input.
+ */
+function lookupConfiguredSlug(slug?: string): string | undefined {
+  if (!slug) return undefined;
+  const knownSlugs = getEnterpriseSlugsInternal();
+  return knownSlugs.find(s => s === slug);
 }
 
 // ── Validated URL construction ────────────────────────────────────────
@@ -83,11 +104,19 @@ function buildValidatedUrl(pathOrUrl: string, mode: AuthMode): string {
     throw new Error(`GitHub API path must be root-relative (start with /): ${pathOrUrl.slice(0, 120).replace(/\n|\r/g, "")}`);
   }
 
-  const full = new URL(pathOrUrl, GITHUB_API_BASE);
-  if (!ALLOWED_ORIGINS.has(full.origin)) {
-    throw new Error(`Constructed URL escapes allowed origin: ${full.origin.replace(/\n|\r/g, "")}`);
+  // Use string concatenation to preserve GHES path prefixes (e.g., /api/v3),
+  // then parse to normalize and validate the result.
+  const fullUrl = `${GITHUB_API_BASE}${pathOrUrl}`;
+  let parsed: URL;
+  try {
+    parsed = new URL(fullUrl);
+  } catch {
+    throw new Error(`Invalid constructed URL: ${fullUrl.slice(0, 120).replace(/\n|\r/g, "")}`);
   }
-  return full.href;
+  if (!ALLOWED_ORIGINS.has(parsed.origin)) {
+    throw new Error(`Constructed URL escapes allowed origin: ${parsed.origin.replace(/\n|\r/g, "")}`);
+  }
+  return parsed.href;
 }
 
 // ── Auth context resolution ───────────────────────────────────────────
@@ -115,28 +144,24 @@ function resolveAuthContext(path: string, enterpriseSlug?: string): AuthContext 
     }
   }
 
-  // Validate enterprise slug against server config when provided
-  let validatedSlug: string | undefined;
-  if (enterpriseSlug) {
-    const checked = validateEnterpriseSlug(enterpriseSlug);
-    if (checked) {
-      validatedSlug = checked;
-    } else {
-      // Unknown enterprise slug — fall back to global PAT (drop enterprise context)
-      return { mode: "pat" };
-    }
+  // Look up enterprise slug in server config (returns server-owned string or undefined)
+  const configuredSlug = lookupConfiguredSlug(enterpriseSlug);
+
+  // If slug was provided but not found in config, fall back to global PAT
+  if (enterpriseSlug && !configuredSlug) {
+    return { mode: "pat" };
   }
 
   // Enterprise endpoints → always PAT
   if (path.startsWith("/enterprises/")) {
-    return { mode: "pat", enterpriseSlug: validatedSlug };
+    return { mode: "pat", enterpriseSlug: configuredSlug };
   }
 
-  // If valid enterprise context, check for enterprise-level App auth
-  if (validatedSlug) {
+  // If valid enterprise context (server-owned slug), check for enterprise-level App auth
+  if (configuredSlug) {
     return {
-      mode: isAppAuthConfiguredForEnterprise(validatedSlug) ? "app" : "pat",
-      enterpriseSlug: validatedSlug,
+      mode: isAppAuthConfiguredForEnterprise(configuredSlug) ? "app" : "pat",
+      enterpriseSlug: configuredSlug,
     };
   }
 
@@ -166,9 +191,7 @@ function resolveOrOverrideContext(
   if (authMode) {
     return {
       mode: authMode,
-      enterpriseSlug: enterpriseSlug
-        ? (validateEnterpriseSlug(enterpriseSlug) ?? undefined)
-        : undefined,
+      enterpriseSlug: lookupConfiguredSlug(enterpriseSlug),
     };
   }
   return resolveAuthContext(path, enterpriseSlug);
