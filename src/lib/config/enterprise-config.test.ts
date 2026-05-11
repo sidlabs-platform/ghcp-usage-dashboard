@@ -9,6 +9,15 @@ import {
   getResolvedOrgsForEnterprise,
   resetEnterpriseConfigCache,
   resolveDefaultScope,
+  isMetricEnabledForEnterprise,
+  isCopilotSubEnabledForEnterprise,
+  isBillingEnabledForEnterprise,
+  isBillingSubEnabledForEnterprise,
+  isCodeScanningAutofixEnabledForEnterprise,
+  isMetricEnabledForAnyEnterprise,
+  isCopilotSubEnabledForAnyEnterprise,
+  isBillingSubEnabledForAnyEnterprise,
+  getClientEnterpriseMetrics,
 } from "./enterprise-config";
 import { getDashboardConfig } from "./dashboard-config";
 
@@ -53,6 +62,9 @@ describe("enterprise-config", () => {
     delete process.env.ACME_APP_KEY;
     delete process.env.ACME_APP_INSTALL;
     delete process.env.BETA_TOKEN;
+    delete process.env.GITHUB_ENTERPRISE;
+    delete process.env.GITHUB_TOKEN;
+    delete process.env.GITHUB_ORGS;
   });
 
   describe("getConfiguredEnterprises", () => {
@@ -206,6 +218,559 @@ describe("enterprise-config", () => {
       const first = getConfiguredEnterprises();
       const second = getConfiguredEnterprises();
       expect(second).toBe(first);
+    });
+  });
+
+  // ── Per-enterprise metric resolution tests ─────────────────────────
+
+  // Helper to build a full mock config with enterprise metric overrides
+  function makeConfig(overrides: {
+    globalMetrics?: Record<string, unknown>;
+    enterprises?: Array<{
+      slug: string;
+      displayName?: string;
+      tokenEnvVar?: string;
+      metrics?: Record<string, unknown>;
+    }>;
+  }) {
+    const defaultGlobalMetrics = {
+      copilot: { enabled: true, enterprise: true, userMetrics: true, seats: true, teams: true },
+      codeScanning: { enabled: true, autofix: false },
+      dependabot: { enabled: true },
+      secretScanning: { enabled: true },
+      billing: { enabled: true, meteredUsage: true, premiumRequests: true },
+    };
+
+    return {
+      enterprises: (overrides.enterprises ?? [
+        { slug: "ent-a", displayName: "Ent A", tokenEnvVar: "T_A" },
+        { slug: "ent-b", displayName: "Ent B", tokenEnvVar: "T_B" },
+      ]).map((e) => ({
+        displayName: e.slug,
+        tokenEnvVar: `${e.slug.toUpperCase().replace(/-/g, "_")}_TOKEN`,
+        ...e,
+      })),
+      // Shallow spread replaces entire metric category objects, which exercises
+      // the production code's `?? true` / `?? false` fallbacks for missing sub-toggles.
+      metrics: { ...defaultGlobalMetrics, ...overrides.globalMetrics },
+    };
+  }
+
+  function setMockConfig(cfg: ReturnType<typeof makeConfig>) {
+    mockGetDashboardConfig.mockReturnValue(cfg as any);
+    resetEnterpriseConfigCache();
+  }
+
+  describe("isMetricEnabledForEnterprise", () => {
+    afterEach(() => resetEnterpriseConfigCache());
+
+    it("returns global value when enterprise has no override", () => {
+      setMockConfig(makeConfig({
+        globalMetrics: { copilot: { enabled: true } },
+        enterprises: [{ slug: "ent-a" }],
+      }));
+      expect(isMetricEnabledForEnterprise("ent-a", "copilot")).toBe(true);
+    });
+
+    it("enterprise override enabled:false takes precedence over global enabled:true", () => {
+      setMockConfig(makeConfig({
+        globalMetrics: { copilot: { enabled: true } },
+        enterprises: [{ slug: "ent-a", metrics: { copilot: { enabled: false } } }],
+      }));
+      expect(isMetricEnabledForEnterprise("ent-a", "copilot")).toBe(false);
+    });
+
+    it("enterprise override enabled:true takes precedence over global enabled:false", () => {
+      setMockConfig(makeConfig({
+        globalMetrics: { dependabot: { enabled: false } },
+        enterprises: [{ slug: "ent-a", metrics: { dependabot: { enabled: true } } }],
+      }));
+      expect(isMetricEnabledForEnterprise("ent-a", "dependabot")).toBe(true);
+    });
+
+    it("falls back to global disabled when no override", () => {
+      setMockConfig(makeConfig({
+        globalMetrics: { secretScanning: { enabled: false } },
+        enterprises: [{ slug: "ent-a" }],
+      }));
+      expect(isMetricEnabledForEnterprise("ent-a", "secretScanning")).toBe(false);
+    });
+
+    it("works for all metric categories", () => {
+      const categories = ["copilot", "codeScanning", "dependabot", "secretScanning", "billing"] as const;
+      for (const cat of categories) {
+        setMockConfig(makeConfig({
+          globalMetrics: { [cat]: { enabled: true } },
+          enterprises: [{ slug: "ent-a", metrics: { [cat]: { enabled: false } } }],
+        }));
+        expect(isMetricEnabledForEnterprise("ent-a", cat)).toBe(false);
+      }
+    });
+
+    it("defaults to true when global config has no explicit enabled field", () => {
+      setMockConfig(makeConfig({
+        globalMetrics: { dependabot: {} },
+        enterprises: [{ slug: "ent-a" }],
+      }));
+      expect(isMetricEnabledForEnterprise("ent-a", "dependabot")).toBe(true);
+    });
+  });
+
+  describe("isCopilotSubEnabledForEnterprise", () => {
+    afterEach(() => resetEnterpriseConfigCache());
+
+    it("returns false when copilot is disabled for the enterprise", () => {
+      setMockConfig(makeConfig({
+        enterprises: [{ slug: "ent-a", metrics: { copilot: { enabled: false } } }],
+      }));
+      expect(isCopilotSubEnabledForEnterprise("ent-a", "userMetrics")).toBe(false);
+    });
+
+    it("enterprise sub-toggle override takes precedence over global", () => {
+      setMockConfig(makeConfig({
+        globalMetrics: { copilot: { enabled: true, seats: true } },
+        enterprises: [{ slug: "ent-a", metrics: { copilot: { seats: false } } }],
+      }));
+      expect(isCopilotSubEnabledForEnterprise("ent-a", "seats")).toBe(false);
+    });
+
+    it("falls back to global sub-toggle when no enterprise override", () => {
+      setMockConfig(makeConfig({
+        globalMetrics: { copilot: { enabled: true, teams: false } },
+        enterprises: [{ slug: "ent-a" }],
+      }));
+      expect(isCopilotSubEnabledForEnterprise("ent-a", "teams")).toBe(false);
+    });
+
+    it("defaults sub-toggle to true when not explicitly set globally", () => {
+      setMockConfig(makeConfig({
+        globalMetrics: { copilot: { enabled: true } },
+        enterprises: [{ slug: "ent-a" }],
+      }));
+      expect(isCopilotSubEnabledForEnterprise("ent-a", "userMetrics")).toBe(true);
+    });
+
+    it("pullRequests sub-toggle can be overridden per enterprise", () => {
+      setMockConfig(makeConfig({
+        globalMetrics: { copilot: { enabled: true, pullRequests: false } },
+        enterprises: [{ slug: "ent-a", metrics: { copilot: { pullRequests: true } } }],
+      }));
+      expect(isCopilotSubEnabledForEnterprise("ent-a", "pullRequests")).toBe(true);
+    });
+
+    it("all sub-toggle keys work correctly", () => {
+      const subs = ["enterprise", "userMetrics", "seats", "teams", "pullRequests"] as const;
+      for (const sub of subs) {
+        setMockConfig(makeConfig({
+          globalMetrics: { copilot: { enabled: true, [sub]: true } },
+          enterprises: [{ slug: "ent-a", metrics: { copilot: { [sub]: false } } }],
+        }));
+        expect(isCopilotSubEnabledForEnterprise("ent-a", sub)).toBe(false);
+      }
+    });
+  });
+
+  describe("isBillingEnabledForEnterprise", () => {
+    afterEach(() => resetEnterpriseConfigCache());
+
+    it("returns false when copilot enterprise sub-toggle is disabled", () => {
+      setMockConfig(makeConfig({
+        globalMetrics: {
+          copilot: { enabled: true, enterprise: false },
+          billing: { enabled: true },
+        },
+        enterprises: [{ slug: "ent-a" }],
+      }));
+      expect(isBillingEnabledForEnterprise("ent-a")).toBe(false);
+    });
+
+    it("returns false when billing category is globally disabled and no override", () => {
+      setMockConfig(makeConfig({
+        globalMetrics: {
+          copilot: { enabled: true, enterprise: true },
+          billing: { enabled: false },
+        },
+        enterprises: [{ slug: "ent-a" }],
+      }));
+      expect(isBillingEnabledForEnterprise("ent-a")).toBe(false);
+    });
+
+    it("returns true when both copilot.enterprise and billing are enabled", () => {
+      setMockConfig(makeConfig({
+        globalMetrics: {
+          copilot: { enabled: true, enterprise: true },
+          billing: { enabled: true },
+        },
+        enterprises: [{ slug: "ent-a" }],
+      }));
+      expect(isBillingEnabledForEnterprise("ent-a")).toBe(true);
+    });
+
+    it("enterprise billing override overrides global disabled", () => {
+      setMockConfig(makeConfig({
+        globalMetrics: {
+          copilot: { enabled: true, enterprise: true },
+          billing: { enabled: false },
+        },
+        enterprises: [{ slug: "ent-a", metrics: { billing: { enabled: true } } }],
+      }));
+      expect(isBillingEnabledForEnterprise("ent-a")).toBe(true);
+    });
+
+    it("returns false when copilot itself is disabled for enterprise", () => {
+      setMockConfig(makeConfig({
+        globalMetrics: {
+          copilot: { enabled: true, enterprise: true },
+          billing: { enabled: true },
+        },
+        enterprises: [{ slug: "ent-a", metrics: { copilot: { enabled: false } } }],
+      }));
+      expect(isBillingEnabledForEnterprise("ent-a")).toBe(false);
+    });
+  });
+
+  describe("isBillingSubEnabledForEnterprise", () => {
+    afterEach(() => resetEnterpriseConfigCache());
+
+    it("returns false when billing is disabled for enterprise", () => {
+      setMockConfig(makeConfig({
+        globalMetrics: {
+          copilot: { enabled: true, enterprise: true },
+          billing: { enabled: false },
+        },
+        enterprises: [{ slug: "ent-a" }],
+      }));
+      expect(isBillingSubEnabledForEnterprise("ent-a", "meteredUsage")).toBe(false);
+    });
+
+    it("enterprise override for meteredUsage takes precedence", () => {
+      setMockConfig(makeConfig({
+        globalMetrics: {
+          copilot: { enabled: true, enterprise: true },
+          billing: { enabled: true, meteredUsage: true },
+        },
+        enterprises: [{ slug: "ent-a", metrics: { billing: { meteredUsage: false } } }],
+      }));
+      expect(isBillingSubEnabledForEnterprise("ent-a", "meteredUsage")).toBe(false);
+    });
+
+    it("enterprise override for premiumRequests takes precedence", () => {
+      setMockConfig(makeConfig({
+        globalMetrics: {
+          copilot: { enabled: true, enterprise: true },
+          billing: { enabled: true, premiumRequests: false },
+        },
+        enterprises: [{ slug: "ent-a", metrics: { billing: { premiumRequests: true } } }],
+      }));
+      expect(isBillingSubEnabledForEnterprise("ent-a", "premiumRequests")).toBe(true);
+    });
+
+    it("falls back to global billing sub-toggle", () => {
+      setMockConfig(makeConfig({
+        globalMetrics: {
+          copilot: { enabled: true, enterprise: true },
+          billing: { enabled: true, meteredUsage: false },
+        },
+        enterprises: [{ slug: "ent-a" }],
+      }));
+      expect(isBillingSubEnabledForEnterprise("ent-a", "meteredUsage")).toBe(false);
+    });
+
+    it("defaults to true when sub not explicitly set globally", () => {
+      setMockConfig(makeConfig({
+        globalMetrics: {
+          copilot: { enabled: true, enterprise: true },
+          billing: { enabled: true },
+        },
+        enterprises: [{ slug: "ent-a" }],
+      }));
+      expect(isBillingSubEnabledForEnterprise("ent-a", "meteredUsage")).toBe(true);
+      expect(isBillingSubEnabledForEnterprise("ent-a", "premiumRequests")).toBe(true);
+    });
+  });
+
+  describe("isCodeScanningAutofixEnabledForEnterprise", () => {
+    afterEach(() => resetEnterpriseConfigCache());
+
+    it("returns false when codeScanning category is disabled", () => {
+      setMockConfig(makeConfig({
+        globalMetrics: { codeScanning: { enabled: false, autofix: true } },
+        enterprises: [{ slug: "ent-a" }],
+      }));
+      expect(isCodeScanningAutofixEnabledForEnterprise("ent-a")).toBe(false);
+    });
+
+    it("enterprise autofix override takes precedence over global", () => {
+      setMockConfig(makeConfig({
+        globalMetrics: { codeScanning: { enabled: true, autofix: false } },
+        enterprises: [{ slug: "ent-a", metrics: { codeScanning: { autofix: true } } }],
+      }));
+      expect(isCodeScanningAutofixEnabledForEnterprise("ent-a")).toBe(true);
+    });
+
+    it("falls back to global autofix setting (default false)", () => {
+      setMockConfig(makeConfig({
+        globalMetrics: { codeScanning: { enabled: true } },
+        enterprises: [{ slug: "ent-a" }],
+      }));
+      expect(isCodeScanningAutofixEnabledForEnterprise("ent-a")).toBe(false);
+    });
+
+    it("returns false when enterprise overrides codeScanning to disabled", () => {
+      setMockConfig(makeConfig({
+        globalMetrics: { codeScanning: { enabled: true, autofix: true } },
+        enterprises: [{ slug: "ent-a", metrics: { codeScanning: { enabled: false } } }],
+      }));
+      expect(isCodeScanningAutofixEnabledForEnterprise("ent-a")).toBe(false);
+    });
+
+    it("returns true when globally enabled and enterprise has no override", () => {
+      setMockConfig(makeConfig({
+        globalMetrics: { codeScanning: { enabled: true, autofix: true } },
+        enterprises: [{ slug: "ent-a" }],
+      }));
+      expect(isCodeScanningAutofixEnabledForEnterprise("ent-a")).toBe(true);
+    });
+  });
+
+  describe("isMetricEnabledForAnyEnterprise", () => {
+    afterEach(() => resetEnterpriseConfigCache());
+
+    it("returns true when at least one enterprise has metric enabled", () => {
+      setMockConfig(makeConfig({
+        globalMetrics: { dependabot: { enabled: true } },
+        enterprises: [
+          { slug: "ent-a", metrics: { dependabot: { enabled: false } } },
+          { slug: "ent-b" },
+        ],
+      }));
+      expect(isMetricEnabledForAnyEnterprise("dependabot")).toBe(true);
+    });
+
+    it("returns false when all enterprises have metric disabled", () => {
+      setMockConfig(makeConfig({
+        globalMetrics: { dependabot: { enabled: true } },
+        enterprises: [
+          { slug: "ent-a", metrics: { dependabot: { enabled: false } } },
+          { slug: "ent-b", metrics: { dependabot: { enabled: false } } },
+        ],
+      }));
+      expect(isMetricEnabledForAnyEnterprise("dependabot")).toBe(false);
+    });
+
+    it("handles mixed enabled/disabled enterprises", () => {
+      setMockConfig(makeConfig({
+        globalMetrics: { copilot: { enabled: false } },
+        enterprises: [
+          { slug: "ent-a" },
+          { slug: "ent-b", metrics: { copilot: { enabled: true } } },
+        ],
+      }));
+      expect(isMetricEnabledForAnyEnterprise("copilot")).toBe(true);
+    });
+
+    it("legacy mode (0 enterprises) falls back to global enabled", () => {
+      setMockConfig(makeConfig({
+        globalMetrics: { codeScanning: { enabled: true } },
+        enterprises: [],
+      }));
+      delete process.env.GITHUB_ENTERPRISE;
+      expect(isMetricEnabledForAnyEnterprise("codeScanning")).toBe(true);
+    });
+
+    it("legacy mode (0 enterprises) falls back to global disabled", () => {
+      setMockConfig(makeConfig({
+        globalMetrics: { billing: { enabled: false } },
+        enterprises: [],
+      }));
+      delete process.env.GITHUB_ENTERPRISE;
+      expect(isMetricEnabledForAnyEnterprise("billing")).toBe(false);
+    });
+
+    it("legacy mode defaults to true when no explicit enabled field", () => {
+      setMockConfig(makeConfig({
+        globalMetrics: { secretScanning: {} },
+        enterprises: [],
+      }));
+      delete process.env.GITHUB_ENTERPRISE;
+      expect(isMetricEnabledForAnyEnterprise("secretScanning")).toBe(true);
+    });
+  });
+
+  describe("isCopilotSubEnabledForAnyEnterprise", () => {
+    afterEach(() => resetEnterpriseConfigCache());
+
+    it("returns true when at least one enterprise has sub enabled", () => {
+      setMockConfig(makeConfig({
+        globalMetrics: { copilot: { enabled: true, seats: true } },
+        enterprises: [
+          { slug: "ent-a", metrics: { copilot: { seats: false } } },
+          { slug: "ent-b" },
+        ],
+      }));
+      expect(isCopilotSubEnabledForAnyEnterprise("seats")).toBe(true);
+    });
+
+    it("returns false when all enterprises have sub disabled", () => {
+      setMockConfig(makeConfig({
+        globalMetrics: { copilot: { enabled: true, teams: true } },
+        enterprises: [
+          { slug: "ent-a", metrics: { copilot: { teams: false } } },
+          { slug: "ent-b", metrics: { copilot: { teams: false } } },
+        ],
+      }));
+      expect(isCopilotSubEnabledForAnyEnterprise("teams")).toBe(false);
+    });
+
+    it("legacy mode falls back to global copilot config", () => {
+      setMockConfig(makeConfig({
+        globalMetrics: { copilot: { enabled: true, userMetrics: true } },
+        enterprises: [],
+      }));
+      delete process.env.GITHUB_ENTERPRISE;
+      expect(isCopilotSubEnabledForAnyEnterprise("userMetrics")).toBe(true);
+    });
+
+    it("legacy mode returns false when copilot globally disabled", () => {
+      setMockConfig(makeConfig({
+        globalMetrics: { copilot: { enabled: false } },
+        enterprises: [],
+      }));
+      delete process.env.GITHUB_ENTERPRISE;
+      expect(isCopilotSubEnabledForAnyEnterprise("seats")).toBe(false);
+    });
+
+    it("legacy mode defaults sub to true when not explicitly set", () => {
+      setMockConfig(makeConfig({
+        globalMetrics: { copilot: { enabled: true } },
+        enterprises: [],
+      }));
+      delete process.env.GITHUB_ENTERPRISE;
+      expect(isCopilotSubEnabledForAnyEnterprise("pullRequests")).toBe(true);
+    });
+  });
+
+  describe("isBillingSubEnabledForAnyEnterprise", () => {
+    afterEach(() => resetEnterpriseConfigCache());
+
+    it("returns true when at least one enterprise has billing sub enabled", () => {
+      setMockConfig(makeConfig({
+        globalMetrics: {
+          copilot: { enabled: true, enterprise: true },
+          billing: { enabled: true, meteredUsage: true },
+        },
+        enterprises: [
+          { slug: "ent-a", metrics: { billing: { meteredUsage: false } } },
+          { slug: "ent-b" },
+        ],
+      }));
+      expect(isBillingSubEnabledForAnyEnterprise("meteredUsage")).toBe(true);
+    });
+
+    it("returns false when all enterprises have billing sub disabled", () => {
+      setMockConfig(makeConfig({
+        globalMetrics: {
+          copilot: { enabled: true, enterprise: true },
+          billing: { enabled: true, premiumRequests: true },
+        },
+        enterprises: [
+          { slug: "ent-a", metrics: { billing: { premiumRequests: false } } },
+          { slug: "ent-b", metrics: { billing: { premiumRequests: false } } },
+        ],
+      }));
+      expect(isBillingSubEnabledForAnyEnterprise("premiumRequests")).toBe(false);
+    });
+
+    it("legacy mode falls back to global billing config", () => {
+      setMockConfig(makeConfig({
+        globalMetrics: {
+          copilot: { enabled: true, enterprise: true },
+          billing: { enabled: true, meteredUsage: true },
+        },
+        enterprises: [],
+      }));
+      delete process.env.GITHUB_ENTERPRISE;
+      // Legacy mode with 0 enterprises: billing requires enterprise mode
+      // isBillingSubEnabledForAnyEnterprise checks isBillingSubEnabledForEnterprise
+      // which chains through isBillingEnabledForEnterprise -> isCopilotSubEnabledForEnterprise(enterprise)
+      // With 0 enterprises, it falls back directly to global config check
+      expect(isBillingSubEnabledForAnyEnterprise("meteredUsage")).toBe(true);
+    });
+
+    it("legacy mode returns false when billing globally disabled", () => {
+      setMockConfig(makeConfig({
+        globalMetrics: {
+          copilot: { enabled: true, enterprise: true },
+          billing: { enabled: false },
+        },
+        enterprises: [],
+      }));
+      delete process.env.GITHUB_ENTERPRISE;
+      expect(isBillingSubEnabledForAnyEnterprise("meteredUsage")).toBe(false);
+    });
+
+    it("returns false when copilot enterprise mode disabled globally", () => {
+      setMockConfig(makeConfig({
+        globalMetrics: {
+          copilot: { enabled: true, enterprise: false },
+          billing: { enabled: true },
+        },
+        enterprises: [{ slug: "ent-a" }],
+      }));
+      expect(isBillingSubEnabledForAnyEnterprise("meteredUsage")).toBe(false);
+    });
+
+    it("legacy mode defaults billing sub to true when not explicitly set", () => {
+      setMockConfig(makeConfig({
+        globalMetrics: {
+          copilot: { enabled: true, enterprise: true },
+          billing: { enabled: true },
+        },
+        enterprises: [],
+      }));
+      expect(isBillingSubEnabledForAnyEnterprise("meteredUsage")).toBe(true);
+      expect(isBillingSubEnabledForAnyEnterprise("premiumRequests")).toBe(true);
+    });
+  });
+
+  describe("getClientEnterpriseMetrics", () => {
+    afterEach(() => resetEnterpriseConfigCache());
+
+    it("returns resolved metric states per enterprise", () => {
+      setMockConfig(makeConfig({
+        globalMetrics: {
+          copilot: { enabled: true },
+          codeScanning: { enabled: true },
+          dependabot: { enabled: true },
+          secretScanning: { enabled: true },
+          billing: { enabled: false },
+        },
+        enterprises: [
+          { slug: "ent-a" },
+          { slug: "ent-b", metrics: { copilot: { enabled: false }, billing: { enabled: true } } },
+        ],
+      }));
+      const result = getClientEnterpriseMetrics();
+      expect(result["ent-a"]).toEqual({
+        copilot: true,
+        codeScanning: true,
+        dependabot: true,
+        secretScanning: true,
+        billing: false,
+      });
+      expect(result["ent-b"]).toEqual({
+        copilot: false,
+        codeScanning: true,
+        dependabot: true,
+        secretScanning: true,
+        billing: true,
+      });
+    });
+
+    it("returns empty object when no enterprises configured", () => {
+      setMockConfig(makeConfig({ enterprises: [] }));
+      delete process.env.GITHUB_ENTERPRISE;
+      expect(getClientEnterpriseMetrics()).toEqual({});
     });
   });
 
