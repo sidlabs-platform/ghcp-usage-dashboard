@@ -16,7 +16,7 @@ export class OrgsClient {
    */
   async listEnterpriseOrgs(enterprise: string, enterpriseSlug?: string): Promise<GitHubOrg[]> {
     return githubFetchPaginated<GitHubOrg>(
-      `/enterprises/${enterprise}/organizations`,
+      `/enterprises/${encodeURIComponent(enterprise)}/organizations`,
       100,
       "pat",
       enterpriseSlug,

@@ -83,38 +83,40 @@ export function ScopeProvider({ children }: { children: ReactNode }) {
 
   // Prune org/team selections that don't belong to the currently selected enterprises.
   // Uses functional state updates to avoid stale closure issues.
+  // Matches ScopeFilter's matchesEnterprise logic: items without enterpriseSlug are
+  // kept when only one enterprise is configured (legacy data compatibility).
   useEffect(() => {
     if (selectedEnterprises.length === 0) return;
 
-    const opts = filterOptions; // capture ref for closures below
+    const opts = filterOptions;
+    const singleEnterprise = opts.enterprises.length <= 1;
+    const matchesEnt = (entSlug: string | undefined) =>
+      entSlug ? selectedEnterprises.includes(entSlug) : singleEnterprise;
 
     setSelectedOrgTeams((prev) => {
-      const pruned = prev.filter((slug) => {
-        const team = opts.orgTeams.find((t) => {
+      const pruned = prev.filter((slug) =>
+        opts.orgTeams.some((t) => {
           const qualifiedSlug = t.enterpriseSlug ? `${t.enterpriseSlug}:${t.slug}` : t.slug;
-          return qualifiedSlug === slug || t.slug === slug;
-        });
-        return team && team.enterpriseSlug && selectedEnterprises.includes(team.enterpriseSlug);
-      });
+          return (qualifiedSlug === slug || t.slug === slug) && matchesEnt(t.enterpriseSlug);
+        }),
+      );
       return pruned.length === prev.length ? prev : pruned;
     });
 
     setSelectedEntTeams((prev) => {
-      const pruned = prev.filter((slug) => {
-        const team = opts.enterpriseTeams.find((t) => {
+      const pruned = prev.filter((slug) =>
+        opts.enterpriseTeams.some((t) => {
           const qualifiedSlug = t.enterpriseSlug ? `${t.enterpriseSlug}:${t.slug}` : t.slug;
-          return qualifiedSlug === slug || t.slug === slug;
-        });
-        return team && team.enterpriseSlug && selectedEnterprises.includes(team.enterpriseSlug);
-      });
+          return (qualifiedSlug === slug || t.slug === slug) && matchesEnt(t.enterpriseSlug);
+        }),
+      );
       return pruned.length === prev.length ? prev : pruned;
     });
 
     setSelectedOrgs((prev) => {
-      const pruned = prev.filter((slug) => {
-        const org = opts.orgs.find((o) => o.slug === slug);
-        return org && org.enterpriseSlug && selectedEnterprises.includes(org.enterpriseSlug);
-      });
+      const pruned = prev.filter((slug) =>
+        opts.orgs.some((o) => o.slug === slug && matchesEnt(o.enterpriseSlug)),
+      );
       return pruned.length === prev.length ? prev : pruned;
     });
   }, [selectedEnterprises, filterOptions]);

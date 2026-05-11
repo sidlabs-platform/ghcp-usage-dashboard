@@ -73,7 +73,8 @@ async function discoverOrgsIfNeeded(
   const include = config.organizations?.include ?? [];
 
   if (include.length > 0) {
-    // Explicit org list — persist as 'configured' for cache consistency
+    // Explicit org list — clear any stale discovered orgs and persist as 'configured'
+    clearEnterpriseOrgs(enterpriseSlug);
     upsertEnterpriseOrgs(enterpriseSlug, include, "configured");
     return include.length;
   }
@@ -91,8 +92,8 @@ async function discoverOrgsIfNeeded(
     const apiOrgs = await orgsClient.listEnterpriseOrgs(enterpriseSlug, enterpriseSlug);
     const orgSlugs = apiOrgs.map((o) => o.login);
 
-    // Clear old discovered orgs and re-populate
-    clearEnterpriseOrgs(enterpriseSlug, "discovered");
+    // Replace the full cached org set with the latest discovery result
+    clearEnterpriseOrgs(enterpriseSlug);
     if (orgSlugs.length > 0) {
       upsertEnterpriseOrgs(enterpriseSlug, orgSlugs, "discovered");
     }

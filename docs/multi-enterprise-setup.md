@@ -124,6 +124,7 @@ Each enterprise can override any global metric toggle. When a field is omitted, 
 ```
 
 Available override fields:
+
 | Category | Fields |
 |----------|--------|
 | `copilot` | `enabled`, `enterprise`, `userMetrics`, `seats`, `teams`, `pullRequests` |

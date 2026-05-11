@@ -292,6 +292,8 @@ export function isCopilotSubEnabledForEnterprise(
  * Check if billing is enabled for a specific enterprise.
  */
 export function isBillingEnabledForEnterprise(slug: string): boolean {
+  // Billing requires enterprise mode to be enabled (billing API is enterprise-only)
+  if (!isCopilotSubEnabledForEnterprise(slug, "enterprise")) return false;
   return isMetricEnabledForEnterprise(slug, "billing");
 }
 
