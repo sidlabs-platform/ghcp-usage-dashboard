@@ -277,4 +277,114 @@ describe("dashboard-config (with config file)", () => {
     expect(isBillingSubEnabled("premiumRequests")).toBe(true);
     delete process.env.GITHUB_ENTERPRISE;
   });
+
+  // ── Multi-enterprise tests (offsets 130+, must come after all existing tests) ──
+
+  it("isEnterpriseEnabled returns true when enterprises array is configured (multi-enterprise)", () => {
+    mockReadFileSync.mockReturnValue(JSON.stringify({
+      enterprises: [
+        { slug: "ent-a", displayName: "Ent A", tokenEnvVar: "TOKEN_A" },
+        { slug: "ent-b", displayName: "Ent B", tokenEnvVar: "TOKEN_B" },
+      ],
+      metrics: { copilot: { enabled: true, enterprise: true } },
+    }));
+    vi.setSystemTime(Date.now() + 130 * 60 * 1000);
+    delete process.env.GITHUB_ENTERPRISE;
+    expect(isEnterpriseEnabled()).toBe(true);
+  });
+
+  it("isEnterpriseEnabled returns false when enterprises array exists but enterprise toggle is off", () => {
+    mockReadFileSync.mockReturnValue(JSON.stringify({
+      enterprises: [
+        { slug: "ent-a", displayName: "Ent A", tokenEnvVar: "TOKEN_A" },
+      ],
+      metrics: { copilot: { enabled: true, enterprise: false } },
+    }));
+    vi.setSystemTime(Date.now() + 140 * 60 * 1000);
+    delete process.env.GITHUB_ENTERPRISE;
+    expect(isEnterpriseEnabled()).toBe(false);
+  });
+
+  it("deepMergeConfig preserves enterprises array from config file", () => {
+    const enterprises = [
+      { slug: "ent-1", displayName: "Ent 1", tokenEnvVar: "T1" },
+    ];
+    mockReadFileSync.mockReturnValue(JSON.stringify({ enterprises }));
+    vi.setSystemTime(Date.now() + 150 * 60 * 1000);
+    const config = getDashboardConfig();
+    expect(config.enterprises).toEqual(enterprises);
+  });
+
+  it("getResolvedOrgs aggregates orgs from all enterprises in multi-enterprise mode", () => {
+    mockReadFileSync.mockReturnValue(JSON.stringify({
+      enterprises: [
+        { slug: "ent-a", displayName: "A", tokenEnvVar: "T1", organizations: { include: ["org-a", "org-b"], exclude: ["org-b"] } },
+        { slug: "ent-b", displayName: "B", tokenEnvVar: "T2", organizations: { include: ["org-c"] } },
+      ],
+    }));
+    vi.setSystemTime(Date.now() + 160 * 60 * 1000);
+    delete process.env.GITHUB_ORGS;
+    const orgs = getResolvedOrgs();
+    expect(orgs).toEqual(["org-a", "org-c"]);
+  });
+
+  it("getResolvedOrgs deduplicates orgs shared across multiple enterprises", () => {
+    mockReadFileSync.mockReturnValue(JSON.stringify({
+      enterprises: [
+        { slug: "ent-a", displayName: "A", tokenEnvVar: "T1", organizations: { include: ["shared-org", "org-a"] } },
+        { slug: "ent-b", displayName: "B", tokenEnvVar: "T2", organizations: { include: ["shared-org", "org-b"] } },
+      ],
+    }));
+    vi.setSystemTime(Date.now() + 170 * 60 * 1000);
+    delete process.env.GITHUB_ORGS;
+    const orgs = getResolvedOrgs();
+    expect(orgs).toContain("shared-org");
+    expect(orgs).toContain("org-a");
+    expect(orgs).toContain("org-b");
+    expect(orgs).toHaveLength(3);
+  });
+
+  it("getResolvedOrgs returns empty when enterprises have no organizations defined", () => {
+    mockReadFileSync.mockReturnValue(JSON.stringify({
+      enterprises: [
+        { slug: "ent-a", displayName: "A", tokenEnvVar: "T1" },
+      ],
+    }));
+    vi.setSystemTime(Date.now() + 180 * 60 * 1000);
+    delete process.env.GITHUB_ORGS;
+    const orgs = getResolvedOrgs();
+    expect(orgs).toEqual([]);
+  });
+
+  it("getResolvedOrgs still works with GITHUB_ORGS when no enterprises configured", () => {
+    mockReadFileSync.mockReturnValue(JSON.stringify({}));
+    vi.setSystemTime(Date.now() + 190 * 60 * 1000);
+    process.env.GITHUB_ORGS = "org-x,org-y";
+    const orgs = getResolvedOrgs();
+    expect(orgs).toEqual(["org-x", "org-y"]);
+    delete process.env.GITHUB_ORGS;
+  });
+
+  it("getEffectiveBillingEnabled returns true in multi-enterprise mode with billing enabled", () => {
+    mockReadFileSync.mockReturnValue(JSON.stringify({
+      enterprises: [
+        { slug: "ent-a", displayName: "A", tokenEnvVar: "T1" },
+      ],
+      metrics: { billing: { enabled: true } },
+    }));
+    vi.setSystemTime(Date.now() + 200 * 60 * 1000);
+    delete process.env.GITHUB_ENTERPRISE;
+    expect(getEffectiveBillingEnabled()).toBe(true);
+  });
+
+  it("isCopilotSubEnabled('enterprise') returns true in multi-enterprise mode", () => {
+    mockReadFileSync.mockReturnValue(JSON.stringify({
+      enterprises: [
+        { slug: "ent-x", displayName: "X", tokenEnvVar: "TX" },
+      ],
+    }));
+    vi.setSystemTime(Date.now() + 210 * 60 * 1000);
+    delete process.env.GITHUB_ENTERPRISE;
+    expect(isCopilotSubEnabled("enterprise")).toBe(true);
+  });
 });
