@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { cn, formatNumber, formatPercent, formatDelta, formatMinutes, safeNum, getDateRange, datesBetween, parseAndClampDays, MAX_DAYS } from "./utils";
+import { cn, formatNumber, formatPercent, formatDelta, formatMinutes, safeNum, getDateRange, datesBetween, parseAndClampDays, MAX_DAYS, parseDateRangeParams } from "./utils";
 
 // ── cn ──────────────────────────────────────────────────────────────────
 
@@ -256,5 +256,86 @@ describe("datesBetween", () => {
   it("handles leap year", () => {
     const result = datesBetween("2024-02-28", "2024-03-01");
     expect(result).toEqual(["2024-02-28", "2024-02-29", "2024-03-01"]);
+  });
+});
+
+// ── parseDateRangeParams ──────────────────────────────────────────────
+
+describe("parseDateRangeParams", () => {
+  it("falls back to days param when no startDate/endDate", () => {
+    const params = new URLSearchParams({ days: "14" });
+    const result = parseDateRangeParams(params);
+    expect("start" in result).toBe(true);
+    if ("start" in result) {
+      expect(result.start).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+      expect(result.end).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    }
+  });
+
+  it("uses default days when no params provided", () => {
+    const params = new URLSearchParams();
+    const result = parseDateRangeParams(params, 7);
+    expect("start" in result).toBe(true);
+  });
+
+  it("uses explicit startDate/endDate when provided", () => {
+    const params = new URLSearchParams({ startDate: "2024-01-01", endDate: "2024-01-15" });
+    const result = parseDateRangeParams(params);
+    expect(result).toEqual({ start: "2024-01-01", end: "2024-01-15" });
+  });
+
+  it("prefers startDate/endDate over days", () => {
+    const params = new URLSearchParams({ days: "7", startDate: "2024-03-01", endDate: "2024-03-10" });
+    const result = parseDateRangeParams(params);
+    expect(result).toEqual({ start: "2024-03-01", end: "2024-03-10" });
+  });
+
+  it("returns error when only startDate is provided", () => {
+    const params = new URLSearchParams({ startDate: "2024-01-01" });
+    const result = parseDateRangeParams(params);
+    expect("error" in result).toBe(true);
+  });
+
+  it("returns error when only endDate is provided", () => {
+    const params = new URLSearchParams({ endDate: "2024-01-15" });
+    const result = parseDateRangeParams(params);
+    expect("error" in result).toBe(true);
+  });
+
+  it("returns error for invalid date format", () => {
+    const params = new URLSearchParams({ startDate: "01-01-2024", endDate: "01-15-2024" });
+    const result = parseDateRangeParams(params);
+    expect("error" in result).toBe(true);
+  });
+
+  it("returns error when start is after end", () => {
+    const params = new URLSearchParams({ startDate: "2024-01-15", endDate: "2024-01-01" });
+    const result = parseDateRangeParams(params);
+    expect("error" in result).toBe(true);
+    if ("error" in result) expect(result.error).toContain("before");
+  });
+
+  it("returns error when range exceeds MAX_DAYS", () => {
+    const params = new URLSearchParams({ startDate: "2023-01-01", endDate: "2024-12-31" });
+    const result = parseDateRangeParams(params);
+    expect("error" in result).toBe(true);
+    if ("error" in result) expect(result.error).toContain(String(MAX_DAYS));
+  });
+
+  it("accepts same start and end date", () => {
+    const params = new URLSearchParams({ startDate: "2024-06-15", endDate: "2024-06-15" });
+    const result = parseDateRangeParams(params);
+    expect(result).toEqual({ start: "2024-06-15", end: "2024-06-15" });
+  });
+
+  it("returns error for future end date", () => {
+    const tomorrow = new Date();
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    const tomorrowStr = tomorrow.toISOString().split("T")[0];
+    const todayStr = new Date().toISOString().split("T")[0];
+    const params = new URLSearchParams({ startDate: todayStr, endDate: tomorrowStr });
+    const result = parseDateRangeParams(params);
+    expect("error" in result).toBe(true);
+    if ("error" in result) expect(result.error).toContain("future");
   });
 });

@@ -12,6 +12,7 @@ import Link from "next/link";
 import { Users } from "lucide-react";
 import { PaginatedTable, type ColumnDef } from "@/components/tables/PaginatedTable";
 import { ExportMenu } from "@/components/ui/ExportMenu";
+import { DateFilter } from "@/components/filters/DateFilter";
 import type { CSVColumn } from "@/lib/export/csv";
 import { formatNumber, safeNum } from "@/lib/utils";
 
@@ -80,13 +81,21 @@ const userExportColumns: CSVColumn[] = [
 ];
 
 export default function UsersPage() {
-  const { days } = useDateRange();
+  const { mode, days, startDate, endDate } = useDateRange();
   const { hasFilter, buildScopeParams } = useScope();
   const [totalUsers, setTotalUsers] = useState(0);
 
-  const extraParams = new URLSearchParams({ days: String(days) });
+  const extraParams = new URLSearchParams();
+  if (mode === "custom") {
+    extraParams.set("startDate", startDate);
+    extraParams.set("endDate", endDate);
+  } else {
+    extraParams.set("days", String(days));
+  }
   const scopeParams = buildScopeParams();
   scopeParams.forEach((v, k) => extraParams.set(k, v));
+
+  const dateLabel = mode === "custom" ? `${startDate} to ${endDate}` : `Last ${days} days`;
 
   return (
     <div>
@@ -97,10 +106,10 @@ export default function UsersPage() {
             extraParams,
             columns: userExportColumns,
             dataExtractor: (json) => json.users ?? [],
-            filename: `users-export-${days}d`,
+            filename: `users-export-${mode === "custom" ? `${startDate}_${endDate}` : `${days}d`}`,
             metadata: {
               reportName: "User Explorer",
-              dateRange: `Last ${days} days`,
+              dateRange: dateLabel,
               teams: scopeParams.get("teams") || undefined,
               orgs: scopeParams.get("orgs") || undefined,
             },
@@ -108,6 +117,7 @@ export default function UsersPage() {
         />
       </PageHeader>
       <ScopeFilter />
+      <DateFilter />
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 mb-8">
         <MetricCard

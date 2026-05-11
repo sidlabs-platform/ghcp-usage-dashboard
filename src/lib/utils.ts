@@ -88,3 +88,57 @@ export function datesBetween(startDay: string, endDay: string): string[] {
   }
   return dates;
 }
+
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * Parse date-range query params. Accepts either `days` OR explicit
+ * `startDate` + `endDate` (YYYY-MM-DD). Returns `{ start, end }` on
+ * success or `{ error }` on validation failure.
+ *
+ * When both `days` and `startDate`/`endDate` are provided, explicit
+ * dates take precedence.
+ */
+export function parseDateRangeParams(
+  params: URLSearchParams,
+  defaultDays = 7,
+): { start: string; end: string } | { error: string } {
+  const rawStart = params.get("startDate");
+  const rawEnd = params.get("endDate");
+
+  if (rawStart || rawEnd) {
+    if (!rawStart || !rawEnd) {
+      return { error: "Both startDate and endDate must be provided together." };
+    }
+    if (!DATE_RE.test(rawStart) || !DATE_RE.test(rawEnd)) {
+      return { error: "startDate and endDate must be in YYYY-MM-DD format." };
+    }
+    const s = new Date(rawStart);
+    const e = new Date(rawEnd);
+    if (isNaN(s.getTime()) || isNaN(e.getTime())) {
+      return { error: "startDate or endDate is not a valid date." };
+    }
+    if (s > e) {
+      return { error: "startDate must be on or before endDate." };
+    }
+    const diffDays = Math.round((e.getTime() - s.getTime()) / (1000 * 60 * 60 * 24)) + 1;
+    if (diffDays > MAX_DAYS) {
+      return {
+        error: `Date range spans ${diffDays} days, which exceeds the maximum of ${MAX_DAYS}.`,
+      };
+    }
+    // Reject future end dates — data is only available up to yesterday
+    const yesterday = new Date();
+    yesterday.setDate(yesterday.getDate() - 1);
+    yesterday.setHours(0, 0, 0, 0);
+    if (e > yesterday) {
+      return { error: "endDate cannot be in the future. Latest available data is from yesterday." };
+    }
+    return { start: rawStart, end: rawEnd };
+  }
+
+  // Fall back to `days` param
+  const daysResult = parseAndClampDays(params.get("days"), defaultDays);
+  if ("error" in daysResult) return daysResult;
+  return getDateRange(daysResult.days);
+}
