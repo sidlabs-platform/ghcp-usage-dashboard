@@ -34,7 +34,8 @@ export function getDiscoveredOrgsFromDb(enterpriseSlug: string): string[] {
     return ensureLoader()(enterpriseSlug);
   } catch (err) {
     if (process.env.NODE_ENV !== "test") {
-      console.warn("[orgs-resolver] Failed to load orgs from DB, returning empty:", err);
+      console.warn("[orgs-resolver] Failed to load orgs from DB, returning empty:",
+        err instanceof Error ? err.message : err);
     }
     _loader = undefined;
     return [];
