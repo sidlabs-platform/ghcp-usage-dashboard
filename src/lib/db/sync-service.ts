@@ -34,6 +34,11 @@ import { upsertEnterpriseOrgs, clearEnterpriseOrgs } from "./orgs-repo";
 
 const BACKFILL_DAYS = parseInt(process.env.BACKFILL_DAYS || "90", 10) || 90;
 
+/** Strip newlines/carriage returns from a string before logging to prevent log injection. */
+function sanitizeForLog(s: string): string {
+  return s.replace(/\n|\r/g, "");
+}
+
 export interface SyncProgress {
   phase: string;
   day?: string;
@@ -84,7 +89,7 @@ async function discoverOrgsIfNeeded(
     phase: "org-discovery",
     current: 0,
     total: 1,
-    message: `[${enterpriseSlug}] Discovering organizations from enterprise API...`,
+    message: `[${sanitizeForLog(enterpriseSlug)}] Discovering organizations from enterprise API...`,
     enterpriseSlug,
   });
 
@@ -100,14 +105,14 @@ async function discoverOrgsIfNeeded(
 
     console.log(
       "[Sync] [%s] Auto-discovered %d organization(s) from enterprise API",
-      enterpriseSlug.replace(/\n|\r/g, ""),
+      sanitizeForLog(enterpriseSlug),
       orgSlugs.length,
     );
     return orgSlugs.length;
   } catch (err) {
     console.warn(
       "[Sync] [%s] Org auto-discovery failed (continuing with cached orgs): %s",
-      enterpriseSlug.replace(/\n|\r/g, ""),
+      sanitizeForLog(enterpriseSlug),
       err instanceof Error ? err.message : String(err),
     );
     return 0;
@@ -127,7 +132,7 @@ export async function syncDay(
 
   // 1. Enterprise aggregate (skipped when enterprise is disabled)
   if (isCopilotSubEnabledForEnterprise(enterpriseSlug, "enterprise") && !isSynced(enterpriseSlug, "enterprise", enterpriseSlug, day)) {
-    onProgress?.({ phase: "enterprise", day, current: 0, total: 1, message: `[${enterpriseSlug}] Fetching enterprise metrics for ${day}`, enterpriseSlug });
+    onProgress?.({ phase: "enterprise", day, current: 0, total: 1, message: `[${sanitizeForLog(enterpriseSlug)}] Fetching enterprise metrics for ${day}`, enterpriseSlug });
     try {
       const data = await metricsClient.getEnterpriseDailyReport(enterpriseSlug, day, enterpriseSlug);
       for (const record of data) {
@@ -138,7 +143,7 @@ export async function syncDay(
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       recordSync(enterpriseSlug, "enterprise", enterpriseSlug, day, 0, "error", msg);
-      console.error("[%s] Failed to sync enterprise data for %s: %s", enterpriseSlug.replace(/\n|\r/g, ""), day, msg.replace(/\n|\r/g, ""));
+      console.error("[%s] Failed to sync enterprise data for %s: %s", sanitizeForLog(enterpriseSlug), day, sanitizeForLog(msg));
     }
   }
 
@@ -146,7 +151,7 @@ export async function syncDay(
   if (userMetricsEnabled) {
     if (isCopilotSubEnabledForEnterprise(enterpriseSlug, "enterprise")) {
       if (!isSynced(enterpriseSlug, "users", enterpriseSlug, day)) {
-        onProgress?.({ phase: "users", day, current: 0, total: 1, message: `[${enterpriseSlug}] Fetching user metrics for ${day}`, enterpriseSlug });
+        onProgress?.({ phase: "users", day, current: 0, total: 1, message: `[${sanitizeForLog(enterpriseSlug)}] Fetching user metrics for ${day}`, enterpriseSlug });
         try {
           const users = await metricsClient.getEnterpriseUserDailyReport(enterpriseSlug, day, enterpriseSlug);
           batchUpsertUserDayMetrics(enterpriseSlug, users);
@@ -155,7 +160,7 @@ export async function syncDay(
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
           recordSync(enterpriseSlug, "users", enterpriseSlug, day, 0, "error", msg);
-          console.error("[%s] Failed to sync user data for %s: %s", enterpriseSlug.replace(/\n|\r/g, ""), day, msg.replace(/\n|\r/g, ""));
+          console.error("[%s] Failed to sync user data for %s: %s", sanitizeForLog(enterpriseSlug), day, sanitizeForLog(msg));
         }
       }
     } else {
@@ -167,7 +172,7 @@ export async function syncDay(
       const orgUserLimit = pLimit(5);
       await Promise.all(orgs.map((org) => orgUserLimit(async () => {
         if (!isSynced(enterpriseSlug, "users", org, day)) {
-          onProgress?.({ phase: "users", day, current: 0, total: orgs.length, message: `[${enterpriseSlug}] Fetching user metrics for org ${org} on ${day}`, enterpriseSlug });
+          onProgress?.({ phase: "users", day, current: 0, total: orgs.length, message: `[${sanitizeForLog(enterpriseSlug)}] Fetching user metrics for org ${sanitizeForLog(org)} on ${day}`, enterpriseSlug });
           try {
             const users = await metricsClient.getOrgUserDailyReport(org, day, enterpriseSlug);
             batchUpsertUserDayMetrics(enterpriseSlug, users);
@@ -176,7 +181,7 @@ export async function syncDay(
           } catch (err) {
             const msg = err instanceof Error ? err.message : String(err);
             recordSync(enterpriseSlug, "users", org, day, 0, "error", msg);
-            console.error("[%s] Failed to sync user data for org %s on %s: %s", enterpriseSlug.replace(/\n|\r/g, ""), org.replace(/\n|\r/g, ""), day, msg.replace(/\n|\r/g, ""));
+            console.error("[%s] Failed to sync user data for org %s on %s: %s", sanitizeForLog(enterpriseSlug), sanitizeForLog(org), day, sanitizeForLog(msg));
           }
         }
       })));
@@ -187,7 +192,7 @@ export async function syncDay(
   const orgLimit = pLimit(5);
   await Promise.all(orgs.map((org) => orgLimit(async () => {
     if (!isSynced(enterpriseSlug, "org", org, day)) {
-      onProgress?.({ phase: "org", day, current: 0, total: orgs.length, message: `[${enterpriseSlug}] Fetching org ${org} metrics for ${day}`, enterpriseSlug });
+      onProgress?.({ phase: "org", day, current: 0, total: orgs.length, message: `[${sanitizeForLog(enterpriseSlug)}] Fetching org ${sanitizeForLog(org)} metrics for ${day}`, enterpriseSlug });
       try {
         const data = await metricsClient.getOrgDailyReport(org, day, enterpriseSlug);
         for (const record of data) {
@@ -198,7 +203,7 @@ export async function syncDay(
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         recordSync(enterpriseSlug, "org", org, day, 0, "error", msg);
-        console.error("[%s] Failed to sync org %s data for %s: %s", enterpriseSlug.replace(/\n|\r/g, ""), org.replace(/\n|\r/g, ""), day, msg.replace(/\n|\r/g, ""));
+        console.error("[%s] Failed to sync org %s data for %s: %s", sanitizeForLog(enterpriseSlug), sanitizeForLog(org), day, sanitizeForLog(msg));
       }
     }
   })));
@@ -251,7 +256,7 @@ export async function backfillEnterprise(
       day,
       current: i + 1,
       total: allDays.length,
-      message: `[${enterpriseSlug}] Syncing day ${i + 1}/${allDays.length}: ${day}`,
+      message: `[${sanitizeForLog(enterpriseSlug)}] Syncing day ${i + 1}/${allDays.length}: ${day}`,
       enterpriseSlug,
     });
 
@@ -260,7 +265,7 @@ export async function backfillEnterprise(
       daysSynced++;
     } catch (err) {
       errors++;
-      console.error("[%s] Error syncing %s:", enterpriseSlug.replace(/\n|\r/g, ""), day, err);
+      console.error("[%s] Error syncing %s:", sanitizeForLog(enterpriseSlug), day, err);
     }
   }));
 
@@ -311,7 +316,7 @@ async function incrementalSyncEnterprise(
   }
 
   if (latestDays.length === 0) {
-    console.warn("[Sync] [%s] No enterprise and no orgs configured — nothing to sync", enterpriseSlug.replace(/\n|\r/g, ""));
+    console.warn("[Sync] [%s] No enterprise and no orgs configured — nothing to sync", sanitizeForLog(enterpriseSlug));
     return { daysSynced: 0, daysSkipped: 0 };
   }
 
@@ -350,7 +355,7 @@ async function incrementalSyncEnterprise(
       day: days[i],
       current: i + 1,
       total: days.length,
-      message: `[${enterpriseSlug}] Incremental sync ${i + 1}/${days.length}: ${days[i]}`,
+      message: `[${sanitizeForLog(enterpriseSlug)}] Incremental sync ${i + 1}/${days.length}: ${days[i]}`,
       enterpriseSlug,
     });
 
@@ -394,7 +399,7 @@ async function syncSeatsForEnterprise(slug: string): Promise<number> {
       total += seats.length;
       recordSync(slug, "seats", org, null, seats.length);
     } catch (err) {
-      console.error("[%s] Failed to sync seats for %s:", slug.replace(/\n|\r/g, ""), org.replace(/\n|\r/g, ""), err);
+      console.error("[%s] Failed to sync seats for %s:", sanitizeForLog(slug), sanitizeForLog(org), err);
     }
   }
 
@@ -432,7 +437,7 @@ async function syncTeamsForEnterprise(slug: string): Promise<number> {
       total += entTeams.length;
       recordSync(slug, "teams", slug, null, entTeams.length);
     } catch (err) {
-      console.error("[%s] Failed to sync enterprise teams:", slug.replace(/\n|\r/g, ""), err);
+      console.error("[%s] Failed to sync enterprise teams:", sanitizeForLog(slug), err);
     }
   }
 
@@ -444,7 +449,7 @@ async function syncTeamsForEnterprise(slug: string): Promise<number> {
       total += orgTeams.length;
       recordSync(slug, "teams", org, null, orgTeams.length);
     } catch (err) {
-      console.error("[%s] Failed to sync teams for %s:", slug.replace(/\n|\r/g, ""), org.replace(/\n|\r/g, ""), err);
+      console.error("[%s] Failed to sync teams for %s:", sanitizeForLog(slug), sanitizeForLog(org), err);
     }
   }
 
@@ -501,7 +506,7 @@ export async function fullSync(
     // Teams
     let entTeams = 0;
     if (isCopilotSubEnabledForEnterprise(slug, "teams")) {
-      onProgress?.({ phase: "teams", current: 0, total: 1, message: `[${slug}] Syncing team memberships...`, enterpriseSlug: slug });
+      onProgress?.({ phase: "teams", current: 0, total: 1, message: `[${sanitizeForLog(slug)}] Syncing team memberships...`, enterpriseSlug: slug });
       entTeams = await syncTeamsForEnterprise(slug);
     }
     heartbeatSyncLock();
@@ -509,13 +514,13 @@ export async function fullSync(
     // Seats
     let entSeats = 0;
     if (isCopilotSubEnabledForEnterprise(slug, "seats")) {
-      onProgress?.({ phase: "seats", current: 0, total: 1, message: `[${slug}] Syncing seat data...`, enterpriseSlug: slug });
+      onProgress?.({ phase: "seats", current: 0, total: 1, message: `[${sanitizeForLog(slug)}] Syncing seat data...`, enterpriseSlug: slug });
       entSeats = await syncSeatsForEnterprise(slug);
     }
     heartbeatSyncLock();
 
     // Backfill
-    onProgress?.({ phase: "backfill", current: 0, total: 1, message: `[${slug}] Starting metrics backfill...`, enterpriseSlug: slug });
+    onProgress?.({ phase: "backfill", current: 0, total: 1, message: `[${sanitizeForLog(slug)}] Starting metrics backfill...`, enterpriseSlug: slug });
     const bf = await backfillEnterprise(slug, undefined, onProgress);
     heartbeatSyncLock();
 
@@ -523,13 +528,13 @@ export async function fullSync(
     await sync28DayFallback(slug, onProgress);
 
     // Sync billing reports
-    onProgress?.({ phase: "billing", current: 0, total: 1, message: `[${slug}] Syncing billing reports...`, enterpriseSlug: slug });
+    onProgress?.({ phase: "billing", current: 0, total: 1, message: `[${sanitizeForLog(slug)}] Syncing billing reports...`, enterpriseSlug: slug });
     try {
       await syncBilling(slug, (p) => {
         onProgress?.({ phase: "billing", current: p.current, total: p.total, message: p.message, enterpriseSlug: slug });
       });
     } catch (err) {
-      console.error("[Sync] [%s] Billing sync failed:", slug.replace(/\n|\r/g, ""), err);
+      console.error("[Sync] [%s] Billing sync failed:", sanitizeForLog(slug), err);
     }
 
     enterpriseResults.push({
@@ -593,18 +598,18 @@ async function sync28DayFallback(
 
   // Enterprise 28-day fallback (only when enterprise mode is on)
   if (isCopilotSubEnabledForEnterprise(enterpriseSlug, "enterprise") && !hasEnterpriseDataForRange(enterpriseSlug, startStr, endStr, [enterpriseSlug])) {
-    onProgress?.({ phase: "fallback", current: 0, total: 1, message: `[${enterpriseSlug}] Trying enterprise 28-day report as fallback...`, enterpriseSlug });
+    onProgress?.({ phase: "fallback", current: 0, total: 1, message: `[${sanitizeForLog(enterpriseSlug)}] Trying enterprise 28-day report as fallback...`, enterpriseSlug });
     try {
       const data = await metricsClient.getEnterprise28DayReport(enterpriseSlug, enterpriseSlug);
       if (data.length > 0) {
-        console.log("[Sync] [%s] 28-day enterprise fallback: %d day-totals received", enterpriseSlug.replace(/\n|\r/g, ""), data.length);
+        console.log("[Sync] [%s] 28-day enterprise fallback: %d day-totals received", sanitizeForLog(enterpriseSlug), data.length);
         for (const record of data) {
           upsertEnterpriseDayMetrics(enterpriseSlug, record);
           recordSync(enterpriseSlug, "enterprise", enterpriseSlug, record.day, 1, "success");
         }
       }
     } catch (err) {
-      console.error("[Sync] [%s] 28-day enterprise fallback failed:", enterpriseSlug.replace(/\n|\r/g, ""), err);
+      console.error("[Sync] [%s] 28-day enterprise fallback failed:", sanitizeForLog(enterpriseSlug), err);
     }
   }
 
@@ -613,18 +618,18 @@ async function sync28DayFallback(
     if (hasOrgDataForRange(org, startStr, endStr, [enterpriseSlug])) {
       continue; // Already have org data, skip fallback
     }
-    onProgress?.({ phase: "fallback", current: 0, total: orgs.length, message: `[${enterpriseSlug}] Trying org ${org} 28-day report as fallback...`, enterpriseSlug });
+    onProgress?.({ phase: "fallback", current: 0, total: orgs.length, message: `[${sanitizeForLog(enterpriseSlug)}] Trying org ${sanitizeForLog(org)} 28-day report as fallback...`, enterpriseSlug });
     try {
       const data = await metricsClient.getOrg28DayReport(org, enterpriseSlug);
       if (data.length > 0) {
-        console.log("[Sync] [%s] 28-day org fallback for %s: %d day-totals received", enterpriseSlug.replace(/\n|\r/g, ""), org.replace(/\n|\r/g, ""), data.length);
+        console.log("[Sync] [%s] 28-day org fallback for %s: %d day-totals received", sanitizeForLog(enterpriseSlug), sanitizeForLog(org), data.length);
         for (const record of data) {
           upsertOrgDayMetrics(enterpriseSlug, org, record);
           recordSync(enterpriseSlug, "org", org, record.day, 1, "success");
         }
       }
     } catch (err) {
-      console.error("[Sync] [%s] 28-day org fallback failed for %s:", enterpriseSlug.replace(/\n|\r/g, ""), org.replace(/\n|\r/g, ""), err);
+      console.error("[Sync] [%s] 28-day org fallback failed for %s:", sanitizeForLog(enterpriseSlug), sanitizeForLog(org), err);
     }
   }
 }
