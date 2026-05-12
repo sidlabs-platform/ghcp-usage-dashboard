@@ -1,6 +1,7 @@
 import fs from "fs";
 import path from "path";
 import type { EnterpriseConfig } from "./enterprise-config";
+import { getDiscoveredOrgsFromDb } from "./orgs-resolver";
 
 // --- Types ---
 
@@ -217,16 +218,7 @@ export function getResolvedOrgs(): string[] {
       if (include.length > 0) {
         entOrgs = [...include];
       } else {
-        // Fall back to auto-discovered orgs cached in DB
-        try {
-          // eslint-disable-next-line @typescript-eslint/no-require-imports
-          const { getEnterpriseOrgs } = require("@/lib/db/orgs-repo") as {
-            getEnterpriseOrgs: (slug: string) => string[];
-          };
-          entOrgs = getEnterpriseOrgs(ent.slug);
-        } catch {
-          entOrgs = [];
-        }
+        entOrgs = getDiscoveredOrgsFromDb(ent.slug);
       }
 
       for (const org of entOrgs) {
@@ -244,17 +236,9 @@ export function getResolvedOrgs(): string[] {
 
   // When GITHUB_ORGS is blank, fall back to DB-cached auto-discovered orgs
   if (orgs.length === 0) {
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const { getEnterpriseOrgs } = require("@/lib/db/orgs-repo") as {
-        getEnterpriseOrgs: (slug: string) => string[];
-      };
-      const legacySlug = process.env.GITHUB_ENTERPRISE;
-      if (legacySlug) {
-        orgs = getEnterpriseOrgs(legacySlug);
-      }
-    } catch {
-      // DB not initialized yet — return empty
+    const legacySlug = process.env.GITHUB_ENTERPRISE;
+    if (legacySlug) {
+      orgs = getDiscoveredOrgsFromDb(legacySlug);
     }
   }
 
