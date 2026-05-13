@@ -307,3 +307,237 @@ describe("SQL json_each aggregation queries", () => {
     expect(rows[1].weekly).toBe(1); // alice deduplicated across window
   });
 });
+
+// ═══════════════════════════════════════════════════════════════════════
+// Multi-enterprise SQL deduplication tests
+// Validates that all aggregation SQL patterns correctly handle users
+// appearing across multiple enterprises.
+// ═══════════════════════════════════════════════════════════════════════
+
+describe("multi-enterprise SQL deduplication", () => {
+  beforeAll(() => {
+    // Insert multi-enterprise data with an overlapping user (alice in both)
+    const insert = db.prepare(`
+      INSERT OR REPLACE INTO user_daily_metrics (
+        day, enterprise_id, enterprise_slug, user_id, user_login,
+        code_generation_activity_count, code_acceptance_activity_count,
+        user_initiated_interaction_count,
+        loc_suggested_to_add_sum, loc_suggested_to_delete_sum,
+        loc_added_sum, loc_deleted_sum,
+        chat_panel_agent_mode, chat_panel_ask_mode, chat_panel_custom_mode,
+        chat_panel_edit_mode, chat_panel_plan_mode, chat_panel_unknown_mode,
+        used_agent, used_chat, used_cli,
+        used_copilot_code_review_active, used_copilot_code_review_passive, used_copilot_coding_agent,
+        totals_by_ide, totals_by_feature, totals_by_language_feature,
+        totals_by_model_feature, totals_by_language_model, totals_by_cli
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+
+    const feature = JSON.stringify([
+      { feature: "code_completion", loc_added_sum: 50, loc_suggested_to_add_sum: 100, loc_deleted_sum: 0,
+        code_generation_activity_count: 20, code_acceptance_activity_count: 15, user_initiated_interaction_count: 20 },
+      { feature: "agent_edit", loc_added_sum: 30, loc_suggested_to_add_sum: 0, loc_deleted_sum: 5,
+        code_generation_activity_count: 0, code_acceptance_activity_count: 0, user_initiated_interaction_count: 3 },
+    ]);
+
+    // Ent-X, 2025-05-10: alice (agent=1, chat=1, cli=1)
+    insert.run("2025-05-10", "ent-x", "mega-corp", 100, "alice",
+      20, 15, 30, 100, 0, 80, 5, 0, 5, 0, 3, 0, 0, 1, 1, 1, 0, 0, 0,
+      "[]", feature, "[]", "[]", "[]", null);
+
+    // Ent-X, 2025-05-10: dave (agent=0, chat=1, cli=0)
+    insert.run("2025-05-10", "ent-x", "mega-corp", 200, "dave",
+      10, 8, 15, 50, 0, 40, 2, 0, 3, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0,
+      "[]", feature, "[]", "[]", "[]", null);
+
+    // Ent-Y, 2025-05-10: alice (same user, different enterprise)
+    insert.run("2025-05-10", "ent-y", "init-tech", 100, "alice",
+      18, 12, 25, 90, 0, 70, 4, 0, 4, 0, 2, 0, 0, 1, 1, 1, 0, 0, 0,
+      "[]", feature, "[]", "[]", "[]", null);
+
+    // Ent-Y, 2025-05-10: eve (agent=1, chat=0, cli=1)
+    insert.run("2025-05-10", "ent-y", "init-tech", 300, "eve",
+      8, 5, 12, 40, 0, 30, 2, 0, 0, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0,
+      "[]", feature, "[]", "[]", "[]", null);
+
+    // Day 2: only alice in ent-x + new user frank in ent-y
+    insert.run("2025-05-11", "ent-x", "mega-corp", 100, "alice",
+      12, 9, 20, 60, 0, 50, 3, 0, 3, 0, 2, 0, 0, 1, 1, 0, 0, 0, 0,
+      "[]", feature, "[]", "[]", "[]", null);
+
+    insert.run("2025-05-11", "ent-y", "init-tech", 400, "frank",
+      5, 3, 8, 25, 0, 18, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+      "[]", feature, "[]", "[]", "[]", null);
+  });
+
+  it("COUNT(DISTINCT user_login) deduplicates daily active users across enterprises", () => {
+    const rows = db.prepare(`
+      SELECT
+        day,
+        COUNT(DISTINCT user_login) as daily
+      FROM user_daily_metrics
+      WHERE day = '2025-05-10'
+        AND enterprise_slug IN ('mega-corp', 'init-tech')
+      GROUP BY day
+    `).all() as { day: string; daily: number }[];
+
+    expect(rows).toHaveLength(1);
+    // alice (x2 rows), dave, eve = 3 distinct users
+    expect(rows[0].daily).toBe(3);
+  });
+
+  it("SUM of boolean flags double-counts overlapping users (the old bug)", () => {
+    // This proves why SUM(used_cli) was wrong
+    const row = db.prepare(`
+      SELECT
+        SUM(used_cli) as cli_sum,
+        COUNT(DISTINCT CASE WHEN used_cli = 1 THEN user_id END) as cli_distinct
+      FROM user_daily_metrics
+      WHERE day = '2025-05-10'
+        AND enterprise_slug IN ('mega-corp', 'init-tech')
+    `).get() as { cli_sum: number; cli_distinct: number };
+
+    // SUM would give 3 (alice*2 + eve), but distinct gives correct 2
+    expect(row.cli_sum).toBe(3);     // WRONG: inflated
+    expect(row.cli_distinct).toBe(2); // CORRECT: alice + eve
+  });
+
+  it("SUM of used_agent double-counts overlapping users (the old bug)", () => {
+    const row = db.prepare(`
+      SELECT
+        SUM(used_agent) as agent_sum,
+        COUNT(DISTINCT CASE WHEN used_agent = 1 THEN user_id END) as agent_distinct
+      FROM user_daily_metrics
+      WHERE day = '2025-05-10'
+        AND enterprise_slug IN ('mega-corp', 'init-tech')
+    `).get() as { agent_sum: number; agent_distinct: number };
+
+    // alice has used_agent=1 in both enterprises → SUM=3, DISTINCT=2
+    expect(row.agent_sum).toBe(3);     // WRONG: inflated
+    expect(row.agent_distinct).toBe(2); // CORRECT: alice + eve
+  });
+
+  it("SUM of used_chat double-counts overlapping users (the old bug)", () => {
+    const row = db.prepare(`
+      SELECT
+        SUM(used_chat) as chat_sum,
+        COUNT(DISTINCT CASE WHEN used_chat = 1 THEN user_id END) as chat_distinct
+      FROM user_daily_metrics
+      WHERE day = '2025-05-10'
+        AND enterprise_slug IN ('mega-corp', 'init-tech')
+    `).get() as { chat_sum: number; chat_distinct: number };
+
+    // alice has used_chat=1 in both, dave has used_chat=1 → SUM=3, DISTINCT=2
+    expect(row.chat_sum).toBe(3);     // WRONG: inflated
+    expect(row.chat_distinct).toBe(2); // CORRECT: alice + dave
+  });
+
+  it("rolling 7-day WAU correctly deduplicates across enterprises", () => {
+    const rows = db.prepare(`
+      SELECT
+        m.day,
+        COUNT(DISTINCT m.user_login) as daily,
+        (SELECT COUNT(DISTINCT w.user_login)
+         FROM user_daily_metrics w
+         WHERE w.day BETWEEN date(m.day, '-6 days') AND m.day
+           AND w.enterprise_slug IN ('mega-corp', 'init-tech')
+        ) as weekly
+      FROM user_daily_metrics m
+      WHERE m.day >= '2025-05-10' AND m.day <= '2025-05-11'
+        AND m.enterprise_slug IN ('mega-corp', 'init-tech')
+      GROUP BY m.day
+      ORDER BY m.day ASC
+    `).all() as { day: string; daily: number; weekly: number }[];
+
+    expect(rows).toHaveLength(2);
+    // Day 1: daily=3 (alice, dave, eve), weekly=3
+    expect(rows[0].daily).toBe(3);
+    expect(rows[0].weekly).toBe(3);
+    // Day 2: daily=2 (alice, frank), weekly=4 (alice, dave, eve, frank in 7-day window)
+    expect(rows[1].daily).toBe(2);
+    expect(rows[1].weekly).toBe(4);
+  });
+
+  it("rolling 30-day MAU correctly deduplicates across enterprises", () => {
+    const rows = db.prepare(`
+      SELECT
+        m.day,
+        (SELECT COUNT(DISTINCT mo.user_login)
+         FROM user_daily_metrics mo
+         WHERE mo.day BETWEEN date(m.day, '-29 days') AND m.day
+           AND mo.enterprise_slug IN ('mega-corp', 'init-tech')
+        ) as monthly
+      FROM user_daily_metrics m
+      WHERE m.day >= '2025-05-10' AND m.day <= '2025-05-11'
+        AND m.enterprise_slug IN ('mega-corp', 'init-tech')
+      GROUP BY m.day
+      ORDER BY m.day ASC
+    `).all() as { day: string; monthly: number }[];
+
+    expect(rows).toHaveLength(2);
+    // Day 1: 3 distinct users in 30-day window
+    expect(rows[0].monthly).toBe(3);
+    // Day 2: 4 distinct users (alice, dave, eve, frank)
+    expect(rows[1].monthly).toBe(4);
+  });
+
+  it("adoption COUNT(DISTINCT) deduplicates across enterprises", () => {
+    const row = db.prepare(`
+      SELECT
+        COUNT(DISTINCT user_login) as totalUsers,
+        COUNT(DISTINCT CASE WHEN used_agent = 1 THEN user_login END) as agentUsers,
+        COUNT(DISTINCT CASE WHEN used_cli = 1 THEN user_login END) as cliUsers,
+        COUNT(DISTINCT CASE WHEN used_chat = 1 THEN user_login END) as chatUsers
+      FROM user_daily_metrics
+      WHERE day >= '2025-05-10' AND day <= '2025-05-11'
+        AND enterprise_slug IN ('mega-corp', 'init-tech')
+    `).get() as { totalUsers: number; agentUsers: number; cliUsers: number; chatUsers: number };
+
+    // 4 distinct users across both days: alice, dave, eve, frank
+    expect(row.totalUsers).toBe(4);
+    // agent users: alice, eve (frank has used_agent=0)
+    expect(row.agentUsers).toBe(2);
+    // cli users: alice, eve (day1 only)
+    expect(row.cliUsers).toBe(2);
+    // chat users: alice, dave
+    expect(row.chatUsers).toBe(2);
+  });
+
+  it("json_each aggregation sums activity across all enterprise rows", () => {
+    const rows = db.prepare(`
+      SELECT
+        u.day,
+        COALESCE(SUM(CASE WHEN json_extract(j.value, '$.feature') != 'agent_edit'
+          THEN json_extract(j.value, '$.code_generation_activity_count') ELSE 0 END), 0) as compGenCount,
+        COALESCE(SUM(CASE WHEN json_extract(j.value, '$.feature') = 'agent_edit'
+          THEN json_extract(j.value, '$.loc_added_sum') ELSE 0 END), 0) as agentAdded
+      FROM user_daily_metrics u, json_each(u.totals_by_feature) j
+      WHERE u.day = '2025-05-10'
+        AND u.totals_by_feature IS NOT NULL AND u.totals_by_feature != '[]'
+        AND u.enterprise_slug IN ('mega-corp', 'init-tech')
+      GROUP BY u.day
+    `).all() as { day: string; compGenCount: number; agentAdded: number }[];
+
+    expect(rows).toHaveLength(1);
+    // 4 rows × 20 code_generation from code_completion = 80
+    expect(rows[0].compGenCount).toBe(80);
+    // 4 rows × 30 agent_edit loc_added = 120
+    expect(rows[0].agentAdded).toBe(120);
+  });
+
+  it("single-enterprise filter returns no cross-enterprise contamination", () => {
+    const rows = db.prepare(`
+      SELECT
+        day,
+        COUNT(DISTINCT user_login) as daily
+      FROM user_daily_metrics
+      WHERE day = '2025-05-10'
+        AND enterprise_slug = 'mega-corp'
+      GROUP BY day
+    `).all() as { day: string; daily: number }[];
+
+    // Only alice and dave in mega-corp
+    expect(rows).toHaveLength(1);
+    expect(rows[0].daily).toBe(2);
+  });
+});

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getEnterpriseMetrics, getAggregatedDailySummary, resolveEnterpriseId } from "@/lib/db/metrics-repo";
+import { getEnterpriseMetrics, getAggregatedDailySummary, resolveEnterpriseId, countEffectiveEnterprises } from "@/lib/db/metrics-repo";
 import { getSeatStats } from "@/lib/db/seats-repo";
 import { parseScopeFilter } from "@/lib/api/scope-filter";
 import {
@@ -43,7 +43,10 @@ async function handler(request: NextRequest) {
     }
 
     // When filters are active, always use user-level aggregation
-    const resolvedId = hasFilter ? null : resolveEnterpriseId(enterpriseSlugs);
+    // When multiple enterprises exist, skip enterprise-level data (can't sum DAU/WAU/MAU
+    // across enterprises — overlapping users would be double-counted)
+    const isMultiEnterprise = !hasFilter && countEffectiveEnterprises(enterpriseSlugs) > 1;
+    const resolvedId = hasFilter || isMultiEnterprise ? null : resolveEnterpriseId(enterpriseSlugs);
     let metrics = resolvedId ? getEnterpriseMetrics(start, end, enterpriseSlugs) : [];
 
     const useAggregated = metrics.length === 0;
@@ -218,7 +221,7 @@ async function handler(request: NextRequest) {
       monthlyActiveUsers: hasFilter
         ? adoption.totalUsers
         : (useAggregated
-          ? adoption.totalUsers
+          ? (latestTrend?.monthly || adoption.totalUsers)
           : (metrics[metrics.length - 1] as { monthly_active_users?: number })?.monthly_active_users || 0),
       agentAdoption: adoption.totalUsers > 0 ? (adoption.agentUsers / adoption.totalUsers) * 100 : 0,
       codingAgentAdoption: adoption.totalUsers > 0 ? (adoption.codingAgentUsers / adoption.totalUsers) * 100 : 0,

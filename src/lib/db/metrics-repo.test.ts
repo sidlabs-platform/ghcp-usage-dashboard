@@ -20,6 +20,7 @@ import {
   upsertEnterpriseDayMetrics,
   getEnterpriseMetrics,
   resolveEnterpriseId,
+  countEffectiveEnterprises,
   hasEnterpriseDataForRange,
   upsertUserDayMetrics,
   getUserMetrics,
@@ -740,5 +741,286 @@ describe("enterprise_id fallback for org-only mode", () => {
       "SELECT enterprise_id FROM user_daily_metrics WHERE user_login = 'ent-user' AND day = '2024-10-03'"
     ).get() as any;
     expect(row.enterprise_id).toBe("real-ent-123");
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════
+// Multi-enterprise test suite — validates that DAU/WAU/MAU, adoption,
+// feature usage, and CLI user counts are correctly deduplicated when
+// users appear across multiple enterprises.
+// ═══════════════════════════════════════════════════════════════════════
+
+describe("multi-enterprise: countEffectiveEnterprises", () => {
+  beforeEach(() => {
+    db.exec("DELETE FROM enterprise_daily_metrics");
+  });
+
+  it("returns 0 when no enterprise data exists", () => {
+    expect(countEffectiveEnterprises()).toBe(0);
+  });
+
+  it("returns 1 for single enterprise", () => {
+    upsertEnterpriseDayMetrics("acme", {
+      day: "2025-06-01", enterprise_id: "ent-a", daily_active_users: 10,
+      weekly_active_users: 20, monthly_active_users: 40,
+      monthly_active_agent_users: 2, monthly_active_chat_users: 8, daily_active_cli_users: 1,
+      code_generation_activity_count: 50, code_acceptance_activity_count: 30,
+      user_initiated_interaction_count: 100,
+      loc_suggested_to_add_sum: 200, loc_suggested_to_delete_sum: 10,
+      loc_added_sum: 150, loc_deleted_sum: 5,
+      totals_by_ide: [], totals_by_feature: [], totals_by_language_feature: [],
+      totals_by_model_feature: [], totals_by_language_model: [],
+    } as any);
+    expect(countEffectiveEnterprises()).toBe(1);
+  });
+
+  it("returns 2 for two distinct enterprises", () => {
+    upsertEnterpriseDayMetrics("acme", {
+      day: "2025-06-01", enterprise_id: "ent-a", daily_active_users: 10,
+      weekly_active_users: 20, monthly_active_users: 40,
+      monthly_active_agent_users: 0, monthly_active_chat_users: 0, daily_active_cli_users: 0,
+      code_generation_activity_count: 0, code_acceptance_activity_count: 0,
+      user_initiated_interaction_count: 0,
+      loc_suggested_to_add_sum: 0, loc_suggested_to_delete_sum: 0,
+      loc_added_sum: 0, loc_deleted_sum: 0,
+      totals_by_ide: [], totals_by_feature: [], totals_by_language_feature: [],
+      totals_by_model_feature: [], totals_by_language_model: [],
+    } as any);
+    upsertEnterpriseDayMetrics("globex", {
+      day: "2025-06-01", enterprise_id: "ent-b", daily_active_users: 5,
+      weekly_active_users: 12, monthly_active_users: 25,
+      monthly_active_agent_users: 0, monthly_active_chat_users: 0, daily_active_cli_users: 0,
+      code_generation_activity_count: 0, code_acceptance_activity_count: 0,
+      user_initiated_interaction_count: 0,
+      loc_suggested_to_add_sum: 0, loc_suggested_to_delete_sum: 0,
+      loc_added_sum: 0, loc_deleted_sum: 0,
+      totals_by_ide: [], totals_by_feature: [], totals_by_language_feature: [],
+      totals_by_model_feature: [], totals_by_language_model: [],
+    } as any);
+    expect(countEffectiveEnterprises()).toBe(2);
+  });
+
+  it("filters by enterprise slugs when provided", () => {
+    upsertEnterpriseDayMetrics("acme", {
+      day: "2025-06-01", enterprise_id: "ent-a", daily_active_users: 10,
+      weekly_active_users: 20, monthly_active_users: 40,
+      monthly_active_agent_users: 0, monthly_active_chat_users: 0, daily_active_cli_users: 0,
+      code_generation_activity_count: 0, code_acceptance_activity_count: 0,
+      user_initiated_interaction_count: 0,
+      loc_suggested_to_add_sum: 0, loc_suggested_to_delete_sum: 0,
+      loc_added_sum: 0, loc_deleted_sum: 0,
+      totals_by_ide: [], totals_by_feature: [], totals_by_language_feature: [],
+      totals_by_model_feature: [], totals_by_language_model: [],
+    } as any);
+    upsertEnterpriseDayMetrics("globex", {
+      day: "2025-06-01", enterprise_id: "ent-b", daily_active_users: 5,
+      weekly_active_users: 12, monthly_active_users: 25,
+      monthly_active_agent_users: 0, monthly_active_chat_users: 0, daily_active_cli_users: 0,
+      code_generation_activity_count: 0, code_acceptance_activity_count: 0,
+      user_initiated_interaction_count: 0,
+      loc_suggested_to_add_sum: 0, loc_suggested_to_delete_sum: 0,
+      loc_added_sum: 0, loc_deleted_sum: 0,
+      totals_by_ide: [], totals_by_feature: [], totals_by_language_feature: [],
+      totals_by_model_feature: [], totals_by_language_model: [],
+    } as any);
+    // Filtering to one slug → 1
+    expect(countEffectiveEnterprises(["acme"])).toBe(1);
+    // Filtering to both → 2
+    expect(countEffectiveEnterprises(["acme", "globex"])).toBe(2);
+    // No filter → all → 2
+    expect(countEffectiveEnterprises()).toBe(2);
+  });
+});
+
+describe("multi-enterprise: getAggregatedDailySummary deduplication", () => {
+  // Insert multi-enterprise user data where some users overlap
+  beforeEach(() => {
+    db.exec("DELETE FROM user_daily_metrics");
+
+    const insert = db.prepare(`
+      INSERT INTO user_daily_metrics (
+        day, enterprise_id, enterprise_slug, user_id, user_login,
+        code_generation_activity_count, code_acceptance_activity_count,
+        user_initiated_interaction_count,
+        loc_suggested_to_add_sum, loc_suggested_to_delete_sum,
+        loc_added_sum, loc_deleted_sum,
+        chat_panel_agent_mode, chat_panel_ask_mode, chat_panel_custom_mode,
+        chat_panel_edit_mode, chat_panel_plan_mode, chat_panel_unknown_mode,
+        used_agent, used_chat, used_cli,
+        used_copilot_code_review_active, used_copilot_code_review_passive, used_copilot_coding_agent,
+        totals_by_ide, totals_by_feature, totals_by_language_feature,
+        totals_by_model_feature, totals_by_language_model, totals_by_cli
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+
+    // Enterprise A: alice (user_id=1), bob (user_id=2)
+    // Enterprise B: alice (user_id=1), charlie (user_id=3)
+    // alice is in BOTH enterprises on the same day
+
+    // Ent-A, Day 2025-07-01: alice (agent=1, chat=1, cli=1)
+    insert.run("2025-07-01", "ent-a", "acme", 1, "alice",
+      20, 15, 30, 100, 0, 80, 5, 0, 5, 0, 3, 0, 0, 1, 1, 1, 0, 0, 0,
+      "[]", "[]", "[]", "[]", "[]", null);
+
+    // Ent-A, Day 2025-07-01: bob (agent=0, chat=1, cli=0)
+    insert.run("2025-07-01", "ent-a", "acme", 2, "bob",
+      10, 8, 15, 50, 0, 40, 2, 0, 3, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0,
+      "[]", "[]", "[]", "[]", "[]", null);
+
+    // Ent-B, Day 2025-07-01: alice (agent=1, chat=1, cli=1) — same user, different enterprise
+    insert.run("2025-07-01", "ent-b", "globex", 1, "alice",
+      15, 10, 20, 80, 0, 60, 3, 0, 4, 0, 2, 0, 0, 1, 1, 1, 0, 0, 0,
+      "[]", "[]", "[]", "[]", "[]", null);
+
+    // Ent-B, Day 2025-07-01: charlie (agent=1, chat=0, cli=0)
+    insert.run("2025-07-01", "ent-b", "globex", 3, "charlie",
+      5, 3, 10, 30, 0, 20, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0,
+      "[]", "[]", "[]", "[]", "[]", null);
+
+    // Day 2 — only alice in Ent-A (to test rolling windows)
+    insert.run("2025-07-02", "ent-a", "acme", 1, "alice",
+      18, 12, 25, 90, 0, 70, 4, 0, 6, 0, 4, 0, 0, 1, 1, 0, 0, 0, 0,
+      "[]", "[]", "[]", "[]", "[]", null);
+  });
+
+  it("DAU counts distinct users across enterprises (no double-counting)", () => {
+    const summary = getAggregatedDailySummary("2025-07-01", "2025-07-01");
+    expect(summary).toHaveLength(1);
+    // 3 distinct users: alice, bob, charlie (alice NOT counted twice)
+    expect(summary[0].daily_active_users).toBe(3);
+  });
+
+  it("WAU rolling window deduplicates users across enterprises", () => {
+    const summary = getAggregatedDailySummary("2025-07-01", "2025-07-02");
+    expect(summary).toHaveLength(2);
+    // Day 1: WAU should be 3 (alice, bob, charlie in 7-day window)
+    expect(summary[0].weekly_active_users).toBe(3);
+    // Day 2: WAU should still be 3 (alice + bob + charlie within 7-day window)
+    expect(summary[1].weekly_active_users).toBe(3);
+  });
+
+  it("MAU rolling window deduplicates users across enterprises", () => {
+    const summary = getAggregatedDailySummary("2025-07-01", "2025-07-02");
+    // Day 2: MAU should be 3 (all users within 30-day window)
+    expect(summary[1].monthly_active_users).toBe(3);
+  });
+
+  it("CLI user count deduplicates across enterprises (no SUM inflation)", () => {
+    const summary = getAggregatedDailySummary("2025-07-01", "2025-07-01");
+    // Only alice has used_cli=1 (in both enterprises) — should count as 1, not 2
+    expect(summary[0].daily_active_cli_users).toBe(1);
+  });
+
+  it("agent user count deduplicates across enterprises", () => {
+    const summary = getAggregatedDailySummary("2025-07-01", "2025-07-01");
+    // alice (both enterprises) + charlie = 2 distinct agent users, NOT 3
+    expect(summary[0].agent_users).toBe(2);
+  });
+
+  it("chat user count deduplicates across enterprises", () => {
+    const summary = getAggregatedDailySummary("2025-07-01", "2025-07-01");
+    // alice (both enterprises) + bob = 2 distinct chat users, NOT 3
+    expect(summary[0].chat_users).toBe(2);
+  });
+
+  it("activity counts are summed across all rows (additive metrics)", () => {
+    const summary = getAggregatedDailySummary("2025-07-01", "2025-07-01");
+    // code_generation: 20 + 10 + 15 + 5 = 50 (summed, not deduplicated)
+    expect(summary[0].code_generation_activity_count).toBe(50);
+    expect(summary[0].code_acceptance_activity_count).toBe(36); // 15+8+10+3
+    expect(summary[0].loc_added_sum).toBe(200); // 80+40+60+20
+  });
+
+  it("enterprise slug filter scopes correctly in multi-enterprise", () => {
+    // Filter to only acme → alice + bob
+    const acmeOnly = getAggregatedDailySummary("2025-07-01", "2025-07-01", ["acme"]);
+    expect(acmeOnly).toHaveLength(1);
+    expect(acmeOnly[0].daily_active_users).toBe(2);
+    expect(acmeOnly[0].daily_active_cli_users).toBe(1); // alice
+    expect(acmeOnly[0].agent_users).toBe(1); // alice
+    expect(acmeOnly[0].chat_users).toBe(2); // alice + bob
+
+    // Filter to only globex → alice + charlie
+    const globexOnly = getAggregatedDailySummary("2025-07-01", "2025-07-01", ["globex"]);
+    expect(globexOnly).toHaveLength(1);
+    expect(globexOnly[0].daily_active_users).toBe(2);
+    expect(globexOnly[0].daily_active_cli_users).toBe(1); // alice
+    expect(globexOnly[0].agent_users).toBe(2); // alice + charlie
+    expect(globexOnly[0].chat_users).toBe(1); // alice
+
+    // Combined → 3 distinct users
+    const both = getAggregatedDailySummary("2025-07-01", "2025-07-01", ["acme", "globex"]);
+    expect(both).toHaveLength(1);
+    expect(both[0].daily_active_users).toBe(3);
+  });
+
+  it("DAU across multi-day range with overlapping user", () => {
+    const summary = getAggregatedDailySummary("2025-07-01", "2025-07-02");
+    expect(summary).toHaveLength(2);
+    // Day 1: 3 distinct (alice, bob, charlie)
+    expect(summary[0].daily_active_users).toBe(3);
+    // Day 2: 1 distinct (alice only)
+    expect(summary[1].daily_active_users).toBe(1);
+  });
+});
+
+describe("multi-enterprise: getEnterpriseMetrics returns duplicate days", () => {
+  // This test documents the known limitation that enterprise-level data
+  // produces duplicate day entries for multi-enterprise — which is why
+  // the overview route must fall through to user-level aggregation.
+  beforeEach(() => {
+    db.exec("DELETE FROM enterprise_daily_metrics");
+  });
+
+  it("returns separate rows per enterprise for same day", () => {
+    upsertEnterpriseDayMetrics("acme", {
+      day: "2025-07-01", enterprise_id: "ent-a", daily_active_users: 50,
+      weekly_active_users: 120, monthly_active_users: 200,
+      monthly_active_agent_users: 10, monthly_active_chat_users: 40, daily_active_cli_users: 5,
+      code_generation_activity_count: 500, code_acceptance_activity_count: 350,
+      user_initiated_interaction_count: 1000,
+      loc_suggested_to_add_sum: 2000, loc_suggested_to_delete_sum: 100,
+      loc_added_sum: 1500, loc_deleted_sum: 80,
+      totals_by_ide: [], totals_by_feature: [], totals_by_language_feature: [],
+      totals_by_model_feature: [], totals_by_language_model: [],
+    } as any);
+    upsertEnterpriseDayMetrics("globex", {
+      day: "2025-07-01", enterprise_id: "ent-b", daily_active_users: 30,
+      weekly_active_users: 80, monthly_active_users: 150,
+      monthly_active_agent_users: 5, monthly_active_chat_users: 20, daily_active_cli_users: 3,
+      code_generation_activity_count: 300, code_acceptance_activity_count: 200,
+      user_initiated_interaction_count: 600,
+      loc_suggested_to_add_sum: 1200, loc_suggested_to_delete_sum: 50,
+      loc_added_sum: 900, loc_deleted_sum: 40,
+      totals_by_ide: [], totals_by_feature: [], totals_by_language_feature: [],
+      totals_by_model_feature: [], totals_by_language_model: [],
+    } as any);
+
+    const metrics = getEnterpriseMetrics("2025-07-01", "2025-07-01");
+    // Two rows for the same day — one per enterprise
+    expect(metrics).toHaveLength(2);
+    expect(metrics[0].day).toBe("2025-07-01");
+    expect(metrics[1].day).toBe("2025-07-01");
+    // Cannot simply sum DAU (users may overlap)
+    // Cannot take last row (loses first enterprise's data)
+    // This is why multi-enterprise must use user-level aggregation
+  });
+
+  it("single enterprise returns one row per day", () => {
+    upsertEnterpriseDayMetrics("acme", {
+      day: "2025-07-01", enterprise_id: "ent-a", daily_active_users: 50,
+      weekly_active_users: 120, monthly_active_users: 200,
+      monthly_active_agent_users: 10, monthly_active_chat_users: 40, daily_active_cli_users: 5,
+      code_generation_activity_count: 500, code_acceptance_activity_count: 350,
+      user_initiated_interaction_count: 1000,
+      loc_suggested_to_add_sum: 2000, loc_suggested_to_delete_sum: 100,
+      loc_added_sum: 1500, loc_deleted_sum: 80,
+      totals_by_ide: [], totals_by_feature: [], totals_by_language_feature: [],
+      totals_by_model_feature: [], totals_by_language_model: [],
+    } as any);
+
+    const metrics = getEnterpriseMetrics("2025-07-01", "2025-07-01");
+    expect(metrics).toHaveLength(1);
+    expect(metrics[0].daily_active_users).toBe(50);
   });
 });

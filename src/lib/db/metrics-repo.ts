@@ -120,6 +120,21 @@ function mapUserRow(row: Record<string, unknown>): UserDayRecord {
 
 // ── Enterprise ID resolution ──────────────────────────────────────────
 
+/**
+ * Count distinct enterprises in the effective scope.
+ * Used to decide whether enterprise-level aggregate data can be used directly
+ * (only valid for single-enterprise) or user-level aggregation is needed
+ * (required for multi-enterprise to correctly deduplicate users).
+ */
+export function countEffectiveEnterprises(enterpriseSlugs?: string[]): number {
+  const db = getDb();
+  const ef = buildEnterpriseFilter(enterpriseSlugs);
+  const row = db.prepare(
+    `SELECT COUNT(DISTINCT enterprise_slug) as cnt FROM enterprise_daily_metrics WHERE 1=1${ef.clause}`
+  ).get(...ef.params) as { cnt: number } | undefined;
+  return row?.cnt ?? 0;
+}
+
 /** Resolve the numeric enterprise_id from any stored data */
 export function resolveEnterpriseId(enterpriseSlugs?: string[]): string | null {
   const db = getDb();
@@ -588,9 +603,9 @@ export function getAggregatedDailySummary(startDay: string, endDay: string, ente
       SUM(m.loc_suggested_to_add_sum) as loc_suggested_to_add_sum,
       SUM(m.loc_added_sum) as loc_added_sum,
       SUM(m.loc_deleted_sum) as loc_deleted_sum,
-      SUM(m.used_cli) as daily_active_cli_users,
-      SUM(m.used_agent) as agent_users,
-      SUM(m.used_chat) as chat_users
+      COUNT(DISTINCT CASE WHEN m.used_cli = 1 THEN m.user_id END) as daily_active_cli_users,
+      COUNT(DISTINCT CASE WHEN m.used_agent = 1 THEN m.user_id END) as agent_users,
+      COUNT(DISTINCT CASE WHEN m.used_chat = 1 THEN m.user_id END) as chat_users
     FROM user_daily_metrics m
     WHERE m.day >= ? AND m.day <= ?${efM.clause}
     GROUP BY m.day
