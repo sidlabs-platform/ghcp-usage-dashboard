@@ -506,6 +506,7 @@ export async function fullSync(
   for (const entConfig of enterprises) {
     const slug = entConfig.slug;
 
+    try {
     // Validate config + auth for this enterprise (skip for org-only entries)
     if (isCopilotSubEnabledForEnterprise(slug, "enterprise")) {
       void getEnterpriseContext(slug);
@@ -557,6 +558,15 @@ export async function fullSync(
       seats: entSeats,
       teams: entTeams,
     });
+    } catch (err) {
+      console.error("[Sync] [%s] Enterprise sync failed, continuing with remaining enterprises:", sanitizeForLog(slug), err);
+      enterpriseResults.push({
+        enterpriseSlug: slug,
+        backfill: { daysSynced: 0, daysSkipped: 0, errors: 1 },
+        seats: 0,
+        teams: 0,
+      });
+    }
   }
 
   // Refresh pre-aggregated summary tables ONCE after all enterprises

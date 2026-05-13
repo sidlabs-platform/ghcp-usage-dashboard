@@ -95,3 +95,4 @@ exp-001	2026-05-06T17:24:23Z	test-coverage	memory-cache.test.ts: get/set/TTL/evi
 205	2026-05-13T16:43:00+05:30	bug-hunting	fix(summary-tables): compute accurate completion/agent LOC via json_each	KEEP	91.92	91.93	+0.01 stmts; fixes completion_loc including agent_edit and agent_loc_added=0
 206	2026-05-13T16:46:00+05:30	bug-hunting	fix(summary-tables): compute completion-only acceptance_rate in user_period_summary	KEEP	91.93	91.93	stable; fixes deflated acceptance rate from agent_edit inclusion
 207	2026-05-13T16:48:00+05:30	bug-hunting	fix(summary-tables): compute completion-only acceptance rate for team_summary_cache	KEEP	91.93	91.93	stable; fixes deflated team acceptance rate from agent_edit
+208	2026-05-13T16:52:00+05:30	bug-hunting	fix(api): add multi-enterprise guard to pull-requests and cli routes	KEEP	91.93	91.93	stable; prevents duplicate-day data in multi-enterprise mode
