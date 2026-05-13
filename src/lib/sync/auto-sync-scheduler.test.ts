@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 vi.mock("@/lib/config/dashboard-config", () => ({
   getAutoSyncConfig: vi.fn(() => ({ enabled: false, utcTime: "03:00" })),
 }));
-vi.mock("@/lib/db/sync-service", () => ({ incrementalSync: vi.fn(async () => ({ daysSynced: 1, daysSkipped: 0 })) }));
+vi.mock("@/lib/db/sync-service", () => ({ incrementalSync: vi.fn(async () => ({ daysSynced: 1, daysSkipped: 0, errors: 0, failedEnterprises: [] })) }));
 vi.mock("@/lib/db/summary-tables", () => ({ refreshAllSummaries: vi.fn() }));
 vi.mock("@/lib/db/ghas-sync-service", () => ({ fullGhasSync: vi.fn(async () => ({})) }));
 vi.mock("@/lib/db/billing-sync-service", () => ({ syncBilling: vi.fn(async () => ({})) }));

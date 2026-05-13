@@ -383,18 +383,26 @@ async function incrementalSyncEnterprise(
 
 export async function incrementalSync(
   onProgress?: (progress: SyncProgress) => void
-): Promise<{ daysSynced: number; daysSkipped: number }> {
+): Promise<{ daysSynced: number; daysSkipped: number; errors: number; failedEnterprises: string[] }> {
   const enterprises = getConfiguredEnterprises();
   let daysSynced = 0;
   let daysSkipped = 0;
+  let errors = 0;
+  const failedEnterprises: string[] = [];
 
   for (const ent of enterprises) {
-    const result = await incrementalSyncEnterprise(ent.slug, onProgress);
-    daysSynced += result.daysSynced;
-    daysSkipped += result.daysSkipped;
+    try {
+      const result = await incrementalSyncEnterprise(ent.slug, onProgress);
+      daysSynced += result.daysSynced;
+      daysSkipped += result.daysSkipped;
+    } catch (err) {
+      errors++;
+      failedEnterprises.push(ent.slug);
+      console.error("[Sync] [%s] Incremental sync failed, continuing with remaining enterprises:", sanitizeForLog(ent.slug), err);
+    }
   }
 
-  return { daysSynced, daysSkipped };
+  return { daysSynced, daysSkipped, errors, failedEnterprises };
 }
 
 // ── Sync seats (per-enterprise helper) ────────────────────────────────
@@ -506,6 +514,7 @@ export async function fullSync(
   for (const entConfig of enterprises) {
     const slug = entConfig.slug;
 
+    try {
     // Validate config + auth for this enterprise (skip for org-only entries)
     if (isCopilotSubEnabledForEnterprise(slug, "enterprise")) {
       void getEnterpriseContext(slug);
@@ -557,6 +566,15 @@ export async function fullSync(
       seats: entSeats,
       teams: entTeams,
     });
+    } catch (err) {
+      console.error("[Sync] [%s] Enterprise sync failed, continuing with remaining enterprises:", sanitizeForLog(slug), err);
+      enterpriseResults.push({
+        enterpriseSlug: slug,
+        backfill: { daysSynced: 0, daysSkipped: 0, errors: 1 },
+        seats: 0,
+        teams: 0,
+      });
+    }
   }
 
   // Refresh pre-aggregated summary tables ONCE after all enterprises
@@ -612,7 +630,7 @@ async function sync28DayFallback(
   const endStr = yesterday.toISOString().split("T")[0];
 
   // Enterprise 28-day fallback (only when enterprise mode is on)
-  if (isCopilotSubEnabledForEnterprise(enterpriseSlug, "enterprise") && !hasEnterpriseDataForRange(enterpriseSlug, startStr, endStr, [enterpriseSlug])) {
+  if (isCopilotSubEnabledForEnterprise(enterpriseSlug, "enterprise") && !hasEnterpriseDataForRange(enterpriseSlug, startStr, endStr)) {
     onProgress?.({ phase: "fallback", current: 0, total: 1, message: `[${sanitizeForLog(enterpriseSlug)}] Trying enterprise 28-day report as fallback...`, enterpriseSlug });
     try {
       const data = await metricsClient.getEnterprise28DayReport(enterpriseSlug, enterpriseSlug);

@@ -37,6 +37,7 @@ export function upsertAllTeams(enterpriseSlug: string, teams: TeamWithMembers[])
 }
 
 export interface TeamRow {
+  enterprise_slug: string;
   team_slug: string;
   team_name: string;
   source: string;
@@ -49,10 +50,10 @@ export function getAllTeams(enterpriseSlugs?: string[]): TeamRow[] {
   const ef = buildEnterpriseFilter(enterpriseSlugs);
   const where = ef.clause ? `WHERE 1=1${ef.clause}` : "";
   return db.prepare(`
-    SELECT team_slug, team_name, MAX(source) as source, org_slug, COUNT(DISTINCT user_login) as member_count
+    SELECT enterprise_slug, team_slug, team_name, source, org_slug, COUNT(DISTINCT user_login) as member_count
     FROM team_memberships
     ${where}
-    GROUP BY team_slug
+    GROUP BY enterprise_slug, team_slug, source, org_slug, team_name
     ORDER BY team_name ASC
   `).all(...ef.params) as TeamRow[];
 }
@@ -116,23 +117,23 @@ export function getDistinctOrgs(enterpriseSlugs?: string[]): { slug: string; nam
 }
 
 /** Load all teams with their members in a single query (avoids N+1) */
-export function getAllTeamsWithMembers(enterpriseSlugs?: string[]): { team_slug: string; team_name: string; source: string; org_slug: string | null; members: string[] }[] {
+export function getAllTeamsWithMembers(enterpriseSlugs?: string[]): { enterprise_slug: string; team_slug: string; team_name: string; source: string; org_slug: string | null; members: string[] }[] {
   const db = getDb();
   const ef = buildEnterpriseFilter(enterpriseSlugs);
   const where = ef.clause ? `WHERE 1=1${ef.clause}` : "";
   const rows = db.prepare(`
-    SELECT team_slug, team_name, source, org_slug, user_login
+    SELECT enterprise_slug, team_slug, team_name, source, org_slug, user_login
     FROM team_memberships
     ${where}
-    ORDER BY team_slug, user_login
-  `).all(...ef.params) as { team_slug: string; team_name: string; source: string; org_slug: string | null; user_login: string }[];
+    ORDER BY enterprise_slug, source, org_slug, team_slug, user_login
+  `).all(...ef.params) as { enterprise_slug: string; team_slug: string; team_name: string; source: string; org_slug: string | null; user_login: string }[];
 
-  const teamMap = new Map<string, { team_slug: string; team_name: string; source: string; org_slug: string | null; members: string[] }>();
+  const teamMap = new Map<string, { enterprise_slug: string; team_slug: string; team_name: string; source: string; org_slug: string | null; members: string[] }>();
   for (const row of rows) {
-    const key = `${row.team_slug}:${row.source}`;
+    const key = `${row.enterprise_slug}:${row.source}:${row.org_slug ?? ""}:${row.team_slug}`;
     let team = teamMap.get(key);
     if (!team) {
-      team = { team_slug: row.team_slug, team_name: row.team_name, source: row.source, org_slug: row.org_slug, members: [] };
+      team = { enterprise_slug: row.enterprise_slug, team_slug: row.team_slug, team_name: row.team_name, source: row.source, org_slug: row.org_slug, members: [] };
       teamMap.set(key, team);
     }
     team.members.push(row.user_login);

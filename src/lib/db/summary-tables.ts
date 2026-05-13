@@ -58,6 +58,32 @@ export function refreshUserSummary(periodStart: string, periodEnd: string, enter
     GROUP BY enterprise_slug, user_login
   `).run(periodStart, periodEnd, now, periodStart, periodEnd, ...extraParams);
 
+  // Override acceptance_rate with completion-only rate (excludes agent_edit which
+  // has code_generation_activity_count > 0 but code_acceptance_activity_count = 0,
+  // deflating the top-level rate).
+  db.prepare(`
+    UPDATE user_period_summary SET acceptance_rate = COALESCE(f.rate, 0)
+    FROM (
+      SELECT u.enterprise_slug, u.user_login,
+        CASE WHEN SUM(CASE WHEN json_extract(j.value, '$.feature') != 'agent_edit'
+            THEN json_extract(j.value, '$.code_generation_activity_count') ELSE 0 END) > 0
+          THEN ROUND(
+            CAST(SUM(CASE WHEN json_extract(j.value, '$.feature') != 'agent_edit'
+              THEN json_extract(j.value, '$.code_acceptance_activity_count') ELSE 0 END) AS REAL) /
+            SUM(CASE WHEN json_extract(j.value, '$.feature') != 'agent_edit'
+              THEN json_extract(j.value, '$.code_generation_activity_count') ELSE 0 END) * 100, 1)
+          ELSE 0 END as rate
+      FROM user_daily_metrics u, json_each(u.totals_by_feature) j
+      WHERE u.day >= ? AND u.day <= ?
+        AND u.totals_by_feature IS NOT NULL AND u.totals_by_feature != '[]'${enterpriseFilter}
+      GROUP BY u.enterprise_slug, u.user_login
+    ) f
+    WHERE user_period_summary.enterprise_slug = f.enterprise_slug
+      AND user_period_summary.user_login = f.user_login
+      AND user_period_summary.period_start = ?
+      AND user_period_summary.period_end = ?
+  `).run(periodStart, periodEnd, ...extraParams, periodStart, periodEnd);
+
   return result.changes;
 }
 
@@ -104,18 +130,36 @@ export function refreshDailyAggregate(day: string, enterpriseSlug?: string): voi
       COUNT(DISTINCT CASE WHEN used_cli = 1 THEN user_login END),
       COUNT(DISTINCT CASE WHEN used_copilot_coding_agent = 1 THEN user_login END),
       COUNT(DISTINCT CASE WHEN used_copilot_code_review_active = 1 THEN user_login END),
-      -- completion_loc_suggested: approximate (includes all features, not just completions)
-      COALESCE(SUM(loc_suggested_to_add_sum), 0),
-      -- completion_loc_accepted: approximate (same as loc_added for now)
-      COALESCE(SUM(loc_added_sum), 0),
-      -- agent_loc_added: not computed at daily aggregate level (requires json_each)
-      -- TODO: use json_each(totals_by_feature) to extract feature-specific LOC
-      0,
+      -- placeholder LOC columns; updated below with json_each for accuracy
+      0, 0, 0,
       ? as computed_at
     FROM user_daily_metrics
     WHERE day = ? ${enterpriseFilter}
     GROUP BY enterprise_slug
   `).run(day, now, day, ...extraParams);
+
+  // Update completion/agent LOC from json_each(totals_by_feature) for accuracy.
+  // Top-level loc_added_sum includes agent_edit writes; these subqueries separate them.
+  db.prepare(`
+    UPDATE daily_aggregate_cache SET
+      completion_loc_suggested = COALESCE(f.cs, 0),
+      completion_loc_accepted = COALESCE(f.ca, 0),
+      agent_loc_added = COALESCE(f.aa, 0)
+    FROM (
+      SELECT u.enterprise_slug,
+        SUM(CASE WHEN json_extract(j.value, '$.feature') != 'agent_edit'
+          THEN json_extract(j.value, '$.loc_suggested_to_add_sum') ELSE 0 END) as cs,
+        SUM(CASE WHEN json_extract(j.value, '$.feature') != 'agent_edit'
+          THEN json_extract(j.value, '$.loc_added_sum') ELSE 0 END) as ca,
+        SUM(CASE WHEN json_extract(j.value, '$.feature') = 'agent_edit'
+          THEN json_extract(j.value, '$.loc_added_sum') ELSE 0 END) as aa
+      FROM user_daily_metrics u, json_each(u.totals_by_feature) j
+      WHERE u.day = ? AND u.totals_by_feature IS NOT NULL AND u.totals_by_feature != '[]'${enterpriseFilter}
+      GROUP BY u.enterprise_slug
+    ) f
+    WHERE daily_aggregate_cache.day = ?
+      AND daily_aggregate_cache.enterprise_slug = f.enterprise_slug
+  `).run(day, ...extraParams, day);
 }
 
 /**
@@ -170,7 +214,7 @@ export function refreshTeamSummary(periodStart: string, periodEnd: string, enter
       computed_at
     )
     SELECT
-      COALESCE(m.enterprise_slug, '') as enterprise_slug,
+      t.enterprise_slug,
       t.team_slug,
       t.source,
       t.org_slug,
@@ -193,16 +237,16 @@ export function refreshTeamSummary(periodStart: string, periodEnd: string, enter
       CASE WHEN COALESCE(t.member_count, 0) > 0 THEN ROUND(CAST(m.code_review_users AS REAL) / t.member_count * 100, 1) ELSE 0 END,
       ? as computed_at
     FROM (
-      SELECT team_slug, team_name, MAX(source) as source, org_slug, COUNT(DISTINCT user_login) as member_count
+      SELECT enterprise_slug, team_slug, team_name, MAX(source) as source, org_slug, COUNT(DISTINCT user_login) as member_count
       FROM team_memberships
       WHERE 1=1${enterpriseFilter}
-      GROUP BY team_slug, source, org_slug, team_name
+      GROUP BY enterprise_slug, team_slug, source, org_slug, team_name
     ) t
     LEFT JOIN (
       SELECT
+        tm.enterprise_slug,
         tm.team_slug,
         tm.source,
-        u.enterprise_slug,
         COUNT(DISTINCT u.user_login) as active_members,
         COUNT(DISTINCT u.day || ':' || u.user_login) as total_active_days,
         COALESCE(SUM(u.loc_added_sum), 0) as total_loc_added,
@@ -214,10 +258,38 @@ export function refreshTeamSummary(periodStart: string, periodEnd: string, enter
         COUNT(DISTINCT CASE WHEN u.used_cli = 1 THEN u.user_login END) as cli_users,
         COUNT(DISTINCT CASE WHEN u.used_copilot_code_review_active = 1 THEN u.user_login END) as code_review_users
       FROM team_memberships tm
-      INNER JOIN user_daily_metrics u ON tm.user_login = u.user_login AND u.day >= ? AND u.day <= ?${enterpriseFilter.replace('enterprise_slug', 'u.enterprise_slug')}
-      GROUP BY tm.team_slug, tm.source, u.enterprise_slug
-    ) m ON t.team_slug = m.team_slug AND t.source = m.source
+      INNER JOIN user_daily_metrics u ON tm.user_login = u.user_login AND tm.enterprise_slug = u.enterprise_slug AND u.day >= ? AND u.day <= ?${enterpriseFilter.replace('enterprise_slug', 'u.enterprise_slug')}
+      GROUP BY tm.enterprise_slug, tm.team_slug, tm.source
+    ) m ON t.enterprise_slug = m.enterprise_slug AND t.team_slug = m.team_slug AND t.source = m.source
   `).run(periodStart, periodEnd, totalDays, now, ...extraParams, periodStart, periodEnd, ...extraParams);
+
+  // Override overall_acceptance_rate with completion-only rate (excludes agent_edit)
+  db.prepare(`
+    UPDATE team_summary_cache SET overall_acceptance_rate = COALESCE(f.rate, 0)
+    FROM (
+      SELECT tm.enterprise_slug, tm.team_slug, tm.source,
+        CASE WHEN SUM(CASE WHEN json_extract(j.value, '$.feature') != 'agent_edit'
+            THEN json_extract(j.value, '$.code_generation_activity_count') ELSE 0 END) > 0
+          THEN ROUND(
+            CAST(SUM(CASE WHEN json_extract(j.value, '$.feature') != 'agent_edit'
+              THEN json_extract(j.value, '$.code_acceptance_activity_count') ELSE 0 END) AS REAL) /
+            SUM(CASE WHEN json_extract(j.value, '$.feature') != 'agent_edit'
+              THEN json_extract(j.value, '$.code_generation_activity_count') ELSE 0 END) * 100, 1)
+          ELSE 0 END as rate
+      FROM team_memberships tm
+      INNER JOIN user_daily_metrics u
+        ON tm.user_login = u.user_login AND tm.enterprise_slug = u.enterprise_slug,
+        json_each(u.totals_by_feature) j
+      WHERE u.day >= ? AND u.day <= ?
+        AND u.totals_by_feature IS NOT NULL AND u.totals_by_feature != '[]'${enterpriseFilter.replace('enterprise_slug', 'tm.enterprise_slug')}
+      GROUP BY tm.enterprise_slug, tm.team_slug, tm.source
+    ) f
+    WHERE team_summary_cache.enterprise_slug = f.enterprise_slug
+      AND team_summary_cache.team_slug = f.team_slug
+      AND team_summary_cache.source = f.source
+      AND team_summary_cache.period_start = ?
+      AND team_summary_cache.period_end = ?
+  `).run(periodStart, periodEnd, ...extraParams, periodStart, periodEnd);
 
   return result.changes;
 }

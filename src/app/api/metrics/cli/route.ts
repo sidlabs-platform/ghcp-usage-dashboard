@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { resolveEnterpriseId, getEnterpriseMetrics, getAggregatedDailySummary } from "@/lib/db/metrics-repo";
+import { resolveEnterpriseId, getEnterpriseMetrics, getAggregatedDailySummary, countEffectiveEnterprises } from "@/lib/db/metrics-repo";
 import { getDateRange, parseAndClampDays } from "@/lib/utils";
 import { parseScopeFilter } from "@/lib/api/scope-filter";
 import {
@@ -21,7 +21,8 @@ export async function GET(request: Request) {
     const scopeFilter = parseScopeFilter(searchParams);
     const allowedLogins = scopeFilter.allowedLogins ? Array.from(scopeFilter.allowedLogins) : undefined;
     const { enterpriseSlugs } = scopeFilter;
-    const eid = scopeFilter.hasFilter ? null : resolveEnterpriseId(enterpriseSlugs);
+    const isMultiEnterprise = !scopeFilter.hasFilter && countEffectiveEnterprises(enterpriseSlugs) > 1;
+    const eid = scopeFilter.hasFilter || isMultiEnterprise ? null : resolveEnterpriseId(enterpriseSlugs);
 
     const enterpriseRecords = eid ? getEnterpriseMetrics(start, end, enterpriseSlugs) : [];
     const aggregated = enterpriseRecords.length === 0 && !scopeFilter.hasFilter ? getAggregatedDailySummary(start, end, enterpriseSlugs) : [];

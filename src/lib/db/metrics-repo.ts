@@ -219,14 +219,13 @@ export function getEnterpriseMetrics(startDay: string, endDay: string, enterpris
 }
 
 /** Check whether enterprise_daily_metrics has any rows for a date range */
-export function hasEnterpriseDataForRange(enterpriseId: string, startDay: string, endDay: string, enterpriseSlugs?: string[]): boolean {
+export function hasEnterpriseDataForRange(enterpriseSlug: string, startDay: string, endDay: string): boolean {
   const db = getDb();
-  const ef = buildEnterpriseFilter(enterpriseSlugs);
   const row = db.prepare(`
     SELECT 1 FROM enterprise_daily_metrics
-    WHERE enterprise_id = ? AND day >= ? AND day <= ?${ef.clause}
+    WHERE enterprise_slug = ? AND day >= ? AND day <= ?
     LIMIT 1
-  `).get(enterpriseId, startDay, endDay, ...ef.params);
+  `).get(enterpriseSlug, startDay, endDay);
   return !!row;
 }
 
@@ -688,15 +687,15 @@ export function getLatestSyncDay(enterpriseSlug: string, scope: string, scopeId:
   return row?.latest || null;
 }
 
-export function getSyncStatus(enterpriseSlugs?: string[]): { scope: string; scope_id: string; days_synced: number; latest_day: string | null }[] {
+export function getSyncStatus(enterpriseSlugs?: string[]): { enterprise_slug: string; scope: string; scope_id: string; days_synced: number; latest_day: string | null }[] {
   const db = getDb();
   const ef = buildEnterpriseFilter(enterpriseSlugs);
   return db.prepare(`
-    SELECT scope, scope_id, COUNT(*) as days_synced, MAX(day) as latest_day
+    SELECT enterprise_slug, scope, scope_id, COUNT(*) as days_synced, MAX(day) as latest_day
     FROM sync_log WHERE status = 'success' AND day != '__none__'${ef.clause}
-    GROUP BY scope, scope_id
-    ORDER BY scope, scope_id
-  `).all(...ef.params) as { scope: string; scope_id: string; days_synced: number; latest_day: string | null }[];
+    GROUP BY enterprise_slug, scope, scope_id
+    ORDER BY enterprise_slug, scope, scope_id
+  `).all(...ef.params) as { enterprise_slug: string; scope: string; scope_id: string; days_synced: number; latest_day: string | null }[];
 }
 
 // ── Sync lock (database-backed, works across serverless instances) ────

@@ -88,3 +88,19 @@ exp-001	2026-05-06T17:24:23Z	test-coverage	memory-cache.test.ts: get/set/TTL/evi
 198	2026-05-07T17:01:23+05:30	bug-hunting	fix(security-routes): return 400 when scopeId cannot be resolved	KEEP	92.26	92.26	stable; prevents silent empty results from misconfiguration
 199	2026-05-07T17:05:30+05:30	bug-hunting	fix(seats-repo): skip seats with null/missing assignee + regression tests	KEEP	92.26	92.27	+0.01 stmts; prevents TypeError on deleted-user seats
 200	2026-05-07T17:09:59+05:30	bug-hunting	fix(billing-client): guard listReports against null API response	KEEP	92.27	92.27	stable; prevents TypeError on 204 response
+201	2026-05-13T16:31:00+05:30	bug-hunting	fix(summary-tables): add enterprise_slug to team summary subqueries and JOIN conditions	KEEP	91.92	91.92	stable; fixes cross-enterprise contamination in refreshTeamSummary
+202	2026-05-13T16:35:00+05:30	bug-hunting	fix(teams-repo): add enterprise_slug to TeamRow and getAllTeams GROUP BY	KEEP	91.92	91.92	stable; fixes team merging across enterprises
+203	2026-05-13T16:38:00+05:30	bug-hunting	fix(teams-repo): include enterprise_slug in getAllTeamsWithMembers map key	KEEP	91.92	91.92	stable; fixes team merging across enterprises in live data path
+204	2026-05-13T16:40:00+05:30	bug-hunting	fix(teams-route): add enterprise filter to fromCache + scope cache refresh	KEEP	91.92	91.92	stable; fixes data leakage in cached team summaries
+205	2026-05-13T16:43:00+05:30	bug-hunting	fix(summary-tables): compute accurate completion/agent LOC via json_each	KEEP	91.92	91.93	+0.01 stmts; fixes completion_loc including agent_edit and agent_loc_added=0
+206	2026-05-13T16:46:00+05:30	bug-hunting	fix(summary-tables): compute completion-only acceptance_rate in user_period_summary	KEEP	91.93	91.93	stable; fixes deflated acceptance rate from agent_edit inclusion
+207	2026-05-13T16:48:00+05:30	bug-hunting	fix(summary-tables): compute completion-only acceptance rate for team_summary_cache	KEEP	91.93	91.93	stable; fixes deflated team acceptance rate from agent_edit
+208	2026-05-13T16:52:00+05:30	bug-hunting	fix(api): add multi-enterprise guard to pull-requests and cli routes	KEEP	91.93	91.93	stable; prevents duplicate-day data in multi-enterprise mode
+209	2026-05-13T16:58:00+05:30	bug-hunting	fix(sync): add per-enterprise error isolation in fullSync loop	KEEP	91.93	91.88	-0.05 stmts from uncovered error branches; critical reliability fix
+210	2026-05-13T17:00:00+05:30	bug-hunting	test(summary-tables): add multi-enterprise isolation test for refreshTeamSummary	KEEP	91.88	91.88	stable; regression test for cross-enterprise contamination fix
+211	2026-05-13T17:03:00+05:30	bug-hunting	test(teams-repo): add multi-enterprise test for getAllTeamsWithMembers	KEEP	91.88	91.88	stable; regression test for enterprise_slug map key fix
+212	2026-05-13T17:05:00+05:30	bug-hunting	fix(filters-route): add org_slug to orgTeams GROUP BY	KEEP	91.88	91.88	stable; fixes team merging across orgs in filter list
+213	2026-05-13T18:34:00+05:30	bug-hunting	fix(sync): add per-enterprise error isolation in incrementalSync loop	KEEP	91.88	91.85	-0.03 stmts from uncovered error branch; critical reliability fix
+214	2026-05-13T18:37:00+05:30	bug-hunting	fix(metrics-repo): use enterprise_slug instead of enterprise_id in hasEnterpriseDataForRange	KEEP	91.85	91.85	stable; fixes slug/id mismatch causing redundant 28-day fetches
+215	2026-05-13T18:41:00+05:30	bug-hunting	fix(metrics-repo): add enterprise_slug to getSyncStatus GROUP BY	KEEP	91.85	91.85	stable; fixes merged sync status across enterprises
+216	2026-05-13T18:44:00+05:30	bug-hunting	fix(sync-day-route): add per-enterprise error isolation in day sync loop	KEEP	91.85	91.85	stable; prevents one enterprise failure from aborting day sync

@@ -224,11 +224,11 @@ describe("enterprise metrics", () => {
 
   it("hasEnterpriseDataForRange returns true when data exists", () => {
     upsertEnterpriseDayMetrics("ent1", baseDayTotal as any);
-    expect(hasEnterpriseDataForRange("ent-123", "2024-01-01", "2024-01-31")).toBe(true);
+    expect(hasEnterpriseDataForRange("ent1", "2024-01-01", "2024-01-31")).toBe(true);
   });
 
   it("hasEnterpriseDataForRange returns false for empty range", () => {
-    expect(hasEnterpriseDataForRange("ent-123", "2025-01-01", "2025-01-31")).toBe(false);
+    expect(hasEnterpriseDataForRange("ent1", "2025-01-01", "2025-01-31")).toBe(false);
   });
 });
 

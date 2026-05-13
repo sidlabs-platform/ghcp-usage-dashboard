@@ -20,18 +20,28 @@ interface TeamResult {
 /** Try to serve from the pre-aggregated cache; returns null if cache is empty for this period */
 function fromCache(
   db: ReturnType<typeof getDb>, start: string, end: string,
-  selectedSlugs: string[], selectedOrgs: string[],
+  selectedSlugs: string[], selectedOrgs: string[], enterpriseSlugs: string[],
   sort: string, sortDir: string, page: number, pageSize: number,
 ): { teams: TeamResult[]; total: number } | null {
-  // Quick check — if no rows exist for this period, return null to trigger fallback
+  // Quick check — if no rows exist for this period + enterprise scope, return null to trigger fallback
+  const probeConditions: string[] = ["period_start = ? AND period_end = ?"];
+  const probeParams: (string | number)[] = [start, end];
+  if (enterpriseSlugs.length > 0) {
+    probeConditions.push(`enterprise_slug IN (${enterpriseSlugs.map(() => "?").join(",")})`);
+    probeParams.push(...enterpriseSlugs);
+  }
   const probe = db.prepare(
-    `SELECT 1 FROM team_summary_cache WHERE period_start = ? AND period_end = ? LIMIT 1`
-  ).get(start, end);
+    `SELECT 1 FROM team_summary_cache WHERE ${probeConditions.join(" AND ")} LIMIT 1`
+  ).get(...probeParams);
   if (!probe) return null;
 
   const conditions: string[] = ["period_start = ? AND period_end = ?"];
   const queryParams: (string | number)[] = [start, end];
 
+  if (enterpriseSlugs.length > 0) {
+    conditions.push(`enterprise_slug IN (${enterpriseSlugs.map(() => "?").join(",")})`);
+    queryParams.push(...enterpriseSlugs);
+  }
   if (selectedSlugs.length > 0) {
     conditions.push(`team_slug IN (${selectedSlugs.map(() => "?").join(",")})`);
     queryParams.push(...selectedSlugs);
@@ -134,8 +144,14 @@ function fromLiveData(
     return ((av as number) - (bv as number)) * dir;
   });
 
-  // Populate the cache for next request
-  try { refreshTeamSummary(start, end); } catch { /* non-critical */ }
+  // Populate the cache for next request (scoped by enterprise when filtered)
+  try {
+    if (enterpriseSlugs && enterpriseSlugs.length > 0) {
+      for (const slug of enterpriseSlugs) refreshTeamSummary(start, end, slug);
+    } else {
+      refreshTeamSummary(start, end);
+    }
+  } catch { /* non-critical */ }
 
   const total = summaries.length;
   const offset = (page - 1) * pageSize;
@@ -172,7 +188,7 @@ async function handler(request: NextRequest) {
     const db = getDb();
 
     // Try pre-aggregated cache first; fall back to live computation
-    const cached = fromCache(db, start, end, selectedSlugs, selectedOrgs, sort, sortDir, page, pageSize);
+    const cached = fromCache(db, start, end, selectedSlugs, selectedOrgs, selectedEnterprises, sort, sortDir, page, pageSize);
     const result = cached ?? fromLiveData(start, end, selectedSlugs, selectedOrgs, sort, sortDir, page, pageSize, enterpriseSlugs);
 
     return NextResponse.json({
