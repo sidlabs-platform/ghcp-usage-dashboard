@@ -226,8 +226,6 @@ export interface OverviewKpis {
   cliUsers: number;
   licenseUtilization: number;
   periodActiveUsers: number;
-  rollingWAU: number;
-  rollingMAU: number;
   deltas: { dau: number; wau: number };
 }
 

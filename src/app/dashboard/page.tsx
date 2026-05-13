@@ -34,7 +34,7 @@ const CLIvsIDEChart = dynamic(
   () => import("@/components/charts/CLIvsIDEChart").then(m => ({ default: m.CLIvsIDEChart })),
   { ssr: false, loading: () => <ChartSkeleton /> }
 );
-import { Users, UserCheck, Bot, Terminal, CreditCard, Activity, Eye, GitPullRequest, ShieldAlert, TrendingDown, Sparkles, Code2, Brain, Monitor, Receipt, CalendarDays, CalendarRange, Calendar } from "lucide-react";
+import { Users, UserCheck, Bot, Terminal, CreditCard, Activity, Eye, GitPullRequest, ShieldAlert, TrendingDown, Sparkles, Code2, Brain, Monitor, Receipt, Calendar } from "lucide-react";
 
 export default function DashboardOverview() {
   const { days } = useDateRange();
@@ -172,86 +172,7 @@ export default function DashboardOverview() {
 
       {/* KPI Cards */}
       <Section title="Key Metrics">
-        <div ref={kpiRef} className={`grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4 ${isFiltered ? "xl:grid-cols-7" : "xl:grid-cols-8"}`}>
-          <MetricCard
-            title="Daily Active Users"
-            value={kpis.dailyActiveUsers}
-            icon={<Users className="h-4 w-4" />}
-            delta={kpis.deltas.dau !== 0 ? { value: kpis.deltas.dau } : undefined}
-            subtitle="Yesterday"
-            accent="blue"
-            stagger={1}
-            trend={dailyTrendValues}
-          />
-          <MetricCard
-            title="Weekly Active Users"
-            value={kpis.weeklyActiveUsers}
-            icon={<UserCheck className="h-4 w-4" />}
-            subtitle={`${days}-day average`}
-            accent="violet"
-            stagger={2}
-            trend={dailyTrendValues}
-          />
-          <MetricCard
-            title="Monthly Active Users"
-            value={kpis.monthlyActiveUsers}
-            icon={<Users className="h-4 w-4" />}
-            subtitle={`${days}-day average`}
-            accent="green"
-            stagger={3}
-          />
-          <MetricCard
-            title="Agent Adoption"
-            value={kpis.agentAdoption}
-            format="percent"
-            icon={<Bot className="h-4 w-4" />}
-            subtitle="% of active users"
-            accent="amber"
-            stagger={4}
-          />
-          <MetricCard
-            title="Coding Agent"
-            value={kpis.codingAgentAdoption}
-            format="percent"
-            icon={<GitPullRequest className="h-4 w-4" />}
-            subtitle="% using coding agent"
-            accent="amber"
-            stagger={5}
-          />
-          <MetricCard
-            title="Code Review"
-            value={kpis.codeReviewAdoption}
-            format="percent"
-            icon={<Eye className="h-4 w-4" />}
-            subtitle="% with active review"
-            accent="teal"
-            stagger={6}
-          />
-          <MetricCard
-            title="CLI Users"
-            value={kpis.cliUsers}
-            icon={<Terminal className="h-4 w-4" />}
-            subtitle="Yesterday"
-            accent="green"
-            stagger={7}
-          />
-          {!isFiltered && (
-            <MetricCard
-              title="License Utilization"
-              value={kpis.licenseUtilization}
-              format="percent"
-              icon={<CreditCard className="h-4 w-4" />}
-              subtitle="Active / total seats"
-              accent="red"
-              stagger={8}
-            />
-          )}
-        </div>
-      </Section>
-
-      {/* Rolling Active Users */}
-      <Section title="Active Users (Selected Period)">
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+        <div ref={kpiRef} className={`grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4 ${isFiltered ? "xl:grid-cols-8" : "xl:grid-cols-9"}`}>
           <MetricCard
             title="Period Active Users"
             value={kpis.periodActiveUsers ?? 0}
@@ -262,24 +183,78 @@ export default function DashboardOverview() {
             trend={dailyTrendValues}
           />
           <MetricCard
-            title="Rolling WAU"
-            value={kpis.rollingWAU ?? 0}
-            icon={<CalendarDays className="h-4 w-4" />}
-            delta={kpis.deltas.wau !== 0 ? { value: kpis.deltas.wau } : undefined}
-            subtitle="Trailing 7-day window"
+            title="Daily Active Users"
+            value={kpis.dailyActiveUsers}
+            icon={<Users className="h-4 w-4" />}
+            delta={kpis.deltas.dau !== 0 ? { value: kpis.deltas.dau } : undefined}
+            subtitle="Yesterday"
             accent="blue"
             stagger={2}
             trend={dailyTrendValues}
           />
           <MetricCard
-            title="Rolling MAU"
-            value={kpis.rollingMAU ?? 0}
-            icon={<CalendarRange className="h-4 w-4" />}
-            subtitle="Trailing 30-day window"
+            title="Weekly Active Users"
+            value={kpis.weeklyActiveUsers}
+            icon={<UserCheck className="h-4 w-4" />}
+            subtitle={`${days}-day average`}
             accent="violet"
             stagger={3}
             trend={dailyTrendValues}
           />
+          <MetricCard
+            title="Monthly Active Users"
+            value={kpis.monthlyActiveUsers}
+            icon={<Users className="h-4 w-4" />}
+            subtitle={`${days}-day average`}
+            accent="green"
+            stagger={4}
+          />
+          <MetricCard
+            title="Agent Adoption"
+            value={kpis.agentAdoption}
+            format="percent"
+            icon={<Bot className="h-4 w-4" />}
+            subtitle="% of active users"
+            accent="amber"
+            stagger={5}
+          />
+          <MetricCard
+            title="Coding Agent"
+            value={kpis.codingAgentAdoption}
+            format="percent"
+            icon={<GitPullRequest className="h-4 w-4" />}
+            subtitle="% using coding agent"
+            accent="amber"
+            stagger={6}
+          />
+          <MetricCard
+            title="Code Review"
+            value={kpis.codeReviewAdoption}
+            format="percent"
+            icon={<Eye className="h-4 w-4" />}
+            subtitle="% with active review"
+            accent="teal"
+            stagger={7}
+          />
+          <MetricCard
+            title="CLI Users"
+            value={kpis.cliUsers}
+            icon={<Terminal className="h-4 w-4" />}
+            subtitle="Yesterday"
+            accent="green"
+            stagger={8}
+          />
+          {!isFiltered && (
+            <MetricCard
+              title="License Utilization"
+              value={kpis.licenseUtilization}
+              format="percent"
+              icon={<CreditCard className="h-4 w-4" />}
+              subtitle="Active / total seats"
+              accent="red"
+              stagger={9}
+            />
+          )}
         </div>
       </Section>
 
