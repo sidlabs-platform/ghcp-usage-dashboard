@@ -383,10 +383,12 @@ async function incrementalSyncEnterprise(
 
 export async function incrementalSync(
   onProgress?: (progress: SyncProgress) => void
-): Promise<{ daysSynced: number; daysSkipped: number }> {
+): Promise<{ daysSynced: number; daysSkipped: number; errors: number; failedEnterprises: string[] }> {
   const enterprises = getConfiguredEnterprises();
   let daysSynced = 0;
   let daysSkipped = 0;
+  let errors = 0;
+  const failedEnterprises: string[] = [];
 
   for (const ent of enterprises) {
     try {
@@ -394,11 +396,13 @@ export async function incrementalSync(
       daysSynced += result.daysSynced;
       daysSkipped += result.daysSkipped;
     } catch (err) {
+      errors++;
+      failedEnterprises.push(ent.slug);
       console.error("[Sync] [%s] Incremental sync failed, continuing with remaining enterprises:", sanitizeForLog(ent.slug), err);
     }
   }
 
-  return { daysSynced, daysSkipped };
+  return { daysSynced, daysSkipped, errors, failedEnterprises };
 }
 
 // ── Sync seats (per-enterprise helper) ────────────────────────────────
@@ -626,7 +630,7 @@ async function sync28DayFallback(
   const endStr = yesterday.toISOString().split("T")[0];
 
   // Enterprise 28-day fallback (only when enterprise mode is on)
-  if (isCopilotSubEnabledForEnterprise(enterpriseSlug, "enterprise") && !hasEnterpriseDataForRange(enterpriseSlug, startStr, endStr, [enterpriseSlug])) {
+  if (isCopilotSubEnabledForEnterprise(enterpriseSlug, "enterprise") && !hasEnterpriseDataForRange(enterpriseSlug, startStr, endStr)) {
     onProgress?.({ phase: "fallback", current: 0, total: 1, message: `[${sanitizeForLog(enterpriseSlug)}] Trying enterprise 28-day report as fallback...`, enterpriseSlug });
     try {
       const data = await metricsClient.getEnterprise28DayReport(enterpriseSlug, enterpriseSlug);

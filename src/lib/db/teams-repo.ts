@@ -50,10 +50,10 @@ export function getAllTeams(enterpriseSlugs?: string[]): TeamRow[] {
   const ef = buildEnterpriseFilter(enterpriseSlugs);
   const where = ef.clause ? `WHERE 1=1${ef.clause}` : "";
   return db.prepare(`
-    SELECT enterprise_slug, team_slug, team_name, MAX(source) as source, org_slug, COUNT(DISTINCT user_login) as member_count
+    SELECT enterprise_slug, team_slug, team_name, source, org_slug, COUNT(DISTINCT user_login) as member_count
     FROM team_memberships
     ${where}
-    GROUP BY enterprise_slug, team_slug, source, org_slug
+    GROUP BY enterprise_slug, team_slug, source, org_slug, team_name
     ORDER BY team_name ASC
   `).all(...ef.params) as TeamRow[];
 }
@@ -125,12 +125,12 @@ export function getAllTeamsWithMembers(enterpriseSlugs?: string[]): { enterprise
     SELECT enterprise_slug, team_slug, team_name, source, org_slug, user_login
     FROM team_memberships
     ${where}
-    ORDER BY enterprise_slug, team_slug, user_login
+    ORDER BY enterprise_slug, source, org_slug, team_slug, user_login
   `).all(...ef.params) as { enterprise_slug: string; team_slug: string; team_name: string; source: string; org_slug: string | null; user_login: string }[];
 
   const teamMap = new Map<string, { enterprise_slug: string; team_slug: string; team_name: string; source: string; org_slug: string | null; members: string[] }>();
   for (const row of rows) {
-    const key = `${row.enterprise_slug}:${row.team_slug}:${row.source}`;
+    const key = `${row.enterprise_slug}:${row.source}:${row.org_slug ?? ""}:${row.team_slug}`;
     let team = teamMap.get(key);
     if (!team) {
       team = { enterprise_slug: row.enterprise_slug, team_slug: row.team_slug, team_name: row.team_name, source: row.source, org_slug: row.org_slug, members: [] };

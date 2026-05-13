@@ -23,10 +23,16 @@ function fromCache(
   selectedSlugs: string[], selectedOrgs: string[], enterpriseSlugs: string[],
   sort: string, sortDir: string, page: number, pageSize: number,
 ): { teams: TeamResult[]; total: number } | null {
-  // Quick check — if no rows exist for this period, return null to trigger fallback
+  // Quick check — if no rows exist for this period + enterprise scope, return null to trigger fallback
+  const probeConditions: string[] = ["period_start = ? AND period_end = ?"];
+  const probeParams: (string | number)[] = [start, end];
+  if (enterpriseSlugs.length > 0) {
+    probeConditions.push(`enterprise_slug IN (${enterpriseSlugs.map(() => "?").join(",")})`);
+    probeParams.push(...enterpriseSlugs);
+  }
   const probe = db.prepare(
-    `SELECT 1 FROM team_summary_cache WHERE period_start = ? AND period_end = ? LIMIT 1`
-  ).get(start, end);
+    `SELECT 1 FROM team_summary_cache WHERE ${probeConditions.join(" AND ")} LIMIT 1`
+  ).get(...probeParams);
   if (!probe) return null;
 
   const conditions: string[] = ["period_start = ? AND period_end = ?"];
