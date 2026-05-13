@@ -92,3 +92,4 @@ exp-001	2026-05-06T17:24:23Z	test-coverage	memory-cache.test.ts: get/set/TTL/evi
 202	2026-05-13T16:35:00+05:30	bug-hunting	fix(teams-repo): add enterprise_slug to TeamRow and getAllTeams GROUP BY	KEEP	91.92	91.92	stable; fixes team merging across enterprises
 203	2026-05-13T16:38:00+05:30	bug-hunting	fix(teams-repo): include enterprise_slug in getAllTeamsWithMembers map key	KEEP	91.92	91.92	stable; fixes team merging across enterprises in live data path
 204	2026-05-13T16:40:00+05:30	bug-hunting	fix(teams-route): add enterprise filter to fromCache + scope cache refresh	KEEP	91.92	91.92	stable; fixes data leakage in cached team summaries
+205	2026-05-13T16:43:00+05:30	bug-hunting	fix(summary-tables): compute accurate completion/agent LOC via json_each	KEEP	91.92	91.93	+0.01 stmts; fixes completion_loc including agent_edit and agent_loc_added=0

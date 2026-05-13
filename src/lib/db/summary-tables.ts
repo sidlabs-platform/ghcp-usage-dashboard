@@ -58,6 +58,32 @@ export function refreshUserSummary(periodStart: string, periodEnd: string, enter
     GROUP BY enterprise_slug, user_login
   `).run(periodStart, periodEnd, now, periodStart, periodEnd, ...extraParams);
 
+  // Override acceptance_rate with completion-only rate (excludes agent_edit which
+  // has code_generation_activity_count > 0 but code_acceptance_activity_count = 0,
+  // deflating the top-level rate).
+  db.prepare(`
+    UPDATE user_period_summary SET acceptance_rate = COALESCE(f.rate, 0)
+    FROM (
+      SELECT u.enterprise_slug, u.user_login,
+        CASE WHEN SUM(CASE WHEN json_extract(j.value, '$.feature') != 'agent_edit'
+            THEN json_extract(j.value, '$.code_generation_activity_count') ELSE 0 END) > 0
+          THEN ROUND(
+            CAST(SUM(CASE WHEN json_extract(j.value, '$.feature') != 'agent_edit'
+              THEN json_extract(j.value, '$.code_acceptance_activity_count') ELSE 0 END) AS REAL) /
+            SUM(CASE WHEN json_extract(j.value, '$.feature') != 'agent_edit'
+              THEN json_extract(j.value, '$.code_generation_activity_count') ELSE 0 END) * 100, 1)
+          ELSE 0 END as rate
+      FROM user_daily_metrics u, json_each(u.totals_by_feature) j
+      WHERE u.day >= ? AND u.day <= ?
+        AND u.totals_by_feature IS NOT NULL AND u.totals_by_feature != '[]'${enterpriseFilter}
+      GROUP BY u.enterprise_slug, u.user_login
+    ) f
+    WHERE user_period_summary.enterprise_slug = f.enterprise_slug
+      AND user_period_summary.user_login = f.user_login
+      AND user_period_summary.period_start = ?
+      AND user_period_summary.period_end = ?
+  `).run(periodStart, periodEnd, ...extraParams, periodStart, periodEnd);
+
   return result.changes;
 }
 
