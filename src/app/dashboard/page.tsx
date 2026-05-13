@@ -187,8 +187,7 @@ export default function DashboardOverview() {
             title="Weekly Active Users"
             value={kpis.weeklyActiveUsers}
             icon={<UserCheck className="h-4 w-4" />}
-            delta={kpis.deltas.wau !== 0 ? { value: kpis.deltas.wau } : undefined}
-            subtitle="Last 7 days"
+            subtitle={`${days}-day average`}
             accent="violet"
             stagger={2}
             trend={dailyTrendValues}
@@ -197,7 +196,7 @@ export default function DashboardOverview() {
             title="Monthly Active Users"
             value={kpis.monthlyActiveUsers}
             icon={<Users className="h-4 w-4" />}
-            subtitle={isFiltered ? "In selected scope" : "This calendar month"}
+            subtitle={`${days}-day average`}
             accent="green"
             stagger={3}
           />
@@ -266,6 +265,7 @@ export default function DashboardOverview() {
             title="Rolling WAU"
             value={kpis.rollingWAU ?? 0}
             icon={<CalendarDays className="h-4 w-4" />}
+            delta={kpis.deltas.wau !== 0 ? { value: kpis.deltas.wau } : undefined}
             subtitle="Trailing 7-day window"
             accent="blue"
             stagger={2}

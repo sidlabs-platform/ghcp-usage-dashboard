@@ -215,14 +215,19 @@ async function handler(request: NextRequest) {
     const latestTrend = activeUsersTrend[activeUsersTrend.length - 1];
     const prevTrend = activeUsersTrend.length > 1 ? activeUsersTrend[activeUsersTrend.length - 2] : null;
 
+    // Average WAU/MAU across the selected period — changes with date range selection,
+    // unlike rolling values which are point-in-time snapshots at the last day.
+    const avgOfField = (field: 'weekly' | 'monthly') =>
+      activeUsersTrend.length > 0
+        ? Math.round(activeUsersTrend.reduce((sum, t) => sum + (t[field] ?? 0), 0) / activeUsersTrend.length)
+        : 0;
+    const avgWAU = avgOfField('weekly');
+    const avgMAU = avgOfField('monthly');
+
     const kpis = {
       dailyActiveUsers: latestTrend?.daily || 0,
-      weeklyActiveUsers: latestTrend?.weekly || 0,
-      monthlyActiveUsers: hasFilter
-        ? adoption.totalUsers
-        : (useAggregated
-          ? (latestTrend?.monthly != null ? latestTrend.monthly : adoption.totalUsers)
-          : (metrics[metrics.length - 1] as { monthly_active_users?: number })?.monthly_active_users || 0),
+      weeklyActiveUsers: avgWAU,
+      monthlyActiveUsers: avgMAU,
       agentAdoption: adoption.totalUsers > 0 ? (adoption.agentUsers / adoption.totalUsers) * 100 : 0,
       codingAgentAdoption: adoption.totalUsers > 0 ? (adoption.codingAgentUsers / adoption.totalUsers) * 100 : 0,
       codeReviewAdoption: adoption.totalUsers > 0 ? (adoption.codeReviewUsers / adoption.totalUsers) * 100 : 0,
