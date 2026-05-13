@@ -31,7 +31,7 @@ async function handler(request: NextRequest) {
     const orgTeams = db.prepare(`
       SELECT team_slug as slug, team_name as name, org_slug as orgSlug, enterprise_slug as enterpriseSlug, COUNT(DISTINCT user_login) as memberCount
       FROM team_memberships WHERE source = 'org'${entFilter}
-      GROUP BY team_slug, enterprise_slug ORDER BY team_name ASC
+      GROUP BY team_slug, org_slug, enterprise_slug ORDER BY team_name ASC
     `).all(...entParams) as { slug: string; name: string; orgSlug: string; enterpriseSlug: string; memberCount: number }[];
 
     // Distinct orgs
