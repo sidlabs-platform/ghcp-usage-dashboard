@@ -16,9 +16,13 @@ export async function POST(request: NextRequest) {
     }
 
     const enterprises = getConfiguredEnterprises();
-    const results: Record<string, Awaited<ReturnType<typeof syncDay>>> = {};
+    const results: Record<string, Awaited<ReturnType<typeof syncDay>> | { error: string }> = {};
     for (const ent of enterprises) {
-      results[ent.slug] = await syncDay(ent.slug, day);
+      try {
+        results[ent.slug] = await syncDay(ent.slug, day);
+      } catch (err) {
+        results[ent.slug] = { error: err instanceof Error ? err.message : String(err) };
+      }
     }
     return NextResponse.json({ success: true, day, results });
   } catch (err) {
