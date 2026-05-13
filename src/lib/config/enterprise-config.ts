@@ -85,11 +85,6 @@ export function getConfiguredEnterprises(): EnterpriseConfig[] {
 
   // Legacy backward compatibility: synthesize from env vars
   const slug = process.env.GITHUB_ENTERPRISE;
-  if (!slug) {
-    cachedEnterprises = [];
-    cacheTimestamp = now;
-    return cachedEnterprises;
-  }
 
   const hasApp = !!(
     process.env.GITHUB_APP_ID &&
@@ -100,24 +95,59 @@ export function getConfiguredEnterprises(): EnterpriseConfig[] {
   const envOrgs = process.env.GITHUB_ORGS;
   const include = envOrgs ? envOrgs.split(",").map((o) => o.trim()).filter(Boolean) : [];
 
-  cachedEnterprises = [
-    {
-      slug,
-      displayName: slug,
-      tokenEnvVar: "GITHUB_TOKEN",
-      ...(hasApp
-        ? {
-            appIdEnvVar: "GITHUB_APP_ID",
-            appPrivateKeyEnvVar: "GITHUB_APP_PRIVATE_KEY",
-            appInstallationIdEnvVar: "GITHUB_APP_INSTALLATION_ID",
-          }
-        : {}),
-      organizations: {
-        include,
-        exclude: [],
+  if (slug) {
+    // Enterprise mode: synthesize from GITHUB_ENTERPRISE + GITHUB_ORGS
+    cachedEnterprises = [
+      {
+        slug,
+        displayName: slug,
+        tokenEnvVar: "GITHUB_TOKEN",
+        ...(hasApp
+          ? {
+              appIdEnvVar: "GITHUB_APP_ID",
+              appPrivateKeyEnvVar: "GITHUB_APP_PRIVATE_KEY",
+              appInstallationIdEnvVar: "GITHUB_APP_INSTALLATION_ID",
+            }
+          : {}),
+        organizations: {
+          include,
+          exclude: [],
+        },
       },
-    },
-  ];
+    ];
+    cacheTimestamp = now;
+    return cachedEnterprises;
+  }
+
+  // Org-only mode: GITHUB_ORGS set without GITHUB_ENTERPRISE
+  if (include.length > 0) {
+    cachedEnterprises = [
+      {
+        slug: "_org_only",
+        displayName: "Organizations",
+        tokenEnvVar: "GITHUB_TOKEN",
+        ...(hasApp
+          ? {
+              appIdEnvVar: "GITHUB_APP_ID",
+              appPrivateKeyEnvVar: "GITHUB_APP_PRIVATE_KEY",
+              appInstallationIdEnvVar: "GITHUB_APP_INSTALLATION_ID",
+            }
+          : {}),
+        organizations: {
+          include,
+          exclude: [],
+        },
+        metrics: {
+          copilot: { enterprise: false },
+          billing: { enabled: false },
+        },
+      },
+    ];
+    cacheTimestamp = now;
+    return cachedEnterprises;
+  }
+
+  cachedEnterprises = [];
   cacheTimestamp = now;
   return cachedEnterprises;
 }
@@ -140,25 +170,29 @@ export function getEnterpriseConfig(slug: string): EnterpriseConfig {
 /**
  * Returns client-safe enterprise list (no auth details). Safe to send in API responses.
  */
+/**
+ * Returns client-safe enterprise list (no auth details). Safe to send in API responses.
+ * Filters out the synthetic `_org_only` slug when it's the only entry,
+ * since there's nothing to filter and it's not a real enterprise name.
+ */
 export function getClientEnterpriseList(): EnterpriseInfo[] {
-  return getConfiguredEnterprises().map((e) => ({
-    slug: e.slug,
-    displayName: e.displayName,
-  }));
+  const enterprises = getConfiguredEnterprises();
+  return enterprises
+    .filter((e) => e.slug !== "_org_only")
+    .map((e) => ({
+      slug: e.slug,
+      displayName: e.displayName,
+    }));
 }
 
 /**
  * Resolve auth credentials for a specific enterprise by reading its env vars.
+ * For org-only entries with app auth configured, the PAT is optional.
  */
 export function getEnterpriseAuth(slug: string): EnterpriseAuth {
   const config = getEnterpriseConfig(slug);
 
-  const token = process.env[config.tokenEnvVar];
-  if (!token) {
-    throw new Error(
-      `PAT not found: environment variable "${config.tokenEnvVar}" is not set for enterprise "${slug}".`
-    );
-  }
+  const token = process.env[config.tokenEnvVar] ?? "";
 
   let appConfig: EnterpriseAuth["appConfig"];
   if (config.appIdEnvVar && config.appPrivateKeyEnvVar && config.appInstallationIdEnvVar) {
@@ -175,6 +209,17 @@ export function getEnterpriseAuth(slug: string): EnterpriseAuth {
     }
   }
 
+  // In org-only mode, PAT is optional when app auth is configured
+  // (org endpoints use app auth; enterprise endpoints are never called)
+  if (!token) {
+    if (isOrgOnlyEnterprise(slug) && appConfig) {
+      return { token: "", appConfig };
+    }
+    throw new Error(
+      `PAT not found: environment variable "${config.tokenEnvVar}" is not set for enterprise "${slug}".`
+    );
+  }
+
   return { token, appConfig };
 }
 
@@ -183,6 +228,35 @@ export function getEnterpriseAuth(slug: string): EnterpriseAuth {
  */
 export function isMultiEnterprise(): boolean {
   return getConfiguredEnterprises().length > 1;
+}
+
+/**
+ * Returns true when the given enterprise entry is org-only (no enterprise-level access).
+ * Org-only entries have `copilot.enterprise: false` in their metrics overrides,
+ * or the global config has `copilot.enterprise: false` with no per-enterprise override.
+ */
+export function isOrgOnlyEnterprise(slug: string): boolean {
+  try {
+    // Check per-enterprise override first
+    const entConfig = getEnterpriseConfig(slug);
+    const override = entConfig.metrics?.copilot;
+    if (override && typeof override.enterprise === "boolean") {
+      return !override.enterprise;
+    }
+  } catch {
+    // Unknown slug — not org-only
+    return false;
+  }
+
+  // Fall back to global config
+  try {
+    const config = getDashboardConfig();
+    const globalEnterprise = config.metrics?.copilot?.enterprise;
+    // Default is true (enterprise enabled) when not specified
+    return globalEnterprise === false;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -228,13 +302,22 @@ export function resetEnterpriseConfigCache(): void {
 /**
  * Resolve a default scope + scopeId for API routes that need a fallback.
  * In multi-enterprise mode, defaults to the first enterprise slug.
+ * In org-only mode, defaults to the first resolved org.
  * In legacy mode, uses GITHUB_ENTERPRISE env var.
  * Falls back to the first resolved org if enterprise mode is off.
  */
 export function resolveDefaultScope(): { scope: string; scopeId: string } {
   const enterprises = getConfiguredEnterprises();
   if (enterprises.length > 0) {
-    return { scope: "enterprise", scopeId: enterprises[0].slug };
+    const first = enterprises[0];
+    // Org-only entries should default to org scope, not enterprise
+    if (isOrgOnlyEnterprise(first.slug)) {
+      const orgs = getResolvedOrgsForEnterprise(first.slug);
+      if (orgs.length > 0) {
+        return { scope: "org", scopeId: orgs[0] };
+      }
+    }
+    return { scope: "enterprise", scopeId: first.slug };
   }
   return { scope: "org", scopeId: "" };
 }

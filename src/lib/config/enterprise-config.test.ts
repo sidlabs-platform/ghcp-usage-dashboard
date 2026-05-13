@@ -18,6 +18,7 @@ import {
   isCopilotSubEnabledForAnyEnterprise,
   isBillingSubEnabledForAnyEnterprise,
   getClientEnterpriseMetrics,
+  isOrgOnlyEnterprise,
 } from "./enterprise-config";
 import { getDashboardConfig } from "./dashboard-config";
 
@@ -828,6 +829,234 @@ describe("enterprise-config", () => {
       delete process.env.GITHUB_ENTERPRISE;
       delete process.env.GITHUB_TOKEN;
       resetEnterpriseConfigCache();
+    });
+
+    it("returns org scope for org-only config entry", () => {
+      mockGetDashboardConfig.mockReturnValue({
+        metrics: {
+          copilot: { enabled: true, enterprise: true },
+          codeScanning: { enabled: false },
+          dependabot: { enabled: false },
+          secretScanning: { enabled: false },
+          billing: { enabled: false },
+        },
+        enterprises: [
+          {
+            slug: "_org_only",
+            displayName: "Organizations",
+            tokenEnvVar: "GITHUB_TOKEN",
+            organizations: { include: ["org-1", "org-2"] },
+            metrics: { copilot: { enterprise: false }, billing: { enabled: false } },
+          },
+        ],
+      } as any);
+      resetEnterpriseConfigCache();
+      process.env.GITHUB_TOKEN = "ghp_test";
+      const result = resolveDefaultScope();
+      expect(result).toEqual({ scope: "org", scopeId: "org-1" });
+      delete process.env.GITHUB_TOKEN;
+      resetEnterpriseConfigCache();
+    });
+  });
+
+  // ── Org-Only Mode ──────────────────────────────────────────────────────
+
+  describe("org-only mode", () => {
+    afterEach(() => {
+      delete process.env.GITHUB_ENTERPRISE;
+      delete process.env.GITHUB_TOKEN;
+      delete process.env.GITHUB_ORGS;
+      delete process.env.GITHUB_APP_ID;
+      delete process.env.GITHUB_APP_PRIVATE_KEY;
+      delete process.env.GITHUB_APP_INSTALLATION_ID;
+      resetEnterpriseConfigCache();
+    });
+
+    describe("getConfiguredEnterprises — legacy org-only fallback", () => {
+      it("synthesizes org-only entry when GITHUB_ORGS is set without GITHUB_ENTERPRISE", () => {
+        mockGetDashboardConfig.mockReturnValue({ enterprises: [] } as any);
+        resetEnterpriseConfigCache();
+        delete process.env.GITHUB_ENTERPRISE;
+        process.env.GITHUB_ORGS = "org-a,org-b";
+        process.env.GITHUB_TOKEN = "ghp_org";
+
+        const enterprises = getConfiguredEnterprises();
+        expect(enterprises).toHaveLength(1);
+        expect(enterprises[0].slug).toBe("_org_only");
+        expect(enterprises[0].displayName).toBe("Organizations");
+        expect(enterprises[0].tokenEnvVar).toBe("GITHUB_TOKEN");
+        expect(enterprises[0].organizations?.include).toEqual(["org-a", "org-b"]);
+        expect(enterprises[0].metrics?.copilot?.enterprise).toBe(false);
+        expect(enterprises[0].metrics?.billing?.enabled).toBe(false);
+      });
+
+      it("returns empty when neither GITHUB_ENTERPRISE nor GITHUB_ORGS is set", () => {
+        mockGetDashboardConfig.mockReturnValue({ enterprises: [] } as any);
+        resetEnterpriseConfigCache();
+        delete process.env.GITHUB_ENTERPRISE;
+        delete process.env.GITHUB_ORGS;
+
+        const enterprises = getConfiguredEnterprises();
+        expect(enterprises).toHaveLength(0);
+      });
+
+      it("prefers GITHUB_ENTERPRISE over org-only mode", () => {
+        mockGetDashboardConfig.mockReturnValue({} as any);
+        resetEnterpriseConfigCache();
+        process.env.GITHUB_ENTERPRISE = "my-ent";
+        process.env.GITHUB_ORGS = "org-a";
+        process.env.GITHUB_TOKEN = "ghp_test";
+
+        const enterprises = getConfiguredEnterprises();
+        expect(enterprises).toHaveLength(1);
+        expect(enterprises[0].slug).toBe("my-ent");
+        expect(enterprises[0].metrics).toBeUndefined();
+      });
+
+      it("includes App auth config in org-only entry when env vars are set", () => {
+        mockGetDashboardConfig.mockReturnValue({ enterprises: [] } as any);
+        resetEnterpriseConfigCache();
+        delete process.env.GITHUB_ENTERPRISE;
+        process.env.GITHUB_ORGS = "org-a";
+        process.env.GITHUB_APP_ID = "123";
+        process.env.GITHUB_APP_PRIVATE_KEY = "-----BEGIN RSA PRIVATE KEY-----\\nfake\\n-----END RSA PRIVATE KEY-----";
+        process.env.GITHUB_APP_INSTALLATION_ID = "456";
+
+        const enterprises = getConfiguredEnterprises();
+        expect(enterprises[0].appIdEnvVar).toBe("GITHUB_APP_ID");
+        expect(enterprises[0].appPrivateKeyEnvVar).toBe("GITHUB_APP_PRIVATE_KEY");
+        expect(enterprises[0].appInstallationIdEnvVar).toBe("GITHUB_APP_INSTALLATION_ID");
+      });
+    });
+
+    describe("isOrgOnlyEnterprise", () => {
+      it("returns true for org-only entries with copilot.enterprise: false", () => {
+        mockGetDashboardConfig.mockReturnValue({
+          metrics: {
+            copilot: { enabled: true, enterprise: true },
+            codeScanning: { enabled: false },
+            dependabot: { enabled: false },
+            secretScanning: { enabled: false },
+            billing: { enabled: false },
+          },
+          enterprises: [
+            {
+              slug: "org-group",
+              displayName: "Orgs",
+              tokenEnvVar: "GITHUB_TOKEN",
+              organizations: { include: ["org-1"] },
+              metrics: { copilot: { enterprise: false } },
+            },
+          ],
+        } as any);
+        resetEnterpriseConfigCache();
+        process.env.GITHUB_TOKEN = "ghp_test";
+
+        expect(isOrgOnlyEnterprise("org-group")).toBe(true);
+      });
+
+      it("returns false for standard enterprise entries", () => {
+        mockGetDashboardConfig.mockReturnValue({
+          metrics: {
+            copilot: { enabled: true, enterprise: true },
+            codeScanning: { enabled: false },
+            dependabot: { enabled: false },
+            secretScanning: { enabled: false },
+            billing: { enabled: false },
+          },
+          enterprises: [
+            {
+              slug: "acme-corp",
+              displayName: "Acme Corp",
+              tokenEnvVar: "ACME_TOKEN",
+            },
+          ],
+        } as any);
+        resetEnterpriseConfigCache();
+        expect(isOrgOnlyEnterprise("acme-corp")).toBe(false);
+      });
+    });
+
+    describe("getEnterpriseAuth — org-only + app auth", () => {
+      it("allows missing PAT when org-only and app auth is configured", () => {
+        mockGetDashboardConfig.mockReturnValue({
+          enterprises: [
+            {
+              slug: "org-group",
+              displayName: "Orgs",
+              tokenEnvVar: "ORG_TOKEN",
+              appIdEnvVar: "ORG_APP_ID",
+              appPrivateKeyEnvVar: "ORG_APP_KEY",
+              appInstallationIdEnvVar: "ORG_APP_INST",
+              metrics: { copilot: { enterprise: false } },
+            },
+          ],
+        } as any);
+        resetEnterpriseConfigCache();
+        // No ORG_TOKEN set, but app auth env vars are present
+        process.env.ORG_APP_ID = "100";
+        process.env.ORG_APP_KEY = "-----BEGIN RSA PRIVATE KEY-----\\nfake\\n-----END RSA PRIVATE KEY-----";
+        process.env.ORG_APP_INST = "200";
+
+        const auth = getEnterpriseAuth("org-group");
+        expect(auth.token).toBe("");
+        expect(auth.appConfig).toBeDefined();
+        expect(auth.appConfig?.appId).toBe("100");
+
+        delete process.env.ORG_APP_ID;
+        delete process.env.ORG_APP_KEY;
+        delete process.env.ORG_APP_INST;
+      });
+
+      it("still throws when org-only without app auth and no PAT", () => {
+        mockGetDashboardConfig.mockReturnValue({
+          enterprises: [
+            {
+              slug: "org-group",
+              displayName: "Orgs",
+              tokenEnvVar: "ORG_TOKEN",
+              metrics: { copilot: { enterprise: false } },
+            },
+          ],
+        } as any);
+        resetEnterpriseConfigCache();
+
+        expect(() => getEnterpriseAuth("org-group")).toThrow("PAT not found");
+      });
+
+      it("works normally with PAT in org-only mode", () => {
+        mockGetDashboardConfig.mockReturnValue({
+          enterprises: [
+            {
+              slug: "org-group",
+              displayName: "Orgs",
+              tokenEnvVar: "ORG_TOKEN",
+              metrics: { copilot: { enterprise: false } },
+            },
+          ],
+        } as any);
+        resetEnterpriseConfigCache();
+        process.env.ORG_TOKEN = "ghp_org123";
+
+        const auth = getEnterpriseAuth("org-group");
+        expect(auth.token).toBe("ghp_org123");
+
+        delete process.env.ORG_TOKEN;
+      });
+    });
+
+    describe("resolveDefaultScope — org-only", () => {
+      it("returns org scope for org-only legacy config", () => {
+        mockGetDashboardConfig.mockReturnValue({ enterprises: [] } as any);
+        resetEnterpriseConfigCache();
+        delete process.env.GITHUB_ENTERPRISE;
+        process.env.GITHUB_ORGS = "my-org-1,my-org-2";
+        process.env.GITHUB_TOKEN = "ghp_test";
+
+        const result = resolveDefaultScope();
+        expect(result.scope).toBe("org");
+        expect(result.scopeId).toBe("my-org-1");
+      });
     });
   });
 });

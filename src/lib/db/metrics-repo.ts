@@ -425,7 +425,7 @@ export function upsertUserDayMetrics(enterpriseSlug: string, record: UserDayReco
       totals_by_model_feature, totals_by_language_model, totals_by_cli, agent_edit, raw_json
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
-    enterpriseSlug, record.day, record.enterprise_id, record.user_id, record.user_login,
+    enterpriseSlug, record.day, record.enterprise_id || enterpriseSlug, record.user_id, record.user_login,
     record.code_generation_activity_count, record.code_acceptance_activity_count,
     record.user_initiated_interaction_count,
     record.loc_suggested_to_add_sum, record.loc_suggested_to_delete_sum,
@@ -473,7 +473,7 @@ export function batchUpsertUserDayMetrics(enterpriseSlug: string, records: UserD
     for (const r of records) {
       const cm = extractChatModeCounts(r.totals_by_feature || []);
       stmt.run(
-        enterpriseSlug, r.day, r.enterprise_id, r.user_id, r.user_login,
+        enterpriseSlug, r.day, r.enterprise_id || enterpriseSlug, r.user_id, r.user_login,
         r.code_generation_activity_count, r.code_acceptance_activity_count,
         r.user_initiated_interaction_count,
         r.loc_suggested_to_add_sum, r.loc_suggested_to_delete_sum,

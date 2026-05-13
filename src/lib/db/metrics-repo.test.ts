@@ -683,3 +683,62 @@ describe("getAllOrgMetrics daily_active_cli_users null fallback", () => {
     expect(results[0].daily_active_cli_users).toBe(0);
   });
 });
+
+describe("enterprise_id fallback for org-only mode", () => {
+  it("batchUpsertUserDayMetrics uses enterpriseSlug when enterprise_id is missing", () => {
+    const records = [{
+      day: "2024-10-01", enterprise_id: undefined, user_id: 8888, user_login: "orgonly-user",
+      code_generation_activity_count: 5, code_acceptance_activity_count: 3,
+      user_initiated_interaction_count: 2,
+      loc_suggested_to_add_sum: 10, loc_suggested_to_delete_sum: 0,
+      loc_added_sum: 8, loc_deleted_sum: 0,
+      used_agent: false, used_chat: false, used_cli: false,
+      used_copilot_code_review_active: false, used_copilot_code_review_passive: false,
+      used_copilot_coding_agent: false,
+      totals_by_ide: [], totals_by_feature: [], totals_by_language_feature: [],
+      totals_by_model_feature: [], totals_by_language_model: [],
+    }] as any[];
+    const count = batchUpsertUserDayMetrics("_org_only", records);
+    expect(count).toBe(1);
+    const row = db.prepare(
+      "SELECT enterprise_id FROM user_daily_metrics WHERE user_login = 'orgonly-user' AND day = '2024-10-01'"
+    ).get() as any;
+    expect(row.enterprise_id).toBe("_org_only");
+  });
+
+  it("upsertUserDayMetrics uses enterpriseSlug when enterprise_id is missing", () => {
+    upsertUserDayMetrics("_org_only", {
+      day: "2024-10-02", enterprise_id: undefined as any, user_id: 8889, user_login: "orgonly-user2",
+      code_generation_activity_count: 1, code_acceptance_activity_count: 0,
+      user_initiated_interaction_count: 0,
+      loc_suggested_to_add_sum: 0, loc_suggested_to_delete_sum: 0,
+      loc_added_sum: 0, loc_deleted_sum: 0,
+      totals_by_ide: [], totals_by_feature: [], totals_by_language_feature: [],
+      totals_by_model_feature: [], totals_by_language_model: [],
+    } as any);
+    const row = db.prepare(
+      "SELECT enterprise_id FROM user_daily_metrics WHERE user_login = 'orgonly-user2' AND day = '2024-10-02'"
+    ).get() as any;
+    expect(row.enterprise_id).toBe("_org_only");
+  });
+
+  it("preserves real enterprise_id when present", () => {
+    const records = [{
+      day: "2024-10-03", enterprise_id: "real-ent-123", user_id: 8890, user_login: "ent-user",
+      code_generation_activity_count: 1, code_acceptance_activity_count: 0,
+      user_initiated_interaction_count: 0,
+      loc_suggested_to_add_sum: 0, loc_suggested_to_delete_sum: 0,
+      loc_added_sum: 0, loc_deleted_sum: 0,
+      used_agent: false, used_chat: false, used_cli: false,
+      used_copilot_code_review_active: false, used_copilot_code_review_passive: false,
+      used_copilot_coding_agent: false,
+      totals_by_ide: [], totals_by_feature: [], totals_by_language_feature: [],
+      totals_by_model_feature: [], totals_by_language_model: [],
+    }] as any[];
+    batchUpsertUserDayMetrics("some-ent", records);
+    const row = db.prepare(
+      "SELECT enterprise_id FROM user_daily_metrics WHERE user_login = 'ent-user' AND day = '2024-10-03'"
+    ).get() as any;
+    expect(row.enterprise_id).toBe("real-ent-123");
+  });
+});
