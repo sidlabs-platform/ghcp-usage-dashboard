@@ -263,6 +263,34 @@ export function refreshTeamSummary(periodStart: string, periodEnd: string, enter
     ) m ON t.enterprise_slug = m.enterprise_slug AND t.team_slug = m.team_slug AND t.source = m.source
   `).run(periodStart, periodEnd, totalDays, now, ...extraParams, periodStart, periodEnd, ...extraParams);
 
+  // Override overall_acceptance_rate with completion-only rate (excludes agent_edit)
+  db.prepare(`
+    UPDATE team_summary_cache SET overall_acceptance_rate = COALESCE(f.rate, 0)
+    FROM (
+      SELECT tm.enterprise_slug, tm.team_slug, tm.source,
+        CASE WHEN SUM(CASE WHEN json_extract(j.value, '$.feature') != 'agent_edit'
+            THEN json_extract(j.value, '$.code_generation_activity_count') ELSE 0 END) > 0
+          THEN ROUND(
+            CAST(SUM(CASE WHEN json_extract(j.value, '$.feature') != 'agent_edit'
+              THEN json_extract(j.value, '$.code_acceptance_activity_count') ELSE 0 END) AS REAL) /
+            SUM(CASE WHEN json_extract(j.value, '$.feature') != 'agent_edit'
+              THEN json_extract(j.value, '$.code_generation_activity_count') ELSE 0 END) * 100, 1)
+          ELSE 0 END as rate
+      FROM team_memberships tm
+      INNER JOIN user_daily_metrics u
+        ON tm.user_login = u.user_login AND tm.enterprise_slug = u.enterprise_slug,
+        json_each(u.totals_by_feature) j
+      WHERE u.day >= ? AND u.day <= ?
+        AND u.totals_by_feature IS NOT NULL AND u.totals_by_feature != '[]'${enterpriseFilter.replace('enterprise_slug', 'tm.enterprise_slug')}
+      GROUP BY tm.enterprise_slug, tm.team_slug, tm.source
+    ) f
+    WHERE team_summary_cache.enterprise_slug = f.enterprise_slug
+      AND team_summary_cache.team_slug = f.team_slug
+      AND team_summary_cache.source = f.source
+      AND team_summary_cache.period_start = ?
+      AND team_summary_cache.period_end = ?
+  `).run(periodStart, periodEnd, ...extraParams, periodStart, periodEnd);
+
   return result.changes;
 }
 
