@@ -116,6 +116,22 @@ describe("teams-repo", () => {
       const fe = teams.find((t) => t.team_slug === "frontend");
       expect(fe?.members.sort()).toEqual(["alice", "bob"]);
     });
+
+    it("separates same-slug teams from different enterprises", () => {
+      // Add a second enterprise with same team slug
+      upsertAllTeams("globex", [
+        { slug: "frontend", name: "Frontend Team", source: "org", orgSlug: "org-g", members: ["eve", "frank"], description: null },
+      ]);
+      const teams = getAllTeamsWithMembers();
+      const frontends = teams.filter((t) => t.team_slug === "frontend");
+      expect(frontends).toHaveLength(2);
+      const acmeFe = frontends.find((t) => t.enterprise_slug === "acme");
+      const globexFe = frontends.find((t) => t.enterprise_slug === "globex");
+      expect(acmeFe?.members.sort()).toEqual(["alice", "bob"]);
+      expect(globexFe?.members.sort()).toEqual(["eve", "frank"]);
+      // Clean up
+      db.prepare("DELETE FROM team_memberships WHERE enterprise_slug = 'globex'").run();
+    });
   });
 
   describe("resolveFilteredUsers", () => {

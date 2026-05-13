@@ -97,3 +97,4 @@ exp-001	2026-05-06T17:24:23Z	test-coverage	memory-cache.test.ts: get/set/TTL/evi
 207	2026-05-13T16:48:00+05:30	bug-hunting	fix(summary-tables): compute completion-only acceptance rate for team_summary_cache	KEEP	91.93	91.93	stable; fixes deflated team acceptance rate from agent_edit
 208	2026-05-13T16:52:00+05:30	bug-hunting	fix(api): add multi-enterprise guard to pull-requests and cli routes	KEEP	91.93	91.93	stable; prevents duplicate-day data in multi-enterprise mode
 209	2026-05-13T16:58:00+05:30	bug-hunting	fix(sync): add per-enterprise error isolation in fullSync loop	KEEP	91.93	91.88	-0.05 stmts from uncovered error branches; critical reliability fix
+210	2026-05-13T17:00:00+05:30	bug-hunting	test(summary-tables): add multi-enterprise isolation test for refreshTeamSummary	KEEP	91.88	91.88	stable; regression test for cross-enterprise contamination fix
