@@ -165,6 +165,26 @@ describe("refreshTeamSummary", () => {
     const count = refreshTeamSummary("2024-01-01", "2024-01-31", "ent-x");
     expect(count).toBe(1);
   });
+
+  it("isolates metrics across enterprises (no cross-contamination)", () => {
+    // Enterprise A: user1 has LOC=100
+    insertMetric({ day: "2024-01-10", user_login: "user1", enterprise_slug: "ent-a", enterprise_id: "a", user_id: 1, loc_added_sum: 100 });
+    db.prepare(`INSERT INTO team_memberships (enterprise_slug, team_slug, team_name, source, org_slug, user_login, updated_at)
+      VALUES ('ent-a', 'frontend', 'Frontend', 'org', 'org-a', 'user1', '2024-01-01')`).run();
+    // Enterprise B: user1 has LOC=200 (same login, different enterprise)
+    insertMetric({ day: "2024-01-10", user_login: "user1", enterprise_slug: "ent-b", enterprise_id: "b", user_id: 1, loc_added_sum: 200 });
+    db.prepare(`INSERT INTO team_memberships (enterprise_slug, team_slug, team_name, source, org_slug, user_login, updated_at)
+      VALUES ('ent-b', 'frontend', 'Frontend', 'org', 'org-b', 'user1', '2024-01-01')`).run();
+
+    refreshTeamSummary("2024-01-01", "2024-01-31");
+    const rows = db.prepare("SELECT * FROM team_summary_cache WHERE team_slug = 'frontend' ORDER BY enterprise_slug").all() as any[];
+    // Should produce 2 separate rows, one per enterprise — NOT merged
+    expect(rows).toHaveLength(2);
+    expect(rows[0].enterprise_slug).toBe("ent-a");
+    expect(rows[0].total_loc_added).toBe(100);
+    expect(rows[1].enterprise_slug).toBe("ent-b");
+    expect(rows[1].total_loc_added).toBe(200);
+  });
 });
 
 describe("refreshAllSummaries", () => {
