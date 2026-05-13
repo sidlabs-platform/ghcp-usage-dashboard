@@ -832,28 +832,19 @@ describe("enterprise-config", () => {
     });
 
     it("returns org scope for org-only config entry", () => {
-      mockGetDashboardConfig.mockReturnValue({
-        metrics: {
-          copilot: { enabled: true, enterprise: true },
-          codeScanning: { enabled: false },
-          dependabot: { enabled: false },
-          secretScanning: { enabled: false },
-          billing: { enabled: false },
-        },
+      setMockConfig(makeConfig({
         enterprises: [
           {
             slug: "_org_only",
             displayName: "Organizations",
             tokenEnvVar: "GITHUB_TOKEN",
-            organizations: { include: ["org-1", "org-2"] },
             metrics: { copilot: { enterprise: false }, billing: { enabled: false } },
           },
         ],
-      } as any);
-      resetEnterpriseConfigCache();
+      }));
       process.env.GITHUB_TOKEN = "ghp_test";
       const result = resolveDefaultScope();
-      expect(result).toEqual({ scope: "org", scopeId: "org-1" });
+      expect(result).toEqual({ scope: "org", scopeId: "" });
       delete process.env.GITHUB_TOKEN;
       resetEnterpriseConfigCache();
     });
@@ -874,7 +865,7 @@ describe("enterprise-config", () => {
 
     describe("getConfiguredEnterprises — legacy org-only fallback", () => {
       it("synthesizes org-only entry when GITHUB_ORGS is set without GITHUB_ENTERPRISE", () => {
-        mockGetDashboardConfig.mockReturnValue({ enterprises: [] } as any);
+        mockGetDashboardConfig.mockReturnValue({ enterprises: [] } as ReturnType<typeof getDashboardConfig>);
         resetEnterpriseConfigCache();
         delete process.env.GITHUB_ENTERPRISE;
         process.env.GITHUB_ORGS = "org-a,org-b";
@@ -891,7 +882,7 @@ describe("enterprise-config", () => {
       });
 
       it("returns empty when neither GITHUB_ENTERPRISE nor GITHUB_ORGS is set", () => {
-        mockGetDashboardConfig.mockReturnValue({ enterprises: [] } as any);
+        mockGetDashboardConfig.mockReturnValue({ enterprises: [] } as ReturnType<typeof getDashboardConfig>);
         resetEnterpriseConfigCache();
         delete process.env.GITHUB_ENTERPRISE;
         delete process.env.GITHUB_ORGS;
@@ -901,7 +892,7 @@ describe("enterprise-config", () => {
       });
 
       it("prefers GITHUB_ENTERPRISE over org-only mode", () => {
-        mockGetDashboardConfig.mockReturnValue({} as any);
+        mockGetDashboardConfig.mockReturnValue({} as ReturnType<typeof getDashboardConfig>);
         resetEnterpriseConfigCache();
         process.env.GITHUB_ENTERPRISE = "my-ent";
         process.env.GITHUB_ORGS = "org-a";
@@ -914,7 +905,7 @@ describe("enterprise-config", () => {
       });
 
       it("includes App auth config in org-only entry when env vars are set", () => {
-        mockGetDashboardConfig.mockReturnValue({ enterprises: [] } as any);
+        mockGetDashboardConfig.mockReturnValue({ enterprises: [] } as ReturnType<typeof getDashboardConfig>);
         resetEnterpriseConfigCache();
         delete process.env.GITHUB_ENTERPRISE;
         process.env.GITHUB_ORGS = "org-a";
@@ -931,39 +922,23 @@ describe("enterprise-config", () => {
 
     describe("isOrgOnlyEnterprise", () => {
       it("returns true for org-only entries with copilot.enterprise: false", () => {
-        mockGetDashboardConfig.mockReturnValue({
-          metrics: {
-            copilot: { enabled: true, enterprise: true },
-            codeScanning: { enabled: false },
-            dependabot: { enabled: false },
-            secretScanning: { enabled: false },
-            billing: { enabled: false },
-          },
+        setMockConfig(makeConfig({
           enterprises: [
             {
               slug: "org-group",
               displayName: "Orgs",
               tokenEnvVar: "GITHUB_TOKEN",
-              organizations: { include: ["org-1"] },
               metrics: { copilot: { enterprise: false } },
             },
           ],
-        } as any);
-        resetEnterpriseConfigCache();
+        }));
         process.env.GITHUB_TOKEN = "ghp_test";
 
         expect(isOrgOnlyEnterprise("org-group")).toBe(true);
       });
 
       it("returns false for standard enterprise entries", () => {
-        mockGetDashboardConfig.mockReturnValue({
-          metrics: {
-            copilot: { enabled: true, enterprise: true },
-            codeScanning: { enabled: false },
-            dependabot: { enabled: false },
-            secretScanning: { enabled: false },
-            billing: { enabled: false },
-          },
+        setMockConfig(makeConfig({
           enterprises: [
             {
               slug: "acme-corp",
@@ -971,15 +946,22 @@ describe("enterprise-config", () => {
               tokenEnvVar: "ACME_TOKEN",
             },
           ],
-        } as any);
-        resetEnterpriseConfigCache();
+        }));
         expect(isOrgOnlyEnterprise("acme-corp")).toBe(false);
       });
     });
 
     describe("getEnterpriseAuth — org-only + app auth", () => {
       it("allows missing PAT when org-only and app auth is configured", () => {
+        // Use direct mock since makeConfig doesn't support appIdEnvVar etc.
         mockGetDashboardConfig.mockReturnValue({
+          metrics: {
+            copilot: { enabled: true, enterprise: true },
+            codeScanning: { enabled: true, autofix: false },
+            dependabot: { enabled: true },
+            secretScanning: { enabled: true },
+            billing: { enabled: true, meteredUsage: true, premiumRequests: true },
+          },
           enterprises: [
             {
               slug: "org-group",
@@ -991,7 +973,7 @@ describe("enterprise-config", () => {
               metrics: { copilot: { enterprise: false } },
             },
           ],
-        } as any);
+        } as ReturnType<typeof getDashboardConfig>);
         resetEnterpriseConfigCache();
         // No ORG_TOKEN set, but app auth env vars are present
         process.env.ORG_APP_ID = "100";
@@ -1009,7 +991,7 @@ describe("enterprise-config", () => {
       });
 
       it("still throws when org-only without app auth and no PAT", () => {
-        mockGetDashboardConfig.mockReturnValue({
+        setMockConfig(makeConfig({
           enterprises: [
             {
               slug: "org-group",
@@ -1018,14 +1000,13 @@ describe("enterprise-config", () => {
               metrics: { copilot: { enterprise: false } },
             },
           ],
-        } as any);
-        resetEnterpriseConfigCache();
+        }));
 
         expect(() => getEnterpriseAuth("org-group")).toThrow("PAT not found");
       });
 
       it("works normally with PAT in org-only mode", () => {
-        mockGetDashboardConfig.mockReturnValue({
+        setMockConfig(makeConfig({
           enterprises: [
             {
               slug: "org-group",
@@ -1034,8 +1015,7 @@ describe("enterprise-config", () => {
               metrics: { copilot: { enterprise: false } },
             },
           ],
-        } as any);
-        resetEnterpriseConfigCache();
+        }));
         process.env.ORG_TOKEN = "ghp_org123";
 
         const auth = getEnterpriseAuth("org-group");
@@ -1047,7 +1027,7 @@ describe("enterprise-config", () => {
 
     describe("resolveDefaultScope — org-only", () => {
       it("returns org scope for org-only legacy config", () => {
-        mockGetDashboardConfig.mockReturnValue({ enterprises: [] } as any);
+        mockGetDashboardConfig.mockReturnValue({ enterprises: [] } as ReturnType<typeof getDashboardConfig>);
         resetEnterpriseConfigCache();
         delete process.env.GITHUB_ENTERPRISE;
         process.env.GITHUB_ORGS = "my-org-1,my-org-2";

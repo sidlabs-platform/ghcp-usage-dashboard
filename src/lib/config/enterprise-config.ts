@@ -316,6 +316,7 @@ export function resolveDefaultScope(): { scope: string; scopeId: string } {
       if (orgs.length > 0) {
         return { scope: "org", scopeId: orgs[0] };
       }
+      return { scope: "org", scopeId: "" };
     }
     return { scope: "enterprise", scopeId: first.slug };
   }
