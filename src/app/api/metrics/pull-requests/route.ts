@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { resolveEnterpriseId, getEnterpriseMetrics, getAllOrgMetrics, getFilteredOrgMetrics } from "@/lib/db/metrics-repo";
+import { resolveEnterpriseId, getEnterpriseMetrics, getAllOrgMetrics, getFilteredOrgMetrics, countEffectiveEnterprises } from "@/lib/db/metrics-repo";
 import { getDateRange, parseAndClampDays } from "@/lib/utils";
 import type { PullRequestMetrics } from "@/lib/types/metrics";
 
@@ -22,7 +22,9 @@ export async function GET(request: Request) {
     const selectedEnterprises = enterprisesParam ? enterprisesParam.split(",").filter(Boolean) : [];
     const enterpriseSlugs = selectedEnterprises.length > 0 ? selectedEnterprises : undefined;
 
-    const eid = hasOrgFilter ? null : resolveEnterpriseId(enterpriseSlugs);
+    // Skip enterprise-level data when multiple enterprises exist (would produce duplicate days)
+    const isMultiEnterprise = !hasOrgFilter && countEffectiveEnterprises(enterpriseSlugs) > 1;
+    const eid = hasOrgFilter || isMultiEnterprise ? null : resolveEnterpriseId(enterpriseSlugs);
 
     // Try enterprise metrics first, fall back to org metrics
     let records = eid ? getEnterpriseMetrics(start, end, enterpriseSlugs) : [];
