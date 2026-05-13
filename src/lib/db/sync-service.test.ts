@@ -389,4 +389,80 @@ describe("sync-service", () => {
     expect(result.enterprises).toHaveLength(1);
     warnSpy.mockRestore();
   });
+
+  // ── Org-only mode tests ──────────────────────────────────────────────
+
+  it("fullSync in org-only mode skips getEnterpriseContext", async () => {
+    const { getEnterpriseContext, updateEnterpriseRegistry } = await import("./enterprise-context");
+    (isCopilotSubEnabledForEnterprise as ReturnType<typeof vi.fn>)
+      .mockImplementation((_s: string, key: string) => key !== "enterprise");
+    (getConfiguredEnterprises as ReturnType<typeof vi.fn>).mockReturnValue([
+      { slug: "_org_only", displayName: "Organizations" },
+    ]);
+    (getEnterpriseConfig as ReturnType<typeof vi.fn>).mockReturnValue({
+      slug: "_org_only",
+      displayName: "Organizations",
+      organizations: { include: ["org-1"], exclude: [] },
+      metrics: { copilot: { enterprise: false }, billing: { enabled: false } },
+    });
+
+    const result = await fullSync();
+
+    expect(getEnterpriseContext).not.toHaveBeenCalled();
+    // updateEnterpriseRegistry should still be called (local DB write)
+    expect(updateEnterpriseRegistry).toHaveBeenCalledWith("_org_only", "_org_only", "Organizations");
+    expect(result.enterprises).toHaveLength(1);
+    expect(result.enterprises[0].enterpriseSlug).toBe("_org_only");
+  });
+
+  it("fullSync in org-only mode does not call enterprise API endpoints", async () => {
+    (isCopilotSubEnabledForEnterprise as ReturnType<typeof vi.fn>)
+      .mockImplementation((_s: string, key: string) => key !== "enterprise");
+    (isSynced as ReturnType<typeof vi.fn>).mockReturnValue(false);
+    (getConfiguredEnterprises as ReturnType<typeof vi.fn>).mockReturnValue([
+      { slug: "_org_only", displayName: "Organizations" },
+    ]);
+    (getEnterpriseConfig as ReturnType<typeof vi.fn>).mockReturnValue({
+      slug: "_org_only",
+      displayName: "Organizations",
+      organizations: { include: ["org-1"], exclude: [] },
+      metrics: { copilot: { enterprise: false }, billing: { enabled: false } },
+    });
+    (getResolvedOrgsForEnterprise as ReturnType<typeof vi.fn>).mockReturnValue(["org-1"]);
+
+    await fullSync();
+
+    // Enterprise endpoints should NOT be called
+    expect(metricsClient.getEnterpriseDailyReport).not.toHaveBeenCalled();
+    expect(metricsClient.getEnterprise28DayReport).not.toHaveBeenCalled();
+    expect(orgsClient.listEnterpriseOrgs).not.toHaveBeenCalled();
+    // Org endpoints should be called
+    expect(metricsClient.getOrgDailyReport).toHaveBeenCalled();
+  });
+
+  it("discoverOrgsIfNeeded skips enterprise API when enterprise disabled", async () => {
+    (isCopilotSubEnabledForEnterprise as ReturnType<typeof vi.fn>)
+      .mockImplementation((_s: string, key: string) => key !== "enterprise");
+    (getEnterpriseConfig as ReturnType<typeof vi.fn>).mockReturnValue({
+      slug: "_org_only",
+      displayName: "Organizations",
+      organizations: { include: [], exclude: [] },
+      metrics: { copilot: { enterprise: false } },
+    });
+    (getConfiguredEnterprises as ReturnType<typeof vi.fn>).mockReturnValue([
+      { slug: "_org_only", displayName: "Organizations" },
+    ]);
+
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    await fullSync();
+
+    // Enterprise org discovery API should NOT be called
+    expect(orgsClient.listEnterpriseOrgs).not.toHaveBeenCalled();
+    // Warning should be logged
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("Org auto-discovery skipped"),
+      expect.any(String),
+    );
+    warnSpy.mockRestore();
+  });
 });

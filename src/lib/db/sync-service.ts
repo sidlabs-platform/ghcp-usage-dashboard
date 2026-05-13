@@ -84,6 +84,16 @@ async function discoverOrgsIfNeeded(
     return include.length;
   }
 
+  // Skip auto-discovery when enterprise mode is disabled (org-only mode)
+  if (!isCopilotSubEnabledForEnterprise(enterpriseSlug, "enterprise")) {
+    console.warn(
+      "[Sync] [%s] Org auto-discovery skipped (enterprise mode disabled). " +
+      "Configure organizations.include in dashboard-config.json or set GITHUB_ORGS.",
+      sanitizeForLog(enterpriseSlug),
+    );
+    return 0;
+  }
+
   // Auto-discover from enterprise API
   onProgress?.({
     phase: "org-discovery",
@@ -495,8 +505,11 @@ export async function fullSync(
   for (const entConfig of enterprises) {
     const slug = entConfig.slug;
 
-    // Validate config + auth for this enterprise
-    void getEnterpriseContext(slug);
+    // Validate config + auth for this enterprise (skip for org-only entries)
+    if (isCopilotSubEnabledForEnterprise(slug, "enterprise")) {
+      void getEnterpriseContext(slug);
+    }
+    // Always register in DB — this is a local write, not an enterprise API call
     updateEnterpriseRegistry(slug, slug, entConfig.displayName);
 
     // Discover orgs (auto-discovers from API when include is empty)

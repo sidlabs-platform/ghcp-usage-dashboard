@@ -211,6 +211,12 @@ async function headersForAuth(mode: AuthMode, enterpriseSlug?: string): Promise<
           getEnterpriseAuth: (slug: string) => { token: string };
         };
         const auth = getEnterpriseAuth(enterpriseSlug);
+        if (!auth.token) {
+          throw new Error(
+            `PAT auth requested for enterprise "${enterpriseSlug}" but token is empty. ` +
+            `This may indicate an enterprise endpoint is being called in org-only mode.`
+          );
+        }
         base.Authorization = `Bearer ${auth.token}`;
       } else {
         base.Authorization = `Bearer ${getToken()}`;
