@@ -389,9 +389,13 @@ export async function incrementalSync(
   let daysSkipped = 0;
 
   for (const ent of enterprises) {
-    const result = await incrementalSyncEnterprise(ent.slug, onProgress);
-    daysSynced += result.daysSynced;
-    daysSkipped += result.daysSkipped;
+    try {
+      const result = await incrementalSyncEnterprise(ent.slug, onProgress);
+      daysSynced += result.daysSynced;
+      daysSkipped += result.daysSkipped;
+    } catch (err) {
+      console.error("[Sync] [%s] Incremental sync failed, continuing with remaining enterprises:", sanitizeForLog(ent.slug), err);
+    }
   }
 
   return { daysSynced, daysSkipped };
