@@ -345,6 +345,8 @@ export function isMetricEnabledForAnyEnterprise(category: MetricCategory): boole
 
 /**
  * Returns true if a Copilot sub-toggle is enabled for ANY configured enterprise.
+ * Falls back to global config when no enterprises are configured (legacy mode).
+ * Used for page visibility — show a page if at least one enterprise has the sub-toggle enabled.
  */
 export function isCopilotSubEnabledForAnyEnterprise(
   sub: "enterprise" | "userMetrics" | "seats" | "teams" | "pullRequests",
@@ -361,6 +363,8 @@ export function isCopilotSubEnabledForAnyEnterprise(
 
 /**
  * Returns true if a billing sub-toggle is enabled for ANY configured enterprise.
+ * Falls back to global config when no enterprises are configured (legacy mode).
+ * Used for page visibility — show a page if at least one enterprise has the sub-toggle enabled.
  */
 export function isBillingSubEnabledForAnyEnterprise(
   sub: "meteredUsage" | "premiumRequests",

@@ -82,7 +82,7 @@ export type MetricCategory =
 
 const DEFAULT_CONFIG: DashboardConfig = {
   metrics: {
-    copilot: { enabled: true, enterprise: true, userMetrics: true, seats: true, teams: true },
+    copilot: { enabled: true, enterprise: true, userMetrics: true, seats: true, teams: true, pullRequests: true },
     codeScanning: { enabled: true, autofix: false },
     dependabot: { enabled: true },
     secretScanning: { enabled: true },
