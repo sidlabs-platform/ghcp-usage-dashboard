@@ -170,7 +170,7 @@ export function refreshTeamSummary(periodStart: string, periodEnd: string, enter
       computed_at
     )
     SELECT
-      COALESCE(m.enterprise_slug, '') as enterprise_slug,
+      t.enterprise_slug,
       t.team_slug,
       t.source,
       t.org_slug,
@@ -193,16 +193,16 @@ export function refreshTeamSummary(periodStart: string, periodEnd: string, enter
       CASE WHEN COALESCE(t.member_count, 0) > 0 THEN ROUND(CAST(m.code_review_users AS REAL) / t.member_count * 100, 1) ELSE 0 END,
       ? as computed_at
     FROM (
-      SELECT team_slug, team_name, MAX(source) as source, org_slug, COUNT(DISTINCT user_login) as member_count
+      SELECT enterprise_slug, team_slug, team_name, MAX(source) as source, org_slug, COUNT(DISTINCT user_login) as member_count
       FROM team_memberships
       WHERE 1=1${enterpriseFilter}
-      GROUP BY team_slug, source, org_slug, team_name
+      GROUP BY enterprise_slug, team_slug, source, org_slug, team_name
     ) t
     LEFT JOIN (
       SELECT
+        tm.enterprise_slug,
         tm.team_slug,
         tm.source,
-        u.enterprise_slug,
         COUNT(DISTINCT u.user_login) as active_members,
         COUNT(DISTINCT u.day || ':' || u.user_login) as total_active_days,
         COALESCE(SUM(u.loc_added_sum), 0) as total_loc_added,
@@ -214,9 +214,9 @@ export function refreshTeamSummary(periodStart: string, periodEnd: string, enter
         COUNT(DISTINCT CASE WHEN u.used_cli = 1 THEN u.user_login END) as cli_users,
         COUNT(DISTINCT CASE WHEN u.used_copilot_code_review_active = 1 THEN u.user_login END) as code_review_users
       FROM team_memberships tm
-      INNER JOIN user_daily_metrics u ON tm.user_login = u.user_login AND u.day >= ? AND u.day <= ?${enterpriseFilter.replace('enterprise_slug', 'u.enterprise_slug')}
-      GROUP BY tm.team_slug, tm.source, u.enterprise_slug
-    ) m ON t.team_slug = m.team_slug AND t.source = m.source
+      INNER JOIN user_daily_metrics u ON tm.user_login = u.user_login AND tm.enterprise_slug = u.enterprise_slug AND u.day >= ? AND u.day <= ?${enterpriseFilter.replace('enterprise_slug', 'u.enterprise_slug')}
+      GROUP BY tm.enterprise_slug, tm.team_slug, tm.source
+    ) m ON t.enterprise_slug = m.enterprise_slug AND t.team_slug = m.team_slug AND t.source = m.source
   `).run(periodStart, periodEnd, totalDays, now, ...extraParams, periodStart, periodEnd, ...extraParams);
 
   return result.changes;
