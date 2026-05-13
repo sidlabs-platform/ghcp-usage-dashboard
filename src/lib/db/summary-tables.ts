@@ -104,18 +104,36 @@ export function refreshDailyAggregate(day: string, enterpriseSlug?: string): voi
       COUNT(DISTINCT CASE WHEN used_cli = 1 THEN user_login END),
       COUNT(DISTINCT CASE WHEN used_copilot_coding_agent = 1 THEN user_login END),
       COUNT(DISTINCT CASE WHEN used_copilot_code_review_active = 1 THEN user_login END),
-      -- completion_loc_suggested: approximate (includes all features, not just completions)
-      COALESCE(SUM(loc_suggested_to_add_sum), 0),
-      -- completion_loc_accepted: approximate (same as loc_added for now)
-      COALESCE(SUM(loc_added_sum), 0),
-      -- agent_loc_added: not computed at daily aggregate level (requires json_each)
-      -- TODO: use json_each(totals_by_feature) to extract feature-specific LOC
-      0,
+      -- placeholder LOC columns; updated below with json_each for accuracy
+      0, 0, 0,
       ? as computed_at
     FROM user_daily_metrics
     WHERE day = ? ${enterpriseFilter}
     GROUP BY enterprise_slug
   `).run(day, now, day, ...extraParams);
+
+  // Update completion/agent LOC from json_each(totals_by_feature) for accuracy.
+  // Top-level loc_added_sum includes agent_edit writes; these subqueries separate them.
+  db.prepare(`
+    UPDATE daily_aggregate_cache SET
+      completion_loc_suggested = COALESCE(f.cs, 0),
+      completion_loc_accepted = COALESCE(f.ca, 0),
+      agent_loc_added = COALESCE(f.aa, 0)
+    FROM (
+      SELECT u.enterprise_slug,
+        SUM(CASE WHEN json_extract(j.value, '$.feature') != 'agent_edit'
+          THEN json_extract(j.value, '$.loc_suggested_to_add_sum') ELSE 0 END) as cs,
+        SUM(CASE WHEN json_extract(j.value, '$.feature') != 'agent_edit'
+          THEN json_extract(j.value, '$.loc_added_sum') ELSE 0 END) as ca,
+        SUM(CASE WHEN json_extract(j.value, '$.feature') = 'agent_edit'
+          THEN json_extract(j.value, '$.loc_added_sum') ELSE 0 END) as aa
+      FROM user_daily_metrics u, json_each(u.totals_by_feature) j
+      WHERE u.day = ? AND u.totals_by_feature IS NOT NULL AND u.totals_by_feature != '[]'${enterpriseFilter}
+      GROUP BY u.enterprise_slug
+    ) f
+    WHERE daily_aggregate_cache.day = ?
+      AND daily_aggregate_cache.enterprise_slug = f.enterprise_slug
+  `).run(day, ...extraParams, day);
 }
 
 /**
