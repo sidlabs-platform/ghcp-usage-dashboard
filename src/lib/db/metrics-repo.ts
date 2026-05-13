@@ -219,14 +219,14 @@ export function getEnterpriseMetrics(startDay: string, endDay: string, enterpris
 }
 
 /** Check whether enterprise_daily_metrics has any rows for a date range */
-export function hasEnterpriseDataForRange(enterpriseId: string, startDay: string, endDay: string, enterpriseSlugs?: string[]): boolean {
+export function hasEnterpriseDataForRange(enterpriseSlug: string, startDay: string, endDay: string, enterpriseSlugs?: string[]): boolean {
   const db = getDb();
   const ef = buildEnterpriseFilter(enterpriseSlugs);
   const row = db.prepare(`
     SELECT 1 FROM enterprise_daily_metrics
-    WHERE enterprise_id = ? AND day >= ? AND day <= ?${ef.clause}
+    WHERE enterprise_slug = ? AND day >= ? AND day <= ?${ef.clause}
     LIMIT 1
-  `).get(enterpriseId, startDay, endDay, ...ef.params);
+  `).get(enterpriseSlug, startDay, endDay, ...ef.params);
   return !!row;
 }
 

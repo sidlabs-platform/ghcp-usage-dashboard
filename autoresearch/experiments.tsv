@@ -100,3 +100,4 @@ exp-001	2026-05-06T17:24:23Z	test-coverage	memory-cache.test.ts: get/set/TTL/evi
 210	2026-05-13T17:00:00+05:30	bug-hunting	test(summary-tables): add multi-enterprise isolation test for refreshTeamSummary	KEEP	91.88	91.88	stable; regression test for cross-enterprise contamination fix
 211	2026-05-13T17:03:00+05:30	bug-hunting	test(teams-repo): add multi-enterprise test for getAllTeamsWithMembers	KEEP	91.88	91.88	stable; regression test for enterprise_slug map key fix
 212	2026-05-13T17:05:00+05:30	bug-hunting	fix(filters-route): add org_slug to orgTeams GROUP BY	KEEP	91.88	91.88	stable; fixes team merging across orgs in filter list
+213	2026-05-13T18:34:00+05:30	bug-hunting	fix(sync): add per-enterprise error isolation in incrementalSync loop	KEEP	91.88	91.85	-0.03 stmts from uncovered error branch; critical reliability fix
