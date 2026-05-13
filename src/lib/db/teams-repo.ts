@@ -37,6 +37,7 @@ export function upsertAllTeams(enterpriseSlug: string, teams: TeamWithMembers[])
 }
 
 export interface TeamRow {
+  enterprise_slug: string;
   team_slug: string;
   team_name: string;
   source: string;
@@ -49,10 +50,10 @@ export function getAllTeams(enterpriseSlugs?: string[]): TeamRow[] {
   const ef = buildEnterpriseFilter(enterpriseSlugs);
   const where = ef.clause ? `WHERE 1=1${ef.clause}` : "";
   return db.prepare(`
-    SELECT team_slug, team_name, MAX(source) as source, org_slug, COUNT(DISTINCT user_login) as member_count
+    SELECT enterprise_slug, team_slug, team_name, MAX(source) as source, org_slug, COUNT(DISTINCT user_login) as member_count
     FROM team_memberships
     ${where}
-    GROUP BY team_slug
+    GROUP BY enterprise_slug, team_slug, source, org_slug
     ORDER BY team_name ASC
   `).all(...ef.params) as TeamRow[];
 }
