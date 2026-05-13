@@ -221,7 +221,7 @@ async function handler(request: NextRequest) {
       monthlyActiveUsers: hasFilter
         ? adoption.totalUsers
         : (useAggregated
-          ? (latestTrend?.monthly || adoption.totalUsers)
+          ? (latestTrend?.monthly != null ? latestTrend.monthly : adoption.totalUsers)
           : (metrics[metrics.length - 1] as { monthly_active_users?: number })?.monthly_active_users || 0),
       agentAdoption: adoption.totalUsers > 0 ? (adoption.agentUsers / adoption.totalUsers) * 100 : 0,
       codingAgentAdoption: adoption.totalUsers > 0 ? (adoption.codingAgentUsers / adoption.totalUsers) * 100 : 0,
@@ -253,7 +253,7 @@ async function handler(request: NextRequest) {
       cliVsIde,
       dataAsOf: end,
       daysLoaded: totalDays,
-      dataSource: hasFilter ? "filtered-users" : (resolvedId ? "enterprise" : (aggregated.length > 0 ? "aggregated" : "user-aggregated")),
+      dataSource: hasFilter ? "filtered-users" : (resolvedId ? "enterprise" : (isMultiEnterprise ? "multi-enterprise" : (aggregated.length > 0 ? "aggregated" : "user-aggregated"))),
       filtered: hasFilter || !!enterpriseSlugs,
     }, {
       headers: { "Cache-Control": "private, max-age=300, stale-while-revalidate=60" },

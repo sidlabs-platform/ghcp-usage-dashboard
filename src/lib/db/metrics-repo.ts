@@ -125,14 +125,31 @@ function mapUserRow(row: Record<string, unknown>): UserDayRecord {
  * Used to decide whether enterprise-level aggregate data can be used directly
  * (only valid for single-enterprise) or user-level aggregation is needed
  * (required for multi-enterprise to correctly deduplicate users).
+ *
+ * Results are cached with a 60-second TTL for unscoped queries since enterprise
+ * count only changes during sync operations.
  */
+let _entCountCache: { count: number; ts: number } | null = null;
+
+/** Invalidate the enterprise count cache (called after sync or in tests) */
+export function invalidateEnterpriseCountCache(): void {
+  _entCountCache = null;
+}
+
 export function countEffectiveEnterprises(enterpriseSlugs?: string[]): number {
+  if (!enterpriseSlugs && _entCountCache && Date.now() - _entCountCache.ts < 60_000) {
+    return _entCountCache.count;
+  }
   const db = getDb();
   const ef = buildEnterpriseFilter(enterpriseSlugs);
   const row = db.prepare(
     `SELECT COUNT(DISTINCT enterprise_slug) as cnt FROM enterprise_daily_metrics WHERE 1=1${ef.clause}`
   ).get(...ef.params) as { cnt: number } | undefined;
-  return row?.cnt ?? 0;
+  const count = row?.cnt ?? 0;
+  if (!enterpriseSlugs) {
+    _entCountCache = { count, ts: Date.now() };
+  }
+  return count;
 }
 
 /** Resolve the numeric enterprise_id from any stored data */

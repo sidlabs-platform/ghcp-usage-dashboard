@@ -21,6 +21,7 @@ import {
   getEnterpriseMetrics,
   resolveEnterpriseId,
   countEffectiveEnterprises,
+  invalidateEnterpriseCountCache,
   hasEnterpriseDataForRange,
   upsertUserDayMetrics,
   getUserMetrics,
@@ -753,6 +754,7 @@ describe("enterprise_id fallback for org-only mode", () => {
 describe("multi-enterprise: countEffectiveEnterprises", () => {
   beforeEach(() => {
     db.exec("DELETE FROM enterprise_daily_metrics");
+    invalidateEnterpriseCountCache();
   });
 
   it("returns 0 when no enterprise data exists", () => {
