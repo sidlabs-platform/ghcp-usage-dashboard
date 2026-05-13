@@ -226,7 +226,7 @@ export interface OverviewKpis {
   cliUsers: number;
   licenseUtilization: number;
   periodActiveUsers: number;
-  deltas: { dau: number; wau: number };
+  deltas: { dau: number };
 }
 
 export interface OverviewData {

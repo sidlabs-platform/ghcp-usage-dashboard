@@ -239,8 +239,6 @@ async function handler(request: NextRequest) {
       deltas: {
         dau: prevTrend && latestTrend && prevTrend.daily > 0
           ? ((latestTrend.daily - prevTrend.daily) / prevTrend.daily) * 100 : 0,
-        wau: prevTrend && latestTrend && prevTrend.weekly > 0
-          ? ((latestTrend.weekly - prevTrend.weekly) / prevTrend.weekly) * 100 : 0,
       },
     };
 
