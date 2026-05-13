@@ -752,84 +752,72 @@ describe("enterprise_id fallback for org-only mode", () => {
 // ═══════════════════════════════════════════════════════════════════════
 
 describe("multi-enterprise: countEffectiveEnterprises", () => {
+  function insertMinimalUser(day: string, entId: string, entSlug: string, userId: number, login: string) {
+    db.prepare(`
+      INSERT OR REPLACE INTO user_daily_metrics (
+        day, enterprise_id, enterprise_slug, user_id, user_login,
+        code_generation_activity_count, code_acceptance_activity_count,
+        user_initiated_interaction_count,
+        loc_suggested_to_add_sum, loc_suggested_to_delete_sum,
+        loc_added_sum, loc_deleted_sum,
+        chat_panel_agent_mode, chat_panel_ask_mode, chat_panel_custom_mode,
+        chat_panel_edit_mode, chat_panel_plan_mode, chat_panel_unknown_mode,
+        used_agent, used_chat, used_cli,
+        used_copilot_code_review_active, used_copilot_code_review_passive, used_copilot_coding_agent,
+        totals_by_ide, totals_by_feature, totals_by_language_feature,
+        totals_by_model_feature, totals_by_language_model, totals_by_cli
+      ) VALUES (?, ?, ?, ?, ?, 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,'[]','[]','[]','[]','[]',null)
+    `).run(day, entId, entSlug, userId, login);
+  }
+
   beforeEach(() => {
+    db.exec("DELETE FROM user_daily_metrics");
     db.exec("DELETE FROM enterprise_daily_metrics");
     invalidateEnterpriseCountCache();
   });
 
-  it("returns 0 when no enterprise data exists", () => {
+  it("returns 0 when no data exists", () => {
     expect(countEffectiveEnterprises()).toBe(0);
   });
 
   it("returns 1 for single enterprise", () => {
-    upsertEnterpriseDayMetrics("acme", {
-      day: "2025-06-01", enterprise_id: "ent-a", daily_active_users: 10,
-      weekly_active_users: 20, monthly_active_users: 40,
-      monthly_active_agent_users: 2, monthly_active_chat_users: 8, daily_active_cli_users: 1,
-      code_generation_activity_count: 50, code_acceptance_activity_count: 30,
-      user_initiated_interaction_count: 100,
-      loc_suggested_to_add_sum: 200, loc_suggested_to_delete_sum: 10,
-      loc_added_sum: 150, loc_deleted_sum: 5,
-      totals_by_ide: [], totals_by_feature: [], totals_by_language_feature: [],
-      totals_by_model_feature: [], totals_by_language_model: [],
-    } as any);
+    insertMinimalUser("2025-06-01", "ent-a", "acme", 1, "alice");
     expect(countEffectiveEnterprises()).toBe(1);
   });
 
   it("returns 2 for two distinct enterprises", () => {
-    upsertEnterpriseDayMetrics("acme", {
-      day: "2025-06-01", enterprise_id: "ent-a", daily_active_users: 10,
-      weekly_active_users: 20, monthly_active_users: 40,
-      monthly_active_agent_users: 0, monthly_active_chat_users: 0, daily_active_cli_users: 0,
-      code_generation_activity_count: 0, code_acceptance_activity_count: 0,
-      user_initiated_interaction_count: 0,
-      loc_suggested_to_add_sum: 0, loc_suggested_to_delete_sum: 0,
-      loc_added_sum: 0, loc_deleted_sum: 0,
-      totals_by_ide: [], totals_by_feature: [], totals_by_language_feature: [],
-      totals_by_model_feature: [], totals_by_language_model: [],
-    } as any);
-    upsertEnterpriseDayMetrics("globex", {
-      day: "2025-06-01", enterprise_id: "ent-b", daily_active_users: 5,
-      weekly_active_users: 12, monthly_active_users: 25,
-      monthly_active_agent_users: 0, monthly_active_chat_users: 0, daily_active_cli_users: 0,
-      code_generation_activity_count: 0, code_acceptance_activity_count: 0,
-      user_initiated_interaction_count: 0,
-      loc_suggested_to_add_sum: 0, loc_suggested_to_delete_sum: 0,
-      loc_added_sum: 0, loc_deleted_sum: 0,
-      totals_by_ide: [], totals_by_feature: [], totals_by_language_feature: [],
-      totals_by_model_feature: [], totals_by_language_model: [],
-    } as any);
+    insertMinimalUser("2025-06-01", "ent-a", "acme", 1, "alice");
+    insertMinimalUser("2025-06-01", "ent-b", "globex", 2, "bob");
     expect(countEffectiveEnterprises()).toBe(2);
   });
 
   it("filters by enterprise slugs when provided", () => {
-    upsertEnterpriseDayMetrics("acme", {
-      day: "2025-06-01", enterprise_id: "ent-a", daily_active_users: 10,
-      weekly_active_users: 20, monthly_active_users: 40,
-      monthly_active_agent_users: 0, monthly_active_chat_users: 0, daily_active_cli_users: 0,
-      code_generation_activity_count: 0, code_acceptance_activity_count: 0,
-      user_initiated_interaction_count: 0,
-      loc_suggested_to_add_sum: 0, loc_suggested_to_delete_sum: 0,
-      loc_added_sum: 0, loc_deleted_sum: 0,
-      totals_by_ide: [], totals_by_feature: [], totals_by_language_feature: [],
-      totals_by_model_feature: [], totals_by_language_model: [],
-    } as any);
-    upsertEnterpriseDayMetrics("globex", {
-      day: "2025-06-01", enterprise_id: "ent-b", daily_active_users: 5,
-      weekly_active_users: 12, monthly_active_users: 25,
-      monthly_active_agent_users: 0, monthly_active_chat_users: 0, daily_active_cli_users: 0,
-      code_generation_activity_count: 0, code_acceptance_activity_count: 0,
-      user_initiated_interaction_count: 0,
-      loc_suggested_to_add_sum: 0, loc_suggested_to_delete_sum: 0,
-      loc_added_sum: 0, loc_deleted_sum: 0,
-      totals_by_ide: [], totals_by_feature: [], totals_by_language_feature: [],
-      totals_by_model_feature: [], totals_by_language_model: [],
-    } as any);
-    // Filtering to one slug → 1
+    insertMinimalUser("2025-06-01", "ent-a", "acme", 1, "alice");
+    insertMinimalUser("2025-06-01", "ent-b", "globex", 2, "bob");
     expect(countEffectiveEnterprises(["acme"])).toBe(1);
-    // Filtering to both → 2
     expect(countEffectiveEnterprises(["acme", "globex"])).toBe(2);
-    // No filter → all → 2
+    expect(countEffectiveEnterprises()).toBe(2);
+  });
+
+  it("counts org-only enterprises that have no enterprise_daily_metrics rows", () => {
+    // Enterprise A: full mode (has both enterprise_daily_metrics and user data)
+    insertMinimalUser("2025-06-01", "ent-a", "acme", 1, "alice");
+    upsertEnterpriseDayMetrics("acme", {
+      day: "2025-06-01", enterprise_id: "ent-a", daily_active_users: 1,
+      weekly_active_users: 1, monthly_active_users: 1,
+      monthly_active_agent_users: 0, monthly_active_chat_users: 0, daily_active_cli_users: 0,
+      code_generation_activity_count: 0, code_acceptance_activity_count: 0,
+      user_initiated_interaction_count: 0,
+      loc_suggested_to_add_sum: 0, loc_suggested_to_delete_sum: 0,
+      loc_added_sum: 0, loc_deleted_sum: 0,
+      totals_by_ide: [], totals_by_feature: [], totals_by_language_feature: [],
+      totals_by_model_feature: [], totals_by_language_model: [],
+    } as any);
+
+    // Enterprise B: org-only mode (user data exists, but NO enterprise_daily_metrics)
+    insertMinimalUser("2025-06-01", "ent-b", "globex", 2, "bob");
+
+    // Must detect 2 enterprises even though enterprise_daily_metrics only has 1
     expect(countEffectiveEnterprises()).toBe(2);
   });
 });
