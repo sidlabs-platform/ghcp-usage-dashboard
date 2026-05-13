@@ -120,6 +120,42 @@ function mapUserRow(row: Record<string, unknown>): UserDayRecord {
 
 // ── Enterprise ID resolution ──────────────────────────────────────────
 
+/**
+ * Count distinct enterprises in the effective scope.
+ * Used to decide whether enterprise-level aggregate data can be used directly
+ * (only valid for single-enterprise) or user-level aggregation is needed
+ * (required for multi-enterprise to correctly deduplicate users).
+ *
+ * Counts from `user_daily_metrics` (not `enterprise_daily_metrics`) because
+ * org-only mode enterprises have no rows in enterprise_daily_metrics.
+ *
+ * @param enterpriseSlugs - Optional slug filter. When omitted, result is cached for 60s.
+ * @returns Distinct enterprise count in scope.
+ * @remarks Call {@link invalidateEnterpriseCountCache} after sync to ensure fresh data.
+ */
+let _entCountCache: { count: number; ts: number } | null = null;
+
+/** Invalidate the enterprise count cache (called after sync or in tests) */
+export function invalidateEnterpriseCountCache(): void {
+  _entCountCache = null;
+}
+
+export function countEffectiveEnterprises(enterpriseSlugs?: string[]): number {
+  if (!enterpriseSlugs && _entCountCache && Date.now() - _entCountCache.ts < 60_000) {
+    return _entCountCache.count;
+  }
+  const db = getDb();
+  const ef = buildEnterpriseFilter(enterpriseSlugs);
+  const row = db.prepare(
+    `SELECT COUNT(DISTINCT enterprise_slug) as cnt FROM user_daily_metrics WHERE 1=1${ef.clause}`
+  ).get(...ef.params) as { cnt: number } | undefined;
+  const count = row?.cnt ?? 0;
+  if (!enterpriseSlugs) {
+    _entCountCache = { count, ts: Date.now() };
+  }
+  return count;
+}
+
 /** Resolve the numeric enterprise_id from any stored data */
 export function resolveEnterpriseId(enterpriseSlugs?: string[]): string | null {
   const db = getDb();
@@ -588,9 +624,9 @@ export function getAggregatedDailySummary(startDay: string, endDay: string, ente
       SUM(m.loc_suggested_to_add_sum) as loc_suggested_to_add_sum,
       SUM(m.loc_added_sum) as loc_added_sum,
       SUM(m.loc_deleted_sum) as loc_deleted_sum,
-      SUM(m.used_cli) as daily_active_cli_users,
-      SUM(m.used_agent) as agent_users,
-      SUM(m.used_chat) as chat_users
+      COUNT(DISTINCT CASE WHEN m.used_cli = 1 THEN m.user_id END) as daily_active_cli_users,
+      COUNT(DISTINCT CASE WHEN m.used_agent = 1 THEN m.user_id END) as agent_users,
+      COUNT(DISTINCT CASE WHEN m.used_chat = 1 THEN m.user_id END) as chat_users
     FROM user_daily_metrics m
     WHERE m.day >= ? AND m.day <= ?${efM.clause}
     GROUP BY m.day

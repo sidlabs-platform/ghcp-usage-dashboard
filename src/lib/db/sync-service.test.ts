@@ -35,6 +35,7 @@ vi.mock("./metrics-repo", () => ({
   hasEnterpriseDataForRange: vi.fn(() => true),
   hasOrgDataForRange: vi.fn(() => true),
   heartbeatSyncLock: vi.fn(),
+  invalidateEnterpriseCountCache: vi.fn(),
 }));
 
 vi.mock("./seats-repo", () => ({ upsertSeats: vi.fn() }));

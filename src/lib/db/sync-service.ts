@@ -17,6 +17,7 @@ import {
   hasEnterpriseDataForRange,
   hasOrgDataForRange,
   heartbeatSyncLock,
+  invalidateEnterpriseCountCache,
 } from "./metrics-repo";
 import { upsertSeats } from "./seats-repo";
 import { refreshAllSummaries } from "./summary-tables";
@@ -574,8 +575,9 @@ export async function fullSync(
     console.error("[Sync] Failed to refresh summary tables:", err);
   }
 
-  // Invalidate in-memory cache so fresh data is served
+  // Invalidate in-memory caches so fresh data is served
   cache.invalidateAll();
+  invalidateEnterpriseCountCache();
 
   // Aggregate results across all enterprises
   return {
