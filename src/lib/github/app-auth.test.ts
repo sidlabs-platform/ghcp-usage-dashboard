@@ -121,3 +121,44 @@ describe("app-auth (with env + mocked jose)", () => {
     logSpy.mockRestore();
   });
 });
+
+describe("app-auth enterprise functions", () => {
+  beforeEach(() => {
+    vi.resetModules();
+  });
+
+  afterEach(async () => {
+    const { _setEnterpriseAuthFn } = await import("./app-auth");
+    _setEnterpriseAuthFn(undefined);
+  });
+
+  it("loadAppConfigForEnterprise returns config when enterprise has app auth", async () => {
+    const { loadAppConfigForEnterprise, _setEnterpriseAuthFn } = await import("./app-auth");
+    _setEnterpriseAuthFn(() => ({
+      appConfig: { appId: "app-1", privateKey: "pk-1", installationId: "inst-1" },
+    }));
+    const cfg = loadAppConfigForEnterprise("ent-a");
+    expect(cfg).toEqual({ appId: "app-1", privateKey: "pk-1", installationId: "inst-1" });
+  });
+
+  it("loadAppConfigForEnterprise returns null when no appConfig", async () => {
+    const { loadAppConfigForEnterprise, _setEnterpriseAuthFn } = await import("./app-auth");
+    _setEnterpriseAuthFn(() => ({}));
+    expect(loadAppConfigForEnterprise("ent-b")).toBeNull();
+  });
+
+  it("loadAppConfigForEnterprise returns null when auth fn throws", async () => {
+    const { loadAppConfigForEnterprise, _setEnterpriseAuthFn } = await import("./app-auth");
+    _setEnterpriseAuthFn(() => { throw new Error("no config"); });
+    expect(loadAppConfigForEnterprise("ent-c")).toBeNull();
+  });
+
+  it("isAppAuthConfiguredForEnterprise returns true/false based on enterprise config", async () => {
+    const { isAppAuthConfiguredForEnterprise, _setEnterpriseAuthFn } = await import("./app-auth");
+    _setEnterpriseAuthFn((slug: string) =>
+      slug === "has-app" ? { appConfig: { appId: "1", privateKey: "k", installationId: "2" } } : {},
+    );
+    expect(isAppAuthConfiguredForEnterprise("has-app")).toBe(true);
+    expect(isAppAuthConfiguredForEnterprise("no-app")).toBe(false);
+  });
+});

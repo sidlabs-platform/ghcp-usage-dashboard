@@ -49,14 +49,17 @@ export function isAppAuthConfigured(): boolean {
 export function loadAppConfigForEnterprise(
   enterpriseSlug: string
 ): AppConfig | null {
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const { getEnterpriseAuth } = require("@/lib/config/enterprise-config") as {
-    getEnterpriseAuth: (slug: string) => {
-      appConfig?: { appId: string; privateKey: string; installationId: string };
-    };
-  };
   try {
-    const auth = getEnterpriseAuth(enterpriseSlug);
+    const loader = _enterpriseAuthFn ?? (() => {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const mod = require("@/lib/config/enterprise-config") as {
+        getEnterpriseAuth: (slug: string) => {
+          appConfig?: { appId: string; privateKey: string; installationId: string };
+        };
+      };
+      return mod.getEnterpriseAuth;
+    })();
+    const auth = loader(enterpriseSlug);
     if (!auth.appConfig) return null;
     return {
       appId: auth.appConfig.appId,
@@ -66,6 +69,16 @@ export function loadAppConfigForEnterprise(
   } catch {
     return null;
   }
+}
+
+type EnterpriseAuthFn = (slug: string) => {
+  appConfig?: { appId: string; privateKey: string; installationId: string };
+};
+let _enterpriseAuthFn: EnterpriseAuthFn | undefined;
+
+/** @internal Override the enterprise auth loader — for testing only. */
+export function _setEnterpriseAuthFn(fn?: EnterpriseAuthFn): void {
+  _enterpriseAuthFn = fn;
 }
 
 /** Returns true when the given enterprise has App auth configured. */
