@@ -110,3 +110,4 @@ exp-001	2026-05-06T17:24:23Z	test-coverage	memory-cache.test.ts: get/set/TTL/evi
 220	2026-05-14T19:18:03+05:30	test-coverage	aggregation-queries: getUserSummariesPaginated includeInactive branch	KEEP	92.59	93.03	+0.44 stmts, +0.29 branches
 221	2026-05-14T19:19:30+05:30	test-coverage	auto-sync-scheduler: progress callbacks + refreshAllSummaries error	KEEP	93.03	93.09	+0.06 stmts, +0.37 functions
 222	2026-05-14T19:22:03+05:30	test-coverage	pagination: NaN page/pageSize, explicit desc, empty allowedColumns	KEEP	93.09	93.09	+0.19 branches
+223	2026-05-14T19:23:44+05:30	test-coverage	teams-repo: enterprise filter + empty orgSlug branches	KEEP	93.09	93.09	+0.15 branches
