@@ -19,6 +19,11 @@ vi.mock("@/lib/db/orgs-repo", () => ({
   getEnterpriseOrgs: vi.fn(() => []),
 }));
 
+// Mock orgs-resolver (used by legacy mode fallback)
+vi.mock("./orgs-resolver", () => ({
+  getDiscoveredOrgsFromDb: vi.fn(() => []),
+}));
+
 import {
   getDashboardConfig,
   isMetricEnabled,
@@ -107,6 +112,18 @@ describe("dashboard-config (defaults)", () => {
       process.env.GITHUB_ORGS = "org-a,,org-b,";
       const result = getResolvedOrgs();
       expect(result).toEqual(["org-a", "org-b"]);
+    });
+
+    it("falls back to DB-discovered orgs when GITHUB_ORGS is empty and GITHUB_ENTERPRISE is set", async () => {
+      delete process.env.GITHUB_ORGS;
+      process.env.GITHUB_ENTERPRISE = "my-ent";
+      const { getDiscoveredOrgsFromDb } = await import("./orgs-resolver");
+      const mockFn = getDiscoveredOrgsFromDb as ReturnType<typeof vi.fn>;
+      mockFn.mockReturnValue(["discovered-org"]);
+      const result = getResolvedOrgs();
+      expect(result).toEqual(["discovered-org"]);
+      delete process.env.GITHUB_ENTERPRISE;
+      mockFn.mockReturnValue([]);
     });
   });
 
