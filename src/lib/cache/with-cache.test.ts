@@ -85,4 +85,19 @@ describe("withCache", () => {
     const text = await result.text();
     expect(text).toBe("plain text");
   });
+
+  it("strips X-Cache header from handler response when caching", async () => {
+    const handler = vi.fn().mockResolvedValue(
+      NextResponse.json({ ok: true }, { headers: { "X-Cache": "UPSTREAM-HIT", "X-Custom": "keep" } }),
+    );
+    const wrapped = withCache(handler);
+
+    const miss = await wrapped(makeRequest());
+    expect(miss.headers.get("X-Cache")).toBe("MISS");
+    expect(miss.headers.get("X-Custom")).toBe("keep");
+
+    const hit = await wrapped(makeRequest());
+    expect(hit.headers.get("X-Cache")).toBe("HIT");
+    expect(hit.headers.get("X-Custom")).toBe("keep");
+  });
 });

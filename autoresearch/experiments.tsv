@@ -113,3 +113,4 @@ exp-001	2026-05-06T17:24:23Z	test-coverage	memory-cache.test.ts: get/set/TTL/evi
 223	2026-05-14T19:23:44+05:30	test-coverage	teams-repo: enterprise filter + empty orgSlug branches	KEEP	93.09	93.09	+0.15 branches
 224	2026-05-14T19:27:45+05:30	test-coverage	csv: missing pagination fallback + subsequent page error	KEEP	93.09	93.12	+0.03 stmts, +0.09 branches
 225	2026-05-14T19:30:23+05:30	test-coverage	dashboard-config: legacy DB-discovered orgs fallback	KEEP	93.12	93.15	+0.03 stmts, +0.05 branches
+226	2026-05-14T19:34:34+05:30	test-coverage	team-metrics: undefined totals_by_feature || [] fallback	KEEP	93.15	93.15	+0.10 branches
