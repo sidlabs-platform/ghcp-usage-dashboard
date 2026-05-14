@@ -161,4 +161,49 @@ describe("app-auth enterprise functions", () => {
     expect(isAppAuthConfiguredForEnterprise("has-app")).toBe(true);
     expect(isAppAuthConfiguredForEnterprise("no-app")).toBe(false);
   });
+
+  it("getInstallationTokenForEnterprise throws when no config for enterprise", async () => {
+    const { getInstallationTokenForEnterprise, _setEnterpriseAuthFn } = await import("./app-auth");
+    _setEnterpriseAuthFn(() => ({})); // no appConfig
+    await expect(getInstallationTokenForEnterprise("missing-ent")).rejects.toThrow(
+      'not configured for enterprise "missing-ent"',
+    );
+  });
+
+  it("getInstallationTokenForEnterprise mints and caches token per enterprise", async () => {
+    const { getInstallationTokenForEnterprise, _setEnterpriseAuthFn } = await import("./app-auth");
+    _setEnterpriseAuthFn(() => ({
+      appConfig: { appId: "ea", privateKey: "-----BEGIN PRIVATE KEY-----\nfake\n-----END PRIVATE KEY-----", installationId: "ei" },
+    }));
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ token: "ghs_ent_tok", expires_at: new Date(Date.now() + 3600_000).toISOString() }),
+    });
+    vi.stubGlobal("fetch", mockFetch);
+    const t1 = await getInstallationTokenForEnterprise("ent-x");
+    expect(t1).toBe("ghs_ent_tok");
+    // Second call should use cache, not mint again
+    const t2 = await getInstallationTokenForEnterprise("ent-x");
+    expect(t2).toBe("ghs_ent_tok");
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("getInstallationTokenForEnterprise deduplicates concurrent mints", async () => {
+    const { getInstallationTokenForEnterprise, _setEnterpriseAuthFn } = await import("./app-auth");
+    _setEnterpriseAuthFn(() => ({
+      appConfig: { appId: "ea", privateKey: "-----BEGIN PRIVATE KEY-----\nfake\n-----END PRIVATE KEY-----", installationId: "ei" },
+    }));
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ token: "ghs_dedup", expires_at: new Date(Date.now() + 3600_000).toISOString() }),
+    });
+    vi.stubGlobal("fetch", mockFetch);
+    const [r1, r2] = await Promise.all([
+      getInstallationTokenForEnterprise("ent-y"),
+      getInstallationTokenForEnterprise("ent-y"),
+    ]);
+    expect(r1).toBe("ghs_dedup");
+    expect(r2).toBe("ghs_dedup");
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+  });
 });

@@ -104,3 +104,4 @@ exp-001	2026-05-06T17:24:23Z	test-coverage	memory-cache.test.ts: get/set/TTL/evi
 214	2026-05-13T18:37:00+05:30	bug-hunting	fix(metrics-repo): use enterprise_slug instead of enterprise_id in hasEnterpriseDataForRange	KEEP	91.85	91.85	stable; fixes slug/id mismatch causing redundant 28-day fetches
 215	2026-05-13T18:41:00+05:30	bug-hunting	fix(metrics-repo): add enterprise_slug to getSyncStatus GROUP BY	KEEP	91.85	91.85	stable; fixes merged sync status across enterprises
 216	2026-05-13T18:44:00+05:30	bug-hunting	fix(sync-day-route): add per-enterprise error isolation in day sync loop	KEEP	91.85	91.85	stable; prevents one enterprise failure from aborting day sync
+217	2026-05-14T19:12:06+05:30	test-coverage	app-auth: enterprise auth functions	KEEP	91.80	91.99	+0.19 stmts
