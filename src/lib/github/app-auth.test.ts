@@ -120,6 +120,33 @@ describe("app-auth (with env + mocked jose)", () => {
     expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("validated"));
     logSpy.mockRestore();
   });
+
+  it("validateAppAuth throws with wrapped error when mint fails", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: false, status: 500, text: async () => "Server Error",
+    }));
+    const { validateAppAuth } = await import("./app-auth");
+    await expect(validateAppAuth()).rejects.toThrow("validation failed");
+  });
+
+  it("validateAppAuth wraps non-Error throws", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue("string-error"));
+    const { validateAppAuth } = await import("./app-auth");
+    await expect(validateAppAuth()).rejects.toThrow("string-error");
+  });
+
+  it("getInstallationToken deduplicates concurrent mints via refreshPromise", async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ token: "ghs_dedup", expires_at: new Date(Date.now() + 3600_000).toISOString() }),
+    });
+    vi.stubGlobal("fetch", mockFetch);
+    const { getInstallationToken } = await import("./app-auth");
+    const [t1, t2] = await Promise.all([getInstallationToken(), getInstallationToken()]);
+    expect(t1).toBe("ghs_dedup");
+    expect(t2).toBe("ghs_dedup");
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("app-auth enterprise functions", () => {
