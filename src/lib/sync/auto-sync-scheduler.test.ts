@@ -90,15 +90,43 @@ describe("auto-sync-scheduler", () => {
     expect(status.nextRunAt).toBeNull();
   });
 
-  it("executeAutoSync runs full cycle when timer fires", async () => {
+  it("executeAutoSync invokes progress callbacks and heartbeat", async () => {
     mockConfig.mockReturnValue({ enabled: true, utcTime: "03:00" });
-    mockMetric.mockReturnValue(true);
-    const spy = vi.spyOn(console, "log").mockImplementation(() => {});
+    mockMetric.mockImplementation((cat: string) => cat === "billing");
+    // Make incrementalSync invoke the progress callback
+    mockIncrSync.mockImplementation(async (onProgress: (p: { message: string }) => void) => {
+      onProgress({ message: "syncing day 1" });
+      return { daysSynced: 1, daysSkipped: 0 };
+    });
+    const { syncBilling } = await import("@/lib/db/billing-sync-service");
+    (syncBilling as ReturnType<typeof vi.fn>).mockImplementation(
+      async (_slug: string, cb: (p: { current: number; total: number; message: string }) => void) => {
+        cb({ current: 1, total: 1, message: "billing done" });
+        return {};
+      },
+    );
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
     startAutoSync();
-    // Fire the scheduled timer
     await vi.runOnlyPendingTimersAsync();
-    expect(mockIncrSync).toHaveBeenCalled();
-    spy.mockRestore();
+    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("syncing day 1"));
+    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("billing done"));
+    logSpy.mockRestore();
+    stopAutoSync();
+  });
+
+  it("executeAutoSync handles refreshAllSummaries failure", async () => {
+    mockConfig.mockReturnValue({ enabled: true, utcTime: "03:00" });
+    mockAcquire.mockReturnValue(true);
+    mockIncrSync.mockResolvedValue({ daysSynced: 1, daysSkipped: 0 });
+    const { refreshAllSummaries } = await import("@/lib/db/summary-tables");
+    (refreshAllSummaries as ReturnType<typeof vi.fn>).mockImplementation(() => { throw new Error("summary boom"); });
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    startAutoSync();
+    await vi.runOnlyPendingTimersAsync();
+    expect(errSpy).toHaveBeenCalledWith(expect.stringContaining("refresh summary tables"), expect.any(Error));
+    errSpy.mockRestore();
+    logSpy.mockRestore();
     stopAutoSync();
   });
 
