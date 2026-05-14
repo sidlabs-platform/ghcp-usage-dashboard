@@ -226,6 +226,25 @@ describe("getUserSummariesPaginated", () => {
     const result = getUserSummariesPaginated("2024-01-01", "2024-01-31", 1, 10, "unknownField", "desc");
     expect(result.total).toBe(2);
   });
+
+  it("includeInactive adds seat-only users with zero metrics", () => {
+    // Active user with metrics
+    insertMetric({ user_login: "active-user", user_id: 10 });
+    // Seat-only user (no metrics in the date range)
+    db.prepare(`INSERT INTO copilot_seats (enterprise_slug, org_slug, user_login, user_id)
+      VALUES ('ent1', 'org1', 'inactive-user', 20)`).run();
+    const result = getUserSummariesPaginated(
+      "2024-01-01", "2024-01-31", 1, 50, "login", "asc",
+      undefined, undefined, undefined, true,
+    );
+    expect(result.total).toBe(2);
+    const active = result.users.find((u) => u.login === "active-user");
+    const inactive = result.users.find((u) => u.login === "inactive-user");
+    expect(active!.activeDays).toBeGreaterThan(0);
+    expect(inactive!.activeDays).toBe(0);
+    expect(inactive!.locAdded).toBe(0);
+    db.prepare("DELETE FROM copilot_seats").run();
+  });
 });
 
 describe("getModelBreakdown", () => {

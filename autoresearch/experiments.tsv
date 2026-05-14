@@ -106,3 +106,4 @@ exp-001	2026-05-06T17:24:23Z	test-coverage	memory-cache.test.ts: get/set/TTL/evi
 216	2026-05-13T18:44:00+05:30	bug-hunting	fix(sync-day-route): add per-enterprise error isolation in day sync loop	KEEP	91.85	91.85	stable; prevents one enterprise failure from aborting day sync
 217	2026-05-14T19:12:06+05:30	test-coverage	app-auth: enterprise auth functions	KEEP	91.80	91.99	+0.19 stmts
 218	2026-05-14T19:13:23+05:30	test-coverage	app-auth: getInstallationTokenForEnterprise (mint, cache, mutex dedup)	KEEP	91.99	92.50	+0.51 stmts, +0.39 branches, +0.37 functions
+219	2026-05-14T19:14:29+05:30	test-coverage	app-auth: validateAppAuth error/non-Error + getInstallationToken mutex dedup	KEEP	92.50	92.59	+0.09 stmts, +0.15 branches
