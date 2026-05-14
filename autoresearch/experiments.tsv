@@ -117,3 +117,4 @@ exp-001	2026-05-06T17:24:23Z	test-coverage	memory-cache.test.ts: get/set/TTL/evi
 227	2026-05-14T19:37:09+05:30	test-coverage	with-cache: X-Cache header stripping branch	KEEP	93.15	93.15	+0.05 branches
 228	2026-05-14T19:41:53+05:30	test-coverage	billing-sync: fetch progress callback functions	KEEP	93.15	93.21	+0.06 stmts, +0.38 functions
 229	2026-05-14T19:44:06+05:30	test-coverage	ghas-aggregation: dep/ss unique-day openByDay ?? 0 branches	KEEP	93.21	93.21	+0.10 branches
+230	2026-05-14T19:45:42+05:30	test-coverage	utils: NaN date validation branch in parseDateRangeParams	KEEP	93.21	93.24	+0.03 stmts, +0.04 branches
