@@ -108,3 +108,4 @@ exp-001	2026-05-06T17:24:23Z	test-coverage	memory-cache.test.ts: get/set/TTL/evi
 218	2026-05-14T19:13:23+05:30	test-coverage	app-auth: getInstallationTokenForEnterprise (mint, cache, mutex dedup)	KEEP	91.99	92.50	+0.51 stmts, +0.39 branches, +0.37 functions
 219	2026-05-14T19:14:29+05:30	test-coverage	app-auth: validateAppAuth error/non-Error + getInstallationToken mutex dedup	KEEP	92.50	92.59	+0.09 stmts, +0.15 branches
 220	2026-05-14T19:18:03+05:30	test-coverage	aggregation-queries: getUserSummariesPaginated includeInactive branch	KEEP	92.59	93.03	+0.44 stmts, +0.29 branches
+221	2026-05-14T19:19:30+05:30	test-coverage	auto-sync-scheduler: progress callbacks + refreshAllSummaries error	KEEP	93.03	93.09	+0.06 stmts, +0.37 functions

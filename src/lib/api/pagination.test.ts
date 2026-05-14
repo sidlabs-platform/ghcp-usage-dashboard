@@ -62,6 +62,21 @@ describe("parsePaginationParams", () => {
     expect(params.sortDir).toBe("desc");
   });
 
+  it("handles NaN page by defaulting to 1", () => {
+    const sp = new URLSearchParams({ page: "abc" });
+    expect(parsePaginationParams(sp).page).toBe(1);
+  });
+
+  it("handles NaN pageSize by defaulting to 50", () => {
+    const sp = new URLSearchParams({ pageSize: "xyz" });
+    expect(parsePaginationParams(sp).pageSize).toBe(50);
+  });
+
+  it("parses explicit sortDir=desc correctly", () => {
+    const sp = new URLSearchParams({ sortDir: "desc" });
+    expect(parsePaginationParams(sp).sortDir).toBe("desc");
+  });
+
   it("parses search parameter", () => {
     const sp = new URLSearchParams({ search: "alice" });
     expect(parsePaginationParams(sp).search).toBe("alice");
@@ -104,6 +119,14 @@ describe("buildOrderBy", () => {
       allowed,
     );
     expect(result).toBe("ORDER BY name ASC");
+  });
+
+  it("falls back to 'id' when allowedColumns is empty", () => {
+    const result = buildOrderBy(
+      { page: 1, pageSize: 50, sortField: "name", sortDir: "desc" },
+      [],
+    );
+    expect(result).toBe("ORDER BY id DESC");
   });
 });
 
