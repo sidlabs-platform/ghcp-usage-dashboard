@@ -90,6 +90,17 @@ describe("auto-sync-scheduler", () => {
     expect(status.nextRunAt).toBeNull();
   });
 
+  it("executeAutoSync runs full cycle when timer fires", async () => {
+    mockConfig.mockReturnValue({ enabled: true, utcTime: "03:00" });
+    mockMetric.mockReturnValue(true);
+    const spy = vi.spyOn(console, "log").mockImplementation(() => {});
+    startAutoSync();
+    await vi.runOnlyPendingTimersAsync();
+    expect(mockIncrSync).toHaveBeenCalled();
+    spy.mockRestore();
+    stopAutoSync();
+  });
+
   it("executeAutoSync invokes progress callbacks and heartbeat", async () => {
     mockConfig.mockReturnValue({ enabled: true, utcTime: "03:00" });
     mockMetric.mockImplementation((cat: string) => cat === "billing");
