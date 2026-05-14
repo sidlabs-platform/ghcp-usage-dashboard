@@ -115,3 +115,4 @@ exp-001	2026-05-06T17:24:23Z	test-coverage	memory-cache.test.ts: get/set/TTL/evi
 225	2026-05-14T19:30:23+05:30	test-coverage	dashboard-config: legacy DB-discovered orgs fallback	KEEP	93.12	93.15	+0.03 stmts, +0.05 branches
 226	2026-05-14T19:34:34+05:30	test-coverage	team-metrics: undefined totals_by_feature || [] fallback	KEEP	93.15	93.15	+0.10 branches
 227	2026-05-14T19:37:09+05:30	test-coverage	with-cache: X-Cache header stripping branch	KEEP	93.15	93.15	+0.05 branches
+228	2026-05-14T19:41:53+05:30	test-coverage	billing-sync: fetch progress callback functions	KEEP	93.15	93.21	+0.06 stmts, +0.38 functions
