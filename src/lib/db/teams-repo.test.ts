@@ -133,6 +133,33 @@ describe("teams-repo", () => {
         db.prepare("DELETE FROM team_memberships WHERE enterprise_slug = ?").run("globex");
       }
     });
+
+    it("filters by enterprise slugs", () => {
+      try {
+        upsertAllTeams("globex", [
+          { slug: "ops", name: "Ops", source: "org", orgSlug: "org-g", members: ["xena"], description: null },
+        ]);
+        const teams = getAllTeamsWithMembers(["acme"]);
+        expect(teams.every((t) => t.enterprise_slug === "acme")).toBe(true);
+        expect(teams.find((t) => t.team_slug === "ops")).toBeUndefined();
+      } finally {
+        db.prepare("DELETE FROM team_memberships WHERE enterprise_slug = ?").run("globex");
+      }
+    });
+
+    it("handles team with no orgSlug", () => {
+      try {
+        upsertAllTeams("acme", [
+          { slug: "global-team", name: "Global Team", source: "enterprise", orgSlug: "", members: ["zara"], description: null },
+        ]);
+        const teams = getAllTeamsWithMembers(["acme"]);
+        const global = teams.find((t) => t.team_slug === "global-team");
+        expect(global).toBeDefined();
+        expect(global!.members).toEqual(["zara"]);
+      } finally {
+        db.prepare("DELETE FROM team_memberships WHERE team_slug = ?").run("global-team");
+      }
+    });
   });
 
   describe("resolveFilteredUsers", () => {

@@ -196,4 +196,24 @@ describe("fetchAllPages", () => {
     vi.stubGlobal("fetch", mockFetch);
     await expect(fetchAllPages("/api/test", new URLSearchParams(), (j) => j.data)).rejects.toThrow("invalid data format (page 2)");
   });
+
+  it("defaults to 1 page when pagination is missing from response", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ data: [{ id: 1 }] }),
+    }));
+    const result = await fetchAllPages("/api/test", new URLSearchParams(), (j) => j.data);
+    expect(result).toEqual([{ id: 1 }]);
+  });
+
+  it("throws on non-ok response for subsequent pages", async () => {
+    const mockFetch = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ data: [{ id: 1 }], pagination: { totalPages: 2 } }),
+      })
+      .mockResolvedValueOnce({ ok: false, status: 502 });
+    vi.stubGlobal("fetch", mockFetch);
+    await expect(fetchAllPages("/api/test", new URLSearchParams(), (j) => j.data)).rejects.toThrow("HTTP 502 (page 2)");
+  });
 });

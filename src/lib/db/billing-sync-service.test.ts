@@ -126,4 +126,19 @@ describe("billing-sync-service", () => {
     expect(mockFetchPremium).not.toHaveBeenCalled();
     expect(result.premiumRecords).toBe(0);
   });
+
+  it("invokes progress callbacks from fetch functions", async () => {
+    mockFetchUsage.mockImplementation(async (_slug: string, _type: string, _s: string, _e: string, cb: (msg: string) => void) => {
+      cb("usage progress");
+      return [{ day: "2025-01-01" }];
+    });
+    mockFetchPremium.mockImplementation(async (_slug: string, _s: string, _e: string, cb: (msg: string) => void) => {
+      cb("premium progress");
+      return [{ day: "2025-01-01" }];
+    });
+    const progress: string[] = [];
+    await syncBilling("test-ent", (p) => progress.push(p.message));
+    expect(progress.some((m) => m.includes("usage progress"))).toBe(true);
+    expect(progress.some((m) => m.includes("premium progress"))).toBe(true);
+  });
 });

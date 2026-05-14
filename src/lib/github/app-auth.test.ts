@@ -120,4 +120,117 @@ describe("app-auth (with env + mocked jose)", () => {
     expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("validated"));
     logSpy.mockRestore();
   });
+
+  it("validateAppAuth throws with wrapped error when mint fails", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: false, status: 500, text: async () => "Server Error",
+    }));
+    const { validateAppAuth } = await import("./app-auth");
+    await expect(validateAppAuth()).rejects.toThrow("validation failed");
+  });
+
+  it("validateAppAuth wraps non-Error throws", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue("string-error"));
+    const { validateAppAuth } = await import("./app-auth");
+    await expect(validateAppAuth()).rejects.toThrow("string-error");
+  });
+
+  it("getInstallationToken deduplicates concurrent mints via refreshPromise", async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ token: "ghs_dedup", expires_at: new Date(Date.now() + 3600_000).toISOString() }),
+    });
+    vi.stubGlobal("fetch", mockFetch);
+    const { getInstallationToken } = await import("./app-auth");
+    const [t1, t2] = await Promise.all([getInstallationToken(), getInstallationToken()]);
+    expect(t1).toBe("ghs_dedup");
+    expect(t2).toBe("ghs_dedup");
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("app-auth enterprise functions", () => {
+  beforeEach(() => {
+    vi.resetModules();
+  });
+
+  afterEach(async () => {
+    const { _setEnterpriseAuthFn } = await import("./app-auth");
+    _setEnterpriseAuthFn(undefined);
+  });
+
+  it("loadAppConfigForEnterprise returns config when enterprise has app auth", async () => {
+    const { loadAppConfigForEnterprise, _setEnterpriseAuthFn } = await import("./app-auth");
+    _setEnterpriseAuthFn(() => ({
+      appConfig: { appId: "app-1", privateKey: "pk-1", installationId: "inst-1" },
+    }));
+    const cfg = loadAppConfigForEnterprise("ent-a");
+    expect(cfg).toEqual({ appId: "app-1", privateKey: "pk-1", installationId: "inst-1" });
+  });
+
+  it("loadAppConfigForEnterprise returns null when no appConfig", async () => {
+    const { loadAppConfigForEnterprise, _setEnterpriseAuthFn } = await import("./app-auth");
+    _setEnterpriseAuthFn(() => ({}));
+    expect(loadAppConfigForEnterprise("ent-b")).toBeNull();
+  });
+
+  it("loadAppConfigForEnterprise returns null when auth fn throws", async () => {
+    const { loadAppConfigForEnterprise, _setEnterpriseAuthFn } = await import("./app-auth");
+    _setEnterpriseAuthFn(() => { throw new Error("no config"); });
+    expect(loadAppConfigForEnterprise("ent-c")).toBeNull();
+  });
+
+  it("isAppAuthConfiguredForEnterprise returns true/false based on enterprise config", async () => {
+    const { isAppAuthConfiguredForEnterprise, _setEnterpriseAuthFn } = await import("./app-auth");
+    _setEnterpriseAuthFn((slug: string) =>
+      slug === "has-app" ? { appConfig: { appId: "1", privateKey: "k", installationId: "2" } } : {},
+    );
+    expect(isAppAuthConfiguredForEnterprise("has-app")).toBe(true);
+    expect(isAppAuthConfiguredForEnterprise("no-app")).toBe(false);
+  });
+
+  it("getInstallationTokenForEnterprise throws when no config for enterprise", async () => {
+    const { getInstallationTokenForEnterprise, _setEnterpriseAuthFn } = await import("./app-auth");
+    _setEnterpriseAuthFn(() => ({})); // no appConfig
+    await expect(getInstallationTokenForEnterprise("missing-ent")).rejects.toThrow(
+      'not configured for enterprise "missing-ent"',
+    );
+  });
+
+  it("getInstallationTokenForEnterprise mints and caches token per enterprise", async () => {
+    const { getInstallationTokenForEnterprise, _setEnterpriseAuthFn } = await import("./app-auth");
+    _setEnterpriseAuthFn(() => ({
+      appConfig: { appId: "ea", privateKey: "-----BEGIN PRIVATE KEY-----\nfake\n-----END PRIVATE KEY-----", installationId: "ei" },
+    }));
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ token: "ghs_ent_tok", expires_at: new Date(Date.now() + 3600_000).toISOString() }),
+    });
+    vi.stubGlobal("fetch", mockFetch);
+    const t1 = await getInstallationTokenForEnterprise("ent-x");
+    expect(t1).toBe("ghs_ent_tok");
+    // Second call should use cache, not mint again
+    const t2 = await getInstallationTokenForEnterprise("ent-x");
+    expect(t2).toBe("ghs_ent_tok");
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("getInstallationTokenForEnterprise deduplicates concurrent mints", async () => {
+    const { getInstallationTokenForEnterprise, _setEnterpriseAuthFn } = await import("./app-auth");
+    _setEnterpriseAuthFn(() => ({
+      appConfig: { appId: "ea", privateKey: "-----BEGIN PRIVATE KEY-----\nfake\n-----END PRIVATE KEY-----", installationId: "ei" },
+    }));
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ token: "ghs_dedup", expires_at: new Date(Date.now() + 3600_000).toISOString() }),
+    });
+    vi.stubGlobal("fetch", mockFetch);
+    const [r1, r2] = await Promise.all([
+      getInstallationTokenForEnterprise("ent-y"),
+      getInstallationTokenForEnterprise("ent-y"),
+    ]);
+    expect(r1).toBe("ghs_dedup");
+    expect(r2).toBe("ghs_dedup");
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+  });
 });
