@@ -338,4 +338,11 @@ describe("parseDateRangeParams", () => {
     expect("error" in result).toBe(true);
     if ("error" in result) expect(result.error).toContain("future");
   });
+
+  it("returns error for regex-valid but semantically invalid date (month 00)", () => {
+    const params = new URLSearchParams({ startDate: "2024-00-01", endDate: "2024-01-15" });
+    const result = parseDateRangeParams(params);
+    expect("error" in result).toBe(true);
+    if ("error" in result) expect(result.error).toContain("not a valid date");
+  });
 });
