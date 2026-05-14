@@ -75,6 +75,14 @@ describe("computeTeamDayMetrics", () => {
     const result = computeTeamDayMetrics("team-a", "Team A", ["alice"], records, "2024-01-15");
     expect(result.acceptanceRate).toBe(40);
   });
+
+  it("handles undefined totals_by_feature via || [] fallback", () => {
+    const records: UserDayRecord[] = [
+      makeRecord({ user_login: "alice", day: "2024-01-15", totals_by_feature: undefined as unknown as [] }),
+    ];
+    const result = computeTeamDayMetrics("team-a", "Team A", ["alice"], records, "2024-01-15");
+    expect(result.acceptanceRate).toBe(0);
+  });
 });
 
 describe("computeTeamSummary", () => {
@@ -127,5 +135,13 @@ describe("computeTeamSummary", () => {
     expect(result.chatAdoptionRate).toBe(0);
     expect(result.cliAdoptionRate).toBe(0);
     expect(result.codeReviewAdoptionRate).toBe(0);
+  });
+
+  it("handles undefined totals_by_feature in summary || [] fallback", () => {
+    const records: UserDayRecord[] = [
+      makeRecord({ user_login: "alice", day: "2024-01-15", totals_by_feature: undefined as unknown as [] }),
+    ];
+    const result = computeTeamSummary("team-a", "Team A", ["alice"], records);
+    expect(result.overallAcceptanceRate).toBe(0);
   });
 });
