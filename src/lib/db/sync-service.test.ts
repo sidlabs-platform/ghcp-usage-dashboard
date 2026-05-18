@@ -9,6 +9,8 @@ vi.mock("@/lib/github/metrics-client", () => ({
     getEnterpriseUserDailyReport: vi.fn(async () => [{ login: "u1" }]),
     getOrgDailyReport: vi.fn(async () => [{ day: "2025-01-01" }]),
     getOrgUserDailyReport: vi.fn(async () => []),
+    getEnterpriseUserTeamsReport: vi.fn(async () => [{ team_slug: "frontend", user_id: 1, user_login: "u1" }]),
+    getOrgUserTeamsReport: vi.fn(async () => []),
     getEnterprise28DayReport: vi.fn(async () => []),
     getOrg28DayReport: vi.fn(async () => []),
   },
@@ -42,6 +44,7 @@ vi.mock("./seats-repo", () => ({ upsertSeats: vi.fn() }));
 vi.mock("./summary-tables", () => ({ refreshAllSummaries: vi.fn() }));
 vi.mock("@/lib/cache/memory-cache", () => ({ cache: { invalidateAll: vi.fn() } }));
 vi.mock("./teams-repo", () => ({ upsertAllTeams: vi.fn() }));
+vi.mock("./user-teams-repo", () => ({ batchUpsertUserTeams: vi.fn() }));
 vi.mock("@/lib/utils", () => ({ datesBetween: vi.fn(() => ["2025-01-01"]) }));
 vi.mock("./billing-sync-service", () => ({ syncBilling: vi.fn(async () => ({ usageRecords: 0, premiumRecords: 0, errors: [] })) }));
 
@@ -75,6 +78,8 @@ import { teamsClient } from "@/lib/github/teams-client";
 import { getConfiguredEnterprises, getResolvedOrgsForEnterprise, getEnterpriseConfig, isCopilotSubEnabledForEnterprise, isCopilotSubEnabledForAnyEnterprise } from "@/lib/config/enterprise-config";
 import { orgsClient } from "@/lib/github/orgs-client";
 import { upsertEnterpriseOrgs } from "./orgs-repo";
+import { batchUpsertUserTeams } from "./user-teams-repo";
+import { datesBetween } from "@/lib/utils";
 
 describe("sync-service", () => {
   beforeEach(() => {
@@ -85,13 +90,16 @@ describe("sync-service", () => {
     (hasOrgDataForRange as ReturnType<typeof vi.fn>).mockReturnValue(true);
     (getConfiguredEnterprises as ReturnType<typeof vi.fn>).mockReturnValue([{ slug: "test-ent", displayName: "Test" }]);
     (getResolvedOrgsForEnterprise as ReturnType<typeof vi.fn>).mockReturnValue(["test-org"]);
+    (datesBetween as ReturnType<typeof vi.fn>).mockReturnValue(["2025-01-01"]);
   });
 
-  it("syncDay fetches enterprise, users and org data", async () => {
+  it("syncDay fetches enterprise, users, org data, and user-team attribution", async () => {
     const result = await syncDay("test-ent", "2025-01-01");
     expect(result.enterprise).toBe(1);
     expect(result.users).toBe(1);
     expect(result.orgs["test-org"]).toBe(1);
+    expect(metricsClient.getEnterpriseUserTeamsReport).toHaveBeenCalledWith("test-ent", "2025-01-01", "test-ent");
+    expect(batchUpsertUserTeams).toHaveBeenCalledWith("test-ent", "2025-01-01", expect.any(Array));
   });
 
   it("syncDay skips already-synced scopes", async () => {
@@ -295,11 +303,67 @@ describe("sync-service", () => {
     expect(result.users).toBe(0);
   });
 
+  it("syncDay fetches org user-team attribution in org-only mode", async () => {
+    (isCopilotSubEnabledForEnterprise as ReturnType<typeof vi.fn>).mockImplementation((_s: string, key: string) => key !== "enterprise");
+    (metricsClient.getOrgUserTeamsReport as ReturnType<typeof vi.fn>)
+      .mockResolvedValue([{ team_slug: "frontend", user_id: 7, user_login: "org-u1" }]);
+
+    await syncDay("test-ent", "2025-01-01");
+
+    expect(metricsClient.getOrgUserTeamsReport).toHaveBeenCalledWith("test-org", "2025-01-01", "test-ent");
+    expect(batchUpsertUserTeams).toHaveBeenCalledWith("test-ent", "2025-01-01", expect.any(Array));
+  });
+
+  it("backfillEnterprise does not skip a day when user-teams is unsynced", async () => {
+    const { datesBetween } = await import("@/lib/utils");
+    (datesBetween as ReturnType<typeof vi.fn>).mockReturnValue(["2025-01-01"]);
+    (isSynced as ReturnType<typeof vi.fn>).mockImplementation((_enterprise: string, scope: string) => scope !== "user-teams");
+    const result = await backfillEnterprise("test-ent", 1);
+    expect(result.daysSynced).toBe(1);
+    expect(metricsClient.getEnterpriseUserTeamsReport).toHaveBeenCalled();
+  });
+
+  it("syncDay skips user-teams for remainder of sync when API returns 404", async () => {
+    (isSynced as ReturnType<typeof vi.fn>).mockReturnValue(false);
+    (metricsClient.getEnterpriseUserTeamsReport as ReturnType<typeof vi.fn>)
+      .mockRejectedValue(new Error("404 Not Found"));
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    // First call: triggers 404 → caches unavailability
+    await syncDay("test-ent", "2025-01-01");
+    expect(batchUpsertUserTeams).not.toHaveBeenCalledWith("test-ent", "2025-01-01", expect.anything());
+
+    // Second call: should skip without even calling the API
+    (metricsClient.getEnterpriseUserTeamsReport as ReturnType<typeof vi.fn>).mockClear();
+    await syncDay("test-ent", "2025-01-02");
+    expect(metricsClient.getEnterpriseUserTeamsReport).not.toHaveBeenCalled();
+
+    warnSpy.mockRestore();
+  });
+
+  it("backfillEnterprise clears user-teams unavailability cache per run", async () => {
+    (isSynced as ReturnType<typeof vi.fn>).mockReturnValue(false);
+    // First backfill: API returns 404
+    (metricsClient.getEnterpriseUserTeamsReport as ReturnType<typeof vi.fn>)
+      .mockRejectedValue(new Error("404 Not Found"));
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    await backfillEnterprise("test-ent", 1);
+
+    // Second backfill: API now works — should NOT be stuck in unavailable state
+    (metricsClient.getEnterpriseUserTeamsReport as ReturnType<typeof vi.fn>)
+      .mockResolvedValue([{ team_slug: "fe", user_id: 1, user_login: "u1" }]);
+    await backfillEnterprise("test-ent", 1);
+    expect(metricsClient.getEnterpriseUserTeamsReport).toHaveBeenCalled();
+
+    warnSpy.mockRestore();
+  });
+
   it("backfillEnterprise skips fully-synced days", async () => {
+    (datesBetween as ReturnType<typeof vi.fn>).mockReturnValue(["2025-01-01", "2025-01-02", "2025-01-03"]);
     (isSynced as ReturnType<typeof vi.fn>).mockReturnValue(true);
     const result = await backfillEnterprise("test-ent", 3);
     expect(result.daysSynced).toBe(0);
-    expect(result.daysSkipped).toBeGreaterThanOrEqual(2);
+    expect(result.daysSkipped).toBeGreaterThanOrEqual(3);
   });
 
   it("syncDay handles non-Error enterprise throws (String fallback)", async () => {

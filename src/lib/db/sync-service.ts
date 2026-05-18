@@ -23,6 +23,7 @@ import { upsertSeats } from "./seats-repo";
 import { refreshAllSummaries } from "./summary-tables";
 import { cache } from "@/lib/cache/memory-cache";
 import { upsertAllTeams } from "./teams-repo";
+import { batchUpsertUserTeams } from "./user-teams-repo";
 import { datesBetween } from "@/lib/utils";
 import { syncBilling } from "./billing-sync-service";
 import {
@@ -32,8 +33,12 @@ import {
 import { getEnterpriseContext, updateEnterpriseRegistry } from "./enterprise-context";
 import { orgsClient } from "@/lib/github/orgs-client";
 import { upsertEnterpriseOrgs, clearEnterpriseOrgs } from "./orgs-repo";
+import type { UserTeamRecord } from "@/lib/types/metrics";
 
 const BACKFILL_DAYS = parseInt(process.env.BACKFILL_DAYS || "90", 10) || 90;
+
+/** Track which enterprises have the user-teams API unavailable during this sync run */
+const userTeamsUnavailable = new Set<string>();
 
 /** Strip newlines/carriage returns from a string before logging to prevent log injection. */
 function sanitizeForLog(s: string): string {
@@ -219,7 +224,75 @@ export async function syncDay(
     }
   })));
 
+  // 4. User-teams attribution (non-blocking, separate sync scope)
+  if (isCopilotSubEnabledForEnterprise(enterpriseSlug, "teams")) {
+    try {
+      await syncUserTeamsForDay(enterpriseSlug, day);
+    } catch (err) {
+      console.error("[%s] Failed to sync user-teams for %s:", sanitizeForLog(enterpriseSlug), day, err);
+    }
+  }
+
   return result;
+}
+
+/** Sync user-teams attribution for a single day */
+async function syncUserTeamsForDay(
+  enterpriseSlug: string,
+  day: string,
+): Promise<number> {
+  if (userTeamsUnavailable.has(enterpriseSlug)) return 0;
+  if (isSynced(enterpriseSlug, "user-teams", enterpriseSlug, day)) return 0;
+
+  const records: UserTeamRecord[] = [];
+
+  try {
+    if (isCopilotSubEnabledForEnterprise(enterpriseSlug, "enterprise")) {
+      records.push(...await metricsClient.getEnterpriseUserTeamsReport(enterpriseSlug, day, enterpriseSlug));
+    } else {
+      const orgs = getResolvedOrgsForEnterprise(enterpriseSlug);
+      let hasAvailableResponse = false;
+      let sawUnavailableResponse = false;
+
+      for (const org of orgs) {
+        try {
+          const orgRecords = await metricsClient.getOrgUserTeamsReport(org, day, enterpriseSlug);
+          records.push(...orgRecords);
+          hasAvailableResponse = true;
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          if (msg.includes("404") || msg.includes("403")) {
+            sawUnavailableResponse = true;
+            console.warn("[%s] user-teams API not available for org %s, skipping", sanitizeForLog(enterpriseSlug), sanitizeForLog(org));
+          } else {
+            hasAvailableResponse = true;
+            console.error("[%s] Failed to fetch user-teams for org %s on %s: %s", sanitizeForLog(enterpriseSlug), sanitizeForLog(org), day, sanitizeForLog(msg));
+          }
+        }
+      }
+
+      if (!hasAvailableResponse && sawUnavailableResponse) {
+        console.warn("[%s] user-teams API not available, skipping for remainder of sync", sanitizeForLog(enterpriseSlug));
+        userTeamsUnavailable.add(enterpriseSlug);
+        return 0;
+      }
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (msg.includes("404") || msg.includes("403")) {
+      console.warn("[%s] user-teams API not available, skipping for remainder of sync", sanitizeForLog(enterpriseSlug));
+      userTeamsUnavailable.add(enterpriseSlug);
+      return 0;
+    }
+    recordSync(enterpriseSlug, "user-teams", enterpriseSlug, day, 0, "error", msg);
+    return 0;
+  }
+
+  if (records.length > 0) {
+    batchUpsertUserTeams(enterpriseSlug, day, records);
+  }
+  recordSync(enterpriseSlug, "user-teams", enterpriseSlug, day, records.length);
+  return records.length;
 }
 
 // ── Backfill: fetch multiple days ─────────────────────────────────────
@@ -229,6 +302,9 @@ export async function backfillEnterprise(
   days?: number,
   onProgress?: (progress: SyncProgress) => void
 ): Promise<{ daysSynced: number; daysSkipped: number; errors: number }> {
+  // Clear per-run unavailability cache so transient 404s don't persist across calls
+  userTeamsUnavailable.delete(enterpriseSlug);
+
   const numDays = days || BACKFILL_DAYS;
   const orgs = getResolvedOrgsForEnterprise(enterpriseSlug);
   const userMetricsEnabled = isCopilotSubEnabledForEnterprise(enterpriseSlug, "userMetrics");
@@ -256,8 +332,9 @@ export async function backfillEnterprise(
       ? isSynced(enterpriseSlug, "users", enterpriseSlug, day)
       : orgs.every((org) => isSynced(enterpriseSlug, "users", org, day)));
     const orgSynced = orgs.every((org) => isSynced(enterpriseSlug, "org", org, day));
+    const userTeamsSynced = !isCopilotSubEnabledForEnterprise(enterpriseSlug, "teams") || isSynced(enterpriseSlug, "user-teams", enterpriseSlug, day);
 
-    if (entSynced && userSynced && orgSynced) {
+    if (entSynced && userSynced && orgSynced && userTeamsSynced) {
       daysSkipped++;
       return;
     }
@@ -498,6 +575,7 @@ export async function fullSync(
   onProgress?: (progress: SyncProgress) => void
 ): Promise<MultiEnterpriseSyncResult> {
   const enterprises = getConfiguredEnterprises();
+  userTeamsUnavailable.clear();
 
   if (enterprises.length === 0) {
     console.warn("[Sync] No enterprises configured — nothing to sync");

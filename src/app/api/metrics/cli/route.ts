@@ -4,8 +4,8 @@ import { getDateRange, parseAndClampDays } from "@/lib/utils";
 import { parseScopeFilter } from "@/lib/api/scope-filter";
 import {
   getActiveUsersDailyTrend,
+  getCliDailyVolume,
   getCliUserBreakdown,
-  estimateRowCount,
 } from "@/lib/db/aggregation-queries";
 
 export async function GET(request: Request) {
@@ -51,26 +51,33 @@ export async function GET(request: Request) {
       }));
     }
 
-    // Daily token/session/request volume from enterprise totals_by_cli
-    const dailyTokens = enterpriseRecords.map((d) => {
-      const cli = d.totals_by_cli;
-      return {
-        day: d.day,
-        sessions: cli?.session_count ?? 0,
-        requests: cli?.request_count ?? 0,
-        prompts: cli?.prompt_count ?? 0,
-        promptTokens: cli?.token_usage?.prompt_tokens_sum ?? 0,
-        outputTokens: cli?.token_usage?.output_tokens_sum ?? 0,
-        avgPerRequest: cli?.token_usage?.avg_tokens_per_request ?? 0,
-      };
-    });
+    // Daily token/session/request volume
+    const dailyTokens = enterpriseRecords.length > 0
+      ? enterpriseRecords.map((d) => {
+        const cli = d.totals_by_cli;
+        return {
+          day: d.day,
+          sessions: cli?.session_count ?? 0,
+          requests: cli?.request_count ?? 0,
+          prompts: cli?.prompt_count ?? 0,
+          promptTokens: cli?.token_usage?.prompt_tokens_sum ?? 0,
+          outputTokens: cli?.token_usage?.output_tokens_sum ?? 0,
+          avgPerRequest: cli?.token_usage?.avg_tokens_per_request ?? 0,
+        };
+      })
+      : getCliDailyVolume(start, end, allowedLogins, enterpriseSlugs).map((row) => ({
+        day: row.day,
+        sessions: row.sessions,
+        requests: row.requests,
+        prompts: row.prompts,
+        promptTokens: row.promptTokens,
+        outputTokens: row.outputTokens,
+        avgPerRequest: row.requests > 0 ? Math.round((row.promptTokens + row.outputTokens) / row.requests) : 0,
+      }));
 
     // Latest day values for KPIs
-    const latestAgg = aggregated.length > 0 ? aggregated[aggregated.length - 1] : null;
-    const latest = enterpriseRecords.length > 0
-      ? enterpriseRecords[enterpriseRecords.length - 1]
-      : null;
-    const latestCli = latest?.totals_by_cli;
+    const latestTrendRow = dailyTrend.length > 0 ? dailyTrend[dailyTrend.length - 1] : null;
+    const latestTokenRow = dailyTokens.length > 0 ? dailyTokens[dailyTokens.length - 1] : null;
 
     // Top CLI users — SQL aggregation, no getAllUserMetrics
     const topCliUsers = getCliUserBreakdown(start, end, 20, allowedLogins, enterpriseSlugs);
@@ -79,10 +86,10 @@ export async function GET(request: Request) {
       dailyTrend,
       dailyTokens,
       kpis: {
-        dailyCliUsers: latest?.daily_active_cli_users ?? latestAgg?.daily_active_cli_users ?? 0,
-        sessionsToday: latestCli?.session_count ?? 0,
-        requestsToday: latestCli?.request_count ?? 0,
-        avgTokensPerRequest: latestCli?.token_usage?.avg_tokens_per_request ?? 0,
+        dailyCliUsers: latestTrendRow?.cliUsers ?? 0,
+        sessionsToday: latestTokenRow?.sessions ?? 0,
+        requestsToday: latestTokenRow?.requests ?? 0,
+        avgTokensPerRequest: latestTokenRow?.avgPerRequest ?? 0,
       },
       topCliUsers,
     }, {

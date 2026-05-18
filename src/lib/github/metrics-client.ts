@@ -4,10 +4,9 @@
 import { githubFetch, fetchNDJSON, sleep } from "./api-base";
 import type {
   ReportResponse,
-  EnterpriseReport,
-  OrgReport,
   UserDayRecord,
   DayTotal,
+  UserTeamRecord,
 } from "@/lib/types/metrics";
 
 export class MetricsClient {
@@ -172,6 +171,40 @@ export class MetricsClient {
       allUsers.push(...records);
     }
     return allUsers;
+  }
+
+  // ── Enterprise user-teams (1-day) ────────────────────────────────────
+
+  async getEnterpriseUserTeamsReport(enterprise: string, day: string, enterpriseSlug?: string): Promise<UserTeamRecord[]> {
+    const report = await githubFetch<ReportResponse>(
+      `/enterprises/${enterprise}/copilot/metrics/reports/user-teams-1-day?day=${day}`,
+      3, undefined, enterpriseSlug
+    );
+    if (!report?.download_links?.length) return [];
+
+    const allRecords: UserTeamRecord[] = [];
+    for (const link of report.download_links) {
+      const records = await fetchNDJSON<UserTeamRecord>(link);
+      allRecords.push(...records);
+    }
+    return allRecords;
+  }
+
+  // ── Org user-teams (1-day) ───────────────────────────────────────────
+
+  async getOrgUserTeamsReport(org: string, day: string, enterpriseSlug?: string): Promise<UserTeamRecord[]> {
+    const report = await githubFetch<ReportResponse>(
+      `/orgs/${org}/copilot/metrics/reports/user-teams-1-day?day=${day}`,
+      3, undefined, enterpriseSlug
+    );
+    if (!report?.download_links?.length) return [];
+
+    const allRecords: UserTeamRecord[] = [];
+    for (const link of report.download_links) {
+      const records = await fetchNDJSON<UserTeamRecord>(link);
+      allRecords.push(...records);
+    }
+    return allRecords;
   }
 
   // ── Orchestrator: fetch a range of days ────────────────────────────
