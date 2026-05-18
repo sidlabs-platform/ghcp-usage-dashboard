@@ -22,7 +22,10 @@ export function batchUpsertUserTeams(enterpriseSlug: string, day: string, record
 
   const tx = db.transaction(() => {
     for (const record of records) {
-      stmt.run(day, enterpriseSlug, record.organization_id ?? null, record.team_slug, record.user_id, record.user_login, now);
+      if (record.day && record.day !== day) {
+        throw new Error(`batchUpsertUserTeams day mismatch: expected ${day}, got ${record.day}`);
+      }
+      stmt.run(day, enterpriseSlug, record.organization_id ?? '', record.team_slug, record.user_id, record.user_login, now);
     }
   });
 
@@ -58,15 +61,18 @@ export function getCopilotTeamMembers(
   startDay: string,
   endDay: string,
   enterpriseSlugs?: string[],
+  orgSlug?: string,
 ): string[] {
   const db = getDb();
   const ef = buildEnterpriseFilter(enterpriseSlugs);
+  const orgClause = orgSlug ? " AND org_slug = ?" : "";
+  const orgParams = orgSlug ? [orgSlug] : [];
   const rows = db.prepare(`
     SELECT DISTINCT user_login
     FROM copilot_user_teams
-    WHERE team_slug = ? AND day >= ? AND day <= ?${ef.clause}
+    WHERE team_slug = ? AND day >= ? AND day <= ?${ef.clause}${orgClause}
     ORDER BY user_login
-  `).all(teamSlug, startDay, endDay, ...ef.params) as { user_login: string }[];
+  `).all(teamSlug, startDay, endDay, ...ef.params, ...orgParams) as { user_login: string }[];
   return rows.map((row) => row.user_login);
 }
 

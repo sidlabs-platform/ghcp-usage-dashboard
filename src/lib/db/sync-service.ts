@@ -253,6 +253,7 @@ async function syncUserTeamsForDay(
       const orgs = getResolvedOrgsForEnterprise(enterpriseSlug);
       let hasAvailableResponse = false;
       let sawUnavailableResponse = false;
+      let hardErrorMsg: string | null = null;
 
       for (const org of orgs) {
         try {
@@ -265,7 +266,7 @@ async function syncUserTeamsForDay(
             sawUnavailableResponse = true;
             console.warn("[%s] user-teams API not available for org %s, skipping", sanitizeForLog(enterpriseSlug), sanitizeForLog(org));
           } else {
-            hasAvailableResponse = true;
+            hardErrorMsg = msg;
             console.error("[%s] Failed to fetch user-teams for org %s on %s: %s", sanitizeForLog(enterpriseSlug), sanitizeForLog(org), day, sanitizeForLog(msg));
           }
         }
@@ -274,6 +275,12 @@ async function syncUserTeamsForDay(
       if (!hasAvailableResponse && sawUnavailableResponse) {
         console.warn("[%s] user-teams API not available, skipping for remainder of sync", sanitizeForLog(enterpriseSlug));
         userTeamsUnavailable.add(enterpriseSlug);
+        recordSync(enterpriseSlug, "user-teams", enterpriseSlug, day, 0, "skipped", "API unavailable (404/403)");
+        return 0;
+      }
+
+      if (hardErrorMsg && !hasAvailableResponse) {
+        recordSync(enterpriseSlug, "user-teams", enterpriseSlug, day, 0, "error", hardErrorMsg);
         return 0;
       }
     }
@@ -282,6 +289,7 @@ async function syncUserTeamsForDay(
     if (msg.includes("404") || msg.includes("403")) {
       console.warn("[%s] user-teams API not available, skipping for remainder of sync", sanitizeForLog(enterpriseSlug));
       userTeamsUnavailable.add(enterpriseSlug);
+      recordSync(enterpriseSlug, "user-teams", enterpriseSlug, day, 0, "skipped", "API unavailable (404/403)");
       return 0;
     }
     recordSync(enterpriseSlug, "user-teams", enterpriseSlug, day, 0, "error", msg);
@@ -332,7 +340,9 @@ export async function backfillEnterprise(
       ? isSynced(enterpriseSlug, "users", enterpriseSlug, day)
       : orgs.every((org) => isSynced(enterpriseSlug, "users", org, day)));
     const orgSynced = orgs.every((org) => isSynced(enterpriseSlug, "org", org, day));
-    const userTeamsSynced = !isCopilotSubEnabledForEnterprise(enterpriseSlug, "teams") || isSynced(enterpriseSlug, "user-teams", enterpriseSlug, day);
+    const userTeamsSynced = !isCopilotSubEnabledForEnterprise(enterpriseSlug, "teams")
+      || isSynced(enterpriseSlug, "user-teams", enterpriseSlug, day)
+      || userTeamsUnavailable.has(enterpriseSlug);
 
     if (entSynced && userSynced && orgSynced && userTeamsSynced) {
       daysSkipped++;
@@ -462,6 +472,7 @@ export async function incrementalSync(
   onProgress?: (progress: SyncProgress) => void
 ): Promise<{ daysSynced: number; daysSkipped: number; errors: number; failedEnterprises: string[] }> {
   const enterprises = getConfiguredEnterprises();
+  userTeamsUnavailable.clear();
   let daysSynced = 0;
   let daysSkipped = 0;
   let errors = 0;

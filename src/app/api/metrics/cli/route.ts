@@ -77,7 +77,9 @@ export async function GET(request: Request) {
 
     // Latest day values for KPIs
     const latestTrendRow = dailyTrend.length > 0 ? dailyTrend[dailyTrend.length - 1] : null;
-    const latestTokenRow = dailyTokens.length > 0 ? dailyTokens[dailyTokens.length - 1] : null;
+    const latestTokenRow = latestTrendRow
+      ? dailyTokens.find((row) => row.day === latestTrendRow.day) ?? null
+      : null;
 
     // Top CLI users — SQL aggregation, no getAllUserMetrics
     const topCliUsers = getCliUserBreakdown(start, end, 20, allowedLogins, enterpriseSlugs);

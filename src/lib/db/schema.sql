@@ -204,12 +204,12 @@ CREATE TABLE IF NOT EXISTS enterprise_orgs (
 CREATE TABLE IF NOT EXISTS copilot_user_teams (
   day TEXT NOT NULL,
   enterprise_slug TEXT NOT NULL DEFAULT '',
-  org_slug TEXT,
+  org_slug TEXT NOT NULL DEFAULT '',
   team_slug TEXT NOT NULL,
   user_id INTEGER NOT NULL,
   user_login TEXT NOT NULL,
   updated_at TEXT NOT NULL,
-  PRIMARY KEY (day, enterprise_slug, team_slug, user_id)
+  PRIMARY KEY (day, enterprise_slug, org_slug, team_slug, user_id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_copilot_user_teams_day ON copilot_user_teams(day);
