@@ -199,3 +199,20 @@ CREATE TABLE IF NOT EXISTS enterprise_orgs (
   last_synced_at TEXT,
   PRIMARY KEY (enterprise_slug, org_slug)
 );
+
+-- Copilot user-team attribution (per-day, from user-teams-1-day API)
+CREATE TABLE IF NOT EXISTS copilot_user_teams (
+  day TEXT NOT NULL,
+  enterprise_slug TEXT NOT NULL DEFAULT '',
+  org_slug TEXT NOT NULL DEFAULT '',
+  team_slug TEXT NOT NULL,
+  user_id INTEGER NOT NULL,
+  user_login TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (day, enterprise_slug, org_slug, team_slug, user_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_copilot_user_teams_day ON copilot_user_teams(day);
+CREATE INDEX IF NOT EXISTS idx_copilot_user_teams_login ON copilot_user_teams(user_login, day);
+CREATE INDEX IF NOT EXISTS idx_copilot_user_teams_team ON copilot_user_teams(team_slug, day);
+CREATE INDEX IF NOT EXISTS idx_copilot_user_teams_slug ON copilot_user_teams(enterprise_slug, day);

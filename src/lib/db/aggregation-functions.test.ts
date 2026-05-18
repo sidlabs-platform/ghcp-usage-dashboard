@@ -28,6 +28,7 @@ import {
   getFeatureUsageDaily,
   getModelByFeatureBreakdown,
   getModelTrend,
+  getCliDailyVolume,
   getCliUserBreakdown,
   estimateRowCount,
   getActiveUsersRollingTrend,
@@ -407,6 +408,238 @@ describe("getModelTrend", () => {
 
   it("returns empty for empty topModels", () => {
     expect(getModelTrend("2024-01-01", "2024-01-31", [])).toEqual([]);
+  });
+});
+
+describe("getCliDailyVolume", () => {
+  function insertCliMetric(overrides: Partial<Record<string, unknown>> = {}) {
+    const defaults = {
+      day: "2024-01-21",
+      enterprise_id: "ent1",
+      enterprise_slug: "ent1",
+      user_id: 1,
+      user_login: "cli-user",
+      used_cli: 1,
+      totals_by_cli: JSON.stringify({
+        session_count: 5,
+        request_count: 10,
+        prompt_count: 8,
+        token_usage: {
+          prompt_tokens_sum: 1000,
+          output_tokens_sum: 500,
+        },
+      }),
+    };
+    const metric = { ...defaults, ...overrides };
+    db.prepare(`INSERT INTO user_daily_metrics (day, enterprise_id, enterprise_slug, user_id, user_login, used_cli, totals_by_cli)
+      VALUES (?, ?, ?, ?, ?, ?, ?)`).run(
+      metric.day,
+      metric.enterprise_id,
+      metric.enterprise_slug,
+      metric.user_id,
+      metric.user_login,
+      metric.used_cli,
+      metric.totals_by_cli,
+    );
+  }
+
+  it("returns empty array when no CLI users exist", () => {
+    insertMetric({ used_cli: 0, user_login: "ide-user", user_id: 7 });
+
+    expect(getCliDailyVolume("2024-01-01", "2024-01-31")).toEqual([]);
+  });
+
+  it("aggregates sessions requests and tokens by day", () => {
+    insertCliMetric();
+    insertCliMetric({
+      day: "2024-01-21",
+      enterprise_id: "ent1",
+      enterprise_slug: "ent1",
+      user_id: 2,
+      user_login: "cli-user-2",
+      totals_by_cli: JSON.stringify({
+        session_count: 2,
+        request_count: 5,
+        prompt_count: 3,
+        token_usage: {
+          prompt_tokens_sum: 200,
+          output_tokens_sum: 100,
+        },
+      }),
+    });
+    insertCliMetric({
+      day: "2024-01-22",
+      enterprise_id: "ent1",
+      enterprise_slug: "ent1",
+      user_id: 1,
+      user_login: "cli-user",
+      totals_by_cli: JSON.stringify({
+        session_count: 1,
+        request_count: 4,
+        prompt_count: 2,
+        token_usage: {
+          prompt_tokens_sum: 50,
+          output_tokens_sum: 25,
+        },
+      }),
+    });
+
+    expect(getCliDailyVolume("2024-01-01", "2024-01-31")).toEqual([
+      {
+        day: "2024-01-21",
+        sessions: 7,
+        requests: 15,
+        prompts: 11,
+        promptTokens: 1200,
+        outputTokens: 600,
+      },
+      {
+        day: "2024-01-22",
+        sessions: 1,
+        requests: 4,
+        prompts: 2,
+        promptTokens: 50,
+        outputTokens: 25,
+      },
+    ]);
+  });
+
+  it("sums volume across enterprises for the same day", () => {
+    insertCliMetric({
+      day: "2024-01-23",
+      enterprise_id: "ent1",
+      enterprise_slug: "ent-alpha",
+      user_id: 1,
+      user_login: "alpha-user",
+      totals_by_cli: JSON.stringify({
+        session_count: 3,
+        request_count: 6,
+        prompt_count: 4,
+        token_usage: {
+          prompt_tokens_sum: 300,
+          output_tokens_sum: 120,
+        },
+      }),
+    });
+    insertCliMetric({
+      day: "2024-01-23",
+      enterprise_id: "ent2",
+      enterprise_slug: "ent-beta",
+      user_id: 2,
+      user_login: "beta-user",
+      totals_by_cli: JSON.stringify({
+        session_count: 4,
+        request_count: 8,
+        prompt_count: 5,
+        token_usage: {
+          prompt_tokens_sum: 500,
+          output_tokens_sum: 200,
+        },
+      }),
+    });
+
+    expect(getCliDailyVolume("2024-01-01", "2024-01-31")).toEqual([
+      {
+        day: "2024-01-23",
+        sessions: 7,
+        requests: 14,
+        prompts: 9,
+        promptTokens: 800,
+        outputTokens: 320,
+      },
+    ]);
+  });
+
+  it("respects enterprise slug filter", () => {
+    insertCliMetric({
+      day: "2024-01-24",
+      enterprise_id: "ent1",
+      enterprise_slug: "ent-alpha",
+      user_id: 1,
+      user_login: "alpha-user",
+      totals_by_cli: JSON.stringify({
+        session_count: 2,
+        request_count: 4,
+        prompt_count: 3,
+        token_usage: {
+          prompt_tokens_sum: 200,
+          output_tokens_sum: 80,
+        },
+      }),
+    });
+    insertCliMetric({
+      day: "2024-01-24",
+      enterprise_id: "ent2",
+      enterprise_slug: "ent-beta",
+      user_id: 2,
+      user_login: "beta-user",
+      totals_by_cli: JSON.stringify({
+        session_count: 7,
+        request_count: 14,
+        prompt_count: 10,
+        token_usage: {
+          prompt_tokens_sum: 700,
+          output_tokens_sum: 280,
+        },
+      }),
+    });
+
+    expect(getCliDailyVolume("2024-01-01", "2024-01-31", undefined, ["ent-alpha"])).toEqual([
+      {
+        day: "2024-01-24",
+        sessions: 2,
+        requests: 4,
+        prompts: 3,
+        promptTokens: 200,
+        outputTokens: 80,
+      },
+    ]);
+  });
+
+  it("respects login filter", () => {
+    insertCliMetric({
+      day: "2024-01-25",
+      enterprise_id: "ent1",
+      enterprise_slug: "ent1",
+      user_id: 1,
+      user_login: "included-user",
+      totals_by_cli: JSON.stringify({
+        session_count: 6,
+        request_count: 12,
+        prompt_count: 9,
+        token_usage: {
+          prompt_tokens_sum: 600,
+          output_tokens_sum: 240,
+        },
+      }),
+    });
+    insertCliMetric({
+      day: "2024-01-25",
+      enterprise_id: "ent1",
+      enterprise_slug: "ent1",
+      user_id: 2,
+      user_login: "excluded-user",
+      totals_by_cli: JSON.stringify({
+        session_count: 1,
+        request_count: 3,
+        prompt_count: 2,
+        token_usage: {
+          prompt_tokens_sum: 90,
+          output_tokens_sum: 30,
+        },
+      }),
+    });
+
+    expect(getCliDailyVolume("2024-01-01", "2024-01-31", ["included-user"])).toEqual([
+      {
+        day: "2024-01-25",
+        sessions: 6,
+        requests: 12,
+        prompts: 9,
+        promptTokens: 600,
+        outputTokens: 240,
+      },
+    ]);
   });
 });
 

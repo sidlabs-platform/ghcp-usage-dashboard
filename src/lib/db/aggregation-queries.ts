@@ -112,6 +112,15 @@ export interface CompletionDailyRow {
   compAcceptCount: number;
 }
 
+export interface CliDailyVolumeRow {
+  day: string;
+  sessions: number;
+  requests: number;
+  prompts: number;
+  promptTokens: number;
+  outputTokens: number;
+}
+
 export interface CliUserRow {
   login: string;
   sessions: number;
@@ -802,6 +811,35 @@ export function getIdeTrend(
 }
 
 // ── CLI user breakdown (SQL) ──────────────────────────────────────────
+
+/** Aggregate daily CLI session/token volume from user-level totals_by_cli JSON */
+export function getCliDailyVolume(
+  startDay: string,
+  endDay: string,
+  allowedLogins?: string[],
+  enterpriseSlugs?: string[],
+): CliDailyVolumeRow[] {
+  const db = getDb();
+  const filter = buildLoginFilter(allowedLogins ?? []);
+  const ef = buildEnterpriseFilter(enterpriseSlugs);
+  const sql = `
+    SELECT
+      day,
+      COALESCE(SUM(json_extract(totals_by_cli, '$.session_count')), 0) as sessions,
+      COALESCE(SUM(json_extract(totals_by_cli, '$.request_count')), 0) as requests,
+      COALESCE(SUM(json_extract(totals_by_cli, '$.prompt_count')), 0) as prompts,
+      COALESCE(SUM(json_extract(totals_by_cli, '$.token_usage.prompt_tokens_sum')), 0) as promptTokens,
+      COALESCE(SUM(json_extract(totals_by_cli, '$.token_usage.output_tokens_sum')), 0) as outputTokens
+    FROM user_daily_metrics
+    WHERE day >= ? AND day <= ?
+      AND used_cli = 1
+      AND totals_by_cli IS NOT NULL
+      ${filter.clause}${ef.clause}
+    GROUP BY day
+    ORDER BY day ASC
+  `;
+  return db.prepare(sql).all(startDay, endDay, ...filter.params, ...ef.params) as CliDailyVolumeRow[];
+}
 
 /** Aggregate CLI usage per user from totals_by_cli JSON column */
 export function getCliUserBreakdown(

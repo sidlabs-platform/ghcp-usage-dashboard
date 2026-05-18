@@ -205,6 +205,17 @@ export interface UserDayRecord {
   entity_id_partition?: number;
 }
 
+/** Row from the user-teams-1-day NDJSON report */
+export interface UserTeamRecord {
+  day: string;
+  enterprise_id?: string;
+  organization_id?: string;
+  team_slug: string;
+  team_name?: string;
+  user_id: number;
+  user_login: string;
+}
+
 // ── API response types ────────────────────────────────────────────────
 
 export interface ReportResponse {

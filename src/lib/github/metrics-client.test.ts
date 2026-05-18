@@ -8,6 +8,7 @@ vi.mock("./api-base", () => ({
 
 import { MetricsClient } from "./metrics-client";
 import { githubFetch, fetchNDJSON, sleep } from "./api-base";
+import type { UserTeamRecord } from "@/lib/types/metrics";
 
 const mockGithubFetch = githubFetch as ReturnType<typeof vi.fn>;
 const mockFetchNDJSON = fetchNDJSON as ReturnType<typeof vi.fn>;
@@ -226,6 +227,43 @@ describe("MetricsClient", () => {
       mockFetchNDJSON.mockResolvedValue([{ login: "alice" }]);
       await client.fetchEnterpriseUserDateRange("ent", ["2024-01-01", "2024-01-02"]);
       expect(sleep).toHaveBeenCalled();
+    });
+  });
+
+  describe("getEnterpriseUserTeamsReport", () => {
+    it("returns empty when no download_links", async () => {
+      mockGithubFetch.mockResolvedValue({});
+      const result = await client.getEnterpriseUserTeamsReport("ent", "2024-01-01");
+      expect(result).toEqual([]);
+    });
+
+    it("parses NDJSON user-team records correctly", async () => {
+      const records: UserTeamRecord[] = [
+        { day: "2024-01-01", organization_id: "org-a", team_slug: "frontend", user_id: 1, user_login: "alice" },
+        { day: "2024-01-01", organization_id: "org-a", team_slug: "backend", user_id: 1, user_login: "alice" },
+      ];
+      mockGithubFetch.mockResolvedValue({ download_links: ["http://dl-1", "http://dl-2"] });
+      mockFetchNDJSON.mockResolvedValueOnce([records[0]]).mockResolvedValueOnce([records[1]]);
+      const result = await client.getEnterpriseUserTeamsReport("ent", "2024-01-01");
+      expect(result).toEqual(records);
+    });
+  });
+
+  describe("getOrgUserTeamsReport", () => {
+    it("returns empty when no download_links", async () => {
+      mockGithubFetch.mockResolvedValue({});
+      const result = await client.getOrgUserTeamsReport("my-org", "2024-01-01");
+      expect(result).toEqual([]);
+    });
+
+    it("parses NDJSON user-team records correctly", async () => {
+      const records: UserTeamRecord[] = [
+        { day: "2024-01-01", organization_id: "my-org", team_slug: "frontend", user_id: 2, user_login: "bob" },
+      ];
+      mockGithubFetch.mockResolvedValue({ download_links: ["http://dl"] });
+      mockFetchNDJSON.mockResolvedValue(records);
+      const result = await client.getOrgUserTeamsReport("my-org", "2024-01-01");
+      expect(result).toEqual(records);
     });
   });
 
