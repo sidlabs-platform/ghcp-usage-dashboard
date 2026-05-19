@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { isMetricEnabled } from "@/lib/config/dashboard-config";
+import { isBillingSubEnabledForAnyEnterprise } from "@/lib/config/enterprise-config";
 import { getDateRange, parseAndClampDays } from "@/lib/utils";
 import {
   getPremiumUserSummary,
@@ -14,7 +14,7 @@ import { CACHE_TTL } from "@/lib/cache/memory-cache";
 
 async function handler(request: NextRequest) {
   try {
-    if (!isMetricEnabled("billing")) {
+    if (!isBillingSubEnabledForAnyEnterprise("premiumRequests")) {
       return NextResponse.json({ enabled: false });
     }
 

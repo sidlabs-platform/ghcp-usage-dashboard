@@ -100,20 +100,23 @@ describe("billingClient", () => {
   describe("parsePremiumRequestCSV", () => {
     it("parses premium request CSV", () => {
       const csv = [
-        "date,product,sku,quantity,unit_type,applied_cost_per_quantity,gross_amount,discount_amount,net_amount,username,organization,model,exceeds_quota,total_monthly_quota",
-        "2024-02-01,copilot,premium,3,request,0.1,0.3,0,0.3,bob,org-a,gpt-4,TRUE,100",
+        "date,product,sku,quantity,unit_type,applied_cost_per_quantity,gross_amount,discount_amount,net_amount,username,organization,model,exceeds_quota,total_monthly_quota,input_tokens,output_tokens,cached_tokens",
+        "2024-02-01,copilot,premium,3,request,0.1,0.3,0,0.3,bob,org-a,gpt-4,TRUE,100,120,45,30",
       ].join("\n");
       const records = billingClient.parsePremiumRequestCSV(csv);
       expect(records).toHaveLength(1);
       expect(records[0].model).toBe("gpt-4");
       expect(records[0].exceeds_quota).toBe("TRUE");
       expect(records[0].charge_scope).toBe("user");
+      expect((records[0] as Record<string, number>).input_tokens).toBe(120);
+      expect((records[0] as Record<string, number>).output_tokens).toBe(45);
+      expect((records[0] as Record<string, number>).cached_tokens).toBe(30);
     });
 
     it("handles missing/empty fields with fallback defaults", () => {
       const csv = [
-        "date,product,sku,quantity,unit_type,applied_cost_per_quantity,gross_amount,discount_amount,net_amount,username,organization,model,exceeds_quota,total_monthly_quota",
-        "2024-01-01,,,,,,,,,,,,,"
+        "date,product,sku,quantity,unit_type,applied_cost_per_quantity,gross_amount,discount_amount,net_amount,username,organization,model,exceeds_quota,total_monthly_quota,input_tokens,output_tokens,cached_tokens",
+        "2024-01-01,,,,,,,,,,,,,,,,"
       ].join("\n");
       const records = billingClient.parsePremiumRequestCSV(csv);
       expect(records).toHaveLength(1);
@@ -121,6 +124,9 @@ describe("billingClient", () => {
       expect(records[0].quantity).toBe(0);
       expect(records[0].model).toBe("");
       expect(records[0].exceeds_quota).toBe("FALSE");
+      expect((records[0] as Record<string, number>).input_tokens).toBe(0);
+      expect((records[0] as Record<string, number>).output_tokens).toBe(0);
+      expect((records[0] as Record<string, number>).cached_tokens).toBe(0);
     });
   });
 

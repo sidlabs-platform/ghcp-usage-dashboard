@@ -229,6 +229,9 @@ const PREMIUM_SORT_COLUMNS = new Set([
   "exceeds_quota",
   "total_monthly_quota",
   "charge_scope",
+  "input_tokens",
+  "output_tokens",
+  "cached_tokens",
 ]);
 
 // ── Upsert Operations ────────────────────────────────────────────────
@@ -276,8 +279,9 @@ export function upsertPremiumRequests(
     INSERT OR REPLACE INTO billing_premium_requests
       (enterprise_slug, date, product, sku, quantity, unit_type, applied_cost_per_quantity,
        gross_amount, discount_amount, net_amount, username, organization,
-       model, exceeds_quota, total_monthly_quota, charge_scope)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       model, exceeds_quota, total_monthly_quota, charge_scope,
+       input_tokens, output_tokens, cached_tokens)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
   const tx = db.transaction(() => {
     for (const r of records) {
@@ -297,7 +301,10 @@ export function upsertPremiumRequests(
         r.model,
         r.exceeds_quota,
         r.total_monthly_quota,
-        r.charge_scope
+        r.charge_scope,
+        r.input_tokens,
+        r.output_tokens,
+        r.cached_tokens
       );
     }
   });
@@ -607,7 +614,8 @@ export function getPremiumRequestsPaginated(
       `
     SELECT date, product, sku, quantity, unit_type, applied_cost_per_quantity,
            gross_amount, discount_amount, net_amount, username, organization,
-           model, exceeds_quota, total_monthly_quota, charge_scope
+           model, exceeds_quota, total_monthly_quota, charge_scope,
+           input_tokens, output_tokens, cached_tokens
     FROM billing_premium_requests
     ${where}
     ORDER BY ${safeSort} ${safeDir}
@@ -649,7 +657,10 @@ export function getPremiumUserSummary(
         THEN ROUND(COALESCE(SUM(quantity), 0) * 100.0 / MAX(total_monthly_quota), 2)
         ELSE 0
       END AS utilization_pct,
-      COALESCE(SUM(net_amount), 0) AS total_net
+      COALESCE(SUM(net_amount), 0) AS total_net,
+      COALESCE(SUM(input_tokens), 0)  AS total_input_tokens,
+      COALESCE(SUM(output_tokens), 0) AS total_output_tokens,
+      COALESCE(SUM(cached_tokens), 0) AS total_cached_tokens
     FROM billing_premium_requests
     ${buildWhereClause(clauses)}
     GROUP BY username, organization
@@ -679,7 +690,10 @@ export function getPremiumModelSummary(
       model,
       COALESCE(SUM(quantity), 0)         AS total_requests,
       COALESCE(SUM(net_amount), 0)       AS total_net,
-      COUNT(DISTINCT username)           AS unique_users
+      COUNT(DISTINCT username)           AS unique_users,
+      COALESCE(SUM(input_tokens), 0)  AS total_input_tokens,
+      COALESCE(SUM(output_tokens), 0) AS total_output_tokens,
+      COALESCE(SUM(cached_tokens), 0) AS total_cached_tokens
     FROM billing_premium_requests
     ${buildWhereClause(clauses)}
     GROUP BY model
@@ -775,7 +789,10 @@ export function getPremiumDailyTrend(
       date AS day,
       COALESCE(SUM(quantity), 0)   AS total_requests,
       COALESCE(SUM(net_amount), 0) AS total_net,
-      COUNT(DISTINCT username)     AS unique_users
+      COUNT(DISTINCT username)     AS unique_users,
+      COALESCE(SUM(input_tokens), 0)  AS total_input_tokens,
+      COALESCE(SUM(output_tokens), 0) AS total_output_tokens,
+      COALESCE(SUM(cached_tokens), 0) AS total_cached_tokens
     FROM billing_premium_requests
     ${buildWhereClause(clauses)}
     GROUP BY date

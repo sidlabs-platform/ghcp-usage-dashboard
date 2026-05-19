@@ -58,6 +58,10 @@ export function getDb(): Database.Database {
     "ALTER TABLE billing_premium_requests ADD COLUMN enterprise_slug TEXT NOT NULL DEFAULT ''",
     "ALTER TABLE billing_daily_aggregate ADD COLUMN enterprise_slug TEXT NOT NULL DEFAULT ''",
     "ALTER TABLE billing_sync_state ADD COLUMN enterprise_slug TEXT NOT NULL DEFAULT ''",
+    // Token usage fields for premium requests
+    "ALTER TABLE billing_premium_requests ADD COLUMN input_tokens REAL DEFAULT 0",
+    "ALTER TABLE billing_premium_requests ADD COLUMN output_tokens REAL DEFAULT 0",
+    "ALTER TABLE billing_premium_requests ADD COLUMN cached_tokens REAL DEFAULT 0",
     // Summary tables
     "ALTER TABLE user_period_summary ADD COLUMN enterprise_slug TEXT NOT NULL DEFAULT ''",
     "ALTER TABLE daily_aggregate_cache ADD COLUMN enterprise_slug TEXT NOT NULL DEFAULT ''",

@@ -79,6 +79,9 @@ export interface BillingPremiumRequestRecord {
   exceeds_quota: string;         // "TRUE" or "FALSE"
   total_monthly_quota: number;
   charge_scope: ChargeScope;     // Always "user" for premium requests
+  input_tokens: number;
+  output_tokens: number;
+  cached_tokens: number;
 }
 
 // ── Daily Aggregate (for charts) ──────────────────────────────────────
@@ -154,6 +157,9 @@ export interface PremiumRequestUserSummary {
   quota_limit: number;
   utilization_pct: number;
   total_net: number;
+  total_input_tokens: number;
+  total_output_tokens: number;
+  total_cached_tokens: number;
 }
 
 export interface PremiumRequestModelSummary {
@@ -161,6 +167,9 @@ export interface PremiumRequestModelSummary {
   total_requests: number;
   total_net: number;
   unique_users: number;
+  total_input_tokens: number;
+  total_output_tokens: number;
+  total_cached_tokens: number;
 }
 
 // ── Cost Center / Repository / Premium Daily Breakdown ────────────────
@@ -186,6 +195,9 @@ export interface PremiumDailyTrend {
   total_requests: number;
   total_net: number;
   unique_users: number;
+  total_input_tokens: number;
+  total_output_tokens: number;
+  total_cached_tokens: number;
 }
 
 // ── CSV Row shapes (raw from downloaded report) ───────────────────────
@@ -222,4 +234,7 @@ export interface PremiumRequestCSVRow {
   model?: string;
   exceeds_quota?: string;
   total_monthly_quota?: string;
+  input_tokens?: string;
+  output_tokens?: string;
+  cached_tokens?: string;
 }
