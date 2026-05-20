@@ -1,8 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import {
-  isBillingSubEnabledForAnyEnterprise,
-  isMetricEnabledForAnyEnterprise,
-} from "@/lib/config/enterprise-config";
+import { isMetricEnabledForAnyEnterprise } from "@/lib/config/enterprise-config";
 import { getDateRange, parseAndClampDays } from "@/lib/utils";
 import {
   getOverviewKPIs,

@@ -108,9 +108,9 @@ describe("billingClient", () => {
       expect(records[0].model).toBe("gpt-4");
       expect(records[0].exceeds_quota).toBe("TRUE");
       expect(records[0].charge_scope).toBe("user");
-      expect((records[0] as Record<string, number>).input_tokens).toBe(120);
-      expect((records[0] as Record<string, number>).output_tokens).toBe(45);
-      expect((records[0] as Record<string, number>).cached_tokens).toBe(30);
+      expect(records[0].input_tokens).toBe(120);
+      expect(records[0].output_tokens).toBe(45);
+      expect(records[0].cached_tokens).toBe(30);
     });
 
     it("handles missing/empty fields with fallback defaults", () => {
@@ -124,9 +124,9 @@ describe("billingClient", () => {
       expect(records[0].quantity).toBe(0);
       expect(records[0].model).toBe("");
       expect(records[0].exceeds_quota).toBe("FALSE");
-      expect((records[0] as Record<string, number>).input_tokens).toBe(0);
-      expect((records[0] as Record<string, number>).output_tokens).toBe(0);
-      expect((records[0] as Record<string, number>).cached_tokens).toBe(0);
+      expect(records[0].input_tokens).toBe(0);
+      expect(records[0].output_tokens).toBe(0);
+      expect(records[0].cached_tokens).toBe(0);
     });
   });
 
