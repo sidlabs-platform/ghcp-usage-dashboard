@@ -661,3 +661,133 @@ describe("appendBillingFilters edge cases", () => {
     expect(state!.status).toBe("ok");
   });
 });
+
+describe("premium requests — multi-enterprise isolation", () => {
+  const entA = "enterprise-alpha";
+  const entB = "enterprise-beta";
+  const premRecA = {
+    date: "2024-01-15", product: "copilot", sku: "prem1", quantity: 100, unit_type: "token",
+    applied_cost_per_quantity: 0.04, gross_amount: 4, discount_amount: 0, net_amount: 4,
+    username: "alice", organization: "org-shared", model: "gpt-4",
+    exceeds_quota: "FALSE", total_monthly_quota: 500, charge_scope: "user" as const,
+    input_tokens: 2000, output_tokens: 800, cached_tokens: 500,
+  };
+  const premRecB = {
+    date: "2024-01-15", product: "copilot", sku: "prem1", quantity: 60, unit_type: "token",
+    applied_cost_per_quantity: 0.04, gross_amount: 2.4, discount_amount: 0, net_amount: 2.4,
+    username: "alice", organization: "org-shared", model: "claude-3",
+    exceeds_quota: "FALSE", total_monthly_quota: 300, charge_scope: "user" as const,
+    input_tokens: 1200, output_tokens: 400, cached_tokens: 200,
+  };
+
+  beforeEach(() => {
+    upsertPremiumRequests(entA, [premRecA]);
+    upsertPremiumRequests(entB, [premRecB]);
+  });
+
+  it("getPremiumRequestsPaginated isolates by enterprise", () => {
+    const a = getPremiumRequestsPaginated("2024-01-01", "2024-01-31", 1, 50, "date", "desc", undefined, undefined, [entA]);
+    expect(a.total).toBe(1);
+    expect(a.records[0].model).toBe("gpt-4");
+    expect(a.records[0].input_tokens).toBe(2000);
+
+    const b = getPremiumRequestsPaginated("2024-01-01", "2024-01-31", 1, 50, "date", "desc", undefined, undefined, [entB]);
+    expect(b.total).toBe(1);
+    expect(b.records[0].model).toBe("claude-3");
+    expect(b.records[0].input_tokens).toBe(1200);
+
+    // No enterprise filter → both
+    const all = getPremiumRequestsPaginated("2024-01-01", "2024-01-31", 1, 50, "date", "desc");
+    expect(all.total).toBe(2);
+  });
+
+  it("getPremiumUserSummary aggregates correctly per enterprise", () => {
+    const a = getPremiumUserSummary("2024-01-01", "2024-01-31", undefined, [entA]);
+    expect(a).toHaveLength(1);
+    expect(a[0].total_requests).toBe(100);
+    expect(a[0].total_input_tokens).toBe(2000);
+    expect(a[0].total_output_tokens).toBe(800);
+    expect(a[0].total_cached_tokens).toBe(500);
+
+    // Aggregate (no filter): same user in both enterprises → merges into one row
+    const all = getPremiumUserSummary("2024-01-01", "2024-01-31");
+    expect(all).toHaveLength(1); // same username+org → grouped
+    expect(all[0].total_requests).toBe(160); // 100 + 60
+    expect(all[0].total_input_tokens).toBe(3200); // 2000 + 1200
+  });
+
+  it("getPremiumModelSummary isolates by enterprise with token sums", () => {
+    const a = getPremiumModelSummary("2024-01-01", "2024-01-31", undefined, [entA]);
+    expect(a).toHaveLength(1);
+    expect(a[0].model).toBe("gpt-4");
+    expect(a[0].total_input_tokens).toBe(2000);
+
+    const b = getPremiumModelSummary("2024-01-01", "2024-01-31", undefined, [entB]);
+    expect(b).toHaveLength(1);
+    expect(b[0].model).toBe("claude-3");
+    expect(b[0].total_input_tokens).toBe(1200);
+
+    // No filter → two models
+    const all = getPremiumModelSummary("2024-01-01", "2024-01-31");
+    expect(all).toHaveLength(2);
+  });
+
+  it("getPremiumDailyTrend aggregates by enterprise with tokens", () => {
+    const a = getPremiumDailyTrend("2024-01-01", "2024-01-31", undefined, [entA]);
+    expect(a).toHaveLength(1);
+    expect(a[0].total_requests).toBe(100);
+    expect(a[0].total_input_tokens).toBe(2000);
+    expect(a[0].total_cached_tokens).toBe(500);
+
+    // Aggregate: same day → merged
+    const all = getPremiumDailyTrend("2024-01-01", "2024-01-31");
+    expect(all).toHaveLength(1);
+    expect(all[0].total_requests).toBe(160);
+    expect(all[0].total_input_tokens).toBe(3200);
+  });
+
+  it("getPremiumFilterOptions scoped to enterprise", () => {
+    const a = getPremiumFilterOptions("2024-01-01", "2024-01-31", [entA]);
+    expect(a.models).toEqual(["gpt-4"]);
+
+    const b = getPremiumFilterOptions("2024-01-01", "2024-01-31", [entB]);
+    expect(b.models).toEqual(["claude-3"]);
+
+    const all = getPremiumFilterOptions("2024-01-01", "2024-01-31");
+    expect(all.models).toEqual(expect.arrayContaining(["claude-3", "gpt-4"]));
+  });
+
+  it("getOverviewKPIs includes premium totals scoped by enterprise", () => {
+    // Enterprise A has usage + premium
+    upsertUsageRecords(entA, [
+      { date: "2024-01-15", product: "copilot", sku: "seat", quantity: 1, unit_type: "seat", applied_cost_per_quantity: 19, gross_amount: 19, discount_amount: 0, net_amount: 19, organization: "org-shared", repository: "", username: "alice", workflow_path: "", cost_center_name: "", charge_scope: "user" },
+    ]);
+
+    const a = getOverviewKPIs("2024-01-01", "2024-01-31", undefined, [entA]);
+    expect(a.totalNet).toBe(19 + 4); // usage net + premium net
+    expect(a.userChargesNet).toBe(19 + 4);
+
+    const b = getOverviewKPIs("2024-01-01", "2024-01-31", undefined, [entB]);
+    expect(b.totalNet).toBe(2.4); // only premium, no usage in ent-b
+  });
+
+  it("non-matching enterprise returns empty results", () => {
+    const r = getPremiumRequestsPaginated("2024-01-01", "2024-01-31", 1, 50, "date", "desc", undefined, undefined, ["no-such-enterprise"]);
+    expect(r.total).toBe(0);
+
+    const summary = getPremiumUserSummary("2024-01-01", "2024-01-31", undefined, ["no-such-enterprise"]);
+    expect(summary).toHaveLength(0);
+
+    const trend = getPremiumDailyTrend("2024-01-01", "2024-01-31", undefined, ["no-such-enterprise"]);
+    expect(trend).toHaveLength(0);
+  });
+
+  it("multi-enterprise selection returns combined data", () => {
+    const both = getPremiumRequestsPaginated("2024-01-01", "2024-01-31", 1, 50, "date", "desc", undefined, undefined, [entA, entB]);
+    expect(both.total).toBe(2);
+
+    const summary = getPremiumUserSummary("2024-01-01", "2024-01-31", undefined, [entA, entB]);
+    expect(summary).toHaveLength(1); // same user/org → grouped
+    expect(summary[0].total_requests).toBe(160);
+  });
+});
