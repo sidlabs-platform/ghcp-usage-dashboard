@@ -615,7 +615,9 @@ export function getPremiumRequestsPaginated(
     SELECT date, product, sku, quantity, unit_type, applied_cost_per_quantity,
            gross_amount, discount_amount, net_amount, username, organization,
            model, exceeds_quota, total_monthly_quota, charge_scope,
-           input_tokens, output_tokens, cached_tokens
+           COALESCE(input_tokens, 0) AS input_tokens,
+           COALESCE(output_tokens, 0) AS output_tokens,
+           COALESCE(cached_tokens, 0) AS cached_tokens
     FROM billing_premium_requests
     ${where}
     ORDER BY ${safeSort} ${safeDir}
