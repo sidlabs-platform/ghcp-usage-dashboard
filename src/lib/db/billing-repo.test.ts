@@ -30,6 +30,19 @@ import {
   getPremiumDailyTrend,
   refreshBillingDailyAggregates,
 } from "./billing-repo";
+import type { BillingPremiumRequestRecord } from "@/lib/types/billing";
+
+/** Factory for premium request records with sensible defaults. */
+function makePremiumRecord(overrides: Partial<BillingPremiumRequestRecord> = {}): BillingPremiumRequestRecord {
+  return {
+    date: "2024-01-10", product: "copilot", sku: "prem1", quantity: 100,
+    unit_type: "token", applied_cost_per_quantity: 0.01, gross_amount: 1,
+    discount_amount: 0, net_amount: 1, username: "dev1", organization: "org1",
+    model: "gpt-4", exceeds_quota: "FALSE", total_monthly_quota: 500,
+    charge_scope: "user", input_tokens: 0, output_tokens: 0, cached_tokens: 0,
+    ...overrides,
+  };
+}
 
 beforeAll(() => {
   db = new Database(":memory:");
@@ -73,11 +86,14 @@ describe("upsertUsageRecords", () => {
 describe("upsertPremiumRequests", () => {
   it("inserts premium records", () => {
     upsertPremiumRequests("ent1", [
-      { date: "2024-01-10", product: "copilot", sku: "prem1", quantity: 100, unit_type: "token", applied_cost_per_quantity: 0.01, gross_amount: 1, discount_amount: 0, net_amount: 1, username: "dev1", organization: "org1", model: "gpt-4", exceeds_quota: "FALSE", total_monthly_quota: 500, charge_scope: "user" },
+      makePremiumRecord({ input_tokens: 1000, output_tokens: 400, cached_tokens: 250 }),
     ]);
     const rows = db.prepare("SELECT * FROM billing_premium_requests").all() as any[];
     expect(rows).toHaveLength(1);
     expect(rows[0].model).toBe("gpt-4");
+    expect(rows[0].input_tokens).toBe(1000);
+    expect(rows[0].output_tokens).toBe(400);
+    expect(rows[0].cached_tokens).toBe(250);
   });
 });
 
@@ -93,7 +109,7 @@ describe("getOverviewKPIs", () => {
       { date: "2024-01-10", product: "copilot", sku: "s1", quantity: 1, unit_type: "seat", applied_cost_per_quantity: 10, gross_amount: 10, discount_amount: 2, net_amount: 8, organization: "org1", repository: "", username: "u1", workflow_path: "", cost_center_name: "", charge_scope: "user" },
     ]);
     upsertPremiumRequests("ent1", [
-      { date: "2024-01-10", product: "copilot", sku: "p1", quantity: 50, unit_type: "token", applied_cost_per_quantity: 0.1, gross_amount: 5, discount_amount: 0, net_amount: 5, username: "u1", organization: "org1", model: "gpt-4", exceeds_quota: "FALSE", total_monthly_quota: 200, charge_scope: "user" },
+      makePremiumRecord({ sku: "p1", quantity: 50, applied_cost_per_quantity: 0.1, gross_amount: 5, net_amount: 5, username: "u1", total_monthly_quota: 200 }),
     ]);
     const kpis = getOverviewKPIs("2024-01-01", "2024-01-31");
     expect(kpis.totalNet).toBe(13); // 8 + 5
@@ -123,8 +139,8 @@ describe("getOverviewKPIs", () => {
 
   it("applies scopeOrgs filter to premium KPIs", () => {
     upsertPremiumRequests("ent1", [
-      { date: "2024-02-05", product: "copilot", sku: "p1", quantity: 10, unit_type: "token", applied_cost_per_quantity: 1, gross_amount: 10, discount_amount: 0, net_amount: 10, username: "u1", organization: "scoped-org", model: "gpt-4", exceeds_quota: "FALSE", total_monthly_quota: 100, charge_scope: "user" },
-      { date: "2024-02-05", product: "copilot", sku: "p2", quantity: 20, unit_type: "token", applied_cost_per_quantity: 1, gross_amount: 20, discount_amount: 0, net_amount: 20, username: "u2", organization: "other-org", model: "gpt-4", exceeds_quota: "FALSE", total_monthly_quota: 100, charge_scope: "user" },
+      makePremiumRecord({ date: "2024-02-05", sku: "p1", quantity: 10, applied_cost_per_quantity: 1, gross_amount: 10, net_amount: 10, username: "u1", organization: "scoped-org", total_monthly_quota: 100 }),
+      makePremiumRecord({ date: "2024-02-05", sku: "p2", quantity: 20, applied_cost_per_quantity: 1, gross_amount: 20, net_amount: 20, username: "u2", organization: "other-org", total_monthly_quota: 100 }),
     ]);
     const kpis = getOverviewKPIs("2024-02-05", "2024-02-05", { scopeOrgs: ["scoped-org"] });
     expect(kpis.totalNet).toBeGreaterThanOrEqual(10);
@@ -182,8 +198,8 @@ describe("getUsageFilterOptions", () => {
 describe("getPremiumFilterOptions", () => {
   it("returns distinct premium filter values", () => {
     upsertPremiumRequests("ent1", [
-      { date: "2024-01-10", product: "copilot", sku: "p1", quantity: 100, unit_type: "token", applied_cost_per_quantity: 0.01, gross_amount: 1, discount_amount: 0, net_amount: 1, username: "dev1", organization: "org1", model: "gpt-4", exceeds_quota: "FALSE", total_monthly_quota: 500, charge_scope: "user" },
-      { date: "2024-01-10", product: "copilot", sku: "p2", quantity: 50, unit_type: "token", applied_cost_per_quantity: 0.02, gross_amount: 1, discount_amount: 0, net_amount: 1, username: "dev2", organization: "org2", model: "claude-3", exceeds_quota: "FALSE", total_monthly_quota: 300, charge_scope: "user" },
+      makePremiumRecord({ sku: "p1" }),
+      makePremiumRecord({ sku: "p2", quantity: 50, applied_cost_per_quantity: 0.02, username: "dev2", organization: "org2", model: "claude-3", total_monthly_quota: 300 }),
     ]);
     const opts = getPremiumFilterOptions("2024-01-01", "2024-01-31");
     expect(opts.models).toEqual(["claude-3", "gpt-4"]);
@@ -335,17 +351,20 @@ describe("getUsageRecordsPaginated", () => {
 describe("getPremiumRequestsPaginated", () => {
   it("paginates premium records", () => {
     upsertPremiumRequests("ent1", [
-      { date: "2024-01-10", product: "copilot", sku: "p1", quantity: 100, unit_type: "token", applied_cost_per_quantity: 0.01, gross_amount: 1, discount_amount: 0, net_amount: 1, username: "dev1", organization: "org1", model: "gpt-4", exceeds_quota: "FALSE", total_monthly_quota: 500, charge_scope: "user" },
-      { date: "2024-01-11", product: "copilot", sku: "p2", quantity: 200, unit_type: "token", applied_cost_per_quantity: 0.01, gross_amount: 2, discount_amount: 0, net_amount: 2, username: "dev2", organization: "org1", model: "claude-3", exceeds_quota: "FALSE", total_monthly_quota: 300, charge_scope: "user" },
+      makePremiumRecord({ sku: "p1", input_tokens: 1000, output_tokens: 400, cached_tokens: 250 }),
+      makePremiumRecord({ date: "2024-01-11", sku: "p2", quantity: 200, gross_amount: 2, net_amount: 2, username: "dev2", model: "claude-3", total_monthly_quota: 300, input_tokens: 2000, output_tokens: 800, cached_tokens: 500 }),
     ]);
     const page1 = getPremiumRequestsPaginated("2024-01-01", "2024-01-31", 1, 1, "date", "asc");
     expect(page1.total).toBe(2);
     expect(page1.records).toHaveLength(1);
+    expect(page1.records[0].input_tokens).toBe(1000);
+    expect(page1.records[0].output_tokens).toBe(400);
+    expect(page1.records[0].cached_tokens).toBe(250);
   });
 
   it("supports search filter", () => {
     upsertPremiumRequests("ent1", [
-      { date: "2024-01-12", product: "copilot", sku: "p1", quantity: 10, unit_type: "token", applied_cost_per_quantity: 0.01, gross_amount: 0.1, discount_amount: 0, net_amount: 0.1, username: "search-user", organization: "org1", model: "gpt-4", exceeds_quota: "FALSE", total_monthly_quota: 500, charge_scope: "user" },
+      makePremiumRecord({ date: "2024-01-12", sku: "p1", quantity: 10, gross_amount: 0.1, net_amount: 0.1, username: "search-user" }),
     ]);
     const result = getPremiumRequestsPaginated("2024-01-01", "2024-01-31", 1, 10, "date", "asc", "search-user");
     expect(result.total).toBe(1);
@@ -359,7 +378,7 @@ describe("getPremiumRequestsPaginated", () => {
 
   it("supports exceedsQuota filter", () => {
     upsertPremiumRequests("ent1", [
-      { date: "2024-01-13", product: "copilot", sku: "p1", quantity: 999, unit_type: "token", applied_cost_per_quantity: 0.01, gross_amount: 9.99, discount_amount: 0, net_amount: 9.99, username: "heavy-user", organization: "org1", model: "gpt-4", exceeds_quota: "TRUE", total_monthly_quota: 500, charge_scope: "user" },
+      makePremiumRecord({ date: "2024-01-13", sku: "p1", quantity: 999, gross_amount: 9.99, net_amount: 9.99, username: "heavy-user", exceeds_quota: "TRUE" }),
     ]);
     const result = getPremiumRequestsPaginated("2024-01-01", "2024-01-31", 1, 10, "date", "asc", undefined, { exceedsQuota: true });
     expect(result.records.every(r => r.exceeds_quota === "TRUE")).toBe(true);
@@ -378,8 +397,8 @@ describe("getPremiumRequestsPaginated", () => {
 
   it("supports username filter in appendPremiumFilters", () => {
     upsertPremiumRequests("ent1", [
-      { date: "2024-01-14", product: "copilot", sku: "p1", quantity: 10, unit_type: "token", applied_cost_per_quantity: 0.01, gross_amount: 0.1, discount_amount: 0, net_amount: 0.1, username: "prem-target", organization: "org1", model: "gpt-4", exceeds_quota: "FALSE", total_monthly_quota: 500, charge_scope: "user" },
-      { date: "2024-01-14", product: "copilot", sku: "p1", quantity: 5, unit_type: "token", applied_cost_per_quantity: 0.01, gross_amount: 0.05, discount_amount: 0, net_amount: 0.05, username: "prem-other", organization: "org1", model: "gpt-4", exceeds_quota: "FALSE", total_monthly_quota: 500, charge_scope: "user" },
+      makePremiumRecord({ date: "2024-01-14", sku: "p1", quantity: 10, gross_amount: 0.1, net_amount: 0.1, username: "prem-target" }),
+      makePremiumRecord({ date: "2024-01-14", sku: "p1", quantity: 5, gross_amount: 0.05, net_amount: 0.05, username: "prem-other" }),
     ]);
     const result = getPremiumRequestsPaginated("2024-01-14", "2024-01-14", 1, 10, "date", "asc", undefined, { username: "prem-target" });
     expect(result.total).toBe(1);
@@ -388,8 +407,8 @@ describe("getPremiumRequestsPaginated", () => {
 
   it("applies org+scopeOrgs intersection for premium requests", () => {
     upsertPremiumRequests("ent1", [
-      { date: "2024-02-20", product: "copilot", sku: "p1", quantity: 50, unit_type: "token", applied_cost_per_quantity: 0.01, gross_amount: 0.5, discount_amount: 0, net_amount: 0.5, username: "prem-u1", organization: "prem-shared", model: "gpt-4", exceeds_quota: "FALSE", total_monthly_quota: 500, charge_scope: "user" },
-      { date: "2024-02-20", product: "copilot", sku: "p1", quantity: 30, unit_type: "token", applied_cost_per_quantity: 0.01, gross_amount: 0.3, discount_amount: 0, net_amount: 0.3, username: "prem-u2", organization: "prem-other", model: "gpt-4", exceeds_quota: "FALSE", total_monthly_quota: 500, charge_scope: "user" },
+      makePremiumRecord({ date: "2024-02-20", sku: "p1", quantity: 50, gross_amount: 0.5, net_amount: 0.5, username: "prem-u1", organization: "prem-shared" }),
+      makePremiumRecord({ date: "2024-02-20", sku: "p1", quantity: 30, gross_amount: 0.3, net_amount: 0.3, username: "prem-u2", organization: "prem-other" }),
     ]);
     const result = getPremiumRequestsPaginated("2024-02-20", "2024-02-20", 1, 10, "date", "asc", undefined, { organization: ["prem-shared", "prem-other"], scopeOrgs: ["prem-shared"] });
     expect(result.records.every(r => r.organization === "prem-shared")).toBe(true);
@@ -407,7 +426,7 @@ describe("getPremiumRequestsPaginated", () => {
 
   it("falls back to date sort for unknown premium sort field", () => {
     upsertPremiumRequests("ent1", [
-      { date: "2024-01-10", product: "copilot", sku: "p1", quantity: 100, unit_type: "token", applied_cost_per_quantity: 0.01, gross_amount: 1, discount_amount: 0, net_amount: 1, username: "dev1", organization: "org1", model: "gpt-4", exceeds_quota: "FALSE", total_monthly_quota: 500, charge_scope: "user" },
+      makePremiumRecord(),
     ]);
     const result = getPremiumRequestsPaginated("2024-01-01", "2024-01-31", 1, 10, "bad_field", "asc");
     expect(result.total).toBeGreaterThanOrEqual(1);
@@ -415,7 +434,7 @@ describe("getPremiumRequestsPaginated", () => {
 
   it("filters by exceedsQuota false", () => {
     upsertPremiumRequests("ent1", [
-      { date: "2024-03-01", product: "copilot", sku: "p1", quantity: 10, unit_type: "token", applied_cost_per_quantity: 0.01, gross_amount: 0.1, discount_amount: 0, net_amount: 0.1, username: "q-user", organization: "org1", model: "gpt-4", exceeds_quota: "FALSE", total_monthly_quota: 500, charge_scope: "user" },
+      makePremiumRecord({ date: "2024-03-01", quantity: 10, gross_amount: 0.1, net_amount: 0.1, username: "q-user" }),
     ]);
     const result = getPremiumRequestsPaginated("2024-03-01", "2024-03-01", 1, 10, "date", "asc", undefined, { exceedsQuota: false });
     expect(result.records.every(r => r.exceeds_quota === "FALSE")).toBe(true);
@@ -423,7 +442,7 @@ describe("getPremiumRequestsPaginated", () => {
 
   it("filters by scopeOrgs alone without page-level org filter", () => {
     upsertPremiumRequests("ent1", [
-      { date: "2024-03-02", product: "copilot", sku: "p1", quantity: 20, unit_type: "token", applied_cost_per_quantity: 0.01, gross_amount: 0.2, discount_amount: 0, net_amount: 0.2, username: "scope-u", organization: "scoped-org", model: "gpt-4", exceeds_quota: "FALSE", total_monthly_quota: 500, charge_scope: "user" },
+      makePremiumRecord({ date: "2024-03-02", quantity: 20, gross_amount: 0.2, net_amount: 0.2, username: "scope-u", organization: "scoped-org" }),
     ]);
     const result = getPremiumRequestsPaginated("2024-03-02", "2024-03-02", 1, 10, "date", "asc", undefined, { scopeOrgs: ["scoped-org"] });
     expect(result.total).toBe(1);
@@ -433,27 +452,33 @@ describe("getPremiumRequestsPaginated", () => {
 describe("getPremiumUserSummary", () => {
   it("aggregates per user", () => {
     upsertPremiumRequests("ent1", [
-      { date: "2024-01-10", product: "copilot", sku: "p1", quantity: 100, unit_type: "token", applied_cost_per_quantity: 0.01, gross_amount: 1, discount_amount: 0, net_amount: 1, username: "dev1", organization: "org1", model: "gpt-4", exceeds_quota: "FALSE", total_monthly_quota: 500, charge_scope: "user" },
-      { date: "2024-01-11", product: "copilot", sku: "p2", quantity: 50, unit_type: "token", applied_cost_per_quantity: 0.02, gross_amount: 1, discount_amount: 0, net_amount: 1, username: "dev1", organization: "org1", model: "claude-3", exceeds_quota: "FALSE", total_monthly_quota: 500, charge_scope: "user" },
+      makePremiumRecord({ sku: "p1", input_tokens: 1000, output_tokens: 400, cached_tokens: 250 }),
+      makePremiumRecord({ date: "2024-01-11", sku: "p2", quantity: 50, applied_cost_per_quantity: 0.02, model: "claude-3", input_tokens: 500, output_tokens: 200, cached_tokens: 100 }),
     ]);
     const summary = getPremiumUserSummary("2024-01-01", "2024-01-31");
     expect(summary).toHaveLength(1);
     expect(summary[0].username).toBe("dev1");
     expect(summary[0].total_requests).toBe(150);
+    expect(summary[0].total_input_tokens).toBe(1500);
+    expect(summary[0].total_output_tokens).toBe(600);
+    expect(summary[0].total_cached_tokens).toBe(350);
   });
 });
 
 describe("getPremiumModelSummary", () => {
   it("aggregates per model", () => {
     upsertPremiumRequests("ent1", [
-      { date: "2024-01-10", product: "copilot", sku: "p1", quantity: 100, unit_type: "token", applied_cost_per_quantity: 0.01, gross_amount: 1, discount_amount: 0, net_amount: 1, username: "dev1", organization: "org1", model: "gpt-4", exceeds_quota: "FALSE", total_monthly_quota: 500, charge_scope: "user" },
-      { date: "2024-01-10", product: "copilot", sku: "p2", quantity: 200, unit_type: "token", applied_cost_per_quantity: 0.01, gross_amount: 2, discount_amount: 0, net_amount: 2, username: "dev2", organization: "org1", model: "gpt-4", exceeds_quota: "FALSE", total_monthly_quota: 300, charge_scope: "user" },
+      makePremiumRecord({ sku: "p1", input_tokens: 1000, output_tokens: 400, cached_tokens: 250 }),
+      makePremiumRecord({ sku: "p2", quantity: 200, gross_amount: 2, net_amount: 2, username: "dev2", total_monthly_quota: 300, input_tokens: 2000, output_tokens: 900, cached_tokens: 500 }),
     ]);
     const summary = getPremiumModelSummary("2024-01-01", "2024-01-31");
     expect(summary).toHaveLength(1);
     expect(summary[0].model).toBe("gpt-4");
     expect(summary[0].total_requests).toBe(300);
     expect(summary[0].unique_users).toBe(2);
+    expect(summary[0].total_input_tokens).toBe(3000);
+    expect(summary[0].total_output_tokens).toBe(1300);
+    expect(summary[0].total_cached_tokens).toBe(750);
   });
 });
 
@@ -482,12 +507,15 @@ describe("getRepositoryBreakdown", () => {
 describe("getPremiumDailyTrend", () => {
   it("groups by day", () => {
     upsertPremiumRequests("ent1", [
-      { date: "2024-01-10", product: "copilot", sku: "p1", quantity: 100, unit_type: "token", applied_cost_per_quantity: 0.01, gross_amount: 1, discount_amount: 0, net_amount: 1, username: "dev1", organization: "org1", model: "gpt-4", exceeds_quota: "FALSE", total_monthly_quota: 500, charge_scope: "user" },
-      { date: "2024-01-11", product: "copilot", sku: "p2", quantity: 200, unit_type: "token", applied_cost_per_quantity: 0.01, gross_amount: 2, discount_amount: 0, net_amount: 2, username: "dev1", organization: "org1", model: "gpt-4", exceeds_quota: "FALSE", total_monthly_quota: 500, charge_scope: "user" },
+      makePremiumRecord({ sku: "p1", input_tokens: 1000, output_tokens: 400, cached_tokens: 250 }),
+      makePremiumRecord({ date: "2024-01-11", sku: "p2", quantity: 200, gross_amount: 2, net_amount: 2, input_tokens: 2000, output_tokens: 800, cached_tokens: 500 }),
     ]);
     const trend = getPremiumDailyTrend("2024-01-01", "2024-01-31");
     expect(trend).toHaveLength(2);
     expect(trend[0].day).toBe("2024-01-10");
+    expect(trend[0].total_input_tokens).toBe(1000);
+    expect(trend[0].total_output_tokens).toBe(400);
+    expect(trend[0].total_cached_tokens).toBe(250);
   });
 });
 
@@ -593,7 +621,7 @@ describe("appendBillingFilters edge cases", () => {
 
   it("getPremiumRequestsPaginated with enterpriseSlugs", () => {
     upsertPremiumRequests("ent1", [
-      { date: "2024-01-10", product: "copilot", sku: "p1", quantity: 100, unit_type: "token", applied_cost_per_quantity: 0.01, gross_amount: 1, discount_amount: 0, net_amount: 1, username: "u1", organization: "org1", model: "gpt-4", exceeds_quota: "FALSE", total_monthly_quota: 500, charge_scope: "user" },
+      makePremiumRecord({ sku: "p1", username: "u1" }),
     ]);
     const r = getPremiumRequestsPaginated("2024-01-01", "2024-01-31", 1, 10, "date", "asc", undefined, undefined, ["ent1"]);
     expect(r.total).toBe(1);
@@ -601,7 +629,7 @@ describe("appendBillingFilters edge cases", () => {
 
   it("getPremiumUserSummary with enterpriseSlugs", () => {
     upsertPremiumRequests("ent1", [
-      { date: "2024-01-10", product: "copilot", sku: "p1", quantity: 100, unit_type: "token", applied_cost_per_quantity: 0.01, gross_amount: 1, discount_amount: 0, net_amount: 1, username: "u1", organization: "org1", model: "gpt-4", exceeds_quota: "FALSE", total_monthly_quota: 500, charge_scope: "user" },
+      makePremiumRecord({ sku: "p1", username: "u1" }),
     ]);
     const rows = getPremiumUserSummary("2024-01-01", "2024-01-31", undefined, ["ent1"]);
     expect(rows.length).toBe(1);
@@ -609,7 +637,7 @@ describe("appendBillingFilters edge cases", () => {
 
   it("getPremiumModelSummary with enterpriseSlugs", () => {
     upsertPremiumRequests("ent1", [
-      { date: "2024-01-10", product: "copilot", sku: "p1", quantity: 100, unit_type: "token", applied_cost_per_quantity: 0.01, gross_amount: 1, discount_amount: 0, net_amount: 1, username: "u1", organization: "org1", model: "gpt-4", exceeds_quota: "FALSE", total_monthly_quota: 500, charge_scope: "user" },
+      makePremiumRecord({ sku: "p1", username: "u1" }),
     ]);
     const rows = getPremiumModelSummary("2024-01-01", "2024-01-31", undefined, ["ent1"]);
     expect(rows.length).toBe(1);
@@ -633,7 +661,7 @@ describe("appendBillingFilters edge cases", () => {
 
   it("getPremiumDailyTrend with enterpriseSlugs", () => {
     upsertPremiumRequests("ent1", [
-      { date: "2024-01-10", product: "copilot", sku: "p1", quantity: 100, unit_type: "token", applied_cost_per_quantity: 0.01, gross_amount: 1, discount_amount: 0, net_amount: 1, username: "u1", organization: "org1", model: "gpt-4", exceeds_quota: "FALSE", total_monthly_quota: 500, charge_scope: "user" },
+      makePremiumRecord({ sku: "p1", username: "u1" }),
     ]);
     const rows = getPremiumDailyTrend("2024-01-01", "2024-01-31", undefined, ["ent1"]);
     expect(rows.length).toBe(1);
@@ -644,5 +672,135 @@ describe("appendBillingFilters edge cases", () => {
     const state = getBillingSyncState("detailed", "");
     expect(state).not.toBeNull();
     expect(state!.status).toBe("ok");
+  });
+});
+
+describe("premium requests — multi-enterprise isolation", () => {
+  const entA = "enterprise-alpha";
+  const entB = "enterprise-beta";
+  const premRecA = {
+    date: "2024-01-15", product: "copilot", sku: "prem1", quantity: 100, unit_type: "token",
+    applied_cost_per_quantity: 0.04, gross_amount: 4, discount_amount: 0, net_amount: 4,
+    username: "alice", organization: "org-shared", model: "gpt-4",
+    exceeds_quota: "FALSE", total_monthly_quota: 500, charge_scope: "user" as const,
+    input_tokens: 2000, output_tokens: 800, cached_tokens: 500,
+  };
+  const premRecB = {
+    date: "2024-01-15", product: "copilot", sku: "prem1", quantity: 60, unit_type: "token",
+    applied_cost_per_quantity: 0.04, gross_amount: 2.4, discount_amount: 0, net_amount: 2.4,
+    username: "alice", organization: "org-shared", model: "claude-3",
+    exceeds_quota: "FALSE", total_monthly_quota: 300, charge_scope: "user" as const,
+    input_tokens: 1200, output_tokens: 400, cached_tokens: 200,
+  };
+
+  beforeEach(() => {
+    upsertPremiumRequests(entA, [premRecA]);
+    upsertPremiumRequests(entB, [premRecB]);
+  });
+
+  it("getPremiumRequestsPaginated isolates by enterprise", () => {
+    const a = getPremiumRequestsPaginated("2024-01-01", "2024-01-31", 1, 50, "date", "desc", undefined, undefined, [entA]);
+    expect(a.total).toBe(1);
+    expect(a.records[0].model).toBe("gpt-4");
+    expect(a.records[0].input_tokens).toBe(2000);
+
+    const b = getPremiumRequestsPaginated("2024-01-01", "2024-01-31", 1, 50, "date", "desc", undefined, undefined, [entB]);
+    expect(b.total).toBe(1);
+    expect(b.records[0].model).toBe("claude-3");
+    expect(b.records[0].input_tokens).toBe(1200);
+
+    // No enterprise filter → both
+    const all = getPremiumRequestsPaginated("2024-01-01", "2024-01-31", 1, 50, "date", "desc");
+    expect(all.total).toBe(2);
+  });
+
+  it("getPremiumUserSummary aggregates correctly per enterprise", () => {
+    const a = getPremiumUserSummary("2024-01-01", "2024-01-31", undefined, [entA]);
+    expect(a).toHaveLength(1);
+    expect(a[0].total_requests).toBe(100);
+    expect(a[0].total_input_tokens).toBe(2000);
+    expect(a[0].total_output_tokens).toBe(800);
+    expect(a[0].total_cached_tokens).toBe(500);
+
+    // Aggregate (no filter): same user in both enterprises → merges into one row
+    const all = getPremiumUserSummary("2024-01-01", "2024-01-31");
+    expect(all).toHaveLength(1); // same username+org → grouped
+    expect(all[0].total_requests).toBe(160); // 100 + 60
+    expect(all[0].total_input_tokens).toBe(3200); // 2000 + 1200
+  });
+
+  it("getPremiumModelSummary isolates by enterprise with token sums", () => {
+    const a = getPremiumModelSummary("2024-01-01", "2024-01-31", undefined, [entA]);
+    expect(a).toHaveLength(1);
+    expect(a[0].model).toBe("gpt-4");
+    expect(a[0].total_input_tokens).toBe(2000);
+
+    const b = getPremiumModelSummary("2024-01-01", "2024-01-31", undefined, [entB]);
+    expect(b).toHaveLength(1);
+    expect(b[0].model).toBe("claude-3");
+    expect(b[0].total_input_tokens).toBe(1200);
+
+    // No filter → two models
+    const all = getPremiumModelSummary("2024-01-01", "2024-01-31");
+    expect(all).toHaveLength(2);
+  });
+
+  it("getPremiumDailyTrend aggregates by enterprise with tokens", () => {
+    const a = getPremiumDailyTrend("2024-01-01", "2024-01-31", undefined, [entA]);
+    expect(a).toHaveLength(1);
+    expect(a[0].total_requests).toBe(100);
+    expect(a[0].total_input_tokens).toBe(2000);
+    expect(a[0].total_cached_tokens).toBe(500);
+
+    // Aggregate: same day → merged
+    const all = getPremiumDailyTrend("2024-01-01", "2024-01-31");
+    expect(all).toHaveLength(1);
+    expect(all[0].total_requests).toBe(160);
+    expect(all[0].total_input_tokens).toBe(3200);
+  });
+
+  it("getPremiumFilterOptions scoped to enterprise", () => {
+    const a = getPremiumFilterOptions("2024-01-01", "2024-01-31", [entA]);
+    expect(a.models).toEqual(["gpt-4"]);
+
+    const b = getPremiumFilterOptions("2024-01-01", "2024-01-31", [entB]);
+    expect(b.models).toEqual(["claude-3"]);
+
+    const all = getPremiumFilterOptions("2024-01-01", "2024-01-31");
+    expect(all.models).toEqual(expect.arrayContaining(["claude-3", "gpt-4"]));
+  });
+
+  it("getOverviewKPIs includes premium totals scoped by enterprise", () => {
+    // Enterprise A has usage + premium
+    upsertUsageRecords(entA, [
+      { date: "2024-01-15", product: "copilot", sku: "seat", quantity: 1, unit_type: "seat", applied_cost_per_quantity: 19, gross_amount: 19, discount_amount: 0, net_amount: 19, organization: "org-shared", repository: "", username: "alice", workflow_path: "", cost_center_name: "", charge_scope: "user" },
+    ]);
+
+    const a = getOverviewKPIs("2024-01-01", "2024-01-31", undefined, [entA]);
+    expect(a.totalNet).toBe(19 + 4); // usage net + premium net
+    expect(a.userChargesNet).toBe(19 + 4);
+
+    const b = getOverviewKPIs("2024-01-01", "2024-01-31", undefined, [entB]);
+    expect(b.totalNet).toBe(2.4); // only premium, no usage in ent-b
+  });
+
+  it("non-matching enterprise returns empty results", () => {
+    const r = getPremiumRequestsPaginated("2024-01-01", "2024-01-31", 1, 50, "date", "desc", undefined, undefined, ["no-such-enterprise"]);
+    expect(r.total).toBe(0);
+
+    const summary = getPremiumUserSummary("2024-01-01", "2024-01-31", undefined, ["no-such-enterprise"]);
+    expect(summary).toHaveLength(0);
+
+    const trend = getPremiumDailyTrend("2024-01-01", "2024-01-31", undefined, ["no-such-enterprise"]);
+    expect(trend).toHaveLength(0);
+  });
+
+  it("multi-enterprise selection returns combined data", () => {
+    const both = getPremiumRequestsPaginated("2024-01-01", "2024-01-31", 1, 50, "date", "desc", undefined, undefined, [entA, entB]);
+    expect(both.total).toBe(2);
+
+    const summary = getPremiumUserSummary("2024-01-01", "2024-01-31", undefined, [entA, entB]);
+    expect(summary).toHaveLength(1); // same user/org → grouped
+    expect(summary[0].total_requests).toBe(160);
   });
 });

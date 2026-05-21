@@ -270,6 +270,9 @@ function parsePremiumRequestCSV(
     exceeds_quota: r.exceeds_quota || "FALSE",
     total_monthly_quota: parseFloat(r.total_monthly_quota || "0") || 0,
     charge_scope: "user" as const,
+    input_tokens: parseFloat(r.input_tokens || "0") || 0,
+    output_tokens: parseFloat(r.output_tokens || "0") || 0,
+    cached_tokens: parseFloat(r.cached_tokens || "0") || 0,
   }));
 }
 

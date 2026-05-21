@@ -61,6 +61,9 @@ CREATE TABLE IF NOT EXISTS billing_premium_requests (
   exceeds_quota TEXT DEFAULT 'FALSE',
   total_monthly_quota REAL DEFAULT 0,
   charge_scope TEXT NOT NULL DEFAULT 'user',
+  input_tokens REAL NOT NULL DEFAULT 0,
+  output_tokens REAL NOT NULL DEFAULT 0,
+  cached_tokens REAL NOT NULL DEFAULT 0,
   created_at TEXT DEFAULT (datetime('now'))
 );
 
