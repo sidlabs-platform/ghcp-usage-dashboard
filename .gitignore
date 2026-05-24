@@ -35,3 +35,19 @@ DayTotal.dll
 
 # TypeScript build info
 tsconfig.tsbuildinfo
+
+# graphify — knowledge graph outputs and temp files (never commit)
+graphify-out/
+.graphify_detect.json
+.graphify_extract.json
+.graphify_ast.json
+.graphify_semantic.json
+.graphify_semantic_new.json
+.graphify_cached.json
+.graphify_uncached.txt
+.graphify_analysis.json
+.graphify_labels.json
+.graphify_incremental.json
+.graphify_transcripts.json
+.graphify_old.json
+.graphify_python
