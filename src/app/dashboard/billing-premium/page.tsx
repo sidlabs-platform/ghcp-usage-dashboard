@@ -56,6 +56,10 @@ const fmtCurrency = (v: number) => {
     : `$${n.toFixed(2)}`;
 };
 
+/**
+ * Renders the AI Credits billing dashboard page with KPIs, trends, and detailed usage tables.
+ * @returns {JSX.Element} Billing dashboard page content.
+ */
 export default function PremiumRequestsPage() {
   const { days } = useDateRange();
   const { hasFilter, buildScopeParams, selectedEntTeams, selectedOrgTeams, selectedOrgs: scopeOrgs } = useScope();
@@ -255,7 +259,9 @@ export default function PremiumRequestsPage() {
           <div ref={kpiRef} className="grid gap-4 grid-cols-2 lg:grid-cols-4">
             <MetricCard
               title="Total AI Credits"
-              value={kpis.totalAiCredits > 0 ? kpis.totalAiCredits.toLocaleString(undefined, { maximumFractionDigits: 1 }) : kpis.totalRequests}
+              value={kpis.totalAiCredits > 0
+                ? kpis.totalAiCredits.toLocaleString(undefined, { maximumFractionDigits: 1 })
+                : kpis.totalRequests.toLocaleString()}
               format="raw"
               icon={<Zap className="h-4 w-4" />}
               subtitle={`Last ${days} days`}
