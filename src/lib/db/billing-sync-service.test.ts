@@ -4,6 +4,7 @@ vi.mock("@/lib/github/billing-client", () => ({
   billingClient: {
     fetchUsageReport: vi.fn(async () => []),
     fetchPremiumRequestReport: vi.fn(async () => []),
+    fetchAiCreditReport: vi.fn(async () => []),
   },
 }));
 
@@ -29,6 +30,7 @@ const mockBillingEnabled = isBillingEnabledForEnterprise as ReturnType<typeof vi
 const mockSubEnabled = isBillingSubEnabledForEnterprise as ReturnType<typeof vi.fn>;
 const mockFetchUsage = billingClient.fetchUsageReport as ReturnType<typeof vi.fn>;
 const mockFetchPremium = billingClient.fetchPremiumRequestReport as ReturnType<typeof vi.fn>;
+const mockFetchAiCredit = billingClient.fetchAiCreditReport as ReturnType<typeof vi.fn>;
 
 describe("billing-sync-service", () => {
   beforeEach(() => {
@@ -37,13 +39,14 @@ describe("billing-sync-service", () => {
     mockSubEnabled.mockReturnValue(true);
     mockFetchUsage.mockResolvedValue([{ day: "2025-01-01" }]);
     mockFetchPremium.mockResolvedValue([{ day: "2025-01-01" }]);
+    mockFetchAiCredit.mockResolvedValue([{ day: "2025-01-01" }]);
     (getBillingSyncState as ReturnType<typeof vi.fn>).mockReturnValue(null);
   });
 
   it("returns zeros when billing disabled", async () => {
     mockBillingEnabled.mockReturnValue(false);
     const result = await syncBilling("test-ent");
-    expect(result).toEqual({ usageRecords: 0, premiumRecords: 0, errors: [] });
+    expect(result).toEqual({ usageRecords: 0, premiumRecords: 0, aiCreditRecords: 0, errors: [] });
     expect(mockFetchUsage).not.toHaveBeenCalled();
   });
 
@@ -51,6 +54,7 @@ describe("billing-sync-service", () => {
     const result = await syncBilling("test-ent");
     expect(result.usageRecords).toBe(2); // summarized + detailed
     expect(result.premiumRecords).toBe(1);
+    expect(result.aiCreditRecords).toBe(1);
     expect(result.errors).toHaveLength(0);
     expect(refreshBillingDailyAggregates).toHaveBeenCalledWith("test-ent");
   });
@@ -83,6 +87,7 @@ describe("billing-sync-service", () => {
     mockFetchPremium.mockRejectedValue(new Error("premium timeout"));
     const result = await syncBilling("test-ent");
     expect(result.premiumRecords).toBe(0);
+    expect(result.aiCreditRecords).toBe(0);
     expect(result.errors).toHaveLength(1);
     expect(result.errors[0]).toContain("premium_request");
     expect(result.errors[0]).toContain("premium timeout");
@@ -121,10 +126,12 @@ describe("billing-sync-service", () => {
   });
 
   it("syncBilling skips premium when sub-toggle off", async () => {
-    mockSubEnabled.mockImplementation((_slug: string, key: string) => key !== "premiumRequests");
+    mockSubEnabled.mockImplementation((_slug: string, key: string) => key !== "premiumRequests" && key !== "aiCredits");
     const result = await syncBilling("test-ent");
     expect(mockFetchPremium).not.toHaveBeenCalled();
+    expect(mockFetchAiCredit).not.toHaveBeenCalled();
     expect(result.premiumRecords).toBe(0);
+    expect(result.aiCreditRecords).toBe(0);
   });
 
   it("invokes progress callbacks from fetch functions", async () => {
@@ -136,9 +143,14 @@ describe("billing-sync-service", () => {
       cb("premium progress");
       return [{ day: "2025-01-01" }];
     });
+    mockFetchAiCredit.mockImplementation(async (_slug: string, _s: string, _e: string, cb: (msg: string) => void) => {
+      cb("ai credit progress");
+      return [{ day: "2025-01-01" }];
+    });
     const progress: string[] = [];
     await syncBilling("test-ent", (p) => progress.push(p.message));
     expect(progress.some((m) => m.includes("usage progress"))).toBe(true);
     expect(progress.some((m) => m.includes("premium progress"))).toBe(true);
+    expect(progress.some((m) => m.includes("ai credit progress"))).toBe(true);
   });
 });

@@ -32,7 +32,7 @@ export interface EnterpriseMetricOverrides {
   codeScanning?: { enabled?: boolean; autofix?: boolean };
   dependabot?: { enabled?: boolean };
   secretScanning?: { enabled?: boolean };
-  billing?: { enabled?: boolean; meteredUsage?: boolean; premiumRequests?: boolean };
+  billing?: { enabled?: boolean; meteredUsage?: boolean; premiumRequests?: boolean; aiCredits?: boolean };
 }
 
 /** Client-safe enterprise info (no auth details). */
@@ -378,7 +378,7 @@ export function isBillingEnabledForEnterprise(slug: string): boolean {
  */
 export function isBillingSubEnabledForEnterprise(
   slug: string,
-  sub: "meteredUsage" | "premiumRequests",
+  sub: "meteredUsage" | "premiumRequests" | "aiCredits",
 ): boolean {
   if (!isBillingEnabledForEnterprise(slug)) return false;
 
@@ -451,7 +451,7 @@ export function isCopilotSubEnabledForAnyEnterprise(
  * Used for page visibility — show a page if at least one enterprise has the sub-toggle enabled.
  */
 export function isBillingSubEnabledForAnyEnterprise(
-  sub: "meteredUsage" | "premiumRequests",
+  sub: "meteredUsage" | "premiumRequests" | "aiCredits",
 ): boolean {
   const enterprises = getConfiguredEnterprises();
   if (enterprises.length === 0) {

@@ -90,3 +90,13 @@ Use `isCompletionFeature()` and `isAgentFeature()` from `src/lib/aggregation/sep
 - Use `json_each(totals_by_feature)` or `separate-metrics.ts` helpers to compute **completion-only** LOC
 - Show "Agent LoC" separately from completion metrics
 - When filtering `totals_by_language_feature`, exclude `agent_edit` rows to avoid inflating per-language totals
+
+### Billing: AI Credits (replacing Premium Requests)
+- As of June 2026, GitHub Copilot uses **AI Credits** instead of Premium Requests
+- The `ai_credit` billing report type is a superset of `premium_request` — it contains both legacy `copilot_premium_request` rows (unit_type: `requests`) and new `copilot_ai_credit` rows (unit_type: `ai-credits`)
+- New columns: `aic_quantity` (AI Credit equivalent), `aic_gross_amount` (AI Credit cost), `cost_center_name`
+- Removed columns: `input_tokens`, `output_tokens`, `cached_tokens` — no longer returned by the API; kept in schema with defaults for backward compat
+- `exceeds_quota` is only present in `premium_request` reports, not `ai_credit`
+- Config uses both `premiumRequests` and `aiCredits` toggles under `billing` — page shows if EITHER is enabled
+- The dashboard URL path stays `/dashboard/billing-premium` but the UI label is "AI Credits"
+- Use `aic_quantity` / `aic_gross_amount` for the primary credit-based display; legacy `quantity` / `gross_amount` still available for request-based metrics

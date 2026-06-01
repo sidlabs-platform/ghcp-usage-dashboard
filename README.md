@@ -189,7 +189,8 @@ The file `dashboard-config.json` in the project root controls which features are
     "billing": {
       "enabled": false,         // Master toggle for billing (requires enterprise)
       "meteredUsage": true,     // Sync metered usage reports
-      "premiumRequests": true   // Sync premium request reports
+      "premiumRequests": true,  // Sync premium request reports
+      "aiCredits": true          // Sync AI credit reports (new billing model)
     }
   },
   "organizations": {
@@ -226,7 +227,7 @@ The file `dashboard-config.json` in the project root controls which features are
     "codeScanning": { "enabled": true },
     "dependabot": { "enabled": true },
     "secretScanning": { "enabled": true },
-    "billing": { "enabled": true, "meteredUsage": true, "premiumRequests": true }
+    "billing": { "enabled": true, "meteredUsage": true, "premiumRequests": true, "aiCredits": true }
   },
   "organizations": { "include": [], "exclude": [] },
   "security": { "syncIntervalMinutes": 60, "backfillDays": 90 }
@@ -338,9 +339,9 @@ Cost overview with product, organization, user, and cost center breakdowns. Tren
 
 Detailed metered usage reports broken down by product, organization, and user. Requires `billing.meteredUsage: true`.
 
-### ⚡ Premium Requests
+### ⚡ AI Credits
 
-Premium request consumption with model-level breakdown and user-level analysis. Requires `billing.premiumRequests: true`.
+AI credit consumption with model-level breakdown and user-level analysis. Supports both legacy premium requests and the new AI credits billing model (effective June 2026). Requires `billing.premiumRequests: true` or `billing.aiCredits: true`.
 
 ---
 
@@ -363,7 +364,7 @@ Which config toggles control the visibility of each sidebar page:
 | IDE & Languages | `copilot.enabled` + `copilot.userMetrics` |
 | Billing | `billing.enabled` + `copilot.enterprise` + `GITHUB_ENTERPRISE` env var |
 | Metered Usage | Billing visible + `billing.meteredUsage` |
-| Premium Requests | Billing visible + `billing.premiumRequests` |
+| AI Credits | Billing visible + `billing.premiumRequests` OR `billing.aiCredits` |
 
 ---
 
@@ -485,7 +486,7 @@ CSV exports fetch all paginated data (not just the current page view) so you get
 │                      GitHub APIs                                     │
 │  Copilot Metrics (enterprise-1-day, users-1-day, org-1-day)         │
 │  Seats │ Teams │ GHAS (code scanning, dependabot, secret scanning)  │
-│  Billing (metered usage, premium requests)                           │
+│  Billing (metered usage, AI credits / premium requests)               │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 

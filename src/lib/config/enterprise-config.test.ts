@@ -487,6 +487,18 @@ describe("enterprise-config", () => {
       }));
       expect(isBillingSubEnabledForEnterprise("ent-a", "meteredUsage")).toBe(true);
       expect(isBillingSubEnabledForEnterprise("ent-a", "premiumRequests")).toBe(true);
+      expect(isBillingSubEnabledForEnterprise("ent-a", "aiCredits")).toBe(true);
+    });
+
+    it("enterprise override for aiCredits takes precedence over global", () => {
+      setMockConfig(makeConfig({
+        globalMetrics: {
+          copilot: { enabled: true, enterprise: true },
+          billing: { enabled: true, aiCredits: false },
+        },
+        enterprises: [{ slug: "ent-a", metrics: { billing: { aiCredits: true } } }],
+      }));
+      expect(isBillingSubEnabledForEnterprise("ent-a", "aiCredits")).toBe(true);
     });
   });
 

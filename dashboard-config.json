@@ -20,7 +20,8 @@
     "billing": {
       "enabled": true,
       "meteredUsage": true,
-      "premiumRequests": true
+      "premiumRequests": true,
+      "aiCredits": true
     }
   },
   "organizations": {

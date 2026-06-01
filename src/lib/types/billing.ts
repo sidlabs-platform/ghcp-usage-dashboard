@@ -23,7 +23,7 @@ export function deriveChargeScope(product: string, _sku: string): ChargeScope {
 
 // ── Billing Reports API Response ──────────────────────────────────────
 
-export type BillingReportType = "detailed" | "summarized" | "premium_request";
+export type BillingReportType = "detailed" | "summarized" | "premium_request" | "ai_credit";
 export type BillingReportStatus = "pending" | "processing" | "completed" | "failed";
 
 export interface BillingReportExport {
@@ -76,12 +76,15 @@ export interface BillingPremiumRequestRecord {
   username: string;
   organization: string;
   model: string;
-  exceeds_quota: string;         // "TRUE" or "FALSE"
+  exceeds_quota: string;         // "TRUE" or "FALSE" — may be empty for ai_credit report rows
   total_monthly_quota: number;
   charge_scope: ChargeScope;     // Always "user" for premium requests
   input_tokens: number;
   output_tokens: number;
   cached_tokens: number;
+  cost_center_name: string;
+  aic_quantity: number;          // AI Credit equivalent quantity
+  aic_gross_amount: number;      // AI Credit equivalent gross amount
 }
 
 // ── Daily Aggregate (for charts) ──────────────────────────────────────
@@ -146,7 +149,7 @@ export interface BillingUserBreakdown {
   total_net: number;
 }
 
-// ── Premium Request Summaries ─────────────────────────────────────────
+// ── Premium Request / AI Credit Summaries ─────────────────────────────
 
 export interface PremiumRequestUserSummary {
   username: string;
@@ -160,6 +163,8 @@ export interface PremiumRequestUserSummary {
   total_input_tokens: number;
   total_output_tokens: number;
   total_cached_tokens: number;
+  total_aic_quantity: number;
+  total_aic_gross: number;
 }
 
 export interface PremiumRequestModelSummary {
@@ -170,6 +175,8 @@ export interface PremiumRequestModelSummary {
   total_input_tokens: number;
   total_output_tokens: number;
   total_cached_tokens: number;
+  total_aic_quantity: number;
+  total_aic_gross: number;
 }
 
 // ── Cost Center / Repository / Premium Daily Breakdown ────────────────
@@ -198,6 +205,8 @@ export interface PremiumDailyTrend {
   total_input_tokens: number;
   total_output_tokens: number;
   total_cached_tokens: number;
+  total_aic_quantity: number;
+  total_aic_gross: number;
 }
 
 // ── CSV Row shapes (raw from downloaded report) ───────────────────────
@@ -237,4 +246,27 @@ export interface PremiumRequestCSVRow {
   input_tokens?: string;
   output_tokens?: string;
   cached_tokens?: string;
+  cost_center_name?: string;
+  aic_quantity?: string;
+  aic_gross_amount?: string;
+}
+
+/** CSV row shape for the ai_credit report type */
+export interface AiCreditCSVRow {
+  date: string;
+  username?: string;
+  product: string;
+  sku: string;
+  model?: string;
+  quantity: string;
+  unit_type: string;
+  applied_cost_per_quantity: string;
+  gross_amount: string;
+  discount_amount: string;
+  net_amount: string;
+  total_monthly_quota?: string;
+  organization?: string;
+  cost_center_name?: string;
+  aic_quantity?: string;
+  aic_gross_amount?: string;
 }

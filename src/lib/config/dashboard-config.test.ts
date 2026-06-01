@@ -305,6 +305,16 @@ describe("dashboard-config (with config file)", () => {
     delete process.env.GITHUB_ENTERPRISE;
   });
 
+  it("isBillingSubEnabled defaults to true when aiCredits is undefined", () => {
+    mockReadFileSync.mockReturnValue(JSON.stringify({
+      metrics: { billing: { enabled: true } },
+    }));
+    vi.setSystemTime(Date.now() + 125 * 60 * 1000);
+    process.env.GITHUB_ENTERPRISE = "test-ent";
+    expect(isBillingSubEnabled("aiCredits")).toBe(true);
+    delete process.env.GITHUB_ENTERPRISE;
+  });
+
   // ── Multi-enterprise tests (offsets 130+, must come after all existing tests) ──
 
   it("isEnterpriseEnabled returns true when enterprises array is configured (multi-enterprise)", () => {

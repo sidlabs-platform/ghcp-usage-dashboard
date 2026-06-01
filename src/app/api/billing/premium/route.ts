@@ -13,7 +13,8 @@ import { CACHE_TTL } from "@/lib/cache/memory-cache";
 
 async function handler(request: NextRequest) {
   try {
-    if (!isBillingSubEnabledForAnyEnterprise("premiumRequests")) {
+    if (!isBillingSubEnabledForAnyEnterprise("premiumRequests") &&
+        !isBillingSubEnabledForAnyEnterprise("aiCredits")) {
       return NextResponse.json({ enabled: false });
     }
 
