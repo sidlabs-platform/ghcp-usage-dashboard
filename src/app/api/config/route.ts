@@ -63,8 +63,8 @@ export async function GET() {
       ? isBillingSubEnabledForAnyEnterprise("meteredUsage")
       : isBillingSubEnabled("meteredUsage")),
     billingPremium: billingEnabled && (multiEnt
-      ? isBillingSubEnabledForAnyEnterprise("premiumRequests")
-      : isBillingSubEnabled("premiumRequests")),
+      ? (isBillingSubEnabledForAnyEnterprise("premiumRequests") || isBillingSubEnabledForAnyEnterprise("aiCredits"))
+      : (isBillingSubEnabled("premiumRequests") || isBillingSubEnabled("aiCredits"))),
   };
 
   return NextResponse.json({

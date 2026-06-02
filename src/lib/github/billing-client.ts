@@ -11,6 +11,7 @@ import type {
   BillingPremiumRequestRecord,
   UsageCSVRow,
   PremiumRequestCSVRow,
+  AiCreditCSVRow,
 } from "@/lib/types/billing";
 import { deriveChargeScope } from "@/lib/types/billing";
 import { getEnterpriseAuth } from "@/lib/config/enterprise-config";
@@ -273,6 +274,42 @@ function parsePremiumRequestCSV(
     input_tokens: parseFloat(r.input_tokens || "0") || 0,
     output_tokens: parseFloat(r.output_tokens || "0") || 0,
     cached_tokens: parseFloat(r.cached_tokens || "0") || 0,
+    cost_center_name: r.cost_center_name || "",
+    aic_quantity: parseFloat(r.aic_quantity || "0") || 0,
+    aic_gross_amount: parseFloat(r.aic_gross_amount || "0") || 0,
+  }));
+}
+
+/**
+ * Parse AI credit report CSV into typed records.
+ * The ai_credit report contains both legacy premium_request rows and new ai_credit rows.
+ */
+function parseAiCreditCSV(
+  csvContent: string,
+): BillingPremiumRequestRecord[] {
+  const rawRows = parseCSV<AiCreditCSVRow>(csvContent);
+  return rawRows.map((r) => ({
+    date: r.date || "",
+    product: r.product || "",
+    sku: r.sku || "",
+    quantity: parseFloat(r.quantity) || 0,
+    unit_type: r.unit_type || "",
+    applied_cost_per_quantity: parseFloat(r.applied_cost_per_quantity) || 0,
+    gross_amount: parseFloat(r.gross_amount) || 0,
+    discount_amount: parseFloat(r.discount_amount) || 0,
+    net_amount: parseFloat(r.net_amount) || 0,
+    username: r.username || "",
+    organization: r.organization || "",
+    model: r.model || "",
+    exceeds_quota: "",
+    total_monthly_quota: parseFloat(r.total_monthly_quota || "0") || 0,
+    charge_scope: "user" as const,
+    input_tokens: 0,
+    output_tokens: 0,
+    cached_tokens: 0,
+    cost_center_name: r.cost_center_name || "",
+    aic_quantity: parseFloat(r.aic_quantity || "0") || 0,
+    aic_gross_amount: parseFloat(r.aic_gross_amount || "0") || 0,
   }));
 }
 
@@ -360,6 +397,24 @@ async function fetchPremiumRequestReport(
   );
 }
 
+async function fetchAiCreditReport(
+  enterprise: string,
+  startDate: string,
+  endDate: string,
+  onProgress?: (msg: string) => void,
+  enterpriseSlug?: string,
+): Promise<BillingPremiumRequestRecord[]> {
+  return fetchAndParseReport(
+    enterprise,
+    "ai_credit",
+    startDate,
+    endDate,
+    parseAiCreditCSV,
+    onProgress,
+    enterpriseSlug,
+  );
+}
+
 // ── Exported client ───────────────────────────────────────────────────
 
 export const billingClient = {
@@ -370,6 +425,8 @@ export const billingClient = {
   downloadReportCSV,
   parseUsageCSV,
   parsePremiumRequestCSV,
+  parseAiCreditCSV,
   fetchUsageReport,
   fetchPremiumRequestReport,
+  fetchAiCreditReport,
 };

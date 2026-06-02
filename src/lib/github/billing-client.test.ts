@@ -285,21 +285,75 @@ describe("billingClient", () => {
     });
   });
 
+  describe("parseAiCreditCSV", () => {
+    it("parses ai_credit CSV with new columns", () => {
+      const csv = [
+        "date,username,product,sku,model,quantity,unit_type,applied_cost_per_quantity,gross_amount,discount_amount,net_amount,total_monthly_quota,organization,cost_center_name,aic_quantity,aic_gross_amount",
+        "2026-04-01,alice,copilot,copilot_ai_credit,Claude Sonnet 4.6,36.34,ai-credits,0.01,0.3634,0.3634,0,1000,my-org,my-cc,36.34,0.3634",
+      ].join("\n");
+      const records = billingClient.parseAiCreditCSV(csv);
+      expect(records).toHaveLength(1);
+      expect(records[0].sku).toBe("copilot_ai_credit");
+      expect(records[0].unit_type).toBe("ai-credits");
+      expect(records[0].aic_quantity).toBe(36.34);
+      expect(records[0].aic_gross_amount).toBe(0.3634);
+      expect(records[0].cost_center_name).toBe("my-cc");
+      expect(records[0].charge_scope).toBe("user");
+      expect(records[0].exceeds_quota).toBe("");
+      expect(records[0].input_tokens).toBe(0);
+    });
+
+    it("parses legacy premium_request rows in ai_credit report", () => {
+      const csv = [
+        "date,username,product,sku,model,quantity,unit_type,applied_cost_per_quantity,gross_amount,discount_amount,net_amount,total_monthly_quota,organization,cost_center_name,aic_quantity,aic_gross_amount",
+        "2026-04-01,bob,copilot,copilot_premium_request,Auto: Claude Haiku 4.5,0.3,requests,0.04,0.012,0.012,0,1000,my-org,,0.97,0.0097",
+      ].join("\n");
+      const records = billingClient.parseAiCreditCSV(csv);
+      expect(records).toHaveLength(1);
+      expect(records[0].sku).toBe("copilot_premium_request");
+      expect(records[0].unit_type).toBe("requests");
+      expect(records[0].quantity).toBe(0.3);
+      expect(records[0].aic_quantity).toBe(0.97);
+    });
+  });
+
   describe("fetchPremiumRequestReport", () => {
-    it("orchestrates create → wait → download → parse", async () => {
+    it("orchestrates create → wait → download → parse for premium_request report", async () => {
       process.env.GITHUB_TOKEN = "ghp_test";
       const { githubFetch, sleep } = await import("./api-base");
       const mockGF = githubFetch as ReturnType<typeof vi.fn>;
       (sleep as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
-      const csvContent = "date,product,sku,quantity,unit_type,applied_cost_per_quantity,gross_amount,discount_amount,net_amount,username,organization,model,exceeds_quota,total_monthly_quota\n2024-01-01,copilot,s1,5,request,2,10,0,10,alice,org,gpt-4,FALSE,100\n";
+      const csvContent = "date,username,product,sku,model,quantity,unit_type,applied_cost_per_quantity,gross_amount,discount_amount,net_amount,exceeds_quota,total_monthly_quota,organization,cost_center_name,aic_quantity,aic_gross_amount\n2026-04-01,alice,copilot,copilot_premium_request,Claude,5,requests,0.04,0.2,0.2,0,FALSE,1000,org,,20,0.2\n";
       vi.stubGlobal("fetch", vi.fn()
-        .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ id: "r3", status: "pending" }) })
+        .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ id: "r6", status: "pending" }) })
         .mockResolvedValueOnce({ ok: true, text: () => Promise.resolve(csvContent) })
       );
-      mockGF.mockResolvedValue({ id: "r3", status: "completed", download_urls: ["https://storage.example.com/csv"] });
-      const records = await billingClient.fetchPremiumRequestReport("my-ent", "2024-01-01", "2024-01-31");
+      mockGF.mockResolvedValue({ id: "r6", status: "completed", download_urls: ["https://storage.example.com/csv"] });
+      const records = await billingClient.fetchPremiumRequestReport("my-ent", "2026-04-01", "2026-04-30");
       expect(records).toHaveLength(1);
-      expect(records[0].model).toBe("gpt-4");
+      expect(records[0].sku).toBe("copilot_premium_request");
+      expect(records[0].quantity).toBe(5);
+      expect(records[0].exceeds_quota).toBe("FALSE");
+      expect(records[0].aic_quantity).toBe(20);
+    });
+  });
+
+  describe("fetchAiCreditReport", () => {
+    it("orchestrates create → wait → download → parse for ai_credit report", async () => {
+      process.env.GITHUB_TOKEN = "ghp_test";
+      const { githubFetch, sleep } = await import("./api-base");
+      const mockGF = githubFetch as ReturnType<typeof vi.fn>;
+      (sleep as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+      const csvContent = "date,username,product,sku,model,quantity,unit_type,applied_cost_per_quantity,gross_amount,discount_amount,net_amount,total_monthly_quota,organization,cost_center_name,aic_quantity,aic_gross_amount\n2026-04-01,alice,copilot,copilot_ai_credit,Claude,10,ai-credits,0.01,0.1,0.1,0,1000,org,,10,0.1\n";
+      vi.stubGlobal("fetch", vi.fn()
+        .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ id: "r5", status: "pending" }) })
+        .mockResolvedValueOnce({ ok: true, text: () => Promise.resolve(csvContent) })
+      );
+      mockGF.mockResolvedValue({ id: "r5", status: "completed", download_urls: ["https://storage.example.com/csv"] });
+      const records = await billingClient.fetchAiCreditReport("my-ent", "2026-04-01", "2026-04-30");
+      expect(records).toHaveLength(1);
+      expect(records[0].sku).toBe("copilot_ai_credit");
+      expect(records[0].aic_quantity).toBe(10);
     });
   });
 });

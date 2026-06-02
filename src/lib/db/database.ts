@@ -62,6 +62,10 @@ export function getDb(): Database.Database {
     "ALTER TABLE billing_premium_requests ADD COLUMN input_tokens REAL NOT NULL DEFAULT 0",
     "ALTER TABLE billing_premium_requests ADD COLUMN output_tokens REAL NOT NULL DEFAULT 0",
     "ALTER TABLE billing_premium_requests ADD COLUMN cached_tokens REAL NOT NULL DEFAULT 0",
+    // AI Credits migration: new columns on premium_requests table
+    "ALTER TABLE billing_premium_requests ADD COLUMN cost_center_name TEXT DEFAULT ''",
+    "ALTER TABLE billing_premium_requests ADD COLUMN aic_quantity REAL NOT NULL DEFAULT 0",
+    "ALTER TABLE billing_premium_requests ADD COLUMN aic_gross_amount REAL NOT NULL DEFAULT 0",
     // Summary tables
     "ALTER TABLE user_period_summary ADD COLUMN enterprise_slug TEXT NOT NULL DEFAULT ''",
     "ALTER TABLE daily_aggregate_cache ADD COLUMN enterprise_slug TEXT NOT NULL DEFAULT ''",

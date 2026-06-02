@@ -14,7 +14,8 @@ import { CACHE_TTL } from "@/lib/cache/memory-cache";
 
 async function handler(request: NextRequest) {
   try {
-    if (!isBillingSubEnabledForAnyEnterprise("premiumRequests")) {
+    if (!isBillingSubEnabledForAnyEnterprise("premiumRequests") &&
+        !isBillingSubEnabledForAnyEnterprise("aiCredits")) {
       return NextResponse.json({ enabled: false });
     }
 
@@ -62,6 +63,8 @@ async function handler(request: NextRequest) {
     const topModel = modelSummary.length > 0
       ? modelSummary.reduce((a, b) => (a.total_requests > b.total_requests ? a : b)).model
       : "N/A";
+    const totalAiCredits = userSummary.reduce((sum, u) => sum + (u.total_aic_quantity ?? 0), 0);
+    const totalAicGross = userSummary.reduce((sum, u) => sum + (u.total_aic_gross ?? 0), 0);
 
     return NextResponse.json({
       enabled: true,
@@ -72,6 +75,8 @@ async function handler(request: NextRequest) {
         totalNet,
         topModel,
         uniqueModels: modelSummary.length,
+        totalAiCredits,
+        totalAicGross,
       },
       userSummary,
       modelSummary,

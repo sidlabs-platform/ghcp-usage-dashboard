@@ -39,6 +39,8 @@ interface PremiumKPIs {
   totalNet: number;
   topModel: string;
   uniqueModels: number;
+  totalAiCredits: number;
+  totalAicGross: number;
 }
 
 interface FilterOptions {
@@ -54,6 +56,10 @@ const fmtCurrency = (v: number) => {
     : `$${n.toFixed(2)}`;
 };
 
+/**
+ * Renders the AI Credits billing dashboard page with KPIs, trends, and detailed usage tables.
+ * @returns {JSX.Element} Billing dashboard page content.
+ */
 export default function PremiumRequestsPage() {
   const { days } = useDateRange();
   const { hasFilter, buildScopeParams, selectedEntTeams, selectedOrgTeams, selectedOrgs: scopeOrgs } = useScope();
@@ -164,7 +170,7 @@ export default function PremiumRequestsPage() {
   if (!enabled) {
     return (
       <div className="space-y-6">
-        <PageHeader title="Premium Requests" description="Premium model request tracking, quotas, and per-user breakdown" />
+        <PageHeader title="AI Credits" description="AI credit consumption, model usage, quotas, and per-user breakdown" />
         <div className="text-center py-16 text-[hsl(var(--muted-foreground))]">
           <Zap className="h-16 w-16 mx-auto mb-4 opacity-40" />
           <p className="text-sm">Enable billing in <code className="text-xs bg-[hsl(var(--accent))] px-1 py-0.5 rounded">dashboard-config.json</code>.</p>
@@ -176,7 +182,7 @@ export default function PremiumRequestsPage() {
   if (loading && !kpis) {
     return (
       <div className="space-y-6">
-        <PageHeader title="Premium Requests" description="Premium model request tracking, quotas, and per-user breakdown" />
+        <PageHeader title="AI Credits" description="AI credit consumption, model usage, quotas, and per-user breakdown" />
         <div className="grid gap-4 grid-cols-2 lg:grid-cols-4">
           {[...Array(4)].map((_, i) => <ChartSkeleton key={i} />)}
         </div>
@@ -200,26 +206,26 @@ export default function PremiumRequestsPage() {
 
   return (
     <div className="space-y-8">
-      <PageHeader title="Premium Requests" description="Premium model request tracking, quotas, and per-user breakdown">
+      <PageHeader title="AI Credits" description="AI credit consumption, model usage, quotas, and per-user breakdown">
         <ExportMenu
           csv={{
             fetchUrl: "/api/billing/premium",
             extraParams: buildParams(),
             columns: csvColumns,
             dataExtractor: (json) => json.records,
-            filename: `premium-requests-${days}d`,
+            filename: `ai-credits-${days}d`,
             metadata: {
-              reportName: "Premium Requests Report",
+              reportName: "AI Credits Report",
               dateRange: `Last ${days} days`,
               ...(hasFilter && { teams: [...selectedEntTeams, ...selectedOrgTeams].join(", "), orgs: scopeOrgs.join(", ") }),
             },
           }}
           pdf={{
             sectionRefs: [kpiRef, trendRef, chartsRef, tableRef],
-            title: "Premium Requests Report",
-            filename: `premium-requests-${days}d`,
+            title: "AI Credits Report",
+            filename: `ai-credits-${days}d`,
             metadata: {
-              reportName: "Premium Requests Report",
+              reportName: "AI Credits Report",
               dateRange: `Last ${days} days`,
               ...(hasFilter && { teams: [...selectedEntTeams, ...selectedOrgTeams].join(", "), orgs: scopeOrgs.join(", ") }),
             },
@@ -238,11 +244,11 @@ export default function PremiumRequestsPage() {
       {!hasData && !loading && (
         <div className="text-center py-16 text-[hsl(var(--muted-foreground))]">
           <Zap className="h-16 w-16 mx-auto mb-4 opacity-40" />
-          <p className="text-xl font-semibold mb-2">No premium request data {hasFilter ? "for this filter" : ""}</p>
+          <p className="text-xl font-semibold mb-2">No AI credit data {hasFilter ? "for this filter" : ""}</p>
           <p className="text-sm max-w-md mx-auto">
             {hasFilter
               ? "Try adjusting your team/org filter or date range."
-              : "Premium request data will appear after a billing sync. Premium request reporting is available from October 2025 onward."}
+              : "AI credit data will appear after a billing sync."}
           </p>
         </div>
       )}
@@ -252,8 +258,11 @@ export default function PremiumRequestsPage() {
           {/* KPI Cards */}
           <div ref={kpiRef} className="grid gap-4 grid-cols-2 lg:grid-cols-4">
             <MetricCard
-              title="Total Premium Requests"
-              value={kpis.totalRequests}
+              title="Total AI Credits"
+              value={kpis.totalAiCredits > 0
+                ? kpis.totalAiCredits.toLocaleString(undefined, { maximumFractionDigits: 1 })
+                : kpis.totalRequests.toLocaleString()}
+              format="raw"
               icon={<Zap className="h-4 w-4" />}
               subtitle={`Last ${days} days`}
             />
@@ -272,10 +281,10 @@ export default function PremiumRequestsPage() {
             />
             <MetricCard
               title="Total Cost"
-              value={fmtCurrency(kpis.totalNet)}
+              value={fmtCurrency(kpis.totalAicGross > 0 ? kpis.totalAicGross : kpis.totalNet)}
               format="raw"
               icon={<Users className="h-4 w-4" />}
-              subtitle="Net premium request cost"
+              subtitle="Net AI credit cost"
             />
           </div>
 
@@ -284,7 +293,7 @@ export default function PremiumRequestsPage() {
             <div ref={trendRef} className="rounded-xl border bg-[hsl(var(--card))] p-6">
               <h3 className="text-lg font-semibold mb-1">Daily Trend</h3>
               <p className="text-sm text-[hsl(var(--muted-foreground))] mb-4">
-                <span className="text-purple-500">● Requests</span>{" · "}
+                <span className="text-purple-500">● Credits</span>{" · "}
                 <span className="text-amber-500">● Cost</span>{" · "}
                 <span className="text-emerald-500" style={{ borderBottom: "1px dashed" }}>Active Users</span>
               </p>
@@ -314,7 +323,7 @@ export default function PremiumRequestsPage() {
             <div className="rounded-xl border bg-[hsl(var(--card))] overflow-hidden">
               <div className="px-6 py-4 border-b">
                 <h3 className="text-lg font-semibold">Per-User Breakdown</h3>
-                <p className="text-sm text-[hsl(var(--muted-foreground))]">Premium request quota utilization by user</p>
+                <p className="text-sm text-[hsl(var(--muted-foreground))]">AI credit quota utilization by user</p>
               </div>
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
@@ -322,7 +331,7 @@ export default function PremiumRequestsPage() {
                     <tr>
                       <th className="px-4 py-3 text-left text-xs font-medium text-[hsl(var(--muted-foreground))] uppercase">Username</th>
                       <th className="px-4 py-3 text-left text-xs font-medium text-[hsl(var(--muted-foreground))] uppercase">Org</th>
-                      <th className="px-4 py-3 text-right text-xs font-medium text-[hsl(var(--muted-foreground))] uppercase">Total Requests</th>
+                      <th className="px-4 py-3 text-right text-xs font-medium text-[hsl(var(--muted-foreground))] uppercase">AI Credits</th>
                       <th className="px-4 py-3 text-right text-xs font-medium text-[hsl(var(--muted-foreground))] uppercase">Within Quota</th>
                       <th className="px-4 py-3 text-right text-xs font-medium text-[hsl(var(--muted-foreground))] uppercase">Over Quota</th>
                       <th className="px-4 py-3 text-right text-xs font-medium text-[hsl(var(--muted-foreground))] uppercase">Quota Limit</th>
@@ -495,13 +504,13 @@ export default function PremiumRequestsPage() {
             )}
           </div>
 
-          {/* Info: Premium Requests are User-Level */}
+          {/* Info: AI Credits are User-Level */}
           <div className="rounded-xl border border-blue-200 dark:border-blue-900 bg-blue-50/50 dark:bg-blue-950/20 p-4">
             <p className="text-sm text-blue-700 dark:text-blue-400 flex items-center gap-2">
               <Users className="h-4 w-4 shrink-0" />
               <span>
-                <strong>Premium requests are user-level charges.</strong> Each request is attributed to the individual user
-                who made it. Users exceeding their monthly quota will incur additional charges billed to the organization.
+                <strong>AI credits are user-level charges.</strong> Each credit is consumed based on token usage (input, output, cached).
+                Users exceeding their monthly quota will incur additional charges billed to the organization. Each credit equals $0.01 USD.
               </span>
             </p>
           </div>

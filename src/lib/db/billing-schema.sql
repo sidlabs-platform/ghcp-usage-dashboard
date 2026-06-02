@@ -40,7 +40,7 @@ CREATE INDEX IF NOT EXISTS idx_billing_usage_scope ON billing_usage_records(char
 CREATE INDEX IF NOT EXISTS idx_billing_usage_date_product ON billing_usage_records(date, product);
 
 -- ============================================================================
--- Premium Request Records (from premium_request billing reports)
+-- Premium Request / AI Credit Records (from premium_request and ai_credit billing reports)
 -- ============================================================================
 
 CREATE TABLE IF NOT EXISTS billing_premium_requests (
@@ -64,6 +64,9 @@ CREATE TABLE IF NOT EXISTS billing_premium_requests (
   input_tokens REAL NOT NULL DEFAULT 0,
   output_tokens REAL NOT NULL DEFAULT 0,
   cached_tokens REAL NOT NULL DEFAULT 0,
+  cost_center_name TEXT DEFAULT '',
+  aic_quantity REAL NOT NULL DEFAULT 0,
+  aic_gross_amount REAL NOT NULL DEFAULT 0,
   created_at TEXT DEFAULT (datetime('now'))
 );
 

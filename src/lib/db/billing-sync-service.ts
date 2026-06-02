@@ -201,25 +201,83 @@ async function syncPremiumRequestReport(
   return records.length;
 }
 
+async function syncAiCreditReport(
+  enterpriseSlug: string,
+  onProgress?: (p: BillingSyncProgress) => void,
+): Promise<number> {
+  const reportType: BillingReportType = "ai_credit";
+  const range = getDateRange(reportType, enterpriseSlug);
+  if (!range) {
+    console.log(`[Billing Sync] ai_credit: no date range to sync`);
+    return 0;
+  }
+  const { startDate, endDate } = range;
+
+  onProgress?.({
+    phase: "billing-sync",
+    reportType,
+    enterpriseSlug,
+    current: 0,
+    total: 1,
+    message: `Syncing AI credit report: ${startDate} → ${endDate}`,
+  });
+
+  updateBillingSyncState(reportType, new Date().toISOString(), startDate, endDate, "syncing", undefined, enterpriseSlug);
+
+  const records = await billingClient.fetchAiCreditReport(
+    enterpriseSlug,
+    startDate,
+    endDate,
+    (msg) =>
+      onProgress?.({
+        phase: "billing-sync",
+        reportType,
+        enterpriseSlug,
+        current: 0,
+        total: 1,
+        message: msg,
+      }),
+    enterpriseSlug,
+  );
+
+  upsertPremiumRequests(enterpriseSlug, records);
+
+  updateBillingSyncState(reportType, new Date().toISOString(), startDate, endDate, "ok", undefined, enterpriseSlug);
+
+  console.log(`[Billing Sync] ai_credit: upserted ${records.length} records`);
+  onProgress?.({
+    phase: "billing-sync",
+    reportType,
+    enterpriseSlug,
+    current: 1,
+    total: 1,
+    message: `ai_credit: synced ${records.length} records`,
+  });
+
+  return records.length;
+}
+
 // ── Main entry point ──────────────────────────────────────────────────
 
 export async function syncBilling(
   enterpriseSlug: string,
   onProgress?: (p: BillingSyncProgress) => void,
-): Promise<{ usageRecords: number; premiumRecords: number; errors: string[] }> {
+): Promise<{ usageRecords: number; premiumRecords: number; aiCreditRecords: number; errors: string[] }> {
   if (!isBillingEnabledForEnterprise(enterpriseSlug)) {
     console.log("[Billing Sync] Billing is disabled (enterprise off or billing metric disabled), skipping");
-    return { usageRecords: 0, premiumRecords: 0, errors: [] };
+    return { usageRecords: 0, premiumRecords: 0, aiCreditRecords: 0, errors: [] };
   }
 
   const errors: string[] = [];
   let usageRecords = 0;
   let premiumRecords = 0;
+  let aiCreditRecords = 0;
 
   // Compute totalSteps dynamically based on enabled sub-toggles
   let totalSteps = 1; // aggregation always runs
   if (isBillingSubEnabledForEnterprise(enterpriseSlug, "meteredUsage")) totalSteps += 2; // summarized + detailed
   if (isBillingSubEnabledForEnterprise(enterpriseSlug, "premiumRequests")) totalSteps += 1;
+  if (isBillingSubEnabledForEnterprise(enterpriseSlug, "aiCredits")) totalSteps += 1;
   let step = 0;
 
   // ── Summarized usage ────────────────────────────────────────────────
@@ -286,6 +344,28 @@ export async function syncBilling(
     }
   }
 
+  // ── AI credits ──────────────────────────────────────────────────────
+  if (isBillingSubEnabledForEnterprise(enterpriseSlug, "aiCredits")) {
+    try {
+      step++;
+      onProgress?.({
+        phase: "billing-sync",
+        reportType: "ai_credit",
+        enterpriseSlug,
+        current: step,
+        total: totalSteps,
+        message: "Starting AI credit sync...",
+      });
+      aiCreditRecords += await syncAiCreditReport(enterpriseSlug, onProgress);
+    } catch (err) {
+      const msg = formatError("ai_credit", err);
+      errors.push(msg);
+      console.error(`[Billing Sync] ${msg}`);
+      const prev = getBillingSyncState("ai_credit", enterpriseSlug);
+      updateBillingSyncState("ai_credit", new Date().toISOString(), prev?.last_report_start ?? "", prev?.last_report_end ?? "", "error", msg, enterpriseSlug);
+    }
+  }
+
   // ── Refresh daily aggregates ────────────────────────────────────────
   try {
     step++;
@@ -309,10 +389,10 @@ export async function syncBilling(
     enterpriseSlug,
     current: totalSteps,
     total: totalSteps,
-    message: `Billing sync complete: ${usageRecords} usage records, ${premiumRecords} premium records, ${errors.length} errors`,
+    message: `Billing sync complete: ${usageRecords} usage records, ${premiumRecords} premium records, ${aiCreditRecords} AI credit records, ${errors.length} errors`,
   });
 
-  return { usageRecords, premiumRecords, errors };
+  return { usageRecords, premiumRecords, aiCreditRecords, errors };
 }
 
 // ── Error formatting ──────────────────────────────────────────────────

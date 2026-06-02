@@ -105,7 +105,7 @@ const SEARCH_INDEX: SearchEntry[] = [
   },
   {
     href: "/dashboard/billing-premium",
-    label: "Premium Requests",
+    label: "AI Credits",
     description: "Premium model quota and over-quota request tracking",
     keywords: ["premium", "quota", "model", "requests", "over quota"],
     section: "Billing",

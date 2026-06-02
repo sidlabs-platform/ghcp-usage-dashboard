@@ -23,8 +23,10 @@ export interface BillingMetricConfig {
   enabled: boolean;
   /** Sync metered usage (summarized + detailed) reports. */
   meteredUsage?: boolean;
-  /** Sync premium request reports. */
+  /** Sync premium request reports (legacy — use aiCredits instead). */
   premiumRequests?: boolean;
+  /** Sync AI credit reports (replaces premium requests as of June 2026). */
+  aiCredits?: boolean;
 }
 
 export interface MetricConfig {
@@ -86,7 +88,7 @@ const DEFAULT_CONFIG: DashboardConfig = {
     codeScanning: { enabled: true, autofix: false },
     dependabot: { enabled: true },
     secretScanning: { enabled: true },
-    billing: { enabled: false, meteredUsage: true, premiumRequests: true },
+    billing: { enabled: false, meteredUsage: true, premiumRequests: true, aiCredits: true },
   },
   organizations: { include: [], exclude: [] },
   security: {
@@ -195,7 +197,7 @@ export function getEffectiveBillingEnabled(): boolean {
   return isMetricEnabled("billing");
 }
 
-export function isBillingSubEnabled(sub: "meteredUsage" | "premiumRequests"): boolean {
+export function isBillingSubEnabled(sub: "meteredUsage" | "premiumRequests" | "aiCredits"): boolean {
   if (!getEffectiveBillingEnabled()) return false;
   const config = getDashboardConfig();
   return (config.metrics.billing as BillingMetricConfig)[sub] ?? true;
