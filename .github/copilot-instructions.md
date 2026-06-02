@@ -91,6 +91,18 @@ Use `isCompletionFeature()` and `isAgentFeature()` from `src/lib/aggregation/sep
 - Show "Agent LoC" separately from completion metrics
 - When filtering `totals_by_language_feature`, exclude `agent_edit` rows to avoid inflating per-language totals
 
+### AI Adoption Cohorts
+- The API classifies each engaged user into an **AI adoption phase** based on rolling 28-day Copilot usage
+- **Phase 0** (No cohort): Did not meet engagement criteria
+- **Phase 1** (Code first): Code completion and/or IDE agent mode on ≥2 days
+- **Phase 2** (Agent first): Single GitHub-based agent surface (cloud agent, code review, CLI) on ≥2 days
+- **Phase 3** (Multi-agent): Two+ GitHub agent surfaces or GitHub Copilot app on ≥2 days
+- User-level: `ai_adoption_phase` field (object with `phase`, `label`, `version`)
+- Enterprise/org-level: `totals_by_ai_adoption_phase` array with per-phase engagement averages
+- Stored as JSON TEXT columns: `ai_adoption_phase` on `user_daily_metrics`, `totals_by_ai_adoption_phase` on `enterprise_daily_metrics`/`org_daily_metrics`
+- Dashboard page: `/dashboard/adoption-cohorts` — distribution chart, trend chart, per-phase metrics table
+- API: `/api/metrics/adoption-cohorts` — uses enterprise data when available, falls back to user-level aggregation
+
 ### Billing: AI Credits (replacing Premium Requests)
 - As of June 2026, GitHub Copilot uses **AI Credits** instead of Premium Requests
 - The `ai_credit` billing report type is a superset of `premium_request` — it contains both legacy `copilot_premium_request` rows (unit_type: `requests`) and new `copilot_ai_credit` rows (unit_type: `ai-credits`)

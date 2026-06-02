@@ -25,6 +25,7 @@ CREATE TABLE IF NOT EXISTS enterprise_daily_metrics (
   totals_by_model_feature TEXT DEFAULT '[]',
   totals_by_language_model TEXT DEFAULT '[]',
   totals_by_cli TEXT,
+  totals_by_ai_adoption_phase TEXT DEFAULT '[]',
   pull_requests TEXT,
   raw_json TEXT,
   PRIMARY KEY (day, enterprise_id)
@@ -57,6 +58,7 @@ CREATE TABLE IF NOT EXISTS org_daily_metrics (
   totals_by_model_feature TEXT DEFAULT '[]',
   totals_by_language_model TEXT DEFAULT '[]',
   totals_by_cli TEXT,
+  totals_by_ai_adoption_phase TEXT DEFAULT '[]',
   pull_requests TEXT,
   raw_json TEXT,
   PRIMARY KEY (day, org_slug)
@@ -96,6 +98,7 @@ CREATE TABLE IF NOT EXISTS user_daily_metrics (
   totals_by_model_feature TEXT DEFAULT '[]',
   totals_by_language_model TEXT DEFAULT '[]',
   totals_by_cli TEXT,
+  ai_adoption_phase TEXT,
   agent_edit TEXT,
   raw_json TEXT,
   PRIMARY KEY (day, enterprise_id, user_id)

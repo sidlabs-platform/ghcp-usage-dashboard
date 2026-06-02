@@ -70,6 +70,10 @@ export function getDb(): Database.Database {
     "ALTER TABLE user_period_summary ADD COLUMN enterprise_slug TEXT NOT NULL DEFAULT ''",
     "ALTER TABLE daily_aggregate_cache ADD COLUMN enterprise_slug TEXT NOT NULL DEFAULT ''",
     "ALTER TABLE team_summary_cache ADD COLUMN enterprise_slug TEXT NOT NULL DEFAULT ''",
+    // AI adoption cohorts
+    "ALTER TABLE enterprise_daily_metrics ADD COLUMN totals_by_ai_adoption_phase TEXT DEFAULT '[]'",
+    "ALTER TABLE org_daily_metrics ADD COLUMN totals_by_ai_adoption_phase TEXT DEFAULT '[]'",
+    "ALTER TABLE user_daily_metrics ADD COLUMN ai_adoption_phase TEXT",
   ];
   for (const sql of migrations) {
     try { _db.exec(sql); } catch { /* column already exists or table not yet created */ }

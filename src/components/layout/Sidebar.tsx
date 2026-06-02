@@ -20,6 +20,7 @@ import {
   Receipt,
   DollarSign,
   Zap,
+  TrendingUp,
 } from "lucide-react";
 import { useState, useEffect } from "react";
 
@@ -42,6 +43,7 @@ const navGroups: NavGroup[] = [
       { href: "/dashboard", label: "Overview", icon: LayoutDashboard, visKey: "overview" },
       { href: "/dashboard/code-generation", label: "Code Generation", icon: Code2, visKey: "codeGeneration" },
       { href: "/dashboard/chat-modes", label: "Copilot Features", icon: Sparkles, visKey: "chatModes" },
+      { href: "/dashboard/adoption-cohorts", label: "AI Adoption", icon: TrendingUp, visKey: "adoptionCohorts" },
       { href: "/dashboard/models", label: "Model Statistics", icon: Brain, visKey: "models" },
     ],
   },

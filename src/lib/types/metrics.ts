@@ -96,6 +96,28 @@ export interface AgentEdit {
   loc_deleted_sum?: number;
 }
 
+export interface AIAdoptionPhase {
+  phase: number;       // 0–3
+  label: string;       // "No cohort", "Code first", "Agent first", "Multi-agent"
+  version: string;     // e.g. "v1"
+}
+
+export interface TotalsByAIAdoptionPhase {
+  phase: number;
+  label: string;
+  version: string;
+  engaged_users: number;
+  user_initiated_interaction_avg: number;
+  code_generation_activity_avg: number;
+  code_acceptance_activity_avg: number;
+  loc_added_avg: number;
+  loc_deleted_avg: number;
+  pull_requests_created_avg: number;
+  pull_requests_merged_avg: number;
+  pull_requests_reviewed_avg: number;
+  median_minutes_to_merge_avg: number | null;
+}
+
 // ── Enterprise/Org aggregate (day_totals) ─────────────────────────────
 
 export interface DayTotal {
@@ -129,6 +151,9 @@ export interface DayTotal {
   totals_by_model_feature: TotalsByModelFeature[];
   totals_by_language_model: TotalsByLanguageModel[];
   totals_by_cli?: TotalsByCLI;
+
+  // AI adoption cohorts
+  totals_by_ai_adoption_phase?: TotalsByAIAdoptionPhase[];
 
   // Pull requests
   pull_requests?: PullRequestMetrics;
@@ -198,6 +223,9 @@ export interface UserDayRecord {
 
   // Agent edit
   agent_edit?: AgentEdit;
+
+  // AI adoption cohort
+  ai_adoption_phase?: AIAdoptionPhase;
 
   // Internal fields
   etl_id?: string;
