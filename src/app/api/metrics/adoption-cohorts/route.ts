@@ -81,7 +81,9 @@ function getEnterpriseAdoptionCohorts(
     percentage: totalEngaged > 0 ? ((p.engaged_users || 0) / totalEngaged) * 100 : 0,
   }));
 
-  return { distribution, trend, perPhaseMetrics: latestPhases, totalEngaged };
+  // latestDay clarifies that distribution/perPhaseMetrics are a point-in-time snapshot
+  const latestDay = rows[rows.length - 1]?.day ?? end;
+  return { distribution, trend, perPhaseMetrics: latestPhases, totalEngaged, latestDay };
 }
 
 /**
@@ -158,7 +160,11 @@ function getUserAdoptionCohorts(
 
   const trend = Array.from(trendMap.values()).sort((a, b) => a.day.localeCompare(b.day));
 
-  return { distribution, trend, perPhaseMetrics: [], totalEngaged: totalUsers };
+  // latestDay: the most recent day contributing to the distribution snapshot.
+  // Note: distribution counts each user once (latest phase in range);
+  // trend counts distinct users per day per phase, so daily totals may differ.
+  const latestDay = trendRows.length > 0 ? trendRows[trendRows.length - 1].day : end;
+  return { distribution, trend, perPhaseMetrics: [], totalEngaged: totalUsers, latestDay };
 }
 
 async function handler(request: NextRequest) {
@@ -175,6 +181,22 @@ async function handler(request: NextRequest) {
     const { enterpriseSlugs } = filter;
     const hasFilter = filter.selectedTeams.length > 0 || filter.selectedOrgs.length > 0;
     const allowedLoginsArray = filter.allowedLogins ? Array.from(filter.allowedLogins) : undefined;
+
+    // Guard: if a scope filter resolved to zero matching users, return empty
+    // instead of silently dropping the filter and leaking unscoped data.
+    if (hasFilter && allowedLoginsArray && allowedLoginsArray.length === 0) {
+      return NextResponse.json({
+        distribution: [],
+        trend: [],
+        perPhaseMetrics: [],
+        totalEngaged: 0,
+        hasData: false,
+        dataAsOf: end,
+        daysLoaded: days,
+      }, {
+        headers: { "Cache-Control": "private, max-age=300, stale-while-revalidate=60" },
+      });
+    }
 
     let result;
 

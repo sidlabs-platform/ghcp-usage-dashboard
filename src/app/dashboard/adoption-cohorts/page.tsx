@@ -32,6 +32,7 @@ interface AdoptionCohortsData {
   hasData: boolean;
   dataAsOf: string;
   daysLoaded: number;
+  latestDay?: string;
 }
 
 const PHASE_ICONS: Record<number, typeof Users> = {
@@ -128,7 +129,7 @@ export default function AdoptionCohortsPage() {
     <div>
       <PageHeader
         title="AI Adoption Cohorts"
-        description={`AI adoption maturity phases — ${data.daysLoaded} days (as of ${data.dataAsOf})`}
+        description={`AI adoption maturity phases — ${data.daysLoaded} days · Distribution snapshot: ${data.latestDay ?? data.dataAsOf}`}
       >
         <ExportMenu
           pdf={{

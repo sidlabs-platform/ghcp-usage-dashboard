@@ -31,9 +31,10 @@ interface CohortTrendChartProps {
   data: CohortTrendDataPoint[];
 }
 
+/** Parse YYYY-MM-DD without Date constructor to avoid UTC→local timezone shift */
 function formatDate(dateStr: string) {
-  const d = new Date(dateStr);
-  return `${d.getMonth() + 1}/${d.getDate()}`;
+  const [, m, d] = dateStr.split("-").map(Number);
+  return `${m}/${d}`;
 }
 
 export function CohortTrendChart({ data }: CohortTrendChartProps) {
@@ -69,7 +70,10 @@ export function CohortTrendChart({ data }: CohortTrendChartProps) {
             />
             <YAxis tick={{ fontSize: 12 }} />
             <Tooltip
-              labelFormatter={(label: string) => new Date(label).toLocaleDateString()}
+              labelFormatter={(label: string) => {
+                const [y, m, d] = label.split("-").map(Number);
+                return new Date(y, m - 1, d).toLocaleDateString();
+              }}
               contentStyle={{
                 backgroundColor: "hsl(var(--card))",
                 border: "1px solid hsl(var(--border))",
