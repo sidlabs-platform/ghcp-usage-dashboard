@@ -5,6 +5,7 @@ import { getDateRange, parseAndClampDays } from "@/lib/utils";
 import { withCache } from "@/lib/cache/with-cache";
 import { withTimeout } from "@/lib/api/timeout";
 import { CACHE_TTL } from "@/lib/cache/memory-cache";
+import { countEffectiveEnterprises } from "@/lib/db/metrics-repo";
 import type { TotalsByAIAdoptionPhase } from "@/lib/types/metrics";
 
 /** Phase labels used as fallback when API data is missing labels */
@@ -100,23 +101,23 @@ function getUserAdoptionCohorts(
   const lf = buildLoginFilter(allowedLogins ?? []);
   const ef = buildEnterpriseFilter(enterpriseSlugs);
 
-  // Get latest phase per user (use most recent day's phase to avoid double-counting
-  // users who progress through phases within the date range)
+  // Get latest phase per user. Uses ROW_NUMBER to pick exactly one row per
+  // user_login (the most recent day), avoiding duplicates in multi-enterprise
+  // scenarios where the same login appears under different enterprise_slugs.
+  // label is selected deterministically via MIN() so the outer GROUP BY phase
+  // always picks a consistent label.
   const rows = db.prepare(`
-    SELECT phase, label, COUNT(*) as user_count FROM (
-      SELECT
-        u.user_login,
-        json_extract(u.ai_adoption_phase, '$.phase') as phase,
-        json_extract(u.ai_adoption_phase, '$.label') as label
-      FROM user_daily_metrics u
-      INNER JOIN (
-        SELECT user_login, MAX(day) as max_day
-        FROM user_daily_metrics
-        WHERE day >= ? AND day <= ?
-          AND ai_adoption_phase IS NOT NULL${lf.clause}${ef.clause}
-        GROUP BY user_login
-      ) latest ON u.user_login = latest.user_login AND u.day = latest.max_day
-      WHERE u.ai_adoption_phase IS NOT NULL
+    SELECT phase, MIN(label) as label, COUNT(*) as user_count FROM (
+      SELECT user_login, phase, label FROM (
+        SELECT
+          u.user_login,
+          json_extract(u.ai_adoption_phase, '$.phase') as phase,
+          json_extract(u.ai_adoption_phase, '$.label') as label,
+          ROW_NUMBER() OVER (PARTITION BY u.user_login ORDER BY u.day DESC) as rn
+        FROM user_daily_metrics u
+        WHERE u.day >= ? AND u.day <= ?
+          AND u.ai_adoption_phase IS NOT NULL${lf.clause}${ef.clause}
+      ) WHERE rn = 1
     )
     GROUP BY phase
     ORDER BY phase ASC
@@ -182,6 +183,12 @@ async function handler(request: NextRequest) {
     const hasFilter = filter.selectedTeams.length > 0 || filter.selectedOrgs.length > 0;
     const allowedLoginsArray = filter.allowedLogins ? Array.from(filter.allowedLogins) : undefined;
 
+    // In multi-enterprise setups, enterprise_daily_metrics has one row per
+    // enterprise per day — using it directly would produce duplicate trend
+    // entries and only the last enterprise's distribution. Fall back to
+    // user-level aggregation (same pattern as overview/cli/pull-requests routes).
+    const isMultiEnterprise = !hasFilter && countEffectiveEnterprises(enterpriseSlugs) > 1;
+
     // Guard: if a scope filter resolved to zero matching users, return empty
     // instead of silently dropping the filter and leaking unscoped data.
     if (hasFilter && allowedLoginsArray && allowedLoginsArray.length === 0) {
@@ -200,8 +207,8 @@ async function handler(request: NextRequest) {
 
     let result;
 
-    if (hasFilter) {
-      // Filtered view: always aggregate from user-level data
+    if (hasFilter || isMultiEnterprise) {
+      // Filtered or multi-enterprise: always aggregate from user-level data
       result = getUserAdoptionCohorts(start, end, allowedLoginsArray, enterpriseSlugs);
     } else {
       // Try enterprise-level first, fall back to user-level

@@ -1050,7 +1050,7 @@ describe("ai_adoption_phase and totals_by_ai_adoption_phase", () => {
     expect(results[0].totals_by_ai_adoption_phase![1].median_minutes_to_merge_avg).toBe(45);
   });
 
-  it("returns undefined for totals_by_ai_adoption_phase when column is NULL", () => {
+  it("returns empty array for totals_by_ai_adoption_phase when field is omitted (serialized as '[]')", () => {
     upsertEnterpriseDayMetrics("ent1", {
       day: "2026-06-02", enterprise_id: "ent-123",
       daily_active_users: 5, weekly_active_users: 10, monthly_active_users: 20,
