@@ -61,21 +61,29 @@ export default function AdoptionCohortsPage() {
 
   const fetchData = useCallback(() => {
     setLoading(true);
+    const controller = new AbortController();
     const params = new URLSearchParams({ days: String(days) });
     const scopeParams = buildScopeParams();
     scopeParams.forEach((value, key) => params.set(key, value));
 
-    fetch(`/api/metrics/adoption-cohorts?${params}`)
+    fetch(`/api/metrics/adoption-cohorts?${params}`, { signal: controller.signal })
       .then((res) => res.json())
       .then((json) => {
         if (json.error) setError(json.error);
         else { setData(json); setError(null); }
       })
-      .catch((err) => setError(err.message))
+      .catch((err) => {
+        if (err.name !== "AbortError") setError(err.message);
+      })
       .finally(() => setLoading(false));
+
+    return () => controller.abort();
   }, [days, buildScopeParams]);
 
-  useEffect(() => { fetchData(); }, [fetchData]);
+  useEffect(() => {
+    const cleanup = fetchData();
+    return cleanup;
+  }, [fetchData]);
 
   if (loading && !data) {
     return (
@@ -156,7 +164,7 @@ export default function AdoptionCohortsPage() {
             title="Total Engaged"
             value={totalEngaged}
             icon={<Users className="h-4 w-4" />}
-            subtitle="28-day window"
+            subtitle={`${data.daysLoaded}-day window`}
             accent="teal"
             stagger={1}
           />
