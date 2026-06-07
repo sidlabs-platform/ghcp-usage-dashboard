@@ -44,6 +44,7 @@ export async function GET() {
     overview: copilotEnabled,
     codeGeneration: userMetrics,
     chatModes: userMetrics,
+    adoptionCohorts: userMetrics,
     models: userMetrics,
     cli: userMetrics,
     pullRequests: copilotEnabled && (multiEnt

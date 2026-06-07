@@ -34,6 +34,13 @@ const SEARCH_INDEX: SearchEntry[] = [
     section: "Dashboard",
   },
   {
+    href: "/dashboard/adoption-cohorts",
+    label: "AI Adoption Cohorts",
+    description: "AI adoption maturity phases — code first, agent first, multi-agent",
+    keywords: ["adoption", "cohort", "phase", "maturity", "code first", "agent first", "multi-agent"],
+    section: "Dashboard",
+  },
+  {
     href: "/dashboard/models",
     label: "Model Statistics",
     description: "AI model usage and distribution across features",

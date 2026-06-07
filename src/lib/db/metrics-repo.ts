@@ -43,7 +43,8 @@ const DAY_TOTAL_COLUMNS = `
   code_generation_activity_count, code_acceptance_activity_count, user_initiated_interaction_count,
   loc_suggested_to_add_sum, loc_suggested_to_delete_sum, loc_added_sum, loc_deleted_sum,
   totals_by_ide, totals_by_feature, totals_by_language_feature,
-  totals_by_model_feature, totals_by_language_model, totals_by_cli, pull_requests`;
+  totals_by_model_feature, totals_by_language_model, totals_by_cli,
+  totals_by_ai_adoption_phase, pull_requests`;
 
 function mapDayTotalRow(row: Record<string, unknown>): DayTotal {
   return {
@@ -68,6 +69,9 @@ function mapDayTotalRow(row: Record<string, unknown>): DayTotal {
     totals_by_model_feature: JSON.parse((row.totals_by_model_feature as string) || "[]"),
     totals_by_language_model: JSON.parse((row.totals_by_language_model as string) || "[]"),
     totals_by_cli: row.totals_by_cli ? JSON.parse(row.totals_by_cli as string) : undefined,
+    totals_by_ai_adoption_phase: row.totals_by_ai_adoption_phase
+      ? JSON.parse(row.totals_by_ai_adoption_phase as string)
+      : undefined,
     pull_requests: row.pull_requests ? JSON.parse(row.pull_requests as string) : undefined,
   };
 }
@@ -81,7 +85,7 @@ const USER_COLUMNS = `
   used_agent, used_chat, used_cli, used_copilot_code_review_active, used_copilot_code_review_passive,
   used_copilot_coding_agent,
   totals_by_ide, totals_by_feature, totals_by_language_feature,
-  totals_by_model_feature, totals_by_language_model, totals_by_cli, agent_edit`;
+  totals_by_model_feature, totals_by_language_model, totals_by_cli, ai_adoption_phase, agent_edit`;
 
 function mapUserRow(row: Record<string, unknown>): UserDayRecord {
   return {
@@ -114,6 +118,7 @@ function mapUserRow(row: Record<string, unknown>): UserDayRecord {
     totals_by_model_feature: JSON.parse((row.totals_by_model_feature as string) || "[]"),
     totals_by_language_model: JSON.parse((row.totals_by_language_model as string) || "[]"),
     totals_by_cli: row.totals_by_cli ? JSON.parse(row.totals_by_cli as string) : undefined,
+    ai_adoption_phase: row.ai_adoption_phase ? JSON.parse(row.ai_adoption_phase as string) : undefined,
     agent_edit: row.agent_edit ? JSON.parse(row.agent_edit as string) : undefined,
   };
 }
@@ -183,8 +188,9 @@ export function upsertEnterpriseDayMetrics(enterpriseSlug: string, record: DayTo
       code_generation_activity_count, code_acceptance_activity_count, user_initiated_interaction_count,
       loc_suggested_to_add_sum, loc_suggested_to_delete_sum, loc_added_sum, loc_deleted_sum,
       totals_by_ide, totals_by_feature, totals_by_language_feature,
-      totals_by_model_feature, totals_by_language_model, totals_by_cli, pull_requests, raw_json
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      totals_by_model_feature, totals_by_language_model, totals_by_cli,
+      totals_by_ai_adoption_phase, pull_requests, raw_json
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     enterpriseSlug, record.day, record.enterprise_id,
     record.daily_active_users, record.weekly_active_users, record.monthly_active_users,
@@ -200,6 +206,7 @@ export function upsertEnterpriseDayMetrics(enterpriseSlug: string, record: DayTo
     JSON.stringify(record.totals_by_model_feature || []),
     JSON.stringify(record.totals_by_language_model || []),
     record.totals_by_cli ? JSON.stringify(record.totals_by_cli) : null,
+    JSON.stringify(record.totals_by_ai_adoption_phase || []),
     record.pull_requests ? JSON.stringify(record.pull_requests) : null,
     JSON.stringify(record)
   );
@@ -252,8 +259,9 @@ export function upsertOrgDayMetrics(enterpriseSlug: string, orgSlug: string, rec
       code_generation_activity_count, code_acceptance_activity_count, user_initiated_interaction_count,
       loc_suggested_to_add_sum, loc_suggested_to_delete_sum, loc_added_sum, loc_deleted_sum,
       totals_by_ide, totals_by_feature, totals_by_language_feature,
-      totals_by_model_feature, totals_by_language_model, totals_by_cli, pull_requests, raw_json
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      totals_by_model_feature, totals_by_language_model, totals_by_cli,
+      totals_by_ai_adoption_phase, pull_requests, raw_json
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     enterpriseSlug, record.day, orgSlug, record.enterprise_id,
     record.daily_active_users, record.weekly_active_users, record.monthly_active_users,
@@ -269,6 +277,7 @@ export function upsertOrgDayMetrics(enterpriseSlug: string, orgSlug: string, rec
     JSON.stringify(record.totals_by_model_feature || []),
     JSON.stringify(record.totals_by_language_model || []),
     record.totals_by_cli ? JSON.stringify(record.totals_by_cli) : null,
+    JSON.stringify(record.totals_by_ai_adoption_phase || []),
     record.pull_requests ? JSON.stringify(record.pull_requests) : null,
     JSON.stringify(record)
   );
@@ -500,8 +509,9 @@ export function batchUpsertUserDayMetrics(enterpriseSlug: string, records: UserD
       used_agent, used_chat, used_cli, used_copilot_code_review_active, used_copilot_code_review_passive,
       used_copilot_coding_agent,
       totals_by_ide, totals_by_feature, totals_by_language_feature,
-      totals_by_model_feature, totals_by_language_model, totals_by_cli, agent_edit, raw_json
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      totals_by_model_feature, totals_by_language_model, totals_by_cli,
+      ai_adoption_phase, agent_edit, raw_json
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
 
   const tx = db.transaction(() => {
@@ -528,6 +538,7 @@ export function batchUpsertUserDayMetrics(enterpriseSlug: string, records: UserD
         JSON.stringify(r.totals_by_model_feature || []),
         JSON.stringify(r.totals_by_language_model || []),
         r.totals_by_cli ? JSON.stringify(r.totals_by_cli) : null,
+        r.ai_adoption_phase ? JSON.stringify(r.ai_adoption_phase) : null,
         r.agent_edit ? JSON.stringify(r.agent_edit) : null,
         JSON.stringify(r)
       );

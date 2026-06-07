@@ -1014,3 +1014,148 @@ describe("multi-enterprise: getEnterpriseMetrics returns duplicate days", () => 
     expect(metrics[0].daily_active_users).toBe(50);
   });
 });
+
+describe("ai_adoption_phase and totals_by_ai_adoption_phase", () => {
+  beforeEach(() => {
+    db.exec("DELETE FROM enterprise_daily_metrics");
+    db.exec("DELETE FROM user_daily_metrics");
+    invalidateEnterpriseCountCache();
+  });
+
+  it("stores and retrieves totals_by_ai_adoption_phase on enterprise metrics", () => {
+    const phases = [
+      { phase: 0, label: "No cohort", version: "v1", engaged_users: 10, user_initiated_interaction_avg: 1.5, code_generation_activity_avg: 2.0, code_acceptance_activity_avg: 1.0, loc_added_avg: 50, loc_deleted_avg: 5, pull_requests_created_avg: 0.1, pull_requests_merged_avg: 0.05, pull_requests_reviewed_avg: 0.2, median_minutes_to_merge_avg: null },
+      { phase: 1, label: "Code first", version: "v1", engaged_users: 30, user_initiated_interaction_avg: 5.0, code_generation_activity_avg: 8.0, code_acceptance_activity_avg: 6.0, loc_added_avg: 200, loc_deleted_avg: 20, pull_requests_created_avg: 0.5, pull_requests_merged_avg: 0.3, pull_requests_reviewed_avg: 1.0, median_minutes_to_merge_avg: 45 },
+    ];
+    upsertEnterpriseDayMetrics("ent1", {
+      day: "2026-06-01", enterprise_id: "ent-123",
+      daily_active_users: 40, weekly_active_users: 100, monthly_active_users: 150,
+      monthly_active_agent_users: 5, monthly_active_chat_users: 30, daily_active_cli_users: 2,
+      code_generation_activity_count: 200, code_acceptance_activity_count: 150,
+      user_initiated_interaction_count: 500,
+      loc_suggested_to_add_sum: 1000, loc_suggested_to_delete_sum: 50,
+      loc_added_sum: 800, loc_deleted_sum: 40,
+      totals_by_ide: [], totals_by_feature: [], totals_by_language_feature: [],
+      totals_by_model_feature: [], totals_by_language_model: [],
+      totals_by_ai_adoption_phase: phases,
+    } as any);
+
+    const results = getEnterpriseMetrics("2026-06-01", "2026-06-01");
+    expect(results).toHaveLength(1);
+    expect(results[0].totals_by_ai_adoption_phase).toHaveLength(2);
+    expect(results[0].totals_by_ai_adoption_phase![0].phase).toBe(0);
+    expect(results[0].totals_by_ai_adoption_phase![0].label).toBe("No cohort");
+    expect(results[0].totals_by_ai_adoption_phase![0].engaged_users).toBe(10);
+    expect(results[0].totals_by_ai_adoption_phase![1].phase).toBe(1);
+    expect(results[0].totals_by_ai_adoption_phase![1].median_minutes_to_merge_avg).toBe(45);
+  });
+
+  it("returns empty array for totals_by_ai_adoption_phase when field is omitted (serialized as '[]')", () => {
+    upsertEnterpriseDayMetrics("ent1", {
+      day: "2026-06-02", enterprise_id: "ent-123",
+      daily_active_users: 5, weekly_active_users: 10, monthly_active_users: 20,
+      monthly_active_agent_users: 0, monthly_active_chat_users: 0, daily_active_cli_users: 0,
+      code_generation_activity_count: 10, code_acceptance_activity_count: 5,
+      user_initiated_interaction_count: 20,
+      loc_suggested_to_add_sum: 100, loc_suggested_to_delete_sum: 0,
+      loc_added_sum: 80, loc_deleted_sum: 0,
+      totals_by_ide: [], totals_by_feature: [], totals_by_language_feature: [],
+      totals_by_model_feature: [], totals_by_language_model: [],
+    } as any);
+
+    const results = getEnterpriseMetrics("2026-06-02", "2026-06-02");
+    expect(results).toHaveLength(1);
+    // upsert serializes undefined as '[]', so the column is '[]', parsed to empty array
+    expect(results[0].totals_by_ai_adoption_phase).toEqual([]);
+  });
+
+  it("stores and retrieves ai_adoption_phase on user metrics via batchUpsert", () => {
+    const records = [{
+      day: "2026-06-01", enterprise_id: "ent-123", user_id: 100, user_login: "cohort-user",
+      code_generation_activity_count: 5, code_acceptance_activity_count: 3,
+      user_initiated_interaction_count: 10,
+      loc_suggested_to_add_sum: 50, loc_suggested_to_delete_sum: 5,
+      loc_added_sum: 40, loc_deleted_sum: 2,
+      used_agent: true, used_chat: true, used_cli: false,
+      used_copilot_code_review_active: false, used_copilot_code_review_passive: false,
+      used_copilot_coding_agent: false,
+      totals_by_ide: [], totals_by_feature: [], totals_by_language_feature: [],
+      totals_by_model_feature: [], totals_by_language_model: [],
+      ai_adoption_phase: { phase: 2, label: "Agent first", version: "v1" },
+    }] as any[];
+    batchUpsertUserDayMetrics("ent1", records);
+
+    const row = db.prepare(
+      "SELECT ai_adoption_phase FROM user_daily_metrics WHERE user_login = 'cohort-user'"
+    ).get() as any;
+    expect(row).toBeDefined();
+    const parsed = JSON.parse(row.ai_adoption_phase);
+    expect(parsed.phase).toBe(2);
+    expect(parsed.label).toBe("Agent first");
+    expect(parsed.version).toBe("v1");
+  });
+
+  it("stores NULL ai_adoption_phase when field is not provided", () => {
+    const records = [{
+      day: "2026-06-01", enterprise_id: "ent-123", user_id: 101, user_login: "no-cohort-user",
+      code_generation_activity_count: 1, code_acceptance_activity_count: 0,
+      user_initiated_interaction_count: 0,
+      loc_suggested_to_add_sum: 0, loc_suggested_to_delete_sum: 0,
+      loc_added_sum: 0, loc_deleted_sum: 0,
+      used_agent: false, used_chat: false, used_cli: false,
+      used_copilot_code_review_active: false, used_copilot_code_review_passive: false,
+      used_copilot_coding_agent: false,
+      totals_by_ide: [], totals_by_feature: [], totals_by_language_feature: [],
+      totals_by_model_feature: [], totals_by_language_model: [],
+    }] as any[];
+    batchUpsertUserDayMetrics("ent1", records);
+
+    const row = db.prepare(
+      "SELECT ai_adoption_phase FROM user_daily_metrics WHERE user_login = 'no-cohort-user'"
+    ).get() as any;
+    expect(row.ai_adoption_phase).toBeNull();
+  });
+
+  it("mapUserRow parses ai_adoption_phase from stored JSON", () => {
+    const records = [{
+      day: "2026-06-03", enterprise_id: "ent-123", user_id: 102, user_login: "mapped-user",
+      code_generation_activity_count: 1, code_acceptance_activity_count: 0,
+      user_initiated_interaction_count: 0,
+      loc_suggested_to_add_sum: 0, loc_suggested_to_delete_sum: 0,
+      loc_added_sum: 0, loc_deleted_sum: 0,
+      used_agent: false, used_chat: false, used_cli: false,
+      used_copilot_code_review_active: false, used_copilot_code_review_passive: false,
+      used_copilot_coding_agent: false,
+      totals_by_ide: [], totals_by_feature: [], totals_by_language_feature: [],
+      totals_by_model_feature: [], totals_by_language_model: [],
+      ai_adoption_phase: { phase: 3, label: "Multi-agent", version: "v1" },
+    }] as any[];
+    batchUpsertUserDayMetrics("ent1", records);
+
+    const results = getUserMetricsByLogin("mapped-user", "2026-06-03", "2026-06-03");
+    expect(results).toHaveLength(1);
+    expect(results[0].ai_adoption_phase).toBeDefined();
+    expect(results[0].ai_adoption_phase!.phase).toBe(3);
+    expect(results[0].ai_adoption_phase!.label).toBe("Multi-agent");
+  });
+
+  it("mapUserRow returns undefined ai_adoption_phase when column is NULL", () => {
+    const records = [{
+      day: "2026-06-04", enterprise_id: "ent-123", user_id: 103, user_login: "null-phase-user",
+      code_generation_activity_count: 0, code_acceptance_activity_count: 0,
+      user_initiated_interaction_count: 0,
+      loc_suggested_to_add_sum: 0, loc_suggested_to_delete_sum: 0,
+      loc_added_sum: 0, loc_deleted_sum: 0,
+      used_agent: false, used_chat: false, used_cli: false,
+      used_copilot_code_review_active: false, used_copilot_code_review_passive: false,
+      used_copilot_coding_agent: false,
+      totals_by_ide: [], totals_by_feature: [], totals_by_language_feature: [],
+      totals_by_model_feature: [], totals_by_language_model: [],
+    }] as any[];
+    batchUpsertUserDayMetrics("ent1", records);
+
+    const results = getUserMetricsByLogin("null-phase-user", "2026-06-04", "2026-06-04");
+    expect(results).toHaveLength(1);
+    expect(results[0].ai_adoption_phase).toBeUndefined();
+  });
+});
