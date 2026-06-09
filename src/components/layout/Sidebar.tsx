@@ -127,7 +127,7 @@ export function Sidebar() {
   return (
     <aside
       className={cn(
-        "flex flex-col border-r bg-[hsl(var(--card))] transition-all duration-300",
+        "min-h-0 flex flex-col border-r bg-[hsl(var(--card))] transition-all duration-300",
         collapsed ? "w-16" : "w-64"
       )}
     >
@@ -145,7 +145,7 @@ export function Sidebar() {
       </div>
 
       {/* Nav items */}
-      <nav className="flex-1 p-3">
+      <nav className="flex-1 overflow-y-auto p-3">
         {visibleGroups.map((group, groupIndex) => (
           <div key={group.label} className={cn("mb-1", groupIndex === 0 ? "mt-0" : "mt-4")}>
             {!collapsed && (

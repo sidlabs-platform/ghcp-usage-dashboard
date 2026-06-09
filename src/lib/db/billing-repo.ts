@@ -16,8 +16,11 @@ import type {
   ChargeScope,
   PremiumRequestUserSummary,
   PremiumRequestModelSummary,
+  PremiumUserModelBreakdown,
   PremiumDailyTrend,
 } from "@/lib/types/billing";
+
+const AI_CREDITS_START_DATE = "2026-06-01";
 
 // ── Filter Interfaces ─────────────────────────────────────────────────
 
@@ -591,7 +594,7 @@ export function getPremiumRequestsPaginated(
   enterpriseSlugs?: string[]
 ): { records: BillingPremiumRequestRecord[]; total: number } {
   const db = getDb();
-  const clauses: string[] = ["date >= ?", "date <= ?"];
+  const clauses: string[] = ["date >= ?", "date <= ?", `date >= '${AI_CREDITS_START_DATE}'`];
   const params: unknown[] = [start, end];
   const { clause: entClause, params: entParams } = buildEnterpriseFilter(enterpriseSlugs);
   if (entClause) { clauses.push(entClause.replace(/^\s*AND\s+/, "")); params.push(...entParams); }
@@ -648,7 +651,7 @@ export function getPremiumUserSummary(
   enterpriseSlugs?: string[]
 ): PremiumRequestUserSummary[] {
   const db = getDb();
-  const clauses: string[] = ["date >= ?", "date <= ?"];
+  const clauses: string[] = ["date >= ?", "date <= ?", `date >= '${AI_CREDITS_START_DATE}'`];
   const params: unknown[] = [start, end];
   const { clause: entClause, params: entParams } = buildEnterpriseFilter(enterpriseSlugs);
   if (entClause) { clauses.push(entClause.replace(/^\s*AND\s+/, "")); params.push(...entParams); }
@@ -660,16 +663,16 @@ export function getPremiumUserSummary(
     SELECT
       username,
       organization,
-      COALESCE(SUM(quantity), 0)  AS total_requests,
-      COALESCE(SUM(CASE WHEN exceeds_quota = 'FALSE' THEN quantity ELSE 0 END), 0) AS within_quota,
-      COALESCE(SUM(CASE WHEN exceeds_quota = 'TRUE'  THEN quantity ELSE 0 END), 0) AS over_quota,
+      COALESCE(SUM(aic_quantity), 0)  AS total_requests,
+      COALESCE(SUM(CASE WHEN exceeds_quota = 'FALSE' THEN aic_quantity ELSE 0 END), 0) AS within_quota,
+      COALESCE(SUM(CASE WHEN exceeds_quota = 'TRUE'  THEN aic_quantity ELSE 0 END), 0) AS over_quota,
       COALESCE(MAX(total_monthly_quota), 0) AS quota_limit,
       CASE
         WHEN MAX(total_monthly_quota) > 0
-        THEN ROUND(COALESCE(SUM(quantity), 0) * 100.0 / MAX(total_monthly_quota), 2)
+        THEN ROUND(COALESCE(SUM(aic_quantity), 0) * 100.0 / MAX(total_monthly_quota), 2)
         ELSE 0
       END AS utilization_pct,
-      COALESCE(SUM(net_amount), 0) AS total_net,
+      COALESCE(SUM(aic_gross_amount), 0) AS total_net,
       COALESCE(SUM(input_tokens), 0)  AS total_input_tokens,
       COALESCE(SUM(output_tokens), 0) AS total_output_tokens,
       COALESCE(SUM(cached_tokens), 0) AS total_cached_tokens,
@@ -691,7 +694,7 @@ export function getPremiumModelSummary(
   enterpriseSlugs?: string[]
 ): PremiumRequestModelSummary[] {
   const db = getDb();
-  const clauses: string[] = ["date >= ?", "date <= ?"];
+  const clauses: string[] = ["date >= ?", "date <= ?", `date >= '${AI_CREDITS_START_DATE}'`];
   const params: unknown[] = [start, end];
   const { clause: entClause, params: entParams } = buildEnterpriseFilter(enterpriseSlugs);
   if (entClause) { clauses.push(entClause.replace(/^\s*AND\s+/, "")); params.push(...entParams); }
@@ -702,8 +705,8 @@ export function getPremiumModelSummary(
       `
     SELECT
       model,
-      COALESCE(SUM(quantity), 0)         AS total_requests,
-      COALESCE(SUM(net_amount), 0)       AS total_net,
+      COALESCE(SUM(aic_quantity), 0) AS total_requests,
+      COALESCE(SUM(aic_gross_amount), 0) AS total_net,
       COUNT(DISTINCT username)           AS unique_users,
       COALESCE(SUM(input_tokens), 0)  AS total_input_tokens,
       COALESCE(SUM(output_tokens), 0) AS total_output_tokens,
@@ -717,6 +720,49 @@ export function getPremiumModelSummary(
   `
     )
     .all(...params) as PremiumRequestModelSummary[];
+}
+
+export function getPremiumUserModelBreakdown(
+  start: string,
+  end: string,
+  username: string,
+  organization?: string,
+  filters?: PremiumFilters,
+  enterpriseSlugs?: string[]
+): PremiumUserModelBreakdown[] {
+  const db = getDb();
+  const clauses: string[] = ["date >= ?", "date <= ?", "username = ?", `date >= '${AI_CREDITS_START_DATE}'`];
+  const params: unknown[] = [start, end, username];
+  const { clause: entClause, params: entParams } = buildEnterpriseFilter(enterpriseSlugs);
+  if (entClause) { clauses.push(entClause.replace(/^\s*AND\s+/, "")); params.push(...entParams); }
+
+  if (organization !== undefined) {
+    if (organization === "") {
+      clauses.push(`COALESCE(organization, '') = ''`);
+    } else {
+      clauses.push(`organization = ?`);
+      params.push(organization);
+    }
+  }
+
+  appendPremiumFilters(clauses, params, filters);
+
+  return db
+    .prepare(
+      `
+    SELECT
+      model,
+      COALESCE(SUM(aic_quantity), 0) AS ai_credits,
+      COALESCE(SUM(aic_gross_amount), 0) AS usd
+    FROM billing_premium_requests
+    ${buildWhereClause(clauses)}
+    GROUP BY model
+    HAVING COALESCE(SUM(aic_quantity), 0) > 0
+      OR COALESCE(SUM(aic_gross_amount), 0) > 0
+    ORDER BY ai_credits DESC, usd DESC
+  `
+    )
+    .all(...params) as PremiumUserModelBreakdown[];
 }
 
 // ── Cost Center / Repository / Premium Daily Breakdowns ───────────────
@@ -792,7 +838,7 @@ export function getPremiumDailyTrend(
   enterpriseSlugs?: string[]
 ): PremiumDailyTrend[] {
   const db = getDb();
-  const clauses: string[] = ["date >= ?", "date <= ?"];
+  const clauses: string[] = ["date >= ?", "date <= ?", `date >= '${AI_CREDITS_START_DATE}'`];
   const params: unknown[] = [start, end];
   const { clause: entClause, params: entParams } = buildEnterpriseFilter(enterpriseSlugs);
   if (entClause) { clauses.push(entClause.replace(/^\s*AND\s+/, "")); params.push(...entParams); }
@@ -803,8 +849,8 @@ export function getPremiumDailyTrend(
       `
     SELECT
       date AS day,
-      COALESCE(SUM(quantity), 0)   AS total_requests,
-      COALESCE(SUM(net_amount), 0) AS total_net,
+      COALESCE(SUM(aic_quantity), 0) AS total_requests,
+      COALESCE(SUM(aic_gross_amount), 0) AS total_net,
       COUNT(DISTINCT username)     AS unique_users,
       COALESCE(SUM(input_tokens), 0)  AS total_input_tokens,
       COALESCE(SUM(output_tokens), 0) AS total_output_tokens,
@@ -969,7 +1015,7 @@ export function getPremiumFilterOptions(
 } {
   const db = getDb();
   const entFilter = buildEnterpriseFilter(enterpriseSlugs);
-  const where = `WHERE date >= ? AND date <= ?${entFilter.clause}`;
+  const where = `WHERE date >= ? AND date <= ? AND date >= '${AI_CREDITS_START_DATE}'${entFilter.clause}`;
   const params = [start, end, ...entFilter.params];
 
   const models = (

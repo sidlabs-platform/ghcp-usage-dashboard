@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback, useRef, useMemo } from "react";
+import { Fragment, useEffect, useState, useCallback, useRef, useMemo } from "react";
 import dynamic from "next/dynamic";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { MetricCard } from "@/components/cards/MetricCard";
@@ -49,6 +49,12 @@ interface FilterOptions {
   users: string[];
 }
 
+interface UserModelBreakdownRow {
+  model: string;
+  ai_credits: number;
+  usd: number;
+}
+
 const fmtCurrency = (v: number) => {
   const n = safeNum(v);
   return n >= 1_000_000 ? `$${(n / 1_000_000).toFixed(1)}M`
@@ -70,6 +76,9 @@ export default function PremiumRequestsPage() {
   const [records, setRecords] = useState<BillingPremiumRequestRecord[]>([]);
   const [pagination, setPagination] = useState<PaginationInfo>({ page: 1, pageSize: 50, totalItems: 0, totalPages: 0 });
   const [filterOptions, setFilterOptions] = useState<FilterOptions>({ models: [], organizations: [], users: [] });
+  const [expandedUsers, setExpandedUsers] = useState<Record<string, boolean>>({});
+  const [userModelBreakdown, setUserModelBreakdown] = useState<Record<string, UserModelBreakdownRow[]>>({});
+  const [loadingUserModels, setLoadingUserModels] = useState<Record<string, boolean>>({});
   const [loading, setLoading] = useState(true);
   const [enabled, setEnabled] = useState(true);
 
@@ -150,6 +159,45 @@ export default function PremiumRequestsPage() {
     if (sort === col) setSortDir(d => d === "asc" ? "desc" : "asc");
     else { setSort(col); setSortDir("desc"); }
   };
+
+  const getUserKey = (username: string, organization: string) => `${username}::${organization || ""}`;
+
+  const fetchUserModelBreakdown = useCallback(async (username: string, organization: string) => {
+    const key = getUserKey(username, organization);
+    if (userModelBreakdown[key]) return;
+
+    setLoadingUserModels((prev) => ({ ...prev, [key]: true }));
+    try {
+      const p = new URLSearchParams();
+      p.set("days", String(days));
+      p.set("username", username);
+      p.set("rowOrganization", organization || "");
+      if (selectedModel.length) p.set("model", selectedModel.join(","));
+      if (selectedOrg.length) p.set("organization", selectedOrg.join(","));
+      if (exceedsQuota) p.set("exceedsQuota", exceedsQuota);
+      const scopeParams = buildScopeParams();
+      scopeParams.forEach((v, k) => p.set(k, v));
+
+      const res = await fetch(`/api/billing/premium/user-models?${p.toString()}`);
+      const data = await res.json();
+      setUserModelBreakdown((prev) => ({ ...prev, [key]: data.models || [] }));
+    } catch {
+      setUserModelBreakdown((prev) => ({ ...prev, [key]: [] }));
+    } finally {
+      setLoadingUserModels((prev) => ({ ...prev, [key]: false }));
+    }
+  }, [buildScopeParams, days, exceedsQuota, selectedModel, selectedOrg, userModelBreakdown]);
+
+  const toggleUserExpanded = useCallback((username: string, organization: string) => {
+    const key = getUserKey(username, organization);
+    setExpandedUsers((prev) => {
+      const nextExpanded = !prev[key];
+      if (nextExpanded) {
+        void fetchUserModelBreakdown(username, organization);
+      }
+      return { ...prev, [key]: nextExpanded };
+    });
+  }, [fetchUserModelBreakdown]);
 
   const csvColumns = useMemo(() => [
     { key: "date", label: "Date" },
@@ -284,7 +332,7 @@ export default function PremiumRequestsPage() {
               value={fmtCurrency(kpis.totalAicGross > 0 ? kpis.totalAicGross : kpis.totalNet)}
               format="raw"
               icon={<Users className="h-4 w-4" />}
-              subtitle="Net AI credit cost"
+              subtitle="AI credit billed cost"
             />
           </div>
 
@@ -305,7 +353,7 @@ export default function PremiumRequestsPage() {
           <div ref={chartsRef} className="grid gap-6 lg:grid-cols-2">
             <div className="rounded-xl border bg-[hsl(var(--card))] p-6">
               <h3 className="text-lg font-semibold mb-1">Usage by Model</h3>
-              <p className="text-sm text-[hsl(var(--muted-foreground))] mb-4">Request volume and cost per AI model</p>
+              <p className="text-sm text-[hsl(var(--muted-foreground))] mb-4">AI credits consumed and cost per model</p>
               <PremiumModelUsageChart data={modelSummary} />
             </div>
             <div className="rounded-xl border bg-[hsl(var(--card))] p-6">
@@ -323,13 +371,13 @@ export default function PremiumRequestsPage() {
             <div className="rounded-xl border bg-[hsl(var(--card))] overflow-hidden">
               <div className="px-6 py-4 border-b">
                 <h3 className="text-lg font-semibold">Per-User Breakdown</h3>
-                <p className="text-sm text-[hsl(var(--muted-foreground))]">AI credit quota utilization by user</p>
+                <p className="text-sm text-[hsl(var(--muted-foreground))]">Expand a user row to see model-wise AI credits and cost</p>
               </div>
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead className="border-b bg-[hsl(var(--accent))]/30">
                     <tr>
-                      <th className="px-4 py-3 text-left text-xs font-medium text-[hsl(var(--muted-foreground))] uppercase">Username</th>
+                      <th className="px-4 py-3 text-left text-xs font-medium text-[hsl(var(--muted-foreground))] uppercase">User</th>
                       <th className="px-4 py-3 text-left text-xs font-medium text-[hsl(var(--muted-foreground))] uppercase">Org</th>
                       <th className="px-4 py-3 text-right text-xs font-medium text-[hsl(var(--muted-foreground))] uppercase">AI Credits</th>
                       <th className="px-4 py-3 text-right text-xs font-medium text-[hsl(var(--muted-foreground))] uppercase">Within Quota</th>
@@ -343,22 +391,63 @@ export default function PremiumRequestsPage() {
                     {userSummary.slice(0, 50).map((u) => {
                       const utilColor = u.utilization_pct > 100
                         ? "text-red-600 dark:text-red-400"
-                        : u.utilization_pct > 80
-                          ? "text-yellow-600 dark:text-yellow-400"
-                          : "text-emerald-600 dark:text-emerald-400";
+                        : (u.utilization_pct > 80 ? "text-yellow-600 dark:text-yellow-400" : "text-emerald-600 dark:text-emerald-400");
+                      const key = getUserKey(u.username, u.organization || "");
+                      const expanded = !!expandedUsers[key];
+                      const modelRows = userModelBreakdown[key] || [];
+                      const modelLoading = !!loadingUserModels[key];
                       return (
-                        <tr key={u.username} className="hover:bg-[hsl(var(--accent))]/20 transition-colors">
-                          <td className="px-4 py-2.5 font-medium">{u.username}</td>
-                          <td className="px-4 py-2.5 text-[hsl(var(--muted-foreground))]">{u.organization || "—"}</td>
-                          <td className="px-4 py-2.5 text-right">{safeNum(u.total_requests).toLocaleString()}</td>
-                          <td className="px-4 py-2.5 text-right text-emerald-600 dark:text-emerald-400">{safeNum(u.within_quota).toLocaleString()}</td>
-                          <td className="px-4 py-2.5 text-right text-red-600 dark:text-red-400">{safeNum(u.over_quota) > 0 ? safeNum(u.over_quota).toLocaleString() : "—"}</td>
-                          <td className="px-4 py-2.5 text-right text-[hsl(var(--muted-foreground))]">{safeNum(u.quota_limit) > 0 ? safeNum(u.quota_limit).toLocaleString() : "—"}</td>
-                          <td className={`px-4 py-2.5 text-right font-semibold ${utilColor}`}>
-                            {safeNum(u.utilization_pct) > 0 ? `${safeNum(u.utilization_pct).toFixed(1)}%` : "—"}
-                          </td>
-                          <td className="px-4 py-2.5 text-right font-semibold">{fmtCurrency(u.total_net)}</td>
-                        </tr>
+                        <Fragment key={key}>
+                          <tr className="hover:bg-[hsl(var(--accent))]/20 transition-colors cursor-pointer" onClick={() => toggleUserExpanded(u.username, u.organization || "") }>
+                            <td className="px-4 py-2.5 font-medium">
+                              <span className="inline-flex items-center gap-2">
+                                <span className="text-xs text-[hsl(var(--muted-foreground))]">{expanded ? "▾" : "▸"}</span>
+                                {u.username}
+                              </span>
+                            </td>
+                            <td className="px-4 py-2.5 text-[hsl(var(--muted-foreground))]">{u.organization || "—"}</td>
+                            <td className="px-4 py-2.5 text-right">{safeNum(u.total_requests).toLocaleString(undefined, { maximumFractionDigits: 2 })}</td>
+                            <td className="px-4 py-2.5 text-right text-emerald-600 dark:text-emerald-400">{safeNum(u.within_quota).toLocaleString(undefined, { maximumFractionDigits: 2 })}</td>
+                            <td className="px-4 py-2.5 text-right text-red-600 dark:text-red-400">{safeNum(u.over_quota) > 0 ? safeNum(u.over_quota).toLocaleString(undefined, { maximumFractionDigits: 2 }) : "—"}</td>
+                            <td className="px-4 py-2.5 text-right text-[hsl(var(--muted-foreground))]">{safeNum(u.quota_limit) > 0 ? safeNum(u.quota_limit).toLocaleString(undefined, { maximumFractionDigits: 2 }) : "—"}</td>
+                            <td className={`px-4 py-2.5 text-right font-semibold ${utilColor}`}>
+                              {safeNum(u.utilization_pct) > 0 ? `${safeNum(u.utilization_pct).toFixed(1)}%` : "—"}
+                            </td>
+                            <td className="px-4 py-2.5 text-right font-semibold">{fmtCurrency(u.total_net)}</td>
+                          </tr>
+                          {expanded && (
+                            <tr className="bg-[hsl(var(--accent))]/10">
+                              <td colSpan={8} className="px-4 py-3">
+                                {modelLoading ? (
+                                  <div className="text-xs text-[hsl(var(--muted-foreground))]">Loading model breakdown...</div>
+                                ) : modelRows.length === 0 ? (
+                                  <div className="text-xs text-[hsl(var(--muted-foreground))]">No model-level usage found for this user in the selected period.</div>
+                                ) : (
+                                  <div className="overflow-x-auto">
+                                    <table className="min-w-[420px] text-xs">
+                                      <thead>
+                                        <tr className="text-[hsl(var(--muted-foreground))]">
+                                          <th className="py-1 pr-6 text-left font-medium">Model</th>
+                                          <th className="py-1 pr-6 text-right font-medium">AI Credits</th>
+                                          <th className="py-1 text-right font-medium">Cost</th>
+                                        </tr>
+                                      </thead>
+                                      <tbody>
+                                        {modelRows.map((m) => (
+                                          <tr key={`${key}-${m.model}`}>
+                                            <td className="py-1 pr-6">{m.model || "unknown"}</td>
+                                            <td className="py-1 pr-6 text-right">{safeNum(m.ai_credits).toLocaleString(undefined, { maximumFractionDigits: 3 })}</td>
+                                            <td className="py-1 text-right">{fmtCurrency(safeNum(m.usd))}</td>
+                                          </tr>
+                                        ))}
+                                      </tbody>
+                                    </table>
+                                  </div>
+                                )}
+                              </td>
+                            </tr>
+                          )}
+                        </Fragment>
                       );
                     })}
                   </tbody>
@@ -416,7 +505,7 @@ export default function PremiumRequestsPage() {
                   </button>
                 ))}
               </div>
-              {(search || selectedModel.length || selectedOrg.length || exceedsQuota) && (
+              {Boolean(search || selectedModel.length || selectedOrg.length || exceedsQuota) && (
                 <button
                   onClick={() => { setSearch(""); setSelectedModel([]); setSelectedOrg([]); setExceedsQuota(""); }}
                   className="text-xs text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] flex items-center gap-1"
@@ -437,9 +526,9 @@ export default function PremiumRequestsPage() {
                     <SortHeader col="username" label="User" />
                     <SortHeader col="organization" label="Org" />
                     <SortHeader col="model" label="Model" />
-                    <SortHeader col="quantity" label="Qty" />
-                    <SortHeader col="gross_amount" label="Gross" />
-                    <SortHeader col="net_amount" label="Net" />
+                    <SortHeader col="quantity" label="AI Credits" />
+                    <SortHeader col="gross_amount" label="USD" />
+                    <SortHeader col="net_amount" label="Legacy Net" />
                     <th className="px-3 py-3 text-left text-xs font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wider">Exceeds Quota</th>
                     <th className="px-3 py-3 text-right text-xs font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wider">Monthly Quota</th>
                   </tr>
@@ -450,14 +539,14 @@ export default function PremiumRequestsPage() {
                   ) : records.length === 0 ? (
                     <tr><td colSpan={9} className="px-3 py-12 text-center text-[hsl(var(--muted-foreground))]">No records found</td></tr>
                   ) : (
-                    records.map((r, i) => (
-                      <tr key={i} className="hover:bg-[hsl(var(--accent))]/20 transition-colors">
+                    records.map((r) => (
+                      <tr key={`${r.date}-${r.username}-${r.organization}-${r.model}-${r.sku}`} className="hover:bg-[hsl(var(--accent))]/20 transition-colors">
                         <td className="px-3 py-2.5 whitespace-nowrap font-mono text-xs">{r.date}</td>
                         <td className="px-3 py-2.5 whitespace-nowrap font-medium">{r.username || "—"}</td>
                         <td className="px-3 py-2.5 whitespace-nowrap">{r.organization || "—"}</td>
                         <td className="px-3 py-2.5 whitespace-nowrap">{r.model}</td>
-                        <td className="px-3 py-2.5 whitespace-nowrap text-right">{safeNum(r.quantity).toLocaleString()}</td>
-                        <td className="px-3 py-2.5 whitespace-nowrap text-right">{fmtCurrency(r.gross_amount)}</td>
+                        <td className="px-3 py-2.5 whitespace-nowrap text-right">{safeNum(r.aic_quantity).toLocaleString(undefined, { maximumFractionDigits: 3 })}</td>
+                        <td className="px-3 py-2.5 whitespace-nowrap text-right">{fmtCurrency(r.aic_gross_amount)}</td>
                         <td className="px-3 py-2.5 whitespace-nowrap text-right font-semibold">{fmtCurrency(r.net_amount)}</td>
                         <td className="px-3 py-2.5 whitespace-nowrap">
                           {r.exceeds_quota === "TRUE" ? (
@@ -509,8 +598,9 @@ export default function PremiumRequestsPage() {
             <p className="text-sm text-blue-700 dark:text-blue-400 flex items-center gap-2">
               <Users className="h-4 w-4 shrink-0" />
               <span>
-                <strong>AI credits are user-level charges.</strong> Each credit is consumed based on token usage (input, output, cached).
-                Users exceeding their monthly quota will incur additional charges billed to the organization. Each credit equals $0.01 USD.
+                <strong>AI credits are user-level charges.</strong> This page prioritizes AI-credit fields from billing exports
+                (<code className="mx-1">aic_quantity</code>, <code className="mx-1">aic_gross_amount</code>). AI credits are available starting{" "}
+                <strong className="mx-1">2026-06-01</strong>, so earlier months are intentionally excluded from AI credit calculations.
               </span>
             </p>
           </div>

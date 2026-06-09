@@ -179,6 +179,12 @@ export interface PremiumRequestModelSummary {
   total_aic_gross: number;
 }
 
+export interface PremiumUserModelBreakdown {
+  model: string;
+  ai_credits: number;
+  usd: number;
+}
+
 // ── Cost Center / Repository / Premium Daily Breakdown ────────────────
 
 export interface BillingCostCenterBreakdown {
