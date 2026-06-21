@@ -197,6 +197,9 @@ export interface UserDayRecord {
   loc_added_sum: number;
   loc_deleted_sum: number;
 
+  // AI Credits consumed by this user-day, from the Usage Metrics API.
+  ai_credits_used?: number;
+
   // Chat mode breakdown
   chat_panel_agent_mode?: number;
   chat_panel_ask_mode?: number;

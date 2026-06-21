@@ -22,6 +22,7 @@ interface UserRow {
   locAdded: number;
   locDeleted: number;
   interactions: number;
+  aiCreditsUsed: number;
   codeGen: number;
   codeAccept: number;
   acceptanceRate: number;
@@ -45,6 +46,7 @@ const userColumns: ColumnDef<UserRow>[] = [
   { key: "activeDays", label: "Active Days", align: "right", render: (row) => row.activeDays },
   { key: "locAdded", label: "LoC Added", align: "right", render: (row) => formatNumber(row.locAdded) },
   { key: "interactions", label: "Interactions", align: "right", render: (row) => formatNumber(row.interactions) },
+  { key: "aiCreditsUsed", label: "AI Credits", align: "right", render: (row) => safeNum(row.aiCreditsUsed) > 0 ? safeNum(row.aiCreditsUsed).toLocaleString(undefined, { maximumFractionDigits: 2 }) : "—" },
   { key: "acceptanceRate", label: "Accept %", align: "right", render: (row) => `${safeNum(row.acceptanceRate).toFixed(1)}%` },
   {
     key: "features",
@@ -68,6 +70,7 @@ const userExportColumns: CSVColumn[] = [
   { key: "activeDays", label: "Active Days" },
   { key: "locAdded", label: "LoC Added" },
   { key: "interactions", label: "Interactions" },
+  { key: "aiCreditsUsed", label: "AI Credits Used", format: (row) => safeNum(row.aiCreditsUsed).toFixed(2) },
   { key: "acceptanceRate", label: "Acceptance %", format: (row) => `${safeNum(row.acceptanceRate).toFixed(1)}%` },
   {
     key: "features", label: "Features", format: (row) => {

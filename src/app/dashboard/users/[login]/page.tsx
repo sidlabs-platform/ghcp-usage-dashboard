@@ -31,6 +31,7 @@ interface DailyActivity {
   locSuggestedDelete: number;
   locDeleted: number;
   interactions: number;
+  aiCreditsUsed: number;
   agentLocAdded: number;
   agentLocDeleted: number;
 }
@@ -42,6 +43,7 @@ interface UserSummary {
   totalLocSuggestedDelete: number;
   totalLocDeleted: number;
   totalInteractions: number;
+  totalAiCreditsUsed: number;
   totalCodeGen: number;
   totalCodeAccept: number;
   acceptanceRate: number;
@@ -134,7 +136,7 @@ function SectionHeader({ children }: { children: React.ReactNode }) {
 function LoadingSkeleton() {
   return (
     <div className="space-y-6">
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-5">
         {[...Array(8)].map((_, i) => (
           <div key={i} className="h-28 rounded-xl border bg-[hsl(var(--card))] animate-pulse" />
         ))}
@@ -531,6 +533,16 @@ export default function UserDetailPage() {
               value={data.summary.totalInteractions}
               icon={<MessageSquare className="h-4 w-4" />}
               accent="violet"
+            />
+            <MetricCard
+              title="AI Credits Used"
+              value={data.summary.totalAiCreditsUsed > 0
+                ? data.summary.totalAiCreditsUsed.toLocaleString(undefined, { maximumFractionDigits: 2 })
+                : "—"}
+              format="raw"
+              icon={<Sparkles className="h-4 w-4" />}
+              accent="amber"
+              subtitle="Usage Metrics API"
             />
             <MetricCard
               title="Code Generations"

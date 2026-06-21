@@ -74,6 +74,8 @@ export function getDb(): Database.Database {
     "ALTER TABLE enterprise_daily_metrics ADD COLUMN totals_by_ai_adoption_phase TEXT DEFAULT '[]'",
     "ALTER TABLE org_daily_metrics ADD COLUMN totals_by_ai_adoption_phase TEXT DEFAULT '[]'",
     "ALTER TABLE user_daily_metrics ADD COLUMN ai_adoption_phase TEXT",
+    // Usage Metrics API user-level AI Credits
+    "ALTER TABLE user_daily_metrics ADD COLUMN ai_credits_used REAL DEFAULT 0",
   ];
   for (const sql of migrations) {
     try { _db.exec(sql); } catch { /* column already exists or table not yet created */ }
@@ -84,6 +86,20 @@ export function getDb(): Database.Database {
   _db.exec(ghasSchema);
   _db.exec(summarySchema);
   _db.exec(billingSchema);
+  const userMetricColumns = _db.prepare("PRAGMA table_info(user_daily_metrics)").all() as { name: string }[];
+  const hasAiCreditsColumn = userMetricColumns.some((col) => col.name === "ai_credits_used");
+  const hasRawJsonColumn = userMetricColumns.some((col) => col.name === "raw_json");
+  if (hasAiCreditsColumn && hasRawJsonColumn) {
+    _db.exec(`
+      UPDATE user_daily_metrics
+      SET ai_credits_used = CAST(json_extract(raw_json, '$.ai_credits_used') AS REAL)
+      WHERE COALESCE(ai_credits_used, 0) = 0
+        AND raw_json IS NOT NULL
+        AND json_valid(raw_json)
+        AND json_extract(raw_json, '$.ai_credits_used') IS NOT NULL
+        AND COALESCE(CAST(json_extract(raw_json, '$.ai_credits_used') AS REAL), 0) <> 0
+    `);
+  }
   // Note: Run ANALYZE after bulk inserts (e.g. after sync) to update query planner stats
 
   // Migration: recreate tables that need enterprise_slug in PRIMARY KEY.

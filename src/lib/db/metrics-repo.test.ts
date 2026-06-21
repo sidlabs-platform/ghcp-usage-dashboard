@@ -32,6 +32,8 @@ import {
   getUserMetricsByLogin,
   getDistinctUsers,
   getAllUserMetrics,
+  getUserAiCreditsSummary,
+  getUserAiCreditsTotals,
   getAggregatedDailySummary,
   getFilteredOrgMetrics,
   getAllOrgMetrics,
@@ -1157,5 +1159,117 @@ describe("ai_adoption_phase and totals_by_ai_adoption_phase", () => {
     const results = getUserMetricsByLogin("null-phase-user", "2026-06-04", "2026-06-04");
     expect(results).toHaveLength(1);
     expect(results[0].ai_adoption_phase).toBeUndefined();
+  });
+});
+
+describe("ai_credits_used", () => {
+  beforeEach(() => {
+    db.exec("DELETE FROM user_daily_metrics");
+    invalidateEnterpriseCountCache();
+  });
+
+  it("stores, retrieves, and summarizes per-user AI credits from usage metrics", () => {
+    batchUpsertUserDayMetrics("ent1", [
+      {
+        day: "2026-06-19", enterprise_id: "ent-123", user_id: 201, user_login: "octo",
+        code_generation_activity_count: 2, code_acceptance_activity_count: 1,
+        user_initiated_interaction_count: 3,
+        loc_suggested_to_add_sum: 10, loc_suggested_to_delete_sum: 0,
+        loc_added_sum: 8, loc_deleted_sum: 0,
+        used_agent: false, used_chat: true, used_cli: false,
+        totals_by_ide: [], totals_by_feature: [], totals_by_language_feature: [],
+        totals_by_model_feature: [], totals_by_language_model: [],
+        ai_credits_used: 12.5,
+      },
+      {
+        day: "2026-06-20", enterprise_id: "ent-123", user_id: 201, user_login: "octo",
+        code_generation_activity_count: 1, code_acceptance_activity_count: 1,
+        user_initiated_interaction_count: 2,
+        loc_suggested_to_add_sum: 5, loc_suggested_to_delete_sum: 0,
+        loc_added_sum: 5, loc_deleted_sum: 0,
+        used_agent: true, used_chat: false, used_cli: false,
+        totals_by_ide: [], totals_by_feature: [], totals_by_language_feature: [],
+        totals_by_model_feature: [], totals_by_language_model: [],
+        ai_credits_used: 7.25,
+      },
+      {
+        day: "2026-06-20", enterprise_id: "ent-123", user_id: 202, user_login: "mona",
+        code_generation_activity_count: 0, code_acceptance_activity_count: 0,
+        user_initiated_interaction_count: 1,
+        loc_suggested_to_add_sum: 0, loc_suggested_to_delete_sum: 0,
+        loc_added_sum: 0, loc_deleted_sum: 0,
+        used_agent: false, used_chat: true, used_cli: false,
+        totals_by_ide: [], totals_by_feature: [], totals_by_language_feature: [],
+        totals_by_model_feature: [], totals_by_language_model: [],
+        ai_credits_used: 3,
+      },
+    ]);
+
+    const metrics = getUserMetricsByLogin("octo", "2026-06-19", "2026-06-20");
+    expect(metrics.map((m) => m.ai_credits_used)).toEqual([12.5, 7.25]);
+
+    const summary = getUserAiCreditsSummary("2026-06-19", "2026-06-20");
+    expect(summary).toEqual([
+      {
+        user_login: "octo",
+        total_ai_credits_used: 19.75,
+        active_days: 2,
+        avg_daily_ai_credits: 9.875,
+        last_active_day: "2026-06-20",
+      },
+      {
+        user_login: "mona",
+        total_ai_credits_used: 3,
+        active_days: 1,
+        avg_daily_ai_credits: 3,
+        last_active_day: "2026-06-20",
+      },
+    ]);
+  });
+
+  it("computes AI credit KPI totals in SQL without returning every user row", () => {
+    batchUpsertUserDayMetrics("ent1", [
+      {
+        day: "2026-06-19", enterprise_id: "ent-123", user_id: 301, user_login: "top",
+        code_generation_activity_count: 0, code_acceptance_activity_count: 0,
+        user_initiated_interaction_count: 0,
+        loc_suggested_to_add_sum: 0, loc_suggested_to_delete_sum: 0,
+        loc_added_sum: 0, loc_deleted_sum: 0,
+        used_agent: false, used_chat: false, used_cli: false,
+        totals_by_ide: [], totals_by_feature: [], totals_by_language_feature: [],
+        totals_by_model_feature: [], totals_by_language_model: [],
+        ai_credits_used: 10,
+      },
+      {
+        day: "2026-06-19", enterprise_id: "ent-123", user_id: 302, user_login: "second",
+        code_generation_activity_count: 0, code_acceptance_activity_count: 0,
+        user_initiated_interaction_count: 0,
+        loc_suggested_to_add_sum: 0, loc_suggested_to_delete_sum: 0,
+        loc_added_sum: 0, loc_deleted_sum: 0,
+        used_agent: false, used_chat: false, used_cli: false,
+        totals_by_ide: [], totals_by_feature: [], totals_by_language_feature: [],
+        totals_by_model_feature: [], totals_by_language_model: [],
+        ai_credits_used: 4,
+      },
+      {
+        day: "2026-06-19", enterprise_id: "ent-123", user_id: 303, user_login: "zero",
+        code_generation_activity_count: 0, code_acceptance_activity_count: 0,
+        user_initiated_interaction_count: 0,
+        loc_suggested_to_add_sum: 0, loc_suggested_to_delete_sum: 0,
+        loc_added_sum: 0, loc_deleted_sum: 0,
+        used_agent: false, used_chat: false, used_cli: false,
+        totals_by_ide: [], totals_by_feature: [], totals_by_language_feature: [],
+        totals_by_model_feature: [], totals_by_language_model: [],
+        ai_credits_used: 0,
+      },
+    ]);
+
+    expect(getUserAiCreditsTotals("2026-06-19", "2026-06-20")).toEqual({
+      total_ai_credits_used: 14,
+      tracked_users: 2,
+      top_user_login: "top",
+      top_user_ai_credits_used: 10,
+    });
+    expect(getUserAiCreditsSummary("2026-06-19", "2026-06-20", undefined, undefined, 1)).toHaveLength(1);
   });
 });
