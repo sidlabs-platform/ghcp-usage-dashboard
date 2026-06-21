@@ -12,7 +12,7 @@ import {
   getUserAiCreditsTotals,
   type UserAiCreditsFilters,
 } from "@/lib/db/metrics-repo";
-import { resolveFilteredUsers } from "@/lib/db/teams-repo";
+import { parseScopeFilter } from "@/lib/api/scope-filter";
 import { withCache } from "@/lib/cache/with-cache";
 import { withTimeout } from "@/lib/api/timeout";
 import { CACHE_TTL } from "@/lib/cache/memory-cache";
@@ -32,15 +32,8 @@ async function handler(request: NextRequest) {
     const days = daysResult.days;
     const { start, end } = getDateRange(days);
 
-    // Parse scope filter (teams/orgs/enterprises)
-    const teamsParam = params.get("teams");
-    const orgsParam = params.get("orgs");
-    const enterprisesParam = params.get("enterprises");
-    const selectedTeams = teamsParam ? teamsParam.split(",").filter(Boolean) : [];
-    const selectedOrgs = orgsParam ? orgsParam.split(",").filter(Boolean) : [];
-    const selectedEnterprises = enterprisesParam ? enterprisesParam.split(",").filter(Boolean) : [];
-    const enterpriseSlugs = selectedEnterprises.length > 0 ? selectedEnterprises : undefined;
-    const hasScope = selectedTeams.length > 0 || selectedOrgs.length > 0;
+    const scope = parseScopeFilter(params);
+    const enterpriseSlugs = scope.enterpriseSlugs;
 
     const filters: PremiumFilters = {
       username: params.get("username") || undefined,
@@ -51,9 +44,11 @@ async function handler(request: NextRequest) {
         : undefined,
     };
 
-    if (hasScope) {
-      filters.allowedLogins = resolveFilteredUsers(selectedTeams, selectedOrgs, enterpriseSlugs);
-      if (selectedOrgs.length > 0) filters.scopeOrgs = selectedOrgs;
+    if (scope.allowedLogins) {
+      filters.allowedLogins = Array.from(scope.allowedLogins);
+    }
+    if (scope.selectedOrgs.length > 0) {
+      filters.scopeOrgs = scope.selectedOrgs;
     }
 
     const userSummary = getPremiumUserSummary(start, end, filters, enterpriseSlugs);
@@ -61,7 +56,7 @@ async function handler(request: NextRequest) {
     const dailyTrend = getPremiumDailyTrend(start, end, filters, enterpriseSlugs);
     const metricsAiCreditsFilters: UserAiCreditsFilters = {
       userLogin: filters.username,
-      allowedLogins: filters.allowedLogins,
+      allowedLogins: scope.allowedLogins ? Array.from(scope.allowedLogins) : undefined,
     };
     const metricsAiCreditSummary = getUserAiCreditsSummary(
       start,

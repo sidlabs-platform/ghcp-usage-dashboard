@@ -92,11 +92,12 @@ export function getDb(): Database.Database {
   if (hasAiCreditsColumn && hasRawJsonColumn) {
     _db.exec(`
       UPDATE user_daily_metrics
-      SET ai_credits_used = COALESCE(json_extract(raw_json, '$.ai_credits_used'), 0)
+      SET ai_credits_used = CAST(json_extract(raw_json, '$.ai_credits_used') AS REAL)
       WHERE COALESCE(ai_credits_used, 0) = 0
         AND raw_json IS NOT NULL
         AND json_valid(raw_json)
         AND json_extract(raw_json, '$.ai_credits_used') IS NOT NULL
+        AND COALESCE(CAST(json_extract(raw_json, '$.ai_credits_used') AS REAL), 0) <> 0
     `);
   }
   // Note: Run ANALYZE after bulk inserts (e.g. after sync) to update query planner stats

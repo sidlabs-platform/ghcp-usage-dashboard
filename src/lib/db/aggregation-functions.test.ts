@@ -158,7 +158,9 @@ describe("getUserSummaries", () => {
     insertMetric({ day: "2024-01-11", user_login: "credit-user", ai_credits_used: 2.25 });
 
     const summaries = getUserSummaries("2024-01-01", "2024-01-31");
-    expect(summaries[0].aiCreditsUsed).toBe(3.75);
+    const creditUser = summaries.find((s) => s.login === "credit-user");
+    expect(creditUser).toBeDefined();
+    expect(creditUser!.aiCreditsUsed).toBeCloseTo(3.75, 6);
   });
 
   it("returns acceptanceRate 0 when codeGen is 0", () => {
