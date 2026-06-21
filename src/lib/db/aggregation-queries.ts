@@ -24,6 +24,7 @@ export interface UserSummary {
   locAdded: number;
   locDeleted: number;
   interactions: number;
+  aiCreditsUsed: number;
   codeGen: number;
   codeAccept: number;
   acceptanceRate: number;
@@ -207,6 +208,7 @@ export function getUserSummaries(
       COALESCE(SUM(loc_added_sum), 0) as locAdded,
       COALESCE(SUM(loc_deleted_sum), 0) as locDeleted,
       COALESCE(SUM(user_initiated_interaction_count), 0) as interactions,
+      COALESCE(SUM(ai_credits_used), 0) as aiCreditsUsed,
       COALESCE(SUM(code_generation_activity_count), 0) as codeGen,
       COALESCE(SUM(code_acceptance_activity_count), 0) as codeAccept,
       MAX(used_agent) as usedAgent,
@@ -225,6 +227,7 @@ export function getUserSummaries(
     locAdded: number;
     locDeleted: number;
     interactions: number;
+    aiCreditsUsed: number;
     codeGen: number;
     codeAccept: number;
     usedAgent: number;
@@ -241,6 +244,7 @@ export function getUserSummaries(
     locAdded: r.locAdded,
     locDeleted: r.locDeleted,
     interactions: r.interactions,
+    aiCreditsUsed: r.aiCreditsUsed,
     codeGen: r.codeGen,
     codeAccept: r.codeAccept,
     acceptanceRate: r.codeGen > 0 ? Number(((r.codeAccept / r.codeGen) * 100).toFixed(1)) : 0,
@@ -260,7 +264,7 @@ export interface PaginatedUserSummaries {
 
 type RawUserRow = {
   login: string; activeDays: number; locAdded: number; locDeleted: number;
-  interactions: number; codeGen: number; codeAccept: number;
+  interactions: number; aiCreditsUsed: number; codeGen: number; codeAccept: number;
   usedAgent: number; usedChat: number; usedCli: number;
   usedCodeReviewActive: number; usedCodeReviewPassive: number; usedCodingAgent: number;
 };
@@ -272,6 +276,7 @@ function mapUserRow(r: RawUserRow): UserSummary {
     locAdded: r.locAdded,
     locDeleted: r.locDeleted,
     interactions: r.interactions,
+    aiCreditsUsed: r.aiCreditsUsed,
     codeGen: r.codeGen,
     codeAccept: r.codeAccept,
     acceptanceRate: r.codeGen > 0 ? Number(((r.codeAccept / r.codeGen) * 100).toFixed(1)) : 0,
@@ -308,6 +313,7 @@ export function getUserSummariesPaginated(
     activeDays: "activeDays",
     locAdded: "locAdded",
     interactions: "interactions",
+    aiCreditsUsed: "aiCreditsUsed",
     acceptanceRate: "acceptanceRate",
     codeGen: "codeGen",
   };
@@ -337,6 +343,7 @@ export function getUserSummariesPaginated(
           COALESCE(SUM(loc_added_sum), 0) AS locAdded,
           COALESCE(SUM(loc_deleted_sum), 0) AS locDeleted,
           COALESCE(SUM(user_initiated_interaction_count), 0) AS interactions,
+          COALESCE(SUM(ai_credits_used), 0) AS aiCreditsUsed,
           COALESCE(SUM(code_generation_activity_count), 0) AS codeGen,
           COALESCE(SUM(code_acceptance_activity_count), 0) AS codeAccept,
           MAX(used_agent) AS usedAgent,
@@ -356,6 +363,7 @@ export function getUserSummariesPaginated(
           0 AS locAdded,
           0 AS locDeleted,
           0 AS interactions,
+          0 AS aiCreditsUsed,
           0 AS codeGen,
           0 AS codeAccept,
           0 AS usedAgent,
@@ -415,6 +423,7 @@ export function getUserSummariesPaginated(
       COALESCE(SUM(loc_added_sum), 0) as locAdded,
       COALESCE(SUM(loc_deleted_sum), 0) as locDeleted,
       COALESCE(SUM(user_initiated_interaction_count), 0) as interactions,
+      COALESCE(SUM(ai_credits_used), 0) as aiCreditsUsed,
       COALESCE(SUM(code_generation_activity_count), 0) as codeGen,
       COALESCE(SUM(code_acceptance_activity_count), 0) as codeAccept,
       MAX(used_agent) as usedAgent,

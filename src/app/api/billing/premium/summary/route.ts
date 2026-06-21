@@ -7,6 +7,11 @@ import {
   getPremiumDailyTrend,
 } from "@/lib/db/billing-repo";
 import type { PremiumFilters } from "@/lib/db/billing-repo";
+import {
+  getUserAiCreditsSummary,
+  getUserAiCreditsTotals,
+  type UserAiCreditsFilters,
+} from "@/lib/db/metrics-repo";
 import { resolveFilteredUsers } from "@/lib/db/teams-repo";
 import { withCache } from "@/lib/cache/with-cache";
 import { withTimeout } from "@/lib/api/timeout";
@@ -54,6 +59,23 @@ async function handler(request: NextRequest) {
     const userSummary = getPremiumUserSummary(start, end, filters, enterpriseSlugs);
     const modelSummary = getPremiumModelSummary(start, end, filters, enterpriseSlugs);
     const dailyTrend = getPremiumDailyTrend(start, end, filters, enterpriseSlugs);
+    const metricsAiCreditsFilters: UserAiCreditsFilters = {
+      userLogin: filters.username,
+      allowedLogins: filters.allowedLogins,
+    };
+    const metricsAiCreditSummary = getUserAiCreditsSummary(
+      start,
+      end,
+      metricsAiCreditsFilters,
+      enterpriseSlugs,
+      10
+    );
+    const metricsAiCreditTotals = getUserAiCreditsTotals(
+      start,
+      end,
+      metricsAiCreditsFilters,
+      enterpriseSlugs
+    );
 
     // Compute KPIs from user summary
     const totalRequests = userSummary.reduce((sum, u) => sum + u.total_requests, 0);
@@ -77,10 +99,14 @@ async function handler(request: NextRequest) {
         uniqueModels: modelSummary.length,
         totalAiCredits,
         totalAicGross,
+        metricsTotalAiCreditsUsed: metricsAiCreditTotals.total_ai_credits_used,
+        metricsTrackedUsers: metricsAiCreditTotals.tracked_users,
+        metricsTopUser: metricsAiCreditTotals.top_user_login,
       },
       userSummary,
       modelSummary,
       dailyTrend,
+      metricsAiCreditSummary,
       daysLoaded: days,
     }, {
       headers: { "Cache-Control": "private, max-age=300, stale-while-revalidate=60" },
