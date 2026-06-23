@@ -118,9 +118,7 @@ describe("layout coverage", () => {
     fireEvent.click(screen.getByRole("button", { name: "28 days" }));
     expect(mockState.dateRangeState.setDays).toHaveBeenCalledWith(28);
 
-    const themeButton = screen.getAllByRole("button").at(-1);
-    expect(themeButton).toBeDefined();
-    fireEvent.click(themeButton!);
+    fireEvent.click(screen.getByRole("button", { name: /toggle theme/i }));
 
     expect(document.documentElement.classList.contains("dark")).toBe(true);
     expect(localStorage.getItem("theme")).toBe("dark");

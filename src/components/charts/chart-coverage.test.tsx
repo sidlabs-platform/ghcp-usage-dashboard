@@ -38,18 +38,21 @@ import { SecurityTrendChart } from "@/components/charts/SecurityTrendChart";
 import { SeverityBreakdownChart } from "@/components/charts/SeverityBreakdownChart";
 import { Sparkline } from "@/components/charts/Sparkline";
 
+interface MockChartProps {
+  children?: ReactNode;
+  data?: unknown;
+}
+
 function makeMock(testId: string) {
-  return ({
-    children,
-    data,
-  }: {
-    children?: ReactNode;
-    data?: unknown;
-  }) => (
+  const MockChart = ({ children, data }: MockChartProps) => (
     <svg data-testid={testId} data-json={data ? JSON.stringify(data) : undefined}>
       {children}
     </svg>
   );
+
+  MockChart.displayName = testId;
+
+  return MockChart;
 }
 
 vi.mock("recharts", () => ({

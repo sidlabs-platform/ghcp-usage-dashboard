@@ -13,7 +13,34 @@ vi.mock("jose", () => ({
 
 type AppAuthModule = typeof import("./app-auth");
 
+const originalAppEnv = {
+  GITHUB_APP_ID: process.env.GITHUB_APP_ID,
+  GITHUB_APP_PRIVATE_KEY: process.env.GITHUB_APP_PRIVATE_KEY,
+  GITHUB_APP_INSTALLATION_ID: process.env.GITHUB_APP_INSTALLATION_ID,
+};
+
+function restoreAppEnv() {
+  if (originalAppEnv.GITHUB_APP_ID === undefined) {
+    delete process.env.GITHUB_APP_ID;
+  } else {
+    process.env.GITHUB_APP_ID = originalAppEnv.GITHUB_APP_ID;
+  }
+
+  if (originalAppEnv.GITHUB_APP_PRIVATE_KEY === undefined) {
+    delete process.env.GITHUB_APP_PRIVATE_KEY;
+  } else {
+    process.env.GITHUB_APP_PRIVATE_KEY = originalAppEnv.GITHUB_APP_PRIVATE_KEY;
+  }
+
+  if (originalAppEnv.GITHUB_APP_INSTALLATION_ID === undefined) {
+    delete process.env.GITHUB_APP_INSTALLATION_ID;
+  } else {
+    process.env.GITHUB_APP_INSTALLATION_ID = originalAppEnv.GITHUB_APP_INSTALLATION_ID;
+  }
+}
+
 afterEach(() => {
+  restoreAppEnv();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
@@ -56,13 +83,6 @@ describe("app-auth (with env + mocked jose)", () => {
     process.env.GITHUB_APP_INSTALLATION_ID = "456";
     appAuth = await import("./app-auth");
   });
-
-  afterEach(() => {
-    delete process.env.GITHUB_APP_ID;
-    delete process.env.GITHUB_APP_PRIVATE_KEY;
-    delete process.env.GITHUB_APP_INSTALLATION_ID;
-  });
-
   it("isAppAuthConfigured returns true when env vars set", async () => {
     expect(appAuth.isAppAuthConfigured()).toBe(true);
   });

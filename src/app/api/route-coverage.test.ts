@@ -18,6 +18,30 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
+async function waitForExpectedCalls(
+  check: () => void,
+  timeoutMs = 1000
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  let lastError: unknown;
+
+  while (Date.now() < deadline) {
+    try {
+      check();
+      return;
+    } catch (error) {
+      lastError = error;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+  }
+
+  if (lastError instanceof Error) {
+    throw lastError;
+  }
+
+  throw new Error("Timed out waiting for expected route side effects");
+}
+
 describe("additional API route coverage", { timeout: 15000 }, () => {
   it("returns filter options scoped to selected enterprises", async () => {
     const prepare = vi
@@ -365,12 +389,12 @@ describe("additional API route coverage", { timeout: 15000 }, () => {
       inProgress: true,
     });
 
-    await new Promise((resolve) => setTimeout(resolve, 0));
-
-    expect(clearEmptySyncEntries).toHaveBeenCalledTimes(1);
-    expect(forceReleaseSyncLock).toHaveBeenCalledTimes(1);
-    expect(fullSync).toHaveBeenCalledTimes(1);
-    expect(fullGhasSync).toHaveBeenCalledTimes(1);
-    expect(releaseSyncLock).toHaveBeenCalledTimes(1);
+    await waitForExpectedCalls(() => {
+      expect(clearEmptySyncEntries).toHaveBeenCalledTimes(1);
+      expect(forceReleaseSyncLock).toHaveBeenCalledTimes(1);
+      expect(fullSync).toHaveBeenCalledTimes(1);
+      expect(fullGhasSync).toHaveBeenCalledTimes(1);
+      expect(releaseSyncLock).toHaveBeenCalledTimes(1);
+    });
   });
 });

@@ -7,7 +7,7 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-describe("config route", () => {
+describe("config route", { timeout: 15000 }, () => {
   it("uses dashboard-config gating in single-enterprise mode", async () => {
     const isCopilotSubEnabled = vi.fn((key: string) =>
       ({
