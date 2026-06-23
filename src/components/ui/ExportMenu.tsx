@@ -19,16 +19,25 @@ export function ExportMenu({ csv, pdf, isReady = true }: ExportMenuProps) {
   const menuRef = useRef<HTMLDivElement>(null);
   const { exporting, exportCSV, exportPDF } = useExport();
 
-  // Close menu on outside click
+  // Close menu on outside click or Escape key
   useEffect(() => {
     if (!open) return;
-    const handleClick = (e: MouseEvent) => {
+    const handleDocumentClick = (e: MouseEvent) => {
       if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
         setOpen(false);
       }
     };
-    document.addEventListener("mousedown", handleClick);
-    return () => document.removeEventListener("mousedown", handleClick);
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleDocumentClick);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", handleDocumentClick);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
   }, [open]);
 
   const handleCSV = useCallback(async () => {
@@ -77,6 +86,8 @@ export function ExportMenu({ csv, pdf, isReady = true }: ExportMenuProps) {
         size="sm"
         onClick={() => setOpen((prev) => !prev)}
         disabled={!isReady || !!exporting}
+        aria-haspopup="menu"
+        aria-expanded={open}
       >
         {exporting ? (
           <Loader2 className="h-4 w-4 mr-2 animate-spin" />
@@ -87,11 +98,16 @@ export function ExportMenu({ csv, pdf, isReady = true }: ExportMenuProps) {
       </Button>
 
       {open && (
-        <div className="absolute right-0 top-full mt-1 z-50 min-w-[160px] rounded-md border bg-[hsl(var(--background))] p-1 shadow-md">
+        <div 
+          className="absolute right-0 top-full mt-1 z-50 min-w-[160px] rounded-md border bg-[hsl(var(--background))] p-1 shadow-md"
+          role="menu"
+          aria-orientation="vertical"
+        >
           {csv && (
             <button
+              role="menuitem"
               onClick={handleCSV}
-              className="flex w-full items-center gap-2 rounded-sm px-3 py-2 text-sm hover:bg-[hsl(var(--accent))] hover:text-[hsl(var(--accent-foreground))]"
+              className="flex w-full items-center gap-2 rounded-sm px-3 py-2 text-sm hover:bg-[hsl(var(--accent))] hover:text-[hsl(var(--accent-foreground))] focus-visible:bg-[hsl(var(--accent))] focus-visible:text-[hsl(var(--accent-foreground))] focus-visible:outline-none"
             >
               <Table className="h-4 w-4" />
               Export as CSV
@@ -99,8 +115,9 @@ export function ExportMenu({ csv, pdf, isReady = true }: ExportMenuProps) {
           )}
           {pdf && (
             <button
+              role="menuitem"
               onClick={handlePDF}
-              className="flex w-full items-center gap-2 rounded-sm px-3 py-2 text-sm hover:bg-[hsl(var(--accent))] hover:text-[hsl(var(--accent-foreground))]"
+              className="flex w-full items-center gap-2 rounded-sm px-3 py-2 text-sm hover:bg-[hsl(var(--accent))] hover:text-[hsl(var(--accent-foreground))] focus-visible:bg-[hsl(var(--accent))] focus-visible:text-[hsl(var(--accent-foreground))] focus-visible:outline-none"
             >
               <FileText className="h-4 w-4" />
               Export as PDF
