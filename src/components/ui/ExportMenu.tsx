@@ -20,7 +20,18 @@ export function ExportMenu({ csv, pdf, isReady = true }: ExportMenuProps) {
   const triggerRef = useRef<HTMLButtonElement>(null);
   const { exporting, exportCSV, exportPDF } = useExport();
 
-  // Close menu on outside click or Escape key
+  // Focus first menu item when menu opens
+  useEffect(() => {
+    if (open && menuRef.current) {
+      // Small timeout ensures the DOM has updated
+      setTimeout(() => {
+        const firstItem = menuRef.current?.querySelector('[role="menuitem"]') as HTMLElement;
+        firstItem?.focus();
+      }, 0);
+    }
+  }, [open]);
+
+  // Close menu on outside click or Escape key, handle arrow navigation
   useEffect(() => {
     if (!open) return;
     const handleDocumentClick = (e: MouseEvent) => {
@@ -33,6 +44,28 @@ export function ExportMenu({ csv, pdf, isReady = true }: ExportMenuProps) {
         e.preventDefault();
         setOpen(false);
         triggerRef.current?.focus();
+        return;
+      }
+      
+      // Arrow key and Home/End navigation within menu
+      if (open && menuRef.current && ["ArrowDown", "ArrowUp", "Home", "End"].includes(e.key)) {
+        e.preventDefault();
+        const items = Array.from(menuRef.current.querySelectorAll('[role="menuitem"]')) as HTMLElement[];
+        if (items.length === 0) return;
+        
+        const currentIndex = items.indexOf(document.activeElement as HTMLElement);
+        
+        if (e.key === "ArrowDown") {
+          const nextIndex = currentIndex < items.length - 1 ? currentIndex + 1 : 0;
+          items[nextIndex]?.focus();
+        } else if (e.key === "ArrowUp") {
+          const prevIndex = currentIndex > 0 ? currentIndex - 1 : items.length - 1;
+          items[prevIndex]?.focus();
+        } else if (e.key === "Home") {
+          items[0]?.focus();
+        } else if (e.key === "End") {
+          items[items.length - 1]?.focus();
+        }
       }
     };
     document.addEventListener("mousedown", handleDocumentClick);
