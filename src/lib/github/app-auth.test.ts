@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from "vitest";
 
 vi.mock("jose", () => ({
   importPKCS8: vi.fn(async () => "mock-key"),
@@ -11,34 +11,50 @@ vi.mock("jose", () => ({
   },
 }));
 
+type AppAuthModule = typeof import("./app-auth");
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
+
 describe("app-auth (no env)", () => {
+  let appAuth: AppAuthModule;
+
+  beforeAll(async () => {
+    vi.resetModules();
+    delete process.env.GITHUB_APP_ID;
+    delete process.env.GITHUB_APP_PRIVATE_KEY;
+    delete process.env.GITHUB_APP_INSTALLATION_ID;
+    appAuth = await import("./app-auth");
+  });
+
   it("isAppAuthConfigured returns false without env vars", async () => {
-    const { isAppAuthConfigured } = await import("./app-auth");
-    expect(isAppAuthConfigured()).toBe(false);
+    expect(appAuth.isAppAuthConfigured()).toBe(false);
   });
 
   it("logAuthMode logs PAT mode when no app auth configured", async () => {
     const spy = vi.spyOn(console, "log").mockImplementation(() => {});
-    const { logAuthMode } = await import("./app-auth");
-    logAuthMode();
+    appAuth.logAuthMode();
     expect(spy).toHaveBeenCalledWith(
       expect.stringContaining("PAT auth for all endpoints")
     );
-    spy.mockRestore();
   });
 
   it("getInstallationToken throws when no config", async () => {
-    const { getInstallationToken } = await import("./app-auth");
-    await expect(getInstallationToken()).rejects.toThrow("not configured");
+    await expect(appAuth.getInstallationToken()).rejects.toThrow("not configured");
   });
 });
 
 describe("app-auth (with env + mocked jose)", () => {
-  beforeEach(() => {
+  let appAuth: AppAuthModule;
+
+  beforeEach(async () => {
     vi.resetModules();
     process.env.GITHUB_APP_ID = "123";
     process.env.GITHUB_APP_PRIVATE_KEY = "-----BEGIN PRIVATE KEY-----\\nfake\\n-----END PRIVATE KEY-----";
     process.env.GITHUB_APP_INSTALLATION_ID = "456";
+    appAuth = await import("./app-auth");
   });
 
   afterEach(() => {
@@ -48,16 +64,13 @@ describe("app-auth (with env + mocked jose)", () => {
   });
 
   it("isAppAuthConfigured returns true when env vars set", async () => {
-    const { isAppAuthConfigured } = await import("./app-auth");
-    expect(isAppAuthConfigured()).toBe(true);
+    expect(appAuth.isAppAuthConfigured()).toBe(true);
   });
 
   it("logAuthMode logs app mode when configured", async () => {
     const spy = vi.spyOn(console, "log").mockImplementation(() => {});
-    const { logAuthMode } = await import("./app-auth");
-    logAuthMode();
+    appAuth.logAuthMode();
     expect(spy).toHaveBeenCalledWith(expect.stringContaining("App auth active"));
-    spy.mockRestore();
   });
 
   it("getInstallationToken mints and returns token", async () => {
@@ -65,8 +78,7 @@ describe("app-auth (with env + mocked jose)", () => {
       ok: true,
       json: async () => ({ token: "ghs_minted123", expires_at: new Date(Date.now() + 3600_000).toISOString() }),
     }));
-    const { getInstallationToken } = await import("./app-auth");
-    const token = await getInstallationToken();
+    const token = await appAuth.getInstallationToken();
     expect(token).toBe("ghs_minted123");
   });
 
@@ -76,9 +88,8 @@ describe("app-auth (with env + mocked jose)", () => {
       json: async () => ({ token: "ghs_cached", expires_at: new Date(Date.now() + 3600_000).toISOString() }),
     });
     vi.stubGlobal("fetch", mockFetch);
-    const { getInstallationToken } = await import("./app-auth");
-    await getInstallationToken();
-    const token2 = await getInstallationToken();
+    await appAuth.getInstallationToken();
+    const token2 = await appAuth.getInstallationToken();
     expect(token2).toBe("ghs_cached");
     expect(mockFetch).toHaveBeenCalledTimes(1);
   });
@@ -87,8 +98,7 @@ describe("app-auth (with env + mocked jose)", () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
       ok: false, status: 401, text: async () => "Unauthorized",
     }));
-    const { getInstallationToken } = await import("./app-auth");
-    await expect(getInstallationToken()).rejects.toThrow("Failed to create installation token");
+    await expect(appAuth.getInstallationToken()).rejects.toThrow("Failed to create installation token");
   });
 
   it("getInstallationToken throws on missing token in response", async () => {
@@ -96,8 +106,7 @@ describe("app-auth (with env + mocked jose)", () => {
       ok: true,
       json: async () => ({ expires_at: new Date().toISOString() }),
     }));
-    const { getInstallationToken } = await import("./app-auth");
-    await expect(getInstallationToken()).rejects.toThrow("missing token or expires_at");
+    await expect(appAuth.getInstallationToken()).rejects.toThrow("missing token or expires_at");
   });
 
   it("getInstallationToken throws on unparseable expires_at", async () => {
@@ -105,8 +114,7 @@ describe("app-auth (with env + mocked jose)", () => {
       ok: true,
       json: async () => ({ token: "ghs_test", expires_at: "not-a-date" }),
     }));
-    const { getInstallationToken } = await import("./app-auth");
-    await expect(getInstallationToken()).rejects.toThrow("unparseable expires_at");
+    await expect(appAuth.getInstallationToken()).rejects.toThrow("unparseable expires_at");
   });
 
   it("validateAppAuth succeeds after successful mint", async () => {
@@ -115,24 +123,20 @@ describe("app-auth (with env + mocked jose)", () => {
       json: async () => ({ token: "ghs_valid", expires_at: new Date(Date.now() + 3600_000).toISOString() }),
     }));
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
-    const { validateAppAuth } = await import("./app-auth");
-    await expect(validateAppAuth()).resolves.toBeUndefined();
+    await expect(appAuth.validateAppAuth()).resolves.toBeUndefined();
     expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("validated"));
-    logSpy.mockRestore();
   });
 
   it("validateAppAuth throws with wrapped error when mint fails", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
       ok: false, status: 500, text: async () => "Server Error",
     }));
-    const { validateAppAuth } = await import("./app-auth");
-    await expect(validateAppAuth()).rejects.toThrow("validation failed");
+    await expect(appAuth.validateAppAuth()).rejects.toThrow("validation failed");
   });
 
   it("validateAppAuth wraps non-Error throws", async () => {
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue("string-error"));
-    const { validateAppAuth } = await import("./app-auth");
-    await expect(validateAppAuth()).rejects.toThrow("string-error");
+    await expect(appAuth.validateAppAuth()).rejects.toThrow("string-error");
   });
 
   it("getInstallationToken deduplicates concurrent mints via refreshPromise", async () => {
@@ -141,8 +145,10 @@ describe("app-auth (with env + mocked jose)", () => {
       json: async () => ({ token: "ghs_dedup", expires_at: new Date(Date.now() + 3600_000).toISOString() }),
     });
     vi.stubGlobal("fetch", mockFetch);
-    const { getInstallationToken } = await import("./app-auth");
-    const [t1, t2] = await Promise.all([getInstallationToken(), getInstallationToken()]);
+    const [t1, t2] = await Promise.all([
+      appAuth.getInstallationToken(),
+      appAuth.getInstallationToken(),
+    ]);
     expect(t1).toBe("ghs_dedup");
     expect(t2).toBe("ghs_dedup");
     expect(mockFetch).toHaveBeenCalledTimes(1);
@@ -150,56 +156,52 @@ describe("app-auth (with env + mocked jose)", () => {
 });
 
 describe("app-auth enterprise functions", () => {
-  beforeEach(() => {
+  let appAuth: AppAuthModule;
+
+  beforeEach(async () => {
     vi.resetModules();
+    appAuth = await import("./app-auth");
   });
 
-  afterEach(async () => {
-    const { _setEnterpriseAuthFn } = await import("./app-auth");
-    _setEnterpriseAuthFn(undefined);
+  afterEach(() => {
+    appAuth._setEnterpriseAuthFn(undefined);
   });
 
   it("loadAppConfigForEnterprise returns config when enterprise has app auth", async () => {
-    const { loadAppConfigForEnterprise, _setEnterpriseAuthFn } = await import("./app-auth");
-    _setEnterpriseAuthFn(() => ({
+    appAuth._setEnterpriseAuthFn(() => ({
       appConfig: { appId: "app-1", privateKey: "pk-1", installationId: "inst-1" },
     }));
-    const cfg = loadAppConfigForEnterprise("ent-a");
+    const cfg = appAuth.loadAppConfigForEnterprise("ent-a");
     expect(cfg).toEqual({ appId: "app-1", privateKey: "pk-1", installationId: "inst-1" });
   });
 
   it("loadAppConfigForEnterprise returns null when no appConfig", async () => {
-    const { loadAppConfigForEnterprise, _setEnterpriseAuthFn } = await import("./app-auth");
-    _setEnterpriseAuthFn(() => ({}));
-    expect(loadAppConfigForEnterprise("ent-b")).toBeNull();
+    appAuth._setEnterpriseAuthFn(() => ({}));
+    expect(appAuth.loadAppConfigForEnterprise("ent-b")).toBeNull();
   });
 
   it("loadAppConfigForEnterprise returns null when auth fn throws", async () => {
-    const { loadAppConfigForEnterprise, _setEnterpriseAuthFn } = await import("./app-auth");
-    _setEnterpriseAuthFn(() => { throw new Error("no config"); });
-    expect(loadAppConfigForEnterprise("ent-c")).toBeNull();
+    appAuth._setEnterpriseAuthFn(() => { throw new Error("no config"); });
+    expect(appAuth.loadAppConfigForEnterprise("ent-c")).toBeNull();
   });
 
   it("isAppAuthConfiguredForEnterprise returns true/false based on enterprise config", async () => {
-    const { isAppAuthConfiguredForEnterprise, _setEnterpriseAuthFn } = await import("./app-auth");
-    _setEnterpriseAuthFn((slug: string) =>
+    appAuth._setEnterpriseAuthFn((slug: string) =>
       slug === "has-app" ? { appConfig: { appId: "1", privateKey: "k", installationId: "2" } } : {},
     );
-    expect(isAppAuthConfiguredForEnterprise("has-app")).toBe(true);
-    expect(isAppAuthConfiguredForEnterprise("no-app")).toBe(false);
+    expect(appAuth.isAppAuthConfiguredForEnterprise("has-app")).toBe(true);
+    expect(appAuth.isAppAuthConfiguredForEnterprise("no-app")).toBe(false);
   });
 
   it("getInstallationTokenForEnterprise throws when no config for enterprise", async () => {
-    const { getInstallationTokenForEnterprise, _setEnterpriseAuthFn } = await import("./app-auth");
-    _setEnterpriseAuthFn(() => ({})); // no appConfig
-    await expect(getInstallationTokenForEnterprise("missing-ent")).rejects.toThrow(
+    appAuth._setEnterpriseAuthFn(() => ({})); // no appConfig
+    await expect(appAuth.getInstallationTokenForEnterprise("missing-ent")).rejects.toThrow(
       'not configured for enterprise "missing-ent"',
     );
   });
 
   it("getInstallationTokenForEnterprise mints and caches token per enterprise", async () => {
-    const { getInstallationTokenForEnterprise, _setEnterpriseAuthFn } = await import("./app-auth");
-    _setEnterpriseAuthFn(() => ({
+    appAuth._setEnterpriseAuthFn(() => ({
       appConfig: { appId: "ea", privateKey: "-----BEGIN PRIVATE KEY-----\nfake\n-----END PRIVATE KEY-----", installationId: "ei" },
     }));
     const mockFetch = vi.fn().mockResolvedValue({
@@ -207,17 +209,16 @@ describe("app-auth enterprise functions", () => {
       json: async () => ({ token: "ghs_ent_tok", expires_at: new Date(Date.now() + 3600_000).toISOString() }),
     });
     vi.stubGlobal("fetch", mockFetch);
-    const t1 = await getInstallationTokenForEnterprise("ent-x");
+    const t1 = await appAuth.getInstallationTokenForEnterprise("ent-x");
     expect(t1).toBe("ghs_ent_tok");
     // Second call should use cache, not mint again
-    const t2 = await getInstallationTokenForEnterprise("ent-x");
+    const t2 = await appAuth.getInstallationTokenForEnterprise("ent-x");
     expect(t2).toBe("ghs_ent_tok");
     expect(mockFetch).toHaveBeenCalledTimes(1);
   });
 
   it("getInstallationTokenForEnterprise deduplicates concurrent mints", async () => {
-    const { getInstallationTokenForEnterprise, _setEnterpriseAuthFn } = await import("./app-auth");
-    _setEnterpriseAuthFn(() => ({
+    appAuth._setEnterpriseAuthFn(() => ({
       appConfig: { appId: "ea", privateKey: "-----BEGIN PRIVATE KEY-----\nfake\n-----END PRIVATE KEY-----", installationId: "ei" },
     }));
     const mockFetch = vi.fn().mockResolvedValue({
@@ -226,8 +227,8 @@ describe("app-auth enterprise functions", () => {
     });
     vi.stubGlobal("fetch", mockFetch);
     const [r1, r2] = await Promise.all([
-      getInstallationTokenForEnterprise("ent-y"),
-      getInstallationTokenForEnterprise("ent-y"),
+      appAuth.getInstallationTokenForEnterprise("ent-y"),
+      appAuth.getInstallationTokenForEnterprise("ent-y"),
     ]);
     expect(r1).toBe("ghs_dedup");
     expect(r2).toBe("ghs_dedup");
