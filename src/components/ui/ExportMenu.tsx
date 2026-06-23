@@ -17,6 +17,7 @@ interface ExportMenuProps {
 export function ExportMenu({ csv, pdf, isReady = true }: ExportMenuProps) {
   const [open, setOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
   const { exporting, exportCSV, exportPDF } = useExport();
 
   // Close menu on outside click or Escape key
@@ -29,7 +30,9 @@ export function ExportMenu({ csv, pdf, isReady = true }: ExportMenuProps) {
     };
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
+        e.preventDefault();
         setOpen(false);
+        triggerRef.current?.focus();
       }
     };
     document.addEventListener("mousedown", handleDocumentClick);
@@ -63,6 +66,7 @@ export function ExportMenu({ csv, pdf, isReady = true }: ExportMenuProps) {
     const label = singleFormat === "csv" ? "Export CSV" : "Export PDF";
     return (
       <Button
+        type="button"
         variant="outline"
         size="sm"
         onClick={handler}
@@ -82,6 +86,8 @@ export function ExportMenu({ csv, pdf, isReady = true }: ExportMenuProps) {
   return (
     <div className="relative" ref={menuRef}>
       <Button
+        type="button"
+        ref={triggerRef}
         variant="outline"
         size="sm"
         onClick={() => setOpen((prev) => !prev)}
@@ -105,6 +111,7 @@ export function ExportMenu({ csv, pdf, isReady = true }: ExportMenuProps) {
         >
           {csv && (
             <button
+              type="button"
               role="menuitem"
               onClick={handleCSV}
               className="flex w-full items-center gap-2 rounded-sm px-3 py-2 text-sm hover:bg-[hsl(var(--accent))] hover:text-[hsl(var(--accent-foreground))] focus-visible:bg-[hsl(var(--accent))] focus-visible:text-[hsl(var(--accent-foreground))] focus-visible:outline-none"
@@ -115,6 +122,7 @@ export function ExportMenu({ csv, pdf, isReady = true }: ExportMenuProps) {
           )}
           {pdf && (
             <button
+              type="button"
               role="menuitem"
               onClick={handlePDF}
               className="flex w-full items-center gap-2 rounded-sm px-3 py-2 text-sm hover:bg-[hsl(var(--accent))] hover:text-[hsl(var(--accent-foreground))] focus-visible:bg-[hsl(var(--accent))] focus-visible:text-[hsl(var(--accent-foreground))] focus-visible:outline-none"
