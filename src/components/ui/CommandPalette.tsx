@@ -342,10 +342,11 @@ export default function CommandPalette() {
             <span>Esc Close</span>
           </div>
           <kbd
-            className="rounded border px-1.5 py-0.5 text-xs font-mono"
+            className="rounded border px-1.5 py-0.5 text-xs font-mono font-semibold"
             style={{
               borderColor: "hsl(var(--border))",
-              backgroundColor: "hsl(var(--primary) / 0.05)",
+              backgroundColor: "hsl(var(--muted))",
+              color: "hsl(var(--foreground))",
             }}
           >
             ⌘K

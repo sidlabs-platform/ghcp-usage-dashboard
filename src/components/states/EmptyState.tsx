@@ -20,11 +20,11 @@ export function EmptyState({ icon: Icon, title, description, action }: EmptyStat
       <p className="text-sm text-[hsl(var(--muted-foreground))] max-w-sm mb-4">{description}</p>
       {action && (
         action.href ? (
-          <Link href={action.href} className="text-sm font-medium text-[hsl(var(--primary))] hover:underline">
+          <Link href={action.href} className="text-sm font-medium text-[hsl(var(--primary))] hover:underline rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[hsl(var(--ring))] focus-visible:ring-offset-2 focus-visible:ring-offset-[hsl(var(--background))]">
             {action.label} →
           </Link>
         ) : (
-          <button type="button" onClick={action.onClick} className="text-sm font-medium text-[hsl(var(--primary))] hover:underline">
+          <button type="button" onClick={action.onClick} className="text-sm font-medium text-[hsl(var(--primary))] hover:underline rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[hsl(var(--ring))] focus-visible:ring-offset-2 focus-visible:ring-offset-[hsl(var(--background))]">
             {action.label}
           </button>
         )
