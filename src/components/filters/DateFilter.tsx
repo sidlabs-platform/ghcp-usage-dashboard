@@ -69,7 +69,7 @@ export function DateFilter() {
               key={preset.days}
               onClick={() => handlePreset(preset.days)}
               className={cn(
-                "rounded-md px-3 py-1.5 text-xs font-medium transition-colors",
+                "rounded-md px-3 py-1.5 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[hsl(var(--ring))]",
                 mode === "preset" && days === preset.days
                   ? "bg-[hsl(var(--background))] text-[hsl(var(--foreground))] shadow-sm"
                   : "text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))]"
@@ -84,7 +84,7 @@ export function DateFilter() {
         <button
           onClick={handleToggleCustom}
           className={cn(
-            "inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors border",
+            "inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[hsl(var(--ring))]",
             mode === "custom"
               ? "border-[hsl(var(--primary))] bg-[hsl(var(--primary)/0.1)] text-[hsl(var(--primary))]"
               : "border-[hsl(var(--border))] text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))] hover:border-[hsl(var(--foreground)/0.3)]"
@@ -108,7 +108,7 @@ export function DateFilter() {
               value={localStart}
               max={maxDate}
               onChange={(e) => { setLocalStart(e.target.value); setError(null); }}
-              className="rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--background))] px-2.5 py-1.5 text-sm"
+              className="rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--background))] px-2.5 py-1.5 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[hsl(var(--ring))]"
             />
           </div>
           <div>
@@ -121,17 +121,17 @@ export function DateFilter() {
               value={localEnd}
               max={maxDate}
               onChange={(e) => { setLocalEnd(e.target.value); setError(null); }}
-              className="rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--background))] px-2.5 py-1.5 text-sm"
+              className="rounded-md border border-[hsl(var(--border))] bg-[hsl(var(--background))] px-2.5 py-1.5 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[hsl(var(--ring))]"
             />
           </div>
           <button
             onClick={handleApplyCustom}
-            className="rounded-md bg-[hsl(var(--primary))] px-4 py-1.5 text-sm font-medium text-[hsl(var(--primary-foreground))] hover:opacity-90 transition-opacity"
+            className="rounded-md bg-[hsl(var(--primary))] px-4 py-1.5 text-sm font-medium text-[hsl(var(--primary-foreground))] hover:opacity-90 transition-opacity focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[hsl(var(--ring))] focus-visible:ring-offset-2 focus-visible:ring-offset-[hsl(var(--background))]"
           >
             Apply
           </button>
           {error && (
-            <span className="text-xs text-[hsl(var(--destructive))]">{error}</span>
+            <span role="alert" className="text-xs text-[hsl(var(--destructive))]">{error}</span>
           )}
         </div>
       )}

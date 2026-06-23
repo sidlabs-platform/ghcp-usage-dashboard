@@ -144,7 +144,7 @@ describe("shared UI surfaces", () => {
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Export" }));
-    fireEvent.click(screen.getByRole("button", { name: "Export as PDF" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Export as PDF" }));
     expect(exportPDF).toHaveBeenCalled();
   });
 

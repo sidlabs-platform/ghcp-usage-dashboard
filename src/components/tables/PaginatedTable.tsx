@@ -130,7 +130,11 @@ export function PaginatedTable<T>({
       {/* Search bar */}
       {searchable && (
         <div className="mb-4">
+          <label htmlFor={`search-${queryKey}`} className="sr-only">
+            {searchPlaceholder}
+          </label>
           <input
+            id={`search-${queryKey}`}
             type="text"
             placeholder={searchPlaceholder}
             value={search}
@@ -208,11 +212,12 @@ export function PaginatedTable<T>({
       {pagination && pagination.totalPages > 0 && (
         <div className="mt-4 flex items-center justify-between border-t pt-4 text-sm text-[hsl(var(--muted-foreground))]">
           <div className="flex items-center gap-2">
-            <span>Rows per page:</span>
+            <label htmlFor={`pagesize-${queryKey}`}>Rows per page:</label>
             <select
+              id={`pagesize-${queryKey}`}
               value={pageSize}
               onChange={(e) => handlePageSizeChange(Number(e.target.value))}
-              className="rounded border bg-transparent px-2 py-1 text-sm"
+              className="rounded border bg-transparent px-2 py-1 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[hsl(var(--ring))]"
             >
               {pageSizeOptions.map((size) => (
                 <option key={size} value={size}>{size}</option>
@@ -226,17 +231,19 @@ export function PaginatedTable<T>({
             <button
               onClick={() => setPage((p) => Math.max(1, p - 1))}
               disabled={page <= 1}
-              className="rounded p-1 hover:bg-[hsl(var(--muted))] disabled:opacity-30"
+              aria-label="Previous page"
+              className="rounded p-1 hover:bg-[hsl(var(--muted))] disabled:opacity-30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[hsl(var(--ring))]"
             >
               <ChevronLeft className="h-4 w-4" />
             </button>
-            <span className="px-2">
+            <span className="px-2" aria-live="polite">
               Page {page} of {pagination.totalPages}
             </span>
             <button
               onClick={() => setPage((p) => Math.min(pagination.totalPages, p + 1))}
               disabled={page >= pagination.totalPages}
-              className="rounded p-1 hover:bg-[hsl(var(--muted))] disabled:opacity-30"
+              aria-label="Next page"
+              className="rounded p-1 hover:bg-[hsl(var(--muted))] disabled:opacity-30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[hsl(var(--ring))]"
             >
               <ChevronRight className="h-4 w-4" />
             </button>

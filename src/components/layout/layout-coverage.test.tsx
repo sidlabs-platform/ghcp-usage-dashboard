@@ -118,10 +118,12 @@ describe("layout coverage", () => {
     fireEvent.click(screen.getByRole("button", { name: "28 days" }));
     expect(mockState.dateRangeState.setDays).toHaveBeenCalledWith(28);
 
-    fireEvent.click(screen.getByRole("button", { name: /toggle theme/i }));
+    const themeToggle = screen.getByRole("button", { name: "Switch to dark theme" });
+    fireEvent.click(themeToggle);
 
     expect(document.documentElement.classList.contains("dark")).toBe(true);
     expect(localStorage.getItem("theme")).toBe("dark");
+    expect(screen.getByRole("button", { name: "Switch to light theme" })).toBeInTheDocument();
   });
 
   it("shows custom ranges and triggers sync requests", async () => {
@@ -205,11 +207,12 @@ describe("layout coverage", () => {
     render(<Sidebar />);
 
     await screen.findByText("2 enterprises");
-    fireEvent.click(screen.getByRole("button", { name: "Collapse" }));
+    fireEvent.click(screen.getByRole("button", { name: "Collapse sidebar" }));
 
     expect(screen.queryByText("Usage Analytics")).not.toBeInTheDocument();
     expect(screen.queryByText("Overview")).not.toBeInTheDocument();
     expect(screen.queryByText("2 enterprises")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Expand sidebar" })).toBeInTheDocument();
   });
 
   it("activates dashboard shell keyboard shortcuts", () => {

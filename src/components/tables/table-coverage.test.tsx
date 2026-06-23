@@ -87,7 +87,7 @@ describe("PaginatedTable", () => {
     expect(requests[0]).toContain("sortDir=desc");
     expect(onTotalChange).toHaveBeenCalledWith(2);
 
-    fireEvent.click(screen.getByRole("columnheader", { name: /Name/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Name/ }));
     await waitFor(() => {
       expect(requests.at(-1)).toContain("sortDir=asc");
     });
