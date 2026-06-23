@@ -31,8 +31,8 @@ export function SortableHeader<K extends string>({
     >
       <button
         type="button"
-        className={`inline-flex items-center gap-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[hsl(var(--ring))] rounded-sm px-1 -ml-1 cursor-pointer select-none hover:text-[hsl(var(--foreground))] ${
-          align === "right" ? "flex-row-reverse w-full justify-start" : ""
+        className={`w-full inline-flex items-center gap-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[hsl(var(--ring))] rounded-sm px-1 -ml-1 cursor-pointer select-none hover:text-[hsl(var(--foreground))] ${
+          align === "right" ? "flex-row-reverse justify-start" : "justify-start"
         }`}
         onClick={() => onSort(field)}
       >
