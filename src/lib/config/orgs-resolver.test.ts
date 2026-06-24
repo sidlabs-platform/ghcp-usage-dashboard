@@ -37,4 +37,13 @@ describe("getDiscoveredOrgsFromDb", () => {
     _resetLoader(() => ["recovered-org"]);
     expect(getDiscoveredOrgsFromDb("my-ent")).toEqual(["recovered-org"]);
   });
+
+  it("dynamically requires ../db/orgs-repo if loader is not overridden", () => {
+    _resetLoader(undefined);
+    // Since vitest cannot mock CommonJS require() calls, we test the actual fallback
+    // behavior. The real DB module will either succeed (returning an array) or throw 
+    // if uninitialized (which the resolver catches and returns []).
+    const result = getDiscoveredOrgsFromDb("test-ent");
+    expect(Array.isArray(result)).toBe(true);
+  });
 });

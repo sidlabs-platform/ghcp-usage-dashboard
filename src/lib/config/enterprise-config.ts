@@ -1,6 +1,6 @@
 // Multi-enterprise configuration — server-only + client-safe types & helpers
 
-import { getDashboardConfig, type MetricCategory } from "./dashboard-config";
+import { getDashboardConfig, getResolvedOrgs, type MetricCategory } from "./dashboard-config";
 import { getDiscoveredOrgsFromDb } from "./orgs-resolver";
 
 // ── Types ─────────────────────────────────────────────────────────────
@@ -85,7 +85,6 @@ export function getConfiguredEnterprises(): EnterpriseConfig[] {
 
   // Legacy backward compatibility: synthesize from env vars
   const slug = process.env.GITHUB_ENTERPRISE;
-
   const hasApp = !!(
     process.env.GITHUB_APP_ID &&
     process.env.GITHUB_APP_PRIVATE_KEY &&
@@ -93,7 +92,16 @@ export function getConfiguredEnterprises(): EnterpriseConfig[] {
   );
 
   const envOrgs = process.env.GITHUB_ORGS;
-  const include = envOrgs ? envOrgs.split(",").map((o) => o.trim()).filter(Boolean) : [];
+  let include = envOrgs ? envOrgs.split(",").map((o) => o.trim()).filter(Boolean) : [];
+
+  const orgConfig = config.organizations ?? {};
+  const globalInclude = orgConfig.include ?? [];
+  const globalExclude = orgConfig.exclude ?? [];
+
+  if (include.length > 0 && globalInclude.length > 0) {
+    const includeSet = new Set(globalInclude.map((o) => o.toLowerCase()));
+    include = include.filter((o) => includeSet.has(o.toLowerCase()));
+  }
 
   if (slug) {
     // Enterprise mode: synthesize from GITHUB_ENTERPRISE + GITHUB_ORGS
@@ -110,8 +118,8 @@ export function getConfiguredEnterprises(): EnterpriseConfig[] {
             }
           : {}),
         organizations: {
-          include,
-          exclude: [],
+          include: include.length > 0 ? include : globalInclude,
+          exclude: globalExclude,
         },
       },
     ];
@@ -135,7 +143,7 @@ export function getConfiguredEnterprises(): EnterpriseConfig[] {
           : {}),
         organizations: {
           include,
-          exclude: [],
+          exclude: globalExclude,
         },
         metrics: {
           copilot: { enterprise: false },
@@ -271,6 +279,15 @@ export function getEnterpriseSlugs(): string[] {
  * applying the include/exclude rules from its config.
  */
 export function getResolvedOrgsForEnterprise(slug: string): string[] {
+  const dashboardConfig = getDashboardConfig();
+  const isMulti = dashboardConfig.enterprises && dashboardConfig.enterprises.length > 0;
+
+  if (!isMulti) {
+    // In legacy mode, `getResolvedOrgs()` already computes the exact correct list for the 
+    // single enterprise or org-only setup, handling DB fallback and global filters correctly.
+    return getResolvedOrgs();
+  }
+
   const config = getEnterpriseConfig(slug);
   const orgConfig = config.organizations ?? {};
   const include = orgConfig.include ?? [];
