@@ -20,7 +20,7 @@ import {
   getClientEnterpriseMetrics,
   isOrgOnlyEnterprise,
 } from "./enterprise-config";
-import { getDashboardConfig, getResolvedOrgs } from "./dashboard-config";
+import { getDashboardConfig, getResolvedOrgs, DashboardConfig } from "./dashboard-config";
 
 // Mock the dashboard-config module
 vi.mock("./dashboard-config", () => ({
@@ -169,7 +169,7 @@ describe("enterprise-config", () => {
     it("falls back to DB-discovered orgs when organizations config is undefined", () => {
       mockGetDashboardConfig.mockReturnValue({
         enterprises: [{ slug: "no-orgs", displayName: "No Orgs", tokenEnvVar: "T", organizations: {} }],
-      } as any);
+      } as unknown as DashboardConfig);
       resetEnterpriseConfigCache();
       const orgs = getResolvedOrgsForEnterprise("no-orgs");
       expect(orgs).toEqual(["mocked-no-orgs"]);
@@ -181,7 +181,7 @@ describe("enterprise-config", () => {
   describe("legacy env var synthesis", () => {
     it("synthesizes config from env vars when no enterprises in config", () => {
       resetEnterpriseConfigCache();
-      mockGetDashboardConfig.mockReturnValue({ enterprises: [] } as any);
+      mockGetDashboardConfig.mockReturnValue({ enterprises: [] } as unknown as DashboardConfig);
       process.env.GITHUB_ENTERPRISE = "legacy-ent";
       process.env.GITHUB_TOKEN = "ghp_legacy";
       process.env.GITHUB_ORGS = "org1, org2";
@@ -196,7 +196,7 @@ describe("enterprise-config", () => {
 
     it("returns empty when no config and no env vars", () => {
       resetEnterpriseConfigCache();
-      mockGetDashboardConfig.mockReturnValue({ enterprises: [] } as any);
+      mockGetDashboardConfig.mockReturnValue({ enterprises: [] } as unknown as DashboardConfig);
       delete process.env.GITHUB_ENTERPRISE;
       const enterprises = getConfiguredEnterprises();
       expect(enterprises).toEqual([]);
@@ -204,7 +204,7 @@ describe("enterprise-config", () => {
 
     it("includes app env vars in synthesis when all are set", () => {
       resetEnterpriseConfigCache();
-      mockGetDashboardConfig.mockReturnValue({ enterprises: [] } as any);
+      mockGetDashboardConfig.mockReturnValue({ enterprises: [] } as unknown as DashboardConfig);
       process.env.GITHUB_ENTERPRISE = "legacy-ent";
       process.env.GITHUB_TOKEN = "ghp_legacy";
       process.env.GITHUB_APP_ID = "app1";
@@ -264,7 +264,7 @@ describe("enterprise-config", () => {
   }
 
   function setMockConfig(cfg: ReturnType<typeof makeConfig>) {
-    mockGetDashboardConfig.mockReturnValue(cfg as any);
+    mockGetDashboardConfig.mockReturnValue(cfg as unknown as DashboardConfig);
     resetEnterpriseConfigCache();
   }
 
@@ -811,14 +811,14 @@ describe("enterprise-config", () => {
             organizations: { include: ["org-x"] },
           },
         ],
-      } as any);
+      } as unknown as DashboardConfig);
       resetEnterpriseConfigCache();
       const result = resolveDefaultScope();
       expect(result).toEqual({ scope: "enterprise", scopeId: "acme-corp" });
     });
 
     it("returns org scope with empty scopeId when no enterprises configured", () => {
-      mockGetDashboardConfig.mockReturnValue({ enterprises: [] } as any);
+      mockGetDashboardConfig.mockReturnValue({ enterprises: [] } as unknown as DashboardConfig);
       resetEnterpriseConfigCache();
       delete process.env.GITHUB_ENTERPRISE;
       const result = resolveDefaultScope();
@@ -831,14 +831,14 @@ describe("enterprise-config", () => {
         enterprises: [
           { slug: "solo-ent", displayName: "Solo", tokenEnvVar: "SOLO_TOKEN" },
         ],
-      } as any);
+      } as unknown as DashboardConfig);
       resetEnterpriseConfigCache();
       const result = resolveDefaultScope();
       expect(result).toEqual({ scope: "enterprise", scopeId: "solo-ent" });
     });
 
     it("falls back to legacy env var when no config enterprises", () => {
-      mockGetDashboardConfig.mockReturnValue({} as any);
+      mockGetDashboardConfig.mockReturnValue({} as unknown as DashboardConfig);
       resetEnterpriseConfigCache();
       process.env.GITHUB_ENTERPRISE = "legacy-ent";
       process.env.GITHUB_TOKEN = "ghp_legacy";
