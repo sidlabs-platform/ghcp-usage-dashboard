@@ -1,7 +1,11 @@
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, afterEach, vi } from "vitest";
 import { getDiscoveredOrgsFromDb, _resetLoader } from "./orgs-resolver";
 
-describe("getDiscoveredOrgsFromDb", () => {
+vi.mock("../db/orgs-repo", () => ({
+  getEnterpriseOrgs: vi.fn((slug: string) => [`mocked-${slug}`]),
+}));
+
+describe("getDiscoveredOrgsFromDb", () => {
   afterEach(() => _resetLoader());
 
   it("returns orgs from the loader when available", () => {
@@ -36,5 +40,10 @@ describe("getDiscoveredOrgsFromDb", () => {
     // After failure, loader is reset — inject a working one
     _resetLoader(() => ["recovered-org"]);
     expect(getDiscoveredOrgsFromDb("my-ent")).toEqual(["recovered-org"]);
+  });
+
+  it("dynamically requires ../db/orgs-repo if loader is not overridden", () => {
+    _resetLoader(undefined);
+    expect(getDiscoveredOrgsFromDb("test-ent")).toEqual(["mocked-test-ent"]);
   });
 });
