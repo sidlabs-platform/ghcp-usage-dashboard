@@ -20,7 +20,7 @@ import {
   getClientEnterpriseMetrics,
   isOrgOnlyEnterprise,
 } from "./enterprise-config";
-import { getDashboardConfig } from "./dashboard-config";
+import { getDashboardConfig, getResolvedOrgs } from "./dashboard-config";
 
 // Mock the dashboard-config module
 vi.mock("./dashboard-config", () => ({
@@ -43,6 +43,11 @@ vi.mock("./dashboard-config", () => ({
       },
     ],
   })),
+  getResolvedOrgs: vi.fn(() => []),
+}));
+
+vi.mock("./orgs-resolver", () => ({
+  getDiscoveredOrgsFromDb: vi.fn((slug: string) => [`mocked-${slug}`]),
 }));
 
 const mockGetDashboardConfig = vi.mocked(getDashboardConfig);
@@ -161,31 +166,15 @@ describe("enterprise-config", () => {
       expect(orgs).toEqual(["org-x"]);
     });
 
-    it("returns empty array when organizations config is undefined", () => {
-      (getDashboardConfig as ReturnType<typeof vi.fn>).mockReturnValueOnce({
-        enterprises: [{ slug: "no-orgs", displayName: "No Orgs", tokenEnvVar: "T" }],
-      });
+    it("falls back to DB-discovered orgs when organizations config is undefined", () => {
+      mockGetDashboardConfig.mockReturnValue({
+        enterprises: [{ slug: "no-orgs", displayName: "No Orgs", tokenEnvVar: "T", organizations: {} }],
+      } as any);
       resetEnterpriseConfigCache();
       const orgs = getResolvedOrgsForEnterprise("no-orgs");
-      expect(orgs).toEqual([]);
+      expect(orgs).toEqual(["mocked-no-orgs"]);
       resetEnterpriseConfigCache();
-    });
-
-    it("falls back to DB-discovered orgs when organizations.include is undefined or empty", () => {
-      // Create a scenario where multi-enterprise is active but one enterprise has no orgs config
-      (getDashboardConfig as ReturnType<typeof vi.fn>).mockReturnValue({
-        enterprises: [
-          { slug: "auto-ent", displayName: "Auto Ent", tokenEnvVar: "T" }
-        ],
-      });
-      resetEnterpriseConfigCache();
-      
-      // The orgs-resolver mock is currently returning `mocked-${slug}` so let's verify it gets hit
-      const orgs = getResolvedOrgsForEnterprise("auto-ent");
-      expect(orgs).toEqual([]); // Wait, the mock in this file doesn't cover orgs-resolver
-      
-      // Let's reset cache
-      resetEnterpriseConfigCache();
+      // the global before/after reset will handle restoring the mock
     });
   });
 
@@ -873,7 +862,7 @@ describe("enterprise-config", () => {
       }));
       process.env.GITHUB_TOKEN = "ghp_test";
       const result = resolveDefaultScope();
-      expect(result).toEqual({ scope: "org", scopeId: "" });
+      expect(result).toEqual({ scope: "org", scopeId: "mocked-_org_only" });
       delete process.env.GITHUB_TOKEN;
       resetEnterpriseConfigCache();
     });
@@ -1057,6 +1046,7 @@ describe("enterprise-config", () => {
     describe("resolveDefaultScope — org-only", () => {
       it("returns org scope for org-only legacy config", () => {
         mockGetDashboardConfig.mockReturnValue({ enterprises: [] } as ReturnType<typeof getDashboardConfig>);
+        vi.mocked(getResolvedOrgs).mockReturnValueOnce(["my-org-1", "my-org-2"]);
         resetEnterpriseConfigCache();
         delete process.env.GITHUB_ENTERPRISE;
         process.env.GITHUB_ORGS = "my-org-1,my-org-2";
