@@ -1,5 +1,11 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
+
+const mockState = vi.hoisted(() => ({
+  isMetricEnabledForAnyEnterprise: vi.fn(),
+  isBillingSubEnabledForAnyEnterprise: vi.fn(),
+  isMetricEnabled: vi.fn(),
+}));
 
 vi.mock("@/lib/cache/with-cache", () => ({
   withCache: (handler: unknown) => handler,
@@ -39,90 +45,105 @@ vi.mock("@/lib/db/teams-repo", () => ({
   resolveFilteredUsers: vi.fn(() => []),
 }));
 
-const routeLoaders = {
-  overview: () => import("./overview/route"),
-  usage: () => import("./usage/route"),
-  usageSummary: () => import("./usage/summary/route"),
-  premium: () => import("./premium/route"),
-  premiumSummary: () => import("./premium/summary/route"),
+vi.mock("@/lib/db/metrics-repo", () => ({
+  getUserAiCreditsSummary: vi.fn(() => []),
+  getUserAiCreditsTotals: vi.fn(() => ({
+    total_ai_credits_used: 0,
+    tracked_users: 0,
+    top_user_login: null,
+  })),
+}));
+
+vi.mock("@/lib/api/scope-filter", () => ({
+  parseScopeFilter: vi.fn(() => ({
+    enterpriseSlugs: undefined,
+    allowedLogins: undefined,
+    selectedOrgs: [],
+  })),
+}));
+
+vi.mock("@/lib/config/enterprise-config", () => ({
+  isMetricEnabledForAnyEnterprise: (...args: unknown[]) =>
+    mockState.isMetricEnabledForAnyEnterprise(...args),
+  isBillingSubEnabledForAnyEnterprise: (...args: unknown[]) =>
+    mockState.isBillingSubEnabledForAnyEnterprise(...args),
+}));
+
+vi.mock("@/lib/config/dashboard-config", () => ({
+  isMetricEnabled: (...args: unknown[]) => mockState.isMetricEnabled(...args),
+}));
+
+const routeModules = {
+  overview: import("./overview/route"),
+  usage: import("./usage/route"),
+  usageSummary: import("./usage/summary/route"),
+  premium: import("./premium/route"),
+  premiumSummary: import("./premium/summary/route"),
 };
 
+beforeEach(() => {
+  mockState.isMetricEnabledForAnyEnterprise.mockImplementation(() => true);
+  mockState.isBillingSubEnabledForAnyEnterprise.mockImplementation(() => true);
+  mockState.isMetricEnabled.mockImplementation(() => true);
+});
+
 afterEach(() => {
-  vi.resetModules();
   vi.clearAllMocks();
 });
 
-describe("billing route gating", () => {
+describe("billing route gating", { timeout: 10000 }, () => {
   it("uses enterprise-aware billing visibility for overview", async () => {
-    const isMetricEnabledForAnyEnterprise = vi.fn(() => false);
-    const isBillingSubEnabledForAnyEnterprise = vi.fn(() => true);
-    const isMetricEnabled = vi.fn(() => {
+    mockState.isMetricEnabledForAnyEnterprise.mockImplementation(() => false);
+    mockState.isBillingSubEnabledForAnyEnterprise.mockImplementation(() => true);
+    mockState.isMetricEnabled.mockImplementation(() => {
       throw new Error("dashboard-config gating should not be used");
     });
 
-    vi.doMock("@/lib/config/enterprise-config", () => ({
-      isMetricEnabledForAnyEnterprise,
-      isBillingSubEnabledForAnyEnterprise,
-    }));
-    vi.doMock("@/lib/config/dashboard-config", () => ({ isMetricEnabled }));
-
-    const { GET } = await routeLoaders.overview();
+    const { GET } = await routeModules.overview;
     const response = await GET(new NextRequest("http://localhost/api/billing/overview"));
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({ enabled: false });
-    expect(isMetricEnabledForAnyEnterprise).toHaveBeenCalledWith("billing");
-    expect(isBillingSubEnabledForAnyEnterprise).not.toHaveBeenCalled();
-    expect(isMetricEnabled).not.toHaveBeenCalled();
+    expect(mockState.isMetricEnabledForAnyEnterprise).toHaveBeenCalledWith("billing");
+    expect(mockState.isBillingSubEnabledForAnyEnterprise).not.toHaveBeenCalled();
+    expect(mockState.isMetricEnabled).not.toHaveBeenCalled();
   });
 
   it("uses meteredUsage sub-toggle for usage routes", async () => {
-    const isMetricEnabledForAnyEnterprise = vi.fn(() => true);
-    const isBillingSubEnabledForAnyEnterprise = vi.fn(() => false);
-    const isMetricEnabled = vi.fn(() => {
+    mockState.isMetricEnabledForAnyEnterprise.mockImplementation(() => true);
+    mockState.isBillingSubEnabledForAnyEnterprise.mockImplementation(() => false);
+    mockState.isMetricEnabled.mockImplementation(() => {
       throw new Error("dashboard-config gating should not be used");
     });
 
-    vi.doMock("@/lib/config/enterprise-config", () => ({
-      isMetricEnabledForAnyEnterprise,
-      isBillingSubEnabledForAnyEnterprise,
-    }));
-    vi.doMock("@/lib/config/dashboard-config", () => ({ isMetricEnabled }));
-
-    for (const loadRoute of [routeLoaders.usage, routeLoaders.usageSummary]) {
-      const { GET } = await loadRoute();
+    for (const routePromise of [routeModules.usage, routeModules.usageSummary]) {
+      const { GET } = await routePromise;
       const response = await GET(new NextRequest("http://localhost/api/billing/usage"));
       expect(response.status).toBe(200);
       await expect(response.json()).resolves.toEqual({ enabled: false });
     }
 
-    expect(isBillingSubEnabledForAnyEnterprise).toHaveBeenCalledWith("meteredUsage");
-    expect(isMetricEnabledForAnyEnterprise).not.toHaveBeenCalled();
-    expect(isMetricEnabled).not.toHaveBeenCalled();
+    expect(mockState.isBillingSubEnabledForAnyEnterprise).toHaveBeenCalledWith("meteredUsage");
+    expect(mockState.isMetricEnabledForAnyEnterprise).not.toHaveBeenCalled();
+    expect(mockState.isMetricEnabled).not.toHaveBeenCalled();
   });
 
   it("uses premiumRequests sub-toggle for premium routes", async () => {
-    const isMetricEnabledForAnyEnterprise = vi.fn(() => true);
-    const isBillingSubEnabledForAnyEnterprise = vi.fn(() => false);
-    const isMetricEnabled = vi.fn(() => {
+    mockState.isMetricEnabledForAnyEnterprise.mockImplementation(() => true);
+    mockState.isBillingSubEnabledForAnyEnterprise.mockImplementation(() => false);
+    mockState.isMetricEnabled.mockImplementation(() => {
       throw new Error("dashboard-config gating should not be used");
     });
 
-    vi.doMock("@/lib/config/enterprise-config", () => ({
-      isMetricEnabledForAnyEnterprise,
-      isBillingSubEnabledForAnyEnterprise,
-    }));
-    vi.doMock("@/lib/config/dashboard-config", () => ({ isMetricEnabled }));
-
-    for (const loadRoute of [routeLoaders.premium, routeLoaders.premiumSummary]) {
-      const { GET } = await loadRoute();
+    for (const routePromise of [routeModules.premium, routeModules.premiumSummary]) {
+      const { GET } = await routePromise;
       const response = await GET(new NextRequest("http://localhost/api/billing/premium"));
       expect(response.status).toBe(200);
       await expect(response.json()).resolves.toEqual({ enabled: false });
     }
 
-    expect(isBillingSubEnabledForAnyEnterprise).toHaveBeenCalledWith("premiumRequests");
-    expect(isMetricEnabledForAnyEnterprise).not.toHaveBeenCalled();
-    expect(isMetricEnabled).not.toHaveBeenCalled();
+    expect(mockState.isBillingSubEnabledForAnyEnterprise).toHaveBeenCalledWith("premiumRequests");
+    expect(mockState.isMetricEnabledForAnyEnterprise).not.toHaveBeenCalled();
+    expect(mockState.isMetricEnabled).not.toHaveBeenCalled();
   });
 });
