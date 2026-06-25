@@ -38,13 +38,33 @@ export function useExport() {
   const exportCSV = useCallback(async (config: ExportCSVConfig) => {
     setExporting("csv");
     try {
-      const allData = await fetchAllPages(
-        config.fetchUrl,
-        config.extraParams,
-        config.dataExtractor,
-      );
-      const csvString = arrayToCSV(allData, config.columns, config.metadata);
-      triggerDownload(csvString, `${config.filename}.csv`, "text/csv;charset=utf-8");
+      // Create new URLSearchParams for the export endpoint
+      const params = new URLSearchParams(config.extraParams);
+      
+      // Determine correct export endpoint based on fetchUrl
+      let exportUrl = config.fetchUrl;
+      if (exportUrl.startsWith("/api/users")) {
+          exportUrl = "/api/export/users";
+      }
+      
+      // If we don't have a specific export endpoint, fallback to client-side data fetching
+      if (!exportUrl.includes("/export/")) {
+        const allData = await fetchAllPages(
+          config.fetchUrl,
+          config.extraParams,
+          config.dataExtractor,
+        );
+        const csvString = arrayToCSV(allData, config.columns, config.metadata);
+        triggerDownload(csvString, `${config.filename}.csv`, "text/csv;charset=utf-8");
+        return;
+      }
+
+      // Use server-side export endpoint
+      const url = `${exportUrl}?${params.toString()}`;
+      
+      // Open download in a new tab or iframe to handle Content-Disposition
+      window.location.assign(url);
+
     } catch (err) {
       console.error("CSV export failed:", err);
       alert(`Export failed: ${err instanceof Error ? err.message : "Unknown error"}`);
