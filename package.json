@@ -17,6 +17,7 @@
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "date-fns": "^4.1.0",
+    "dom-to-image-more": "^3.10.0",
     "html2canvas": "^1.4.1",
     "jose": "^6.2.2",
     "jspdf": "^4.2.1",

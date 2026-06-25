@@ -44,6 +44,11 @@ vi.mock("@tanstack/react-query", () => ({
   useQueryClient: () => ({
     invalidateQueries: mockState.invalidateQueries,
   }),
+  useQuery: vi.fn(() => ({
+    data: undefined,
+    isLoading: false,
+    error: null,
+  })),
 }));
 
 vi.mock("@/contexts/DateRangeContext", () => ({
