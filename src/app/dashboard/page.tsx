@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback, useRef } from "react";
+import { useQuery } from "@tanstack/react-query";
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { PageHeader } from "@/components/layout/PageHeader";
@@ -39,61 +40,51 @@ import { Users, UserCheck, Bot, Terminal, CreditCard, Activity, Eye, GitPullRequ
 export default function DashboardOverview() {
   const { days } = useDateRange();
   const { hasFilter, buildScopeParams } = useScope();
-  const [data, setData] = useState<OverviewData | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [securityData, setSecurityData] = useState<any>(null);
-  const [securityEnabled, setSecurityEnabled] = useState(false);
-  const [pageVisibility, setPageVisibility] = useState<Record<string, boolean>>({});
+  const { data, isLoading: loading, error } = useQuery({
+    queryKey: ["metrics", "overview", days, Array.from(buildScopeParams().entries())],
+    queryFn: async () => {
+      const params = new URLSearchParams({ days: String(days) });
+      const scopeParams = buildScopeParams();
+      scopeParams.forEach((value, key) => params.set(key, value));
+
+      const res = await fetch(`/api/metrics/overview?${params}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const json = await res.json();
+      if (json.error) throw new Error(json.error);
+      return json as OverviewData;
+    },
+    staleTime: 1000 * 60 * 5,
+  });
+
+  const { data: config } = useQuery({
+    queryKey: ["config"],
+    queryFn: async () => {
+      const res = await fetch("/api/config");
+      if (!res.ok) throw new Error("Failed to fetch config");
+      return res.json();
+    },
+    staleTime: 1000 * 60 * 5,
+  });
+
+  const securityEnabled =
+    config?.metrics?.codeScanning?.enabled ||
+    config?.metrics?.dependabot?.enabled ||
+    config?.metrics?.secretScanning?.enabled;
+    
+  const { data: securityData } = useQuery({
+    queryKey: ["security", "overview", days],
+    queryFn: async () => {
+      const res = await fetch(`/api/security/overview?days=${days}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json();
+    },
+    enabled: !!securityEnabled,
+    staleTime: 1000 * 60 * 5,
+  });
 
   const kpiRef = useRef<HTMLDivElement>(null);
   const chartsRef = useRef<HTMLDivElement>(null);
   const securityRef = useRef<HTMLDivElement>(null);
-
-  // Fetch config once
-  useEffect(() => {
-    fetch("/api/config")
-      .then((r) => r.json())
-      .then((config) => {
-        const enabled =
-          config?.metrics?.codeScanning?.enabled ||
-          config?.metrics?.dependabot?.enabled ||
-          config?.metrics?.secretScanning?.enabled;
-        setSecurityEnabled(enabled);
-        if (config?.pageVisibility) setPageVisibility(config.pageVisibility);
-      })
-      .catch(() => {});
-  }, []);
-
-  const fetchData = useCallback(() => {
-    setLoading(true);
-    const params = new URLSearchParams({ days: String(days) });
-    const scopeParams = buildScopeParams();
-    scopeParams.forEach((value, key) => params.set(key, value));
-
-    fetch(`/api/metrics/overview?${params}`)
-      .then((res) => res.json())
-      .then((json) => {
-        if (json.error) setError(json.error);
-        else { setData(json); setError(null); }
-      })
-      .catch((err) => setError(err.message))
-      .finally(() => setLoading(false));
-
-    // Fetch security overview separately so failures don't break the main dashboard
-    if (securityEnabled) {
-      try {
-        fetch(`/api/security/overview?days=${days}`)
-          .then((res) => { if (res.ok) return res.json(); })
-          .then((json) => { if (json) setSecurityData(json); })
-          .catch(() => { /* Security metrics may not be available */ });
-      } catch { /* Security metrics may not be available */ }
-    } else {
-      setSecurityData(null);
-    }
-  }, [days, buildScopeParams, securityEnabled]);
-
-  useEffect(() => { fetchData(); }, [fetchData]);
 
   if (loading && !data) {
     return (
@@ -121,10 +112,10 @@ export default function DashboardOverview() {
         <div className="rounded-xl border bg-[hsl(var(--card))] p-12 text-center">
           <Activity className="h-12 w-12 mx-auto text-[hsl(var(--muted-foreground))] mb-4" />
           <h3 className="text-lg font-semibold mb-2">
-            {error ? "Error loading data" : "No data available"}
+            Error loading data
           </h3>
           <p className="text-sm text-[hsl(var(--muted-foreground))] max-w-md mx-auto">
-            {error || "Click the Sync button in the header to fetch metrics from GitHub. This will backfill 90 days of data using the enterprise-1-day API endpoint."}
+            {error instanceof Error ? error.message : "Click the Sync button in the header to fetch metrics from GitHub. This will backfill 90 days of data using the enterprise-1-day API endpoint."}
           </p>
         </div>
       </div>
@@ -136,6 +127,8 @@ export default function DashboardOverview() {
   const { kpis, activeUsersTrend, acceptanceRateTrend, chatModes, featureUsage, cliVsIde } = data;
   const dailyTrendValues = data.dailyTrendValues ?? [];
   const isFiltered = data.filtered || hasFilter;
+
+  const pageVisibility = config?.pageVisibility || {};
 
   const chatModeDonutData= [
     { name: "Ask", value: chatModes.ask, color: CHART_COLORS.ask },
