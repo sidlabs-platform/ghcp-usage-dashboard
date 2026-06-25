@@ -365,4 +365,5 @@ async function handler(request: NextRequest) {
   }
 }
 
-export const GET = withTimeout(withCache(handler, CACHE_TTL.MEDIUM));
+import { withRateLimit } from "@/lib/api/rate-limit/rate-limiter";
+export const GET = withRateLimit(withTimeout(withCache(handler, CACHE_TTL.MEDIUM)));
