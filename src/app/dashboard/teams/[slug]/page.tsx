@@ -11,40 +11,7 @@ import { Badge } from "@/components/ui/badge";
 import { DateFilter } from "@/components/filters/DateFilter";
 import { Users, Activity, Code, TrendingUp, Bot, MessageSquare, Terminal } from "lucide-react";
 import { formatNumber, safeNum } from "@/lib/utils";
-
-interface TeamInfo {
-  slug: string;
-  name: string;
-  org: string | null;
-  memberCount: number;
-}
-
-interface MemberRow {
-  login: string;
-  activeDays: number;
-  locAdded: number;
-  interactions: number;
-  acceptanceRate: number;
-  usedAgent: number;
-  usedChat: number;
-  usedCli: number;
-  usedCodeReview: number;
-}
-
-interface Aggregates {
-  totalLocAdded: number;
-  avgAcceptanceRate: number;
-  agentAdoption: number;
-  chatAdoption: number;
-  cliAdoption: number;
-  activeMembers: number;
-}
-
-interface TeamDetailResponse {
-  team: TeamInfo | null;
-  members: MemberRow[];
-  aggregates: Aggregates | null;
-}
+import type { TeamDetailResponse } from "@/lib/types/team-detail";
 
 export default function TeamDetailPage() {
   const { slug } = useParams<{ slug: string }>();
