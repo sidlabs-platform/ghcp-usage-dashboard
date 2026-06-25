@@ -38,7 +38,7 @@ const teamColumns: ColumnDef<TeamSummary>[] = [
     label: "Team",
     render: (row) => (
       <>
-        <Link href={`/dashboard/teams/${row.teamSlug}`} className="font-medium text-[hsl(var(--primary))] hover:underline">
+        <Link href={`/dashboard/teams/${row.teamSlug}?source=${encodeURIComponent(row.source)}`} className="font-medium text-[hsl(var(--primary))] hover:underline">
           {row.teamName}
         </Link>
         <Badge variant="outline" className="ml-2 text-[10px]">{row.source}</Badge>
