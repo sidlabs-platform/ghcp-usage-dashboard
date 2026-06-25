@@ -66,6 +66,17 @@ export default function SecurityPage() {
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
   const [syncStatus, setSyncStatus] = useState<string | null>(null);
+  
+  const pollIntervalRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Clear polling interval on unmount
+  useEffect(() => {
+    return () => {
+      if (pollIntervalRef.current) {
+        clearInterval(pollIntervalRef.current);
+      }
+    };
+  }, []);
 
   const kpiRef = useRef<HTMLDivElement>(null);
   const csRef = useRef<HTMLElement>(null);
@@ -107,19 +118,19 @@ export default function SecurityPage() {
       await fetch("/api/security/sync", { method: "POST" });
       setSyncStatus("Sync in progress — this may take a few minutes for the initial sync...");
       // Poll sync status
-      const poll = setInterval(async () => {
+      pollIntervalRef.current = setInterval(async () => {
         try {
           const res = await fetch("/api/security/sync");
           const data = await res.json();
           if (!data.syncing) {
-            clearInterval(poll);
+            if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
             setSyncing(false);
             setSyncStatus("Sync complete! Loading data...");
             await fetchData();
             setSyncStatus(null);
           }
         } catch {
-          clearInterval(poll);
+          if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
           setSyncing(false);
           setSyncStatus("Sync may still be running. Refresh the page to check.");
         }
