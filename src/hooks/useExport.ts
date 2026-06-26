@@ -3,7 +3,7 @@
 import { useState, useCallback } from "react";
 import { arrayToCSV, fetchAllPages, type CSVColumn, type ExportMetadata } from "@/lib/export/csv";
 import { captureSectionsAsPDF } from "@/lib/export/pdf";
-import { triggerDownload } from "@/lib/export/download";
+import { triggerDownload, triggerDownloadFromUrl } from "@/lib/export/download";
 
 export interface ExportCSVConfig {
   /** API endpoint base URL */
@@ -62,8 +62,7 @@ export function useExport() {
       // Use server-side export endpoint
       const url = `${exportUrl}?${params.toString()}`;
       
-      // Open download in a new tab or iframe to handle Content-Disposition
-      window.location.assign(url);
+      triggerDownloadFromUrl(url);
 
     } catch (err) {
       console.error("CSV export failed:", err);

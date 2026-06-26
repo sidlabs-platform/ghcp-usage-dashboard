@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from "vites
 import Database from "better-sqlite3";
 import path from "path";
 import fs from "fs";
+import * as aggregationQueriesModule from "./aggregation-queries";
 
 let db: Database.Database;
 
@@ -256,6 +257,82 @@ describe("getUserSummariesPaginated", () => {
       expect(active!.activeDays).toBeGreaterThan(0);
       expect(inactive!.activeDays).toBe(0);
       expect(inactive!.locAdded).toBe(0);
+    } finally {
+      db.prepare("DELETE FROM copilot_seats").run();
+    }
+  });
+});
+
+describe("iterateUserSummaries", () => {
+  it("yields aggregated user summaries in the requested order", () => {
+    insertMetric({ day: "2024-01-10", user_login: "bob", user_id: 2, loc_added_sum: 5 });
+    insertMetric({ day: "2024-01-11", user_login: "alice", user_id: 1, loc_added_sum: 10 });
+    insertMetric({ day: "2024-01-12", user_login: "alice", user_id: 1, loc_added_sum: 20 });
+
+    const iterateUserSummaries = (
+      aggregationQueriesModule as {
+        iterateUserSummaries?: (
+          startDay: string,
+          endDay: string,
+          sortField: string,
+          sortDir: "asc" | "desc",
+          search?: string,
+          allowedLogins?: string[],
+          enterpriseSlugs?: string[],
+          includeInactive?: boolean,
+        ) => IterableIterator<ReturnType<typeof getUserSummaries>[number]>;
+      }
+    ).iterateUserSummaries;
+
+    expect(iterateUserSummaries).toBeTypeOf("function");
+
+    const rows = Array.from(
+      iterateUserSummaries!("2024-01-01", "2024-01-31", "login", "asc"),
+    );
+
+    expect(rows).toHaveLength(2);
+    expect(rows.map((row) => row.login)).toEqual(["alice", "bob"]);
+    expect(rows[0]).toMatchObject({
+      login: "alice",
+      activeDays: 2,
+      locAdded: 30,
+      acceptanceRate: 70,
+    });
+  });
+
+  it("includes seat-only users when includeInactive is true", () => {
+    insertMetric({ user_login: "active-user", user_id: 10 });
+    db.prepare(`INSERT INTO copilot_seats (enterprise_slug, org_slug, user_login, user_id)
+      VALUES ('ent1', 'org1', 'inactive-user', 20)`).run();
+
+    const iterateUserSummaries = (
+      aggregationQueriesModule as {
+        iterateUserSummaries?: (
+          startDay: string,
+          endDay: string,
+          sortField: string,
+          sortDir: "asc" | "desc",
+          search?: string,
+          allowedLogins?: string[],
+          enterpriseSlugs?: string[],
+          includeInactive?: boolean,
+        ) => IterableIterator<ReturnType<typeof getUserSummaries>[number]>;
+      }
+    ).iterateUserSummaries;
+
+    expect(iterateUserSummaries).toBeTypeOf("function");
+
+    try {
+      const rows = Array.from(
+        iterateUserSummaries!("2024-01-01", "2024-01-31", "login", "asc", undefined, undefined, undefined, true),
+      );
+
+      expect(rows.map((row) => row.login)).toEqual(["active-user", "inactive-user"]);
+      expect(rows.find((row) => row.login === "inactive-user")).toMatchObject({
+        activeDays: 0,
+        locAdded: 0,
+        acceptanceRate: 0,
+      });
     } finally {
       db.prepare("DELETE FROM copilot_seats").run();
     }

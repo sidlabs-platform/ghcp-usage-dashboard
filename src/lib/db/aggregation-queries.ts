@@ -269,6 +269,16 @@ type RawUserRow = {
   usedCodeReviewActive: number; usedCodeReviewPassive: number; usedCodingAgent: number;
 };
 
+const USER_SUMMARY_SORT_COLUMNS: Record<string, string> = {
+  login: "login",
+  activeDays: "activeDays",
+  locAdded: "locAdded",
+  interactions: "interactions",
+  aiCreditsUsed: "aiCreditsUsed",
+  acceptanceRate: "acceptanceRate",
+  codeGen: "codeGen",
+};
+
 function mapUserRow(r: RawUserRow): UserSummary {
   return {
     login: r.login,
@@ -289,6 +299,141 @@ function mapUserRow(r: RawUserRow): UserSummary {
   };
 }
 
+function* mapUserRowIterator(rows: Iterable<RawUserRow>): IterableIterator<UserSummary> {
+  for (const row of rows) {
+    yield mapUserRow(row);
+  }
+}
+
+/**
+ * Iterate aggregated user summaries without materializing the full result set.
+ */
+export function iterateUserSummaries(
+  startDay: string,
+  endDay: string,
+  sortField: string,
+  sortDir: "asc" | "desc",
+  search?: string,
+  allowedLogins?: string[],
+  enterpriseSlugs?: string[],
+  includeInactive?: boolean,
+): IterableIterator<UserSummary> {
+  const db = getDb();
+  const filter = buildLoginFilter(allowedLogins ?? []);
+  const ef = buildEnterpriseFilter(enterpriseSlugs);
+  const searchClause = search ? `AND user_login LIKE ?` : "";
+  const searchParam = search ? [`%${search}%`] : [];
+  const sqlSort = USER_SUMMARY_SORT_COLUMNS[sortField] || "activeDays";
+  const sqlDir = sortDir === "asc" ? "ASC" : "DESC";
+
+  if (includeInactive) {
+    const seatsFilter = buildLoginFilter(allowedLogins ?? []);
+    const seatsEf = buildEnterpriseFilter(enterpriseSlugs);
+    const seatsSearchClause = search ? `AND user_login LIKE ?` : "";
+    const seatsSearchParam = search ? [`%${search}%`] : [];
+
+    const activeParams = [startDay, endDay, ...filter.params, ...searchParam, ...ef.params];
+    const inactiveParams = [
+      ...seatsFilter.params,
+      ...seatsSearchParam,
+      ...seatsEf.params,
+      startDay,
+      endDay,
+      ...filter.params,
+      ...ef.params,
+    ];
+
+    const cteSql = `
+      WITH active_users AS (
+        SELECT
+          user_login AS login,
+          COUNT(DISTINCT day) AS activeDays,
+          COALESCE(SUM(loc_added_sum), 0) AS locAdded,
+          COALESCE(SUM(loc_deleted_sum), 0) AS locDeleted,
+          COALESCE(SUM(user_initiated_interaction_count), 0) AS interactions,
+          COALESCE(SUM(ai_credits_used), 0) AS aiCreditsUsed,
+          COALESCE(SUM(code_generation_activity_count), 0) AS codeGen,
+          COALESCE(SUM(code_acceptance_activity_count), 0) AS codeAccept,
+          MAX(used_agent) AS usedAgent,
+          MAX(used_chat) AS usedChat,
+          MAX(used_cli) AS usedCli,
+          MAX(used_copilot_code_review_active) AS usedCodeReviewActive,
+          MAX(used_copilot_code_review_passive) AS usedCodeReviewPassive,
+          MAX(used_copilot_coding_agent) AS usedCodingAgent
+        FROM user_daily_metrics
+        WHERE day >= ? AND day <= ? ${filter.clause} ${searchClause}${ef.clause}
+        GROUP BY user_login
+      ),
+      inactive_users AS (
+        SELECT DISTINCT
+          user_login AS login,
+          0 AS activeDays,
+          0 AS locAdded,
+          0 AS locDeleted,
+          0 AS interactions,
+          0 AS aiCreditsUsed,
+          0 AS codeGen,
+          0 AS codeAccept,
+          0 AS usedAgent,
+          0 AS usedChat,
+          0 AS usedCli,
+          0 AS usedCodeReviewActive,
+          0 AS usedCodeReviewPassive,
+          0 AS usedCodingAgent
+        FROM copilot_seats
+        WHERE 1=1 ${seatsFilter.clause} ${seatsSearchClause}${seatsEf.clause}
+          AND user_login NOT IN (
+            SELECT DISTINCT user_login
+            FROM user_daily_metrics
+            WHERE day >= ? AND day <= ? ${filter.clause}${ef.clause}
+          )
+      ),
+      all_users AS (
+        SELECT * FROM active_users
+        UNION ALL
+        SELECT * FROM inactive_users
+      )
+    `;
+
+    const dataSql = `${cteSql} SELECT * FROM all_users ORDER BY ${sqlSort} ${sqlDir}`;
+    const rows = db.prepare(dataSql).iterate(
+      ...activeParams,
+      ...inactiveParams,
+    ) as Iterable<RawUserRow>;
+
+    return mapUserRowIterator(rows);
+  }
+
+  const baseSql = `
+    FROM user_daily_metrics
+    WHERE day >= ? AND day <= ? ${filter.clause} ${searchClause}${ef.clause}
+  `;
+  const baseParams = [startDay, endDay, ...filter.params, ...searchParam, ...ef.params];
+  const dataSql = `
+    SELECT
+      user_login as login,
+      COUNT(DISTINCT day) as activeDays,
+      COALESCE(SUM(loc_added_sum), 0) as locAdded,
+      COALESCE(SUM(loc_deleted_sum), 0) as locDeleted,
+      COALESCE(SUM(user_initiated_interaction_count), 0) as interactions,
+      COALESCE(SUM(ai_credits_used), 0) as aiCreditsUsed,
+      COALESCE(SUM(code_generation_activity_count), 0) as codeGen,
+      COALESCE(SUM(code_acceptance_activity_count), 0) as codeAccept,
+      MAX(used_agent) as usedAgent,
+      MAX(used_chat) as usedChat,
+      MAX(used_cli) as usedCli,
+      MAX(used_copilot_code_review_active) as usedCodeReviewActive,
+      MAX(used_copilot_code_review_passive) as usedCodeReviewPassive,
+      MAX(used_copilot_coding_agent) as usedCodingAgent
+    ${baseSql}
+    GROUP BY user_login
+    ORDER BY ${sqlSort} ${sqlDir}
+  `;
+  const rows = db.prepare(dataSql).iterate(...baseParams) as Iterable<RawUserRow>;
+
+  return mapUserRowIterator(rows);
+}
+
 export function getUserSummariesPaginated(
   startDay: string,
   endDay: string,
@@ -306,18 +451,7 @@ export function getUserSummariesPaginated(
   const ef = buildEnterpriseFilter(enterpriseSlugs);
   const searchClause = search ? `AND user_login LIKE ?` : "";
   const searchParam = search ? [`%${search}%`] : [];
-
-  // Allowed sort columns (prevent SQL injection)
-  const sortColumns: Record<string, string> = {
-    login: "login",
-    activeDays: "activeDays",
-    locAdded: "locAdded",
-    interactions: "interactions",
-    aiCreditsUsed: "aiCreditsUsed",
-    acceptanceRate: "acceptanceRate",
-    codeGen: "codeGen",
-  };
-  const sqlSort = sortColumns[sortField] || "activeDays";
+  const sqlSort = USER_SUMMARY_SORT_COLUMNS[sortField] || "activeDays";
   const sqlDir = sortDir === "asc" ? "ASC" : "DESC";
 
   if (includeInactive) {

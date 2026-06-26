@@ -1,139 +1,194 @@
-import { NextResponse } from 'next/server';
-import { getDb } from '@/lib/db/database';
+import { NextRequest, NextResponse } from "next/server";
+import { withTimeout } from "@/lib/api/timeout";
+import { parseScopeFilter } from "@/lib/api/scope-filter";
+import {
+  iterateUserSummaries,
+  type UserSummary,
+} from "@/lib/db/aggregation-queries";
+import type { ExportMetadata } from "@/lib/export/csv";
+import { escapeCSVValue } from "@/lib/export/csv";
+import {
+  type UserExportRow,
+  userExportColumns,
+} from "@/lib/export/user-export";
+import { parseDateRangeParams } from "@/lib/utils";
 
-function buildEnterpriseFilter(slugs?: string[], alias?: string): { clause: string; params: string[] } {
-  if (!slugs || slugs.length === 0) return { clause: '', params: [] };
-  const placeholders = slugs.map(() => '?').join(',');
-  const prefix = alias ? `${alias}.` : '';
-  return { clause: ` AND ${prefix}enterprise_slug IN (${placeholders})`, params: slugs };
+const STREAM_BATCH_SIZE = 250;
+
+function buildDateRangeLabel(
+  searchParams: URLSearchParams,
+  startDay: string,
+  endDay: string,
+): string {
+  if (searchParams.get("startDate") && searchParams.get("endDate")) {
+    return `${startDay} to ${endDay}`;
+  }
+
+  const days = searchParams.get("days");
+  return days ? `Last ${days} days` : `${startDay} to ${endDay}`;
 }
 
-function parseScopeFilterFromParams(searchParams: URLSearchParams) {
-  const t = searchParams.get('teams');
-  const o = searchParams.get('orgs');
-  const e = searchParams.get('enterprises');
+function buildMetadata(
+  searchParams: URLSearchParams,
+  startDay: string,
+  endDay: string,
+): ExportMetadata {
   return {
-    teams: t ? t.split(',') : [],
-    orgs: o ? o.split(',') : [],
-    enterprises: e ? e.split(',') : []
+    reportName: "User Explorer",
+    dateRange: buildDateRangeLabel(searchParams, startDay, endDay),
+    teams: searchParams.get("teams") || undefined,
+    orgs: searchParams.get("orgs") || undefined,
   };
 }
 
-function filterByScopeLocal(rows: any[], teams: string[], orgs: string[]) {
-  if (teams.length === 0 && orgs.length === 0) return rows;
-  
-  return rows.filter((row: any) => {
-    let orgMatch = true;
-    let teamMatch = true;
-    
-    if (orgs.length > 0) {
-        orgMatch = orgs.includes(row.org_slug);
-    }
-    
-    if (teams.length > 0 && row.teams) {
-        let rowTeams: string[] = [];
-        try {
-            rowTeams = typeof row.teams === 'string' ? JSON.parse(row.teams) : row.teams;
-        } catch(e) {}
-        teamMatch = rowTeams.some((t: string) => teams.includes(t));
-    } else if (teams.length > 0) {
-        teamMatch = false; // No teams on row but teams filter provided
-    }
-    
-    return orgMatch && teamMatch;
+function buildMetadataLines(metadata: ExportMetadata): string[] {
+  const lines = [`Report,${escapeCSVValue(metadata.reportName)}`];
+
+  if (metadata.dateRange) {
+    lines.push(`Date Range,${escapeCSVValue(metadata.dateRange)}`);
+  }
+  if (metadata.teams) {
+    lines.push(`Teams,${escapeCSVValue(metadata.teams)}`);
+  }
+  if (metadata.orgs) {
+    lines.push(`Organizations,${escapeCSVValue(metadata.orgs)}`);
+  }
+
+  lines.push(`Exported At,${escapeCSVValue(new Date().toLocaleString())}`);
+  lines.push("");
+
+  return lines;
+}
+
+function getDefaultColumnValue(row: UserExportRow, key: string): string | number {
+  switch (key) {
+    case "login":
+      return row.login;
+    case "activeDays":
+      return row.activeDays;
+    case "locAdded":
+      return row.locAdded;
+    case "interactions":
+      return row.interactions;
+    default:
+      return "";
+  }
+}
+
+function formatCsvLine(row: UserExportRow): string {
+  return userExportColumns
+    .map((column) => {
+      const value = column.format
+        ? column.format(row)
+        : getDefaultColumnValue(row, column.key);
+      return escapeCSVValue(value);
+    })
+    .join(",");
+}
+
+function buildHeaderLine(): string {
+  return userExportColumns.map((column) => escapeCSVValue(column.label)).join(",");
+}
+
+function mapSummaryToExportRow(summary: UserSummary): UserExportRow {
+  return {
+    login: summary.login,
+    activeDays: summary.activeDays,
+    locAdded: summary.locAdded,
+    interactions: summary.interactions,
+    aiCreditsUsed: summary.aiCreditsUsed,
+    acceptanceRate: summary.acceptanceRate,
+    usedAgent: summary.usedAgent,
+    usedChat: summary.usedChat,
+    usedCli: summary.usedCli,
+    usedCodeReviewActive: summary.usedCodeReviewActive,
+    usedCodeReviewPassive: summary.usedCodeReviewPassive,
+    usedCodingAgent: summary.usedCodingAgent,
+  };
+}
+
+function* mapExportRows(
+  summaries: Iterable<UserSummary>,
+): IterableIterator<UserExportRow> {
+  for (const summary of summaries) {
+    yield mapSummaryToExportRow(summary);
+  }
+}
+
+function createCsvStream(
+  rows: Iterable<UserExportRow>,
+  metadata: ExportMetadata,
+): ReadableStream<Uint8Array> {
+  const encoder = new TextEncoder();
+  const preludeLines = [...buildMetadataLines(metadata), buildHeaderLine()];
+  const preludeIterator = preludeLines[Symbol.iterator]();
+  const rowIterator = rows[Symbol.iterator]();
+
+  return new ReadableStream<Uint8Array>({
+    pull(controller) {
+      let emitted = 0;
+
+      while (emitted < STREAM_BATCH_SIZE) {
+        const nextPrelude = preludeIterator.next();
+        if (!nextPrelude.done) {
+          controller.enqueue(encoder.encode(`${nextPrelude.value}\n`));
+          emitted += 1;
+          continue;
+        }
+
+        const nextRow = rowIterator.next();
+        if (nextRow.done) {
+          controller.close();
+          return;
+        }
+
+        controller.enqueue(encoder.encode(`${formatCsvLine(nextRow.value)}\n`));
+        emitted += 1;
+      }
+    },
   });
 }
 
-export async function GET(request: Request) {
+async function handler(request: NextRequest) {
   try {
-    const { searchParams } = new URL(request.url);
-    const startDay = searchParams.get('startDay');
-    const endDay = searchParams.get('endDay');
-
-    if (!startDay || !endDay) {
-      return NextResponse.json({ error: 'startDay and endDay are required' }, { status: 400 });
+    const searchParams = request.nextUrl.searchParams;
+    const rangeResult = parseDateRangeParams(searchParams, 7);
+    if ("error" in rangeResult) {
+      return NextResponse.json({ error: rangeResult.error }, { status: 400 });
     }
 
-    const scopeFilter = parseScopeFilterFromParams(searchParams);
-    const teams = scopeFilter.teams;
-    const orgs = scopeFilter.orgs;
-    const enterprises = scopeFilter.enterprises;
+    const { start, end } = rangeResult;
+    const scopeFilter = parseScopeFilter(searchParams);
+    const allowedLogins = scopeFilter.allowedLogins
+      ? Array.from(scopeFilter.allowedLogins)
+      : undefined;
+    const includeInactive = searchParams.get("includeInactive") === "true";
+    const search = searchParams.get("search") || undefined;
+    const summaries = iterateUserSummaries(
+      start,
+      end,
+      "login",
+      "asc",
+      search,
+      allowedLogins,
+      scopeFilter.enterpriseSlugs,
+      includeInactive,
+    );
 
-    const db = getDb();
-    const ef = buildEnterpriseFilter(enterprises);
-    const rows = db.prepare(`
-      SELECT *
-      FROM user_daily_metrics
-      WHERE day >= ? AND day <= ?${ef.clause}
-      ORDER BY assignee_login ASC, day ASC
-    `).all(startDay, endDay, ...ef.params) as any[];
-
-    const filteredData = filterByScopeLocal(rows, teams, orgs);
-
-    if (filteredData.length === 0) {
-        return new NextResponse('', {
-            headers: {
-                'Content-Type': 'text/csv',
-                'Content-Disposition': `attachment; filename="copilot-users-export-${startDay}-to-${endDay}.csv"`,
-            }
-        });
-    }
-
-    // Extract headers from the first row
-    const headers = Object.keys(filteredData[0]).join(',');
-    
-    // Create a streaming response
-    const encoder = new TextEncoder();
-    const stream = new ReadableStream({
-      start(controller) {
-        // Enqueue the header row
-        controller.enqueue(encoder.encode(headers + '\n'));
-
-        // Process and enqueue rows in batches
-        const BATCH_SIZE = 500;
-        let index = 0;
-
-        function pushBatch() {
-          let batchEnd = Math.min(index + BATCH_SIZE, filteredData.length);
-          let chunk = '';
-          for (let i = index; i < batchEnd; i++) {
-              const row = filteredData[i];
-              const values = Object.values(row).map(val => {
-                  if (val === null || val === undefined) return '';
-                  // Handle JSON or string fields that might contain commas
-                  const str = typeof val === 'object' ? JSON.stringify(val) : String(val);
-                  if (str.includes(',') || str.includes('"') || str.includes('\n')) {
-                      return `"${str.replace(/"/g, '""')}"`;
-                  }
-                  return str;
-              });
-              chunk += values.join(',') + '\n';
-          }
-          controller.enqueue(encoder.encode(chunk));
-          index = batchEnd;
-
-          if (index < filteredData.length) {
-              // Yield to event loop to avoid blocking
-              setTimeout(pushBatch, 0);
-          } else {
-              controller.close();
-          }
-        }
-        
-        pushBatch();
-      }
-    });
-
-    return new NextResponse(stream, {
-      headers: {
-        'Content-Type': 'text/csv',
-        'Content-Disposition': `attachment; filename="copilot-users-export-${startDay}-to-${endDay}.csv"`,
-        'Cache-Control': 'no-cache, no-store, must-revalidate',
+    return new NextResponse(
+      createCsvStream(mapExportRows(summaries), buildMetadata(searchParams, start, end)),
+      {
+        headers: {
+          "Content-Type": "text/csv; charset=utf-8",
+          "Content-Disposition": `attachment; filename="copilot-users-export-${start}-to-${end}.csv"`,
+          "Cache-Control": "private, no-cache, no-store, max-age=0",
+        },
       },
-    });
-
-  } catch (err: any) {
-    console.error('CSV Export Error:', err);
-    return NextResponse.json({ error: 'Failed to generate CSV export' }, { status: 500 });
+    );
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 }
+
+export const GET = withTimeout(handler);

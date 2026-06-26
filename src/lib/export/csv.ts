@@ -19,7 +19,7 @@ export interface ExportMetadata {
   orgs?: string;
 }
 
-function escapeCSVValue(value: unknown): string {
+export function escapeCSVValue(value: unknown): string {
   if (value === null || value === undefined) return "";
   const str = String(value);
   // Prevent CSV formula injection
