@@ -22,6 +22,7 @@ vi.mock("@/lib/cache/with-cache", () => ({
 }));
 
 vi.mock("@/lib/api/timeout", () => ({
+  DEFAULT_TIMEOUT_MS: 30_000,
   withTimeout: (handler: unknown) => handler,
 }));
 
@@ -134,5 +135,40 @@ describe("users export route", () => {
       ["ent-a"],
       true,
     );
+  });
+
+  it("fails the export stream when it exceeds the route timeout window", async () => {
+    mockState.iterateUserSummaries.mockReturnValue(
+      createIterator([
+        {
+          login: "octocat",
+          activeDays: 7,
+          locAdded: 123,
+          locDeleted: 0,
+          interactions: 5,
+          aiCreditsUsed: 1.25,
+          codeGen: 10,
+          codeAccept: 8,
+          acceptanceRate: 80,
+          usedAgent: true,
+          usedChat: false,
+          usedCli: true,
+          usedCodeReviewActive: false,
+          usedCodeReviewPassive: true,
+          usedCodingAgent: false,
+        },
+      ]),
+    );
+    const nowSpy = vi.spyOn(Date, "now");
+    nowSpy.mockReturnValueOnce(0).mockReturnValue(30_001);
+
+    const { GET } = await routePromise;
+    const response = await GET(new NextRequest("http://localhost/api/export/users?days=7"));
+
+    try {
+      await expect(response.text()).rejects.toThrow("Export timed out");
+    } finally {
+      nowSpy.mockRestore();
+    }
   });
 });

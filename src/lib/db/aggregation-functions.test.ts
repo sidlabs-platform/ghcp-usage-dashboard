@@ -258,7 +258,9 @@ describe("getUserSummariesPaginated", () => {
       expect(inactive!.activeDays).toBe(0);
       expect(inactive!.locAdded).toBe(0);
     } finally {
-      db.prepare("DELETE FROM copilot_seats").run();
+      db.prepare(
+        "DELETE FROM copilot_seats WHERE enterprise_slug = ? AND org_slug = ? AND user_login = ?",
+      ).run("ent1", "org1", "inactive-user");
     }
   });
 });
@@ -334,8 +336,62 @@ describe("iterateUserSummaries", () => {
         acceptanceRate: 0,
       });
     } finally {
-      db.prepare("DELETE FROM copilot_seats").run();
+      db.prepare(
+        "DELETE FROM copilot_seats WHERE enterprise_slug = ? AND org_slug = ? AND user_login = ?",
+      ).run("ent1", "org1", "inactive-user");
     }
+  });
+
+  it("sorts iterated summaries by computed acceptance rate", () => {
+    insertMetric({ user_login: "steady-user", user_id: 1, code_generation_activity_count: 10, code_acceptance_activity_count: 7 });
+    insertMetric({ user_login: "perfect-user", user_id: 2, code_generation_activity_count: 4, code_acceptance_activity_count: 4 });
+    insertMetric({ user_login: "zero-user", user_id: 3, code_generation_activity_count: 0, code_acceptance_activity_count: 0 });
+
+    const iterateUserSummaries = (
+      aggregationQueriesModule as {
+        iterateUserSummaries?: (
+          startDay: string,
+          endDay: string,
+          sortField: string,
+          sortDir: "asc" | "desc",
+          search?: string,
+          allowedLogins?: string[],
+          enterpriseSlugs?: string[],
+          includeInactive?: boolean,
+        ) => IterableIterator<ReturnType<typeof getUserSummaries>[number]>;
+      }
+    ).iterateUserSummaries;
+
+    expect(iterateUserSummaries).toBeTypeOf("function");
+
+    const rows = Array.from(
+      iterateUserSummaries!("2024-01-01", "2024-01-31", "acceptanceRate", "desc"),
+    );
+
+    expect(rows.map((row) => row.login)).toEqual(["perfect-user", "steady-user", "zero-user"]);
+  });
+});
+
+describe("getUserSummariesPaginated sorting", () => {
+  it("sorts paginated summaries by computed acceptance rate", () => {
+    insertMetric({ user_login: "steady-user", user_id: 1, code_generation_activity_count: 10, code_acceptance_activity_count: 7 });
+    insertMetric({ user_login: "perfect-user", user_id: 2, code_generation_activity_count: 4, code_acceptance_activity_count: 4 });
+    insertMetric({ user_login: "zero-user", user_id: 3, code_generation_activity_count: 0, code_acceptance_activity_count: 0 });
+
+    const result = getUserSummariesPaginated(
+      "2024-01-01",
+      "2024-01-31",
+      1,
+      10,
+      "acceptanceRate",
+      "desc",
+    );
+
+    expect(result.users.map((row) => row.login)).toEqual([
+      "perfect-user",
+      "steady-user",
+      "zero-user",
+    ]);
   });
 });
 

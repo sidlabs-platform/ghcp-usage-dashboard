@@ -15,6 +15,9 @@ export interface UserExportRow {
   usedCodingAgent: boolean;
 }
 
+/**
+ * Format the AI credits value for the shared user export CSV contract.
+ */
 export function formatUserExportAiCredits(
   row: Pick<UserExportRow, "aiCreditsUsed">,
 ): string {
@@ -22,6 +25,9 @@ export function formatUserExportAiCredits(
   return value.toFixed(2);
 }
 
+/**
+ * Format the acceptance rate percentage for the shared user export CSV contract.
+ */
 export function formatUserExportAcceptanceRate(
   row: Pick<UserExportRow, "acceptanceRate">,
 ): string {
@@ -29,6 +35,9 @@ export function formatUserExportAcceptanceRate(
   return `${value.toFixed(1)}%`;
 }
 
+/**
+ * Format the enabled feature badges into a single comma-separated export cell.
+ */
 export function formatUserExportFeatures(row: UserExportRow): string {
   const features: string[] = [];
 

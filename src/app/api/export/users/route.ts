@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { withTimeout } from "@/lib/api/timeout";
+import { DEFAULT_TIMEOUT_MS, withTimeout } from "@/lib/api/timeout";
 import { parseScopeFilter } from "@/lib/api/scope-filter";
 import {
   iterateUserSummaries,
@@ -14,6 +14,7 @@ import {
 import { parseDateRangeParams } from "@/lib/utils";
 
 const STREAM_BATCH_SIZE = 250;
+const EXPORT_TIMEOUT_MESSAGE = "Export timed out. Try a narrower date range or add filters.";
 
 function buildDateRangeLabel(
   searchParams: URLSearchParams,
@@ -118,6 +119,7 @@ function* mapExportRows(
 function createCsvStream(
   rows: Iterable<UserExportRow>,
   metadata: ExportMetadata,
+  timeoutAt: number,
 ): ReadableStream<Uint8Array> {
   const encoder = new TextEncoder();
   const preludeLines = [...buildMetadataLines(metadata), buildHeaderLine()];
@@ -129,21 +131,33 @@ function createCsvStream(
       let emitted = 0;
 
       while (emitted < STREAM_BATCH_SIZE) {
-        const nextPrelude = preludeIterator.next();
-        if (!nextPrelude.done) {
-          controller.enqueue(encoder.encode(`${nextPrelude.value}\n`));
-          emitted += 1;
-          continue;
-        }
-
-        const nextRow = rowIterator.next();
-        if (nextRow.done) {
-          controller.close();
+        if (Date.now() >= timeoutAt) {
+          controller.error(new Error(EXPORT_TIMEOUT_MESSAGE));
           return;
         }
 
-        controller.enqueue(encoder.encode(`${formatCsvLine(nextRow.value)}\n`));
-        emitted += 1;
+        try {
+          const nextPrelude = preludeIterator.next();
+          if (!nextPrelude.done) {
+            controller.enqueue(encoder.encode(`${nextPrelude.value}\n`));
+            emitted += 1;
+            continue;
+          }
+
+          const nextRow = rowIterator.next();
+          if (nextRow.done) {
+            controller.close();
+            return;
+          }
+
+          controller.enqueue(encoder.encode(`${formatCsvLine(nextRow.value)}\n`));
+          emitted += 1;
+        } catch (error) {
+          controller.error(
+            error instanceof Error ? error : new Error(String(error)),
+          );
+          return;
+        }
       }
     },
   });
@@ -174,9 +188,14 @@ async function handler(request: NextRequest) {
       scopeFilter.enterpriseSlugs,
       includeInactive,
     );
+    const timeoutAt = Date.now() + DEFAULT_TIMEOUT_MS;
 
     return new NextResponse(
-      createCsvStream(mapExportRows(summaries), buildMetadata(searchParams, start, end)),
+      createCsvStream(
+        mapExportRows(summaries),
+        buildMetadata(searchParams, start, end),
+        timeoutAt,
+      ),
       {
         headers: {
           "Content-Type": "text/csv; charset=utf-8",

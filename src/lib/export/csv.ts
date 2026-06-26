@@ -19,12 +19,16 @@ export interface ExportMetadata {
   orgs?: string;
 }
 
+/**
+ * Escape a single CSV cell value, including formula-injection prefixes and
+ * standard CSV quoting for commas, quotes, and newlines.
+ */
 export function escapeCSVValue(value: unknown): string {
   if (value === null || value === undefined) return "";
   const str = String(value);
   // Prevent CSV formula injection
   const firstChar = str.charAt(0);
-  if (["=", "+", "-", "@", "|", "%", "\t", "\r"].includes(firstChar)) {
+  if (["=", "+", "-", "@", "|", "%", "\t", "\r", "\n"].includes(firstChar)) {
     return `"'${str.replace(/"/g, '""')}"`;
   }
   if (str.includes(",") || str.includes('"') || str.includes("\n")) {

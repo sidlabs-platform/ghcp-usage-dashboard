@@ -275,7 +275,7 @@ const USER_SUMMARY_SORT_COLUMNS: Record<string, string> = {
   locAdded: "locAdded",
   interactions: "interactions",
   aiCreditsUsed: "aiCreditsUsed",
-  acceptanceRate: "acceptanceRate",
+  acceptanceRate: "CASE WHEN codeGen > 0 THEN (codeAccept * 100.0 / codeGen) ELSE 0 END",
   codeGen: "codeGen",
 };
 

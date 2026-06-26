@@ -3,7 +3,7 @@
 import { useState, useCallback } from "react";
 import { arrayToCSV, fetchAllPages, type CSVColumn, type ExportMetadata } from "@/lib/export/csv";
 import { captureSectionsAsPDF } from "@/lib/export/pdf";
-import { triggerDownload, triggerDownloadFromUrl } from "@/lib/export/download";
+import { triggerDownload } from "@/lib/export/download";
 
 export interface ExportCSVConfig {
   /** API endpoint base URL */
@@ -30,6 +30,35 @@ export interface ExportPDFConfig {
   filename: string;
   /** Filter metadata to include in PDF header */
   metadata?: ExportMetadata;
+}
+
+async function getExportErrorMessage(response: Response): Promise<string> {
+  const contentType = response.headers.get("Content-Type") || "";
+
+  if (contentType.includes("application/json")) {
+    const json = await response.json().catch(() => null);
+    if (json && typeof json === "object" && "error" in json && typeof json.error === "string") {
+      return json.error;
+    }
+  }
+
+  const text = await response.text().catch(() => "");
+  return text || `Export fetch failed: HTTP ${response.status}`;
+}
+
+function getDownloadFilename(
+  contentDisposition: string | null,
+  fallbackFilename: string,
+): string {
+  if (!contentDisposition) return fallbackFilename;
+
+  const filenameStarMatch = contentDisposition.match(/filename\*=UTF-8''([^;]+)/i);
+  if (filenameStarMatch) {
+    return decodeURIComponent(filenameStarMatch[1]);
+  }
+
+  const filenameMatch = contentDisposition.match(/filename="?([^"]+)"?/i);
+  return filenameMatch?.[1] || fallbackFilename;
 }
 
 export function useExport() {
@@ -61,8 +90,21 @@ export function useExport() {
 
       // Use server-side export endpoint
       const url = `${exportUrl}?${params.toString()}`;
-      
-      triggerDownloadFromUrl(url);
+      const response = await fetch(url);
+      if (!response.ok) {
+        throw new Error(await getExportErrorMessage(response));
+      }
+
+      const blob = await response.blob();
+      const filename = getDownloadFilename(
+        response.headers.get("Content-Disposition"),
+        `${config.filename}.csv`,
+      );
+      triggerDownload(
+        blob,
+        filename,
+        response.headers.get("Content-Type") || "text/csv;charset=utf-8",
+      );
 
     } catch (err) {
       console.error("CSV export failed:", err);

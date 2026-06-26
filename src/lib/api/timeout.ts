@@ -4,7 +4,7 @@ import { NextRequest, NextResponse } from "next/server";
 
 type RouteHandler = (request: NextRequest) => Promise<NextResponse>;
 
-const DEFAULT_TIMEOUT_MS = 30_000; // 30 seconds
+export const DEFAULT_TIMEOUT_MS = 30_000; // 30 seconds
 
 /**
  * Wraps an API route handler with a timeout.
