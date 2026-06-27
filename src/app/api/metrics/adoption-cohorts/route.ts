@@ -52,15 +52,25 @@ function getEnterpriseAdoptionCohorts(
   if (rows.length === 0) return null;
 
   const trend: { day: string; phase0: number; phase1: number; phase2: number; phase3: number }[] = [];
+  // Parallel trend of absolute PRs merged per phase (June 2026 API addition).
+  const mergedTrend: { day: string; phase0: number; phase1: number; phase2: number; phase3: number }[] = [];
   let latestPhases: TotalsByAIAdoptionPhase[] = [];
+  let hasMergeData = false;
 
   for (const row of rows) {
     const phases: TotalsByAIAdoptionPhase[] = JSON.parse(row.totals_by_ai_adoption_phase || "[]");
     if (phases.length === 0) continue;
 
     const byPhase: Record<number, number> = { 0: 0, 1: 0, 2: 0, 3: 0 };
+    const mergedByPhase: Record<number, number> = { 0: 0, 1: 0, 2: 0, 3: 0 };
+    let dayHasMerge = false;
     for (const p of phases) {
       byPhase[p.phase] = (byPhase[p.phase] || 0) + (p.engaged_users || 0);
+      if (typeof p.total_pull_requests_merged === "number") {
+        hasMergeData = true;
+        dayHasMerge = true;
+        mergedByPhase[p.phase] = (mergedByPhase[p.phase] || 0) + p.total_pull_requests_merged;
+      }
     }
 
     trend.push({
@@ -70,6 +80,16 @@ function getEnterpriseAdoptionCohorts(
       phase2: byPhase[2] || 0,
       phase3: byPhase[3] || 0,
     });
+
+    if (dayHasMerge) {
+      mergedTrend.push({
+        day: row.day,
+        phase0: mergedByPhase[0] || 0,
+        phase1: mergedByPhase[1] || 0,
+        phase2: mergedByPhase[2] || 0,
+        phase3: mergedByPhase[3] || 0,
+      });
+    }
 
     latestPhases = phases;
   }
@@ -82,9 +102,34 @@ function getEnterpriseAdoptionCohorts(
     percentage: totalEngaged > 0 ? ((p.engaged_users || 0) / totalEngaged) * 100 : 0,
   }));
 
+  // Absolute PRs-merged distribution by phase (delivery impact per cohort).
+  const totalMerged = latestPhases.reduce(
+    (s, p) => s + (typeof p.total_pull_requests_merged === "number" ? p.total_pull_requests_merged : 0),
+    0,
+  );
+  const mergedDistribution = latestPhases.map((p) => {
+    const merged = typeof p.total_pull_requests_merged === "number" ? p.total_pull_requests_merged : 0;
+    return {
+      phase: p.phase,
+      label: p.label || PHASE_LABELS[p.phase] || `Phase ${p.phase}`,
+      count: merged,
+      percentage: totalMerged > 0 ? (merged / totalMerged) * 100 : 0,
+    };
+  });
+
   // latestDay clarifies that distribution/perPhaseMetrics are a point-in-time snapshot
   const latestDay = rows[rows.length - 1]?.day ?? end;
-  return { distribution, trend, perPhaseMetrics: latestPhases, totalEngaged, latestDay };
+  return {
+    distribution,
+    trend,
+    perPhaseMetrics: latestPhases,
+    totalEngaged,
+    mergedDistribution,
+    mergedTrend,
+    totalMerged,
+    hasMergeData,
+    latestDay,
+  };
 }
 
 /**
@@ -165,7 +210,19 @@ function getUserAdoptionCohorts(
   // Note: distribution counts each user once (latest phase in range);
   // trend counts distinct users per day per phase, so daily totals may differ.
   const latestDay = trendRows.length > 0 ? trendRows[trendRows.length - 1].day : end;
-  return { distribution, trend, perPhaseMetrics: [], totalEngaged: totalUsers, latestDay };
+  // User-level (per-user) reports do not carry PR-merge counts per adoption
+  // phase, so merge-by-phase delivery metrics are unavailable in this path.
+  return {
+    distribution,
+    trend,
+    perPhaseMetrics: [],
+    totalEngaged: totalUsers,
+    mergedDistribution: [],
+    mergedTrend: [],
+    totalMerged: 0,
+    hasMergeData: false,
+    latestDay,
+  };
 }
 
 async function handler(request: NextRequest) {
@@ -197,6 +254,10 @@ async function handler(request: NextRequest) {
         trend: [],
         perPhaseMetrics: [],
         totalEngaged: 0,
+        mergedDistribution: [],
+        mergedTrend: [],
+        totalMerged: 0,
+        hasMergeData: false,
         hasData: false,
         dataAsOf: end,
         daysLoaded: days,
@@ -224,6 +285,10 @@ async function handler(request: NextRequest) {
         trend: [],
         perPhaseMetrics: [],
         totalEngaged: 0,
+        mergedDistribution: [],
+        mergedTrend: [],
+        totalMerged: 0,
+        hasMergeData: false,
         hasData: false,
         dataAsOf: end,
         daysLoaded: days,
@@ -247,4 +312,5 @@ async function handler(request: NextRequest) {
   }
 }
 
-export const GET = withTimeout(withCache(handler, CACHE_TTL.MEDIUM));
+import { withRateLimit } from "@/lib/api/rate-limit/rate-limiter";
+export const GET = withRateLimit(withTimeout(withCache(handler, CACHE_TTL.MEDIUM)));

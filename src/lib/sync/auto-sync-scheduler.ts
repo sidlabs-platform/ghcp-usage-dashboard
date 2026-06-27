@@ -109,12 +109,14 @@ async function executeAutoSync(): Promise<void> {
           console.log("[AutoSync] Starting GHAS sync...");
           const ghasResult = await fullGhasSync((p) => console.log(`[AutoSync] [GHAS] ${p.message}`));
           console.log("[AutoSync] GHAS sync complete:", JSON.stringify(ghasResult));
+          cache.invalidateByPrefix("/api/security");
         } catch (err) {
           console.error("[AutoSync] GHAS sync failed:", err);
         }
       }
 
       // Run billing sync for each configured enterprise
+      let billingSynced = false;
       if (isMetricEnabledForAnyEnterprise("billing")) {
         const slugs = getEnterpriseSlugs();
         for (const slug of slugs) {
@@ -122,13 +124,19 @@ async function executeAutoSync(): Promise<void> {
             console.log(`[AutoSync] Starting billing sync for ${slug}...`);
             const billingResult = await syncBilling(slug, (p) => console.log(`[AutoSync] [Billing] ${p.message}`));
             console.log(`[AutoSync] Billing sync complete for ${slug}:`, JSON.stringify(billingResult));
+            billingSynced = true;
           } catch (err) {
             console.error(`[AutoSync] Billing sync failed for ${slug}:`, err);
           }
         }
+        if (billingSynced) {
+          cache.invalidateByPrefix("/api/billing");
+        }
       }
 
-      cache.invalidateAll();
+      cache.invalidateByPrefix("/api/metrics");
+      cache.invalidateByPrefix("/api/users");
+      
       lastAutoSyncAt = new Date().toISOString();
     } catch (err) {
       console.error("[AutoSync] Incremental sync failed:", err);
@@ -222,3 +230,4 @@ export function getAutoSyncStatus(): {
     running,
   };
 }
+

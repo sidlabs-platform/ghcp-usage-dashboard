@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useParams } from "next/navigation";
+import { useParams, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { useDateRange } from "@/contexts/DateRangeContext";
@@ -11,43 +11,13 @@ import { Badge } from "@/components/ui/badge";
 import { DateFilter } from "@/components/filters/DateFilter";
 import { Users, Activity, Code, TrendingUp, Bot, MessageSquare, Terminal } from "lucide-react";
 import { formatNumber, safeNum } from "@/lib/utils";
-
-interface TeamInfo {
-  slug: string;
-  name: string;
-  org: string | null;
-  memberCount: number;
-}
-
-interface MemberRow {
-  login: string;
-  activeDays: number;
-  locAdded: number;
-  interactions: number;
-  acceptanceRate: number;
-  usedAgent: number;
-  usedChat: number;
-  usedCli: number;
-  usedCodeReview: number;
-}
-
-interface Aggregates {
-  totalLocAdded: number;
-  avgAcceptanceRate: number;
-  agentAdoption: number;
-  chatAdoption: number;
-  cliAdoption: number;
-  activeMembers: number;
-}
-
-interface TeamDetailResponse {
-  team: TeamInfo | null;
-  members: MemberRow[];
-  aggregates: Aggregates | null;
-}
+import type { TeamDetailResponse } from "@/lib/types/team-detail";
 
 export default function TeamDetailPage() {
   const { slug } = useParams<{ slug: string }>();
+  const searchParams = useSearchParams();
+  const source = searchParams.get("source");
+  const enterprise = searchParams.get("enterprise");
   const { mode, days, startDate, endDate } = useDateRange();
   const [data, setData] = useState<TeamDetailResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -64,6 +34,12 @@ export default function TeamDetailPage() {
       qp.set("endDate", endDate);
     } else {
       qp.set("days", String(days));
+    }
+    if (source) {
+      qp.set("source", source);
+    }
+    if (enterprise) {
+      qp.set("enterprise", enterprise);
     }
 
     fetch(`/api/teams/${encodeURIComponent(slug)}?${qp}`)

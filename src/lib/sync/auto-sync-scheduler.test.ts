@@ -17,7 +17,7 @@ vi.mock("@/lib/db/metrics-repo", () => ({
   heartbeatSyncLock: vi.fn(),
 }));
 vi.mock("@/lib/cache/memory-cache", () => ({
-  cache: { invalidateAll: vi.fn() },
+  cache: { invalidateByPrefix: vi.fn(), invalidateAll: vi.fn() },
 }));
 
 import { startAutoSync, stopAutoSync, getAutoSyncStatus } from "./auto-sync-scheduler";

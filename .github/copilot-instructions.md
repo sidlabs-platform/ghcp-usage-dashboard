@@ -99,9 +99,10 @@ Use `isCompletionFeature()` and `isAgentFeature()` from `src/lib/aggregation/sep
 - **Phase 3** (Multi-agent): Two+ GitHub agent surfaces or GitHub Copilot app on ≥2 days
 - User-level: `ai_adoption_phase` field (object with `phase`, `label`, `version`)
 - Enterprise/org-level: `totals_by_ai_adoption_phase` array with per-phase engagement averages
+- Per-phase **total PRs merged** (`total_pull_requests_merged`, June 2026 API addition): absolute delivery throughput per cohort, enterprise/org reports only. Optional field — degrade gracefully (`hasMergeData` flag, "—" / hidden section) when older synced data lacks it. User-level reports have no per-phase PR data.
 - Stored as JSON TEXT columns: `ai_adoption_phase` on `user_daily_metrics`, `totals_by_ai_adoption_phase` on `enterprise_daily_metrics`/`org_daily_metrics`
-- Dashboard page: `/dashboard/adoption-cohorts` — distribution chart, trend chart, per-phase metrics table
-- API: `/api/metrics/adoption-cohorts` — uses enterprise data when available, falls back to user-level aggregation
+- Dashboard page: `/dashboard/adoption-cohorts` — distribution chart, trend chart, per-phase metrics table, plus a "Delivery Impact by Phase" section (merged-PR KPIs, merged-by-phase bar chart, merged trend)
+- API: `/api/metrics/adoption-cohorts` — uses enterprise data when available, falls back to user-level aggregation; returns `mergedDistribution`, `mergedTrend`, `totalMerged`, `hasMergeData`
 
 ### Billing: AI Credits (replacing Premium Requests)
 - As of June 2026, GitHub Copilot uses **AI Credits** instead of Premium Requests

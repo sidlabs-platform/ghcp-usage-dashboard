@@ -41,6 +41,9 @@ interface PremiumKPIs {
   uniqueModels: number;
   totalAiCredits: number;
   totalAicGross: number;
+  metricsTotalAiCreditsUsed: number;
+  metricsTrackedUsers: number;
+  metricsTopUser: string;
 }
 
 interface FilterOptions {
@@ -55,12 +58,22 @@ interface UserModelBreakdownRow {
   usd: number;
 }
 
+interface MetricsAiCreditUserSummary {
+  user_login: string;
+  total_ai_credits_used: number;
+  active_days: number;
+  avg_daily_ai_credits: number;
+  last_active_day: string;
+}
+
 const fmtCurrency = (v: number) => {
   const n = safeNum(v);
   return n >= 1_000_000 ? `$${(n / 1_000_000).toFixed(1)}M`
     : n >= 1_000 ? `$${(n / 1_000).toFixed(1)}K`
     : `$${n.toFixed(2)}`;
 };
+
+const fmtCredits = (v: number) => safeNum(v).toLocaleString(undefined, { maximumFractionDigits: 2 });
 
 /**
  * Renders the AI Credits billing dashboard page with KPIs, trends, and detailed usage tables.
@@ -73,6 +86,7 @@ export default function PremiumRequestsPage() {
   const [userSummary, setUserSummary] = useState<PremiumRequestUserSummary[]>([]);
   const [modelSummary, setModelSummary] = useState<PremiumRequestModelSummary[]>([]);
   const [dailyTrend, setDailyTrend] = useState<PremiumDailyTrend[]>([]);
+  const [metricsAiCreditSummary, setMetricsAiCreditSummary] = useState<MetricsAiCreditUserSummary[]>([]);
   const [records, setRecords] = useState<BillingPremiumRequestRecord[]>([]);
   const [pagination, setPagination] = useState<PaginationInfo>({ page: 1, pageSize: 50, totalItems: 0, totalPages: 0 });
   const [filterOptions, setFilterOptions] = useState<FilterOptions>({ models: [], organizations: [], users: [] });
@@ -150,6 +164,7 @@ export default function PremiumRequestsPage() {
         setUserSummary(summaryData.userSummary || []);
         setModelSummary(summaryData.modelSummary || []);
         setDailyTrend(summaryData.dailyTrend || []);
+        setMetricsAiCreditSummary(summaryData.metricsAiCreditSummary || []);
       }
     } catch (err) {
       console.error("Failed to load premium requests:", err);
@@ -244,7 +259,9 @@ export default function PremiumRequestsPage() {
     );
   }
 
-  const hasData = kpis && kpis.totalRequests > 0;
+  const hasMetricsAiCredits = safeNum(kpis?.metricsTotalAiCreditsUsed) > 0;
+  const hasBillingCredits = safeNum(kpis?.totalAiCredits) > 0 || safeNum(kpis?.totalRequests) > 0;
+  const hasData = kpis && (hasBillingCredits || hasMetricsAiCredits);
 
   const SortHeader = ({ col, label }: { col: string; label: string }) => (
     <th
@@ -302,7 +319,7 @@ export default function PremiumRequestsPage() {
           <p className="text-sm max-w-md mx-auto">
             {hasFilter
               ? "Try adjusting your team/org filter or date range."
-              : "AI credit data will appear after a billing sync."}
+              : "AI credit data will appear after a user metrics or billing sync."}
           </p>
         </div>
       )}
@@ -313,18 +330,17 @@ export default function PremiumRequestsPage() {
           <div ref={kpiRef} className="grid gap-4 grid-cols-2 lg:grid-cols-4">
             <MetricCard
               title="Total AI Credits"
-              value={kpis.totalAiCredits > 0
-                ? kpis.totalAiCredits.toLocaleString(undefined, { maximumFractionDigits: 1 })
-                : kpis.totalRequests.toLocaleString()}
+              value={hasMetricsAiCredits ? fmtCredits(kpis.metricsTotalAiCreditsUsed) : fmtCredits(kpis.totalAiCredits || kpis.totalRequests)}
               format="raw"
               icon={<Zap className="h-4 w-4" />}
-              subtitle={`Last ${days} days`}
+              subtitle={hasMetricsAiCredits ? "Usage Metrics API reported" : `Last ${days} days`}
             />
             <MetricCard
-              title="Users Over Quota"
-              value={kpis.usersOverQuota}
+              title={hasMetricsAiCredits ? "Top Consumer" : "Users Over Quota"}
+              value={hasMetricsAiCredits ? kpis.metricsTopUser : kpis.usersOverQuota}
+              format={hasMetricsAiCredits ? "raw" : undefined}
               icon={<AlertTriangle className="h-4 w-4" />}
-              subtitle={`${kpis.totalUsers} total users`}
+              subtitle={hasMetricsAiCredits ? `${kpis.metricsTrackedUsers} users with API credits` : `${kpis.totalUsers} total users`}
             />
             <MetricCard
               title="Most Used Model"
@@ -341,6 +357,71 @@ export default function PremiumRequestsPage() {
               subtitle="AI credit billed cost"
             />
           </div>
+
+          {hasMetricsAiCredits && (
+            <div className="rounded-2xl border border-emerald-500/30 bg-gradient-to-br from-emerald-500/10 via-[hsl(var(--card))] to-cyan-500/10 p-6 shadow-sm">
+              <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
+                <div>
+                  <div className="inline-flex items-center gap-2 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-emerald-700 dark:text-emerald-300">
+                    <Zap className="h-3.5 w-3.5" />
+                    Usage Metrics API insight
+                  </div>
+                  <h3 className="mt-4 text-xl font-semibold">AI credits consumed per user</h3>
+                  <p className="mt-1 max-w-3xl text-sm text-[hsl(var(--muted-foreground))]">
+                    User-level reports now include <code className="rounded bg-[hsl(var(--accent))] px-1 py-0.5 text-xs">ai_credits_used</code>,
+                    so this view can show per-user consumption directly from Copilot usage metrics, independent of billing export availability.
+                  </p>
+                </div>
+                <div className="grid grid-cols-2 gap-3 text-right">
+                  <div className="rounded-xl border bg-[hsl(var(--card))]/70 px-4 py-3">
+                    <div className="text-xs text-[hsl(var(--muted-foreground))]">API credits</div>
+                    <div className="text-2xl font-semibold">{fmtCredits(kpis.metricsTotalAiCreditsUsed)}</div>
+                  </div>
+                  <div className="rounded-xl border bg-[hsl(var(--card))]/70 px-4 py-3">
+                    <div className="text-xs text-[hsl(var(--muted-foreground))]">Tracked users</div>
+                    <div className="text-2xl font-semibold">{kpis.metricsTrackedUsers.toLocaleString()}</div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="mt-5 overflow-hidden rounded-xl border bg-[hsl(var(--card))]/80">
+                <table className="w-full text-sm">
+                  <thead className="border-b bg-[hsl(var(--accent))]/30">
+                    <tr>
+                      <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-[hsl(var(--muted-foreground))]">User</th>
+                      <th className="px-4 py-3 text-right text-xs font-medium uppercase tracking-wider text-[hsl(var(--muted-foreground))]">AI Credits Used</th>
+                      <th className="px-4 py-3 text-right text-xs font-medium uppercase tracking-wider text-[hsl(var(--muted-foreground))]">Avg / Active Day</th>
+                      <th className="px-4 py-3 text-right text-xs font-medium uppercase tracking-wider text-[hsl(var(--muted-foreground))]">Active Days</th>
+                      <th className="px-4 py-3 text-right text-xs font-medium uppercase tracking-wider text-[hsl(var(--muted-foreground))]">Last Seen</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-[hsl(var(--border))]">
+                    {metricsAiCreditSummary.slice(0, 10).map((u) => (
+                      <tr key={u.user_login} className="hover:bg-[hsl(var(--accent))]/20 transition-colors">
+                        <td className="px-4 py-2.5 font-medium">{u.user_login}</td>
+                        <td className="px-4 py-2.5 text-right font-semibold">{fmtCredits(u.total_ai_credits_used)}</td>
+                        <td className="px-4 py-2.5 text-right">{fmtCredits(u.avg_daily_ai_credits)}</td>
+                        <td className="px-4 py-2.5 text-right">{u.active_days.toLocaleString()}</td>
+                        <td className="px-4 py-2.5 text-right text-[hsl(var(--muted-foreground))]">{u.last_active_day}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {!hasMetricsAiCredits && hasBillingCredits && (
+            <div className="rounded-xl border border-emerald-500/25 bg-emerald-500/5 p-4">
+              <p className="text-sm text-emerald-700 dark:text-emerald-300 flex items-center gap-2">
+                <Zap className="h-4 w-4 shrink-0" />
+                <span>
+                  <strong>New Usage Metrics API insight:</strong> per-user <code className="rounded bg-[hsl(var(--accent))] px-1 py-0.5 text-xs">ai_credits_used</code>
+                  totals will appear here after user-level metrics synced with the June 2026 API field.
+                </span>
+              </p>
+            </div>
+          )}
 
           {/* Daily Trend */}
           {dailyTrend.length > 0 && (
@@ -403,6 +484,7 @@ export default function PremiumRequestsPage() {
                       const modelRows = userModelBreakdown[key] || [];
                       const modelLoading = !!loadingUserModels[key];
                       return (
+<<<<<<< HEAD
                         <Fragment key={key}>
                           <tr className="hover:bg-[hsl(var(--accent))]/20 transition-colors cursor-pointer" onClick={() => toggleUserExpanded(u.username, u.organization || "") }>
                             <td className="px-4 py-2.5 font-medium">
@@ -454,6 +536,20 @@ export default function PremiumRequestsPage() {
                             </tr>
                           )}
                         </Fragment>
+=======
+                        <tr key={u.username} className="hover:bg-[hsl(var(--accent))]/20 transition-colors">
+                          <td className="px-4 py-2.5 font-medium">{u.username}</td>
+                          <td className="px-4 py-2.5 text-[hsl(var(--muted-foreground))]">{u.organization || "—"}</td>
+                          <td className="px-4 py-2.5 text-right">{fmtCredits(u.total_aic_quantity > 0 ? u.total_aic_quantity : u.total_requests)}</td>
+                          <td className="px-4 py-2.5 text-right text-emerald-600 dark:text-emerald-400">{safeNum(u.within_quota).toLocaleString()}</td>
+                          <td className="px-4 py-2.5 text-right text-red-600 dark:text-red-400">{safeNum(u.over_quota) > 0 ? safeNum(u.over_quota).toLocaleString() : "—"}</td>
+                          <td className="px-4 py-2.5 text-right text-[hsl(var(--muted-foreground))]">{safeNum(u.quota_limit) > 0 ? safeNum(u.quota_limit).toLocaleString() : "—"}</td>
+                          <td className={`px-4 py-2.5 text-right font-semibold ${utilColor}`}>
+                            {safeNum(u.utilization_pct) > 0 ? `${safeNum(u.utilization_pct).toFixed(1)}%` : "—"}
+                          </td>
+                          <td className="px-4 py-2.5 text-right font-semibold">{fmtCurrency(u.total_net)}</td>
+                        </tr>
+>>>>>>> origin/main
                       );
                     })}
                   </tbody>

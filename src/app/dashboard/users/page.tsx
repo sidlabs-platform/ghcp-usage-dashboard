@@ -13,8 +13,8 @@ import { Users } from "lucide-react";
 import { PaginatedTable, type ColumnDef } from "@/components/tables/PaginatedTable";
 import { ExportMenu } from "@/components/ui/ExportMenu";
 import { DateFilter } from "@/components/filters/DateFilter";
-import type { CSVColumn } from "@/lib/export/csv";
 import { formatNumber, safeNum } from "@/lib/utils";
+import { userExportColumns } from "@/lib/export/user-export";
 
 interface UserRow {
   login: string;
@@ -22,6 +22,7 @@ interface UserRow {
   locAdded: number;
   locDeleted: number;
   interactions: number;
+  aiCreditsUsed: number;
   codeGen: number;
   codeAccept: number;
   acceptanceRate: number;
@@ -45,6 +46,7 @@ const userColumns: ColumnDef<UserRow>[] = [
   { key: "activeDays", label: "Active Days", align: "right", render: (row) => row.activeDays },
   { key: "locAdded", label: "LoC Added", align: "right", render: (row) => formatNumber(row.locAdded) },
   { key: "interactions", label: "Interactions", align: "right", render: (row) => formatNumber(row.interactions) },
+  { key: "aiCreditsUsed", label: "AI Credits", align: "right", render: (row) => safeNum(row.aiCreditsUsed) > 0 ? safeNum(row.aiCreditsUsed).toLocaleString(undefined, { maximumFractionDigits: 2 }) : "—" },
   { key: "acceptanceRate", label: "Accept %", align: "right", render: (row) => `${safeNum(row.acceptanceRate).toFixed(1)}%` },
   {
     key: "features",
@@ -60,26 +62,6 @@ const userColumns: ColumnDef<UserRow>[] = [
         {!row.usedCodeReviewActive && row.usedCodeReviewPassive && <Badge variant="secondary">Review (Passive)</Badge>}
       </div>
     ),
-  },
-];
-
-const userExportColumns: CSVColumn[] = [
-  { key: "login", label: "User" },
-  { key: "activeDays", label: "Active Days" },
-  { key: "locAdded", label: "LoC Added" },
-  { key: "interactions", label: "Interactions" },
-  { key: "acceptanceRate", label: "Acceptance %", format: (row) => `${safeNum(row.acceptanceRate).toFixed(1)}%` },
-  {
-    key: "features", label: "Features", format: (row) => {
-      const f: string[] = [];
-      if (row.usedAgent) f.push("Agent");
-      if (row.usedCodingAgent) f.push("Coding Agent");
-      if (row.usedChat) f.push("Chat");
-      if (row.usedCli) f.push("CLI");
-      if (row.usedCodeReviewActive) f.push("Code Review (Active)");
-      else if (row.usedCodeReviewPassive) f.push("Code Review (Passive)");
-      return f.join(", ");
-    },
   },
 ];
 

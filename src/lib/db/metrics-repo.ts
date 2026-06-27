@@ -3,6 +3,26 @@
 import { getDb } from "./database";
 import type { DayTotal, UserDayRecord, TotalsByFeature } from "@/lib/types/metrics";
 
+export interface UserAiCreditsSummary {
+  user_login: string;
+  total_ai_credits_used: number;
+  active_days: number;
+  avg_daily_ai_credits: number;
+  last_active_day: string;
+}
+
+export interface UserAiCreditsTotals {
+  total_ai_credits_used: number;
+  tracked_users: number;
+  top_user_login: string;
+  top_user_ai_credits_used: number;
+}
+
+export interface UserAiCreditsFilters {
+  userLogin?: string;
+  allowedLogins?: string[];
+}
+
 /** Build optional enterprise_slug IN (...) clause for multi-enterprise filtering */
 function buildEnterpriseFilter(slugs?: string[], alias?: string): { clause: string; params: string[] } {
   if (!slugs || slugs.length === 0) return { clause: "", params: [] };
@@ -80,6 +100,7 @@ const USER_COLUMNS = `
   day, enterprise_id, user_id, user_login,
   code_generation_activity_count, code_acceptance_activity_count, user_initiated_interaction_count,
   loc_suggested_to_add_sum, loc_suggested_to_delete_sum, loc_added_sum, loc_deleted_sum,
+  COALESCE(ai_credits_used, 0) AS ai_credits_used,
   chat_panel_agent_mode, chat_panel_ask_mode, chat_panel_custom_mode,
   chat_panel_edit_mode, chat_panel_plan_mode, chat_panel_unknown_mode,
   used_agent, used_chat, used_cli, used_copilot_code_review_active, used_copilot_code_review_passive,
@@ -100,6 +121,7 @@ function mapUserRow(row: Record<string, unknown>): UserDayRecord {
     loc_suggested_to_delete_sum: row.loc_suggested_to_delete_sum as number,
     loc_added_sum: row.loc_added_sum as number,
     loc_deleted_sum: row.loc_deleted_sum as number,
+    ai_credits_used: (row.ai_credits_used as number) || 0,
     chat_panel_agent_mode: (row.chat_panel_agent_mode as number) || 0,
     chat_panel_ask_mode: (row.chat_panel_ask_mode as number) || 0,
     chat_panel_custom_mode: (row.chat_panel_custom_mode as number) || 0,
@@ -461,19 +483,21 @@ export function upsertUserDayMetrics(enterpriseSlug: string, record: UserDayReco
       enterprise_slug, day, enterprise_id, user_id, user_login,
       code_generation_activity_count, code_acceptance_activity_count, user_initiated_interaction_count,
       loc_suggested_to_add_sum, loc_suggested_to_delete_sum, loc_added_sum, loc_deleted_sum,
+      ai_credits_used,
       chat_panel_agent_mode, chat_panel_ask_mode, chat_panel_custom_mode,
       chat_panel_edit_mode, chat_panel_plan_mode, chat_panel_unknown_mode,
       used_agent, used_chat, used_cli, used_copilot_code_review_active, used_copilot_code_review_passive,
       used_copilot_coding_agent,
       totals_by_ide, totals_by_feature, totals_by_language_feature,
       totals_by_model_feature, totals_by_language_model, totals_by_cli, agent_edit, raw_json
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     enterpriseSlug, record.day, record.enterprise_id || enterpriseSlug, record.user_id, record.user_login,
     record.code_generation_activity_count, record.code_acceptance_activity_count,
     record.user_initiated_interaction_count,
     record.loc_suggested_to_add_sum, record.loc_suggested_to_delete_sum,
     record.loc_added_sum, record.loc_deleted_sum,
+    record.ai_credits_used ?? 0,
     chatModes.agent || record.chat_panel_agent_mode || 0,
     chatModes.ask || record.chat_panel_ask_mode || 0,
     chatModes.custom || record.chat_panel_custom_mode || 0,
@@ -504,6 +528,7 @@ export function batchUpsertUserDayMetrics(enterpriseSlug: string, records: UserD
       enterprise_slug, day, enterprise_id, user_id, user_login,
       code_generation_activity_count, code_acceptance_activity_count, user_initiated_interaction_count,
       loc_suggested_to_add_sum, loc_suggested_to_delete_sum, loc_added_sum, loc_deleted_sum,
+      ai_credits_used,
       chat_panel_agent_mode, chat_panel_ask_mode, chat_panel_custom_mode,
       chat_panel_edit_mode, chat_panel_plan_mode, chat_panel_unknown_mode,
       used_agent, used_chat, used_cli, used_copilot_code_review_active, used_copilot_code_review_passive,
@@ -511,7 +536,7 @@ export function batchUpsertUserDayMetrics(enterpriseSlug: string, records: UserD
       totals_by_ide, totals_by_feature, totals_by_language_feature,
       totals_by_model_feature, totals_by_language_model, totals_by_cli,
       ai_adoption_phase, agent_edit, raw_json
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
 
   const tx = db.transaction(() => {
@@ -523,6 +548,7 @@ export function batchUpsertUserDayMetrics(enterpriseSlug: string, records: UserD
         r.user_initiated_interaction_count,
         r.loc_suggested_to_add_sum, r.loc_suggested_to_delete_sum,
         r.loc_added_sum, r.loc_deleted_sum,
+        r.ai_credits_used ?? 0,
         cm.agent || r.chat_panel_agent_mode || 0,
         cm.ask || r.chat_panel_ask_mode || 0,
         cm.custom || r.chat_panel_custom_mode || 0,
@@ -670,6 +696,116 @@ export function getAllUserMetrics(startDay: string, endDay: string, enterpriseSl
   `).all(startDay, endDay, ...ef.params) as Record<string, unknown>[];
 
   return rows.map(mapUserRow);
+}
+
+/**
+ * Summarize Usage Metrics API `ai_credits_used` by user.
+ *
+ * This uses the user-level metrics report field announced in June 2026 and is
+ * independent of billing report availability.
+ */
+export function getUserAiCreditsSummary(
+  startDay: string,
+  endDay: string,
+  filters?: UserAiCreditsFilters,
+  enterpriseSlugs?: string[],
+  limit?: number
+): UserAiCreditsSummary[] {
+  const db = getDb();
+  const { clauses, params } = buildUserAiCreditsWhere(startDay, endDay, filters, enterpriseSlugs);
+
+  const limitSql = limit === undefined ? "" : "\n    LIMIT ?";
+  const queryParams = limit === undefined ? params : [...params, limit];
+
+  return db.prepare(`
+    SELECT
+      user_login,
+      COALESCE(SUM(ai_credits_used), 0) AS total_ai_credits_used,
+      COUNT(DISTINCT day) AS active_days,
+      COALESCE(SUM(ai_credits_used), 0) * 1.0 / COUNT(DISTINCT day) AS avg_daily_ai_credits,
+      MAX(day) AS last_active_day
+    FROM user_daily_metrics
+    WHERE ${clauses.join(" AND ")}
+    GROUP BY user_login
+    ORDER BY total_ai_credits_used DESC, user_login ASC
+    ${limitSql}
+  `).all(...queryParams) as UserAiCreditsSummary[];
+}
+
+function buildUserAiCreditsWhere(
+  startDay: string,
+  endDay: string,
+  filters?: UserAiCreditsFilters,
+  enterpriseSlugs?: string[]
+): { clauses: string[]; params: unknown[] } {
+  const clauses: string[] = [
+    "day >= ?",
+    "day <= ?",
+    "COALESCE(ai_credits_used, 0) > 0",
+  ];
+  const params: unknown[] = [startDay, endDay];
+  const ef = buildEnterpriseFilter(enterpriseSlugs);
+  if (ef.clause) {
+    clauses.push(ef.clause.replace(/^\s*AND\s+/, ""));
+    params.push(...ef.params);
+  }
+
+  if (filters?.userLogin) {
+    clauses.push("user_login = ?");
+    params.push(filters.userLogin);
+  }
+
+  if (filters?.allowedLogins !== undefined) {
+    if (filters.allowedLogins.length === 0) {
+      clauses.push("1 = 0");
+    } else {
+      clauses.push(`user_login IN (${filters.allowedLogins.map(() => "?").join(",")})`);
+      params.push(...filters.allowedLogins);
+    }
+  }
+
+  return { clauses, params };
+}
+
+/**
+ * Compute AI Credits KPI totals from user-level metrics entirely in SQL.
+ */
+export function getUserAiCreditsTotals(
+  startDay: string,
+  endDay: string,
+  filters?: UserAiCreditsFilters,
+  enterpriseSlugs?: string[]
+): UserAiCreditsTotals {
+  const db = getDb();
+  const { clauses, params } = buildUserAiCreditsWhere(startDay, endDay, filters, enterpriseSlugs);
+  const row = db.prepare(`
+    WITH user_totals AS (
+      SELECT
+        user_login,
+        COALESCE(SUM(ai_credits_used), 0) AS total_ai_credits_used
+      FROM user_daily_metrics
+      WHERE ${clauses.join(" AND ")}
+      GROUP BY user_login
+    ),
+    ranked AS (
+      SELECT user_login, total_ai_credits_used
+      FROM user_totals
+      ORDER BY total_ai_credits_used DESC, user_login ASC
+      LIMIT 1
+    )
+    SELECT
+      COALESCE((SELECT SUM(total_ai_credits_used) FROM user_totals), 0) AS total_ai_credits_used,
+      COALESCE((SELECT COUNT(*) FROM user_totals), 0) AS tracked_users,
+      COALESCE((SELECT user_login FROM ranked), 'N/A') AS top_user_login,
+      COALESCE((SELECT total_ai_credits_used FROM ranked), 0) AS top_user_ai_credits_used
+  `).get(...params) as UserAiCreditsTotals | undefined;
+
+  return row ?? {
+    total_ai_credits_used: 0,
+    tracked_users: 0,
+    top_user_login: "N/A",
+    top_user_ai_credits_used: 0,
+  };
 }
 
 // ── Sync log ──────────────────────────────────────────────────────────

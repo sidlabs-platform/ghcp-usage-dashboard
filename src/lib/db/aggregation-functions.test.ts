@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from "vites
 import Database from "better-sqlite3";
 import path from "path";
 import fs from "fs";
+import * as aggregationQueriesModule from "./aggregation-queries";
 
 let db: Database.Database;
 
@@ -62,6 +63,7 @@ function insertMetric(overrides: Partial<Record<string, unknown>> = {}) {
     code_generation_activity_count: 10,
     code_acceptance_activity_count: 7,
     user_initiated_interaction_count: 5,
+    ai_credits_used: 0,
     loc_suggested_to_add_sum: 20,
     loc_added_sum: 15,
     loc_deleted_sum: 3,
@@ -82,15 +84,15 @@ function insertMetric(overrides: Partial<Record<string, unknown>> = {}) {
   db.prepare(`
     INSERT INTO user_daily_metrics (day, enterprise_id, enterprise_slug, user_id, user_login,
       code_generation_activity_count, code_acceptance_activity_count, user_initiated_interaction_count,
-      loc_suggested_to_add_sum, loc_added_sum, loc_deleted_sum,
+      ai_credits_used, loc_suggested_to_add_sum, loc_added_sum, loc_deleted_sum,
       chat_panel_agent_mode, chat_panel_ask_mode, chat_panel_edit_mode, chat_panel_plan_mode,
       chat_panel_custom_mode, chat_panel_unknown_mode,
       used_agent, used_chat, used_cli, used_copilot_code_review_active, used_copilot_code_review_passive, used_copilot_coding_agent)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     m.day, m.enterprise_id, m.enterprise_slug, m.user_id, m.user_login,
     m.code_generation_activity_count, m.code_acceptance_activity_count, m.user_initiated_interaction_count,
-    m.loc_suggested_to_add_sum, m.loc_added_sum, m.loc_deleted_sum,
+    m.ai_credits_used, m.loc_suggested_to_add_sum, m.loc_added_sum, m.loc_deleted_sum,
     m.chat_panel_agent_mode, m.chat_panel_ask_mode, m.chat_panel_edit_mode, m.chat_panel_plan_mode,
     m.chat_panel_custom_mode, m.chat_panel_unknown_mode,
     m.used_agent, m.used_chat, m.used_cli, m.used_copilot_code_review_active, m.used_copilot_code_review_passive, m.used_copilot_coding_agent,
@@ -150,6 +152,16 @@ describe("getUserSummaries", () => {
     expect(summaries[0].locAdded).toBe(30);
     expect(summaries[0].activeDays).toBe(2);
     expect(summaries[0].usedAgent).toBe(true);
+  });
+
+  it("aggregates AI credits used per user", () => {
+    insertMetric({ day: "2024-01-10", user_login: "credit-user", ai_credits_used: 1.5 });
+    insertMetric({ day: "2024-01-11", user_login: "credit-user", ai_credits_used: 2.25 });
+
+    const summaries = getUserSummaries("2024-01-01", "2024-01-31");
+    const creditUser = summaries.find((s) => s.login === "credit-user");
+    expect(creditUser).toBeDefined();
+    expect(creditUser!.aiCreditsUsed).toBeCloseTo(3.75, 6);
   });
 
   it("returns acceptanceRate 0 when codeGen is 0", () => {
@@ -246,8 +258,140 @@ describe("getUserSummariesPaginated", () => {
       expect(inactive!.activeDays).toBe(0);
       expect(inactive!.locAdded).toBe(0);
     } finally {
-      db.prepare("DELETE FROM copilot_seats").run();
+      db.prepare(
+        "DELETE FROM copilot_seats WHERE enterprise_slug = ? AND org_slug = ? AND user_login = ?",
+      ).run("ent1", "org1", "inactive-user");
     }
+  });
+});
+
+describe("iterateUserSummaries", () => {
+  it("yields aggregated user summaries in the requested order", () => {
+    insertMetric({ day: "2024-01-10", user_login: "bob", user_id: 2, loc_added_sum: 5 });
+    insertMetric({ day: "2024-01-11", user_login: "alice", user_id: 1, loc_added_sum: 10 });
+    insertMetric({ day: "2024-01-12", user_login: "alice", user_id: 1, loc_added_sum: 20 });
+
+    const iterateUserSummaries = (
+      aggregationQueriesModule as {
+        iterateUserSummaries?: (
+          startDay: string,
+          endDay: string,
+          sortField: string,
+          sortDir: "asc" | "desc",
+          search?: string,
+          allowedLogins?: string[],
+          enterpriseSlugs?: string[],
+          includeInactive?: boolean,
+        ) => IterableIterator<ReturnType<typeof getUserSummaries>[number]>;
+      }
+    ).iterateUserSummaries;
+
+    expect(iterateUserSummaries).toBeTypeOf("function");
+
+    const rows = Array.from(
+      iterateUserSummaries!("2024-01-01", "2024-01-31", "login", "asc"),
+    );
+
+    expect(rows).toHaveLength(2);
+    expect(rows.map((row) => row.login)).toEqual(["alice", "bob"]);
+    expect(rows[0]).toMatchObject({
+      login: "alice",
+      activeDays: 2,
+      locAdded: 30,
+      acceptanceRate: 70,
+    });
+  });
+
+  it("includes seat-only users when includeInactive is true", () => {
+    insertMetric({ user_login: "active-user", user_id: 10 });
+    db.prepare(`INSERT INTO copilot_seats (enterprise_slug, org_slug, user_login, user_id)
+      VALUES ('ent1', 'org1', 'inactive-user', 20)`).run();
+
+    const iterateUserSummaries = (
+      aggregationQueriesModule as {
+        iterateUserSummaries?: (
+          startDay: string,
+          endDay: string,
+          sortField: string,
+          sortDir: "asc" | "desc",
+          search?: string,
+          allowedLogins?: string[],
+          enterpriseSlugs?: string[],
+          includeInactive?: boolean,
+        ) => IterableIterator<ReturnType<typeof getUserSummaries>[number]>;
+      }
+    ).iterateUserSummaries;
+
+    expect(iterateUserSummaries).toBeTypeOf("function");
+
+    try {
+      const rows = Array.from(
+        iterateUserSummaries!("2024-01-01", "2024-01-31", "login", "asc", undefined, undefined, undefined, true),
+      );
+
+      expect(rows.map((row) => row.login)).toEqual(["active-user", "inactive-user"]);
+      expect(rows.find((row) => row.login === "inactive-user")).toMatchObject({
+        activeDays: 0,
+        locAdded: 0,
+        acceptanceRate: 0,
+      });
+    } finally {
+      db.prepare(
+        "DELETE FROM copilot_seats WHERE enterprise_slug = ? AND org_slug = ? AND user_login = ?",
+      ).run("ent1", "org1", "inactive-user");
+    }
+  });
+
+  it("sorts iterated summaries by computed acceptance rate", () => {
+    insertMetric({ user_login: "steady-user", user_id: 1, code_generation_activity_count: 10, code_acceptance_activity_count: 7 });
+    insertMetric({ user_login: "perfect-user", user_id: 2, code_generation_activity_count: 4, code_acceptance_activity_count: 4 });
+    insertMetric({ user_login: "zero-user", user_id: 3, code_generation_activity_count: 0, code_acceptance_activity_count: 0 });
+
+    const iterateUserSummaries = (
+      aggregationQueriesModule as {
+        iterateUserSummaries?: (
+          startDay: string,
+          endDay: string,
+          sortField: string,
+          sortDir: "asc" | "desc",
+          search?: string,
+          allowedLogins?: string[],
+          enterpriseSlugs?: string[],
+          includeInactive?: boolean,
+        ) => IterableIterator<ReturnType<typeof getUserSummaries>[number]>;
+      }
+    ).iterateUserSummaries;
+
+    expect(iterateUserSummaries).toBeTypeOf("function");
+
+    const rows = Array.from(
+      iterateUserSummaries!("2024-01-01", "2024-01-31", "acceptanceRate", "desc"),
+    );
+
+    expect(rows.map((row) => row.login)).toEqual(["perfect-user", "steady-user", "zero-user"]);
+  });
+});
+
+describe("getUserSummariesPaginated sorting", () => {
+  it("sorts paginated summaries by computed acceptance rate", () => {
+    insertMetric({ user_login: "steady-user", user_id: 1, code_generation_activity_count: 10, code_acceptance_activity_count: 7 });
+    insertMetric({ user_login: "perfect-user", user_id: 2, code_generation_activity_count: 4, code_acceptance_activity_count: 4 });
+    insertMetric({ user_login: "zero-user", user_id: 3, code_generation_activity_count: 0, code_acceptance_activity_count: 0 });
+
+    const result = getUserSummariesPaginated(
+      "2024-01-01",
+      "2024-01-31",
+      1,
+      10,
+      "acceptanceRate",
+      "desc",
+    );
+
+    expect(result.users.map((row) => row.login)).toEqual([
+      "perfect-user",
+      "steady-user",
+      "zero-user",
+    ]);
   });
 });
 

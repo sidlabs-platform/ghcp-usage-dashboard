@@ -7,7 +7,12 @@ import {
   getPremiumDailyTrend,
 } from "@/lib/db/billing-repo";
 import type { PremiumFilters } from "@/lib/db/billing-repo";
-import { resolveFilteredUsers } from "@/lib/db/teams-repo";
+import {
+  getUserAiCreditsSummary,
+  getUserAiCreditsTotals,
+  type UserAiCreditsFilters,
+} from "@/lib/db/metrics-repo";
+import { parseScopeFilter } from "@/lib/api/scope-filter";
 import { withCache } from "@/lib/cache/with-cache";
 import { withTimeout } from "@/lib/api/timeout";
 import { CACHE_TTL } from "@/lib/cache/memory-cache";
@@ -27,15 +32,8 @@ async function handler(request: NextRequest) {
     const days = daysResult.days;
     const { start, end } = getDateRange(days);
 
-    // Parse scope filter (teams/orgs/enterprises)
-    const teamsParam = params.get("teams");
-    const orgsParam = params.get("orgs");
-    const enterprisesParam = params.get("enterprises");
-    const selectedTeams = teamsParam ? teamsParam.split(",").filter(Boolean) : [];
-    const selectedOrgs = orgsParam ? orgsParam.split(",").filter(Boolean) : [];
-    const selectedEnterprises = enterprisesParam ? enterprisesParam.split(",").filter(Boolean) : [];
-    const enterpriseSlugs = selectedEnterprises.length > 0 ? selectedEnterprises : undefined;
-    const hasScope = selectedTeams.length > 0 || selectedOrgs.length > 0;
+    const scope = parseScopeFilter(params);
+    const enterpriseSlugs = scope.enterpriseSlugs;
 
     const filters: PremiumFilters = {
       username: params.get("username") || undefined,
@@ -46,14 +44,33 @@ async function handler(request: NextRequest) {
         : undefined,
     };
 
-    if (hasScope) {
-      filters.allowedLogins = resolveFilteredUsers(selectedTeams, selectedOrgs, enterpriseSlugs);
-      if (selectedOrgs.length > 0) filters.scopeOrgs = selectedOrgs;
+    if (scope.allowedLogins) {
+      filters.allowedLogins = Array.from(scope.allowedLogins);
+    }
+    if (scope.selectedOrgs.length > 0) {
+      filters.scopeOrgs = scope.selectedOrgs;
     }
 
     const userSummary = getPremiumUserSummary(start, end, filters, enterpriseSlugs);
     const modelSummary = getPremiumModelSummary(start, end, filters, enterpriseSlugs);
     const dailyTrend = getPremiumDailyTrend(start, end, filters, enterpriseSlugs);
+    const metricsAiCreditsFilters: UserAiCreditsFilters = {
+      userLogin: filters.username,
+      allowedLogins: scope.allowedLogins ? Array.from(scope.allowedLogins) : undefined,
+    };
+    const metricsAiCreditSummary = getUserAiCreditsSummary(
+      start,
+      end,
+      metricsAiCreditsFilters,
+      enterpriseSlugs,
+      10
+    );
+    const metricsAiCreditTotals = getUserAiCreditsTotals(
+      start,
+      end,
+      metricsAiCreditsFilters,
+      enterpriseSlugs
+    );
 
     // Compute KPIs from user summary
     const totalRequests = userSummary.reduce((sum, u) => sum + u.total_requests, 0);
@@ -77,10 +94,14 @@ async function handler(request: NextRequest) {
         uniqueModels: modelSummary.length,
         totalAiCredits,
         totalAicGross,
+        metricsTotalAiCreditsUsed: metricsAiCreditTotals.total_ai_credits_used,
+        metricsTrackedUsers: metricsAiCreditTotals.tracked_users,
+        metricsTopUser: metricsAiCreditTotals.top_user_login,
       },
       userSummary,
       modelSummary,
       dailyTrend,
+      metricsAiCreditSummary,
       daysLoaded: days,
     }, {
       headers: { "Cache-Control": "private, max-age=300, stale-while-revalidate=60" },
@@ -91,4 +112,5 @@ async function handler(request: NextRequest) {
   }
 }
 
-export const GET = withTimeout(withCache(handler, CACHE_TTL.MEDIUM));
+import { withRateLimit } from "@/lib/api/rate-limit/rate-limiter";
+export const GET = withRateLimit(withTimeout(withCache(handler, CACHE_TTL.MEDIUM)));

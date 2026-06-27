@@ -18,3 +18,17 @@ export function triggerDownload(
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
 }
+
+/**
+ * Trigger a file download from a URL without replacing the current page.
+ */
+export function triggerDownloadFromUrl(url: string): void {
+  const a = document.createElement("a");
+  a.href = url;
+  a.target = "_blank";
+  a.rel = "noopener";
+  a.style.display = "none";
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+}

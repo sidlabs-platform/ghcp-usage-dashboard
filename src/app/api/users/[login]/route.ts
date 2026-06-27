@@ -15,6 +15,7 @@ interface DailyActivity {
   locSuggestedDelete: number;
   locDeleted: number;
   interactions: number;
+  aiCreditsUsed: number;
   agentLocAdded: number;
   agentLocDeleted: number;
 }
@@ -28,6 +29,7 @@ interface UserSummary {
   totalLocSuggestedDelete: number;
   totalLocDeleted: number;
   totalInteractions: number;
+  totalAiCreditsUsed: number;
   totalCodeGen: number;
   totalCodeAccept: number;
   acceptanceRate: number;
@@ -132,6 +134,7 @@ async function handler(request: NextRequest) {
         COALESCE(loc_suggested_to_delete_sum, 0) AS locSuggestedDelete,
         COALESCE(loc_deleted_sum, 0) AS locDeleted,
         COALESCE(user_initiated_interaction_count, 0) AS interactions,
+        COALESCE(ai_credits_used, 0) AS aiCreditsUsed,
         CASE WHEN json_valid(agent_edit) THEN COALESCE(json_extract(agent_edit, '$.loc_added_sum'), 0) ELSE 0 END AS agentLocAdded,
         CASE WHEN json_valid(agent_edit) THEN COALESCE(json_extract(agent_edit, '$.loc_deleted_sum'), 0) ELSE 0 END AS agentLocDeleted
       FROM user_daily_metrics
@@ -148,6 +151,7 @@ async function handler(request: NextRequest) {
         COALESCE(SUM(loc_suggested_to_delete_sum), 0) AS totalLocSuggestedDelete,
         COALESCE(SUM(loc_deleted_sum), 0) AS totalLocDeleted,
         COALESCE(SUM(user_initiated_interaction_count), 0) AS totalInteractions,
+        COALESCE(SUM(ai_credits_used), 0) AS totalAiCreditsUsed,
         COALESCE(SUM(code_generation_activity_count), 0) AS totalCodeGen,
         COALESCE(SUM(code_acceptance_activity_count), 0) AS totalCodeAccept,
         MAX(CASE WHEN used_agent = 1 THEN 1 ELSE 0 END) AS usedAgent,
@@ -165,6 +169,7 @@ async function handler(request: NextRequest) {
       totalLocSuggestedDelete: number;
       totalLocDeleted: number;
       totalInteractions: number;
+      totalAiCreditsUsed: number;
       totalCodeGen: number;
       totalCodeAccept: number;
       usedAgent: number;
@@ -237,6 +242,7 @@ async function handler(request: NextRequest) {
         totalLocSuggestedDelete: summaryRow.totalLocSuggestedDelete,
         totalLocDeleted: summaryRow.totalLocDeleted,
         totalInteractions: summaryRow.totalInteractions,
+        totalAiCreditsUsed: summaryRow.totalAiCreditsUsed,
         totalCodeGen: summaryRow.totalCodeGen,
         totalCodeAccept: summaryRow.totalCodeAccept,
         acceptanceRate: Math.round(topLevelRate * 10) / 10,
@@ -359,4 +365,5 @@ async function handler(request: NextRequest) {
   }
 }
 
-export const GET = withTimeout(withCache(handler, CACHE_TTL.MEDIUM));
+import { withRateLimit } from "@/lib/api/rate-limit/rate-limiter";
+export const GET = withRateLimit(withTimeout(withCache(handler, CACHE_TTL.MEDIUM)));
