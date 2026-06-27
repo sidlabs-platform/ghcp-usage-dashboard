@@ -685,6 +685,7 @@ describe("premium requests — multi-enterprise isolation", () => {
     username: "alice", organization: "org-shared", model: "gpt-4",
     exceeds_quota: "FALSE", total_monthly_quota: 500, charge_scope: "user" as const,
     input_tokens: 2000, output_tokens: 800, cached_tokens: 500,
+    cost_center_name: "", aic_quantity: 100, aic_gross_amount: 6.4,
   };
   const premRecB = {
     date: "2026-06-15", product: "copilot", sku: "prem1", quantity: 60, unit_type: "token",
@@ -692,6 +693,7 @@ describe("premium requests — multi-enterprise isolation", () => {
     username: "alice", organization: "org-shared", model: "claude-3",
     exceeds_quota: "FALSE", total_monthly_quota: 300, charge_scope: "user" as const,
     input_tokens: 1200, output_tokens: 400, cached_tokens: 200,
+    cost_center_name: "", aic_quantity: 60, aic_gross_amount: 3.84,
   };
 
   beforeEach(() => {
