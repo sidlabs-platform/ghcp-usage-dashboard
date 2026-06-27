@@ -22,7 +22,8 @@ import {
   Zap,
   TrendingUp,
 } from "lucide-react";
-import { useState, useEffect } from "react";
+import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 
 interface NavItem {
   href: string;
@@ -84,33 +85,35 @@ type PageVisibility = Record<string, boolean>;
 export function Sidebar() {
   const pathname = usePathname();
   const [collapsed, setCollapsed] = useState(false);
-  const [pageVisibility, setPageVisibility] = useState<PageVisibility>({});
-  const [enterpriseLabel, setEnterpriseLabel] = useState<string>("Enterprise Dashboard");
+  const { data: config } = useQuery({
+    queryKey: ["config"],
+    queryFn: async () => {
+      const res = await fetch("/api/config");
+      if (!res.ok) throw new Error("Failed to fetch config");
+      return res.json();
+    },
+    staleTime: 1000 * 60 * 5, // 5 minutes
+  });
 
-  useEffect(() => {
-    fetch("/api/config")
-      .then((r) => r.json())
-      .then((config) => {
-        if (config?.pageVisibility) {
-          setPageVisibility(config.pageVisibility);
-        }
-      })
-      .catch(() => {}); // Default to showing all if config unavailable
-  }, []);
+  const { data: filtersData } = useQuery({
+    queryKey: ["filters"],
+    queryFn: async () => {
+      const res = await fetch("/api/filters");
+      if (!res.ok) throw new Error("Failed to fetch filters");
+      return res.json();
+    },
+    staleTime: 1000 * 60 * 5, // 5 minutes
+  });
 
-  useEffect(() => {
-    fetch("/api/filters")
-      .then((r) => r.json())
-      .then((data: { enterprises?: { slug: string; displayName: string }[] }) => {
-        const list = data?.enterprises ?? [];
-        if (list.length === 1) {
-          setEnterpriseLabel(list[0].displayName || list[0].slug);
-        } else if (list.length > 1) {
-          setEnterpriseLabel(`${list.length} enterprises`);
-        }
-      })
-      .catch(() => {});
-  }, []);
+  const pageVisibility = config?.pageVisibility || {};
+  let enterpriseLabel = "Enterprise Dashboard";
+  
+  const enterpriseList = filtersData?.enterprises ?? [];
+  if (enterpriseList.length === 1) {
+    enterpriseLabel = enterpriseList[0].displayName || enterpriseList[0].slug;
+  } else if (enterpriseList.length > 1) {
+    enterpriseLabel = `${enterpriseList.length} enterprises`;
+  }
 
   const isItemVisible = (item: NavItem) => {
     if (Object.keys(pageVisibility).length === 0) return true;
