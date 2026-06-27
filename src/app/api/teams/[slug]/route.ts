@@ -4,18 +4,7 @@ import { parseDateRangeParams } from "@/lib/utils";
 import { withCache } from "@/lib/cache/with-cache";
 import { withTimeout } from "@/lib/api/timeout";
 import { CACHE_TTL } from "@/lib/cache/memory-cache";
-
-interface MemberRow {
-  login: string;
-  activeDays: number;
-  locAdded: number;
-  interactions: number;
-  acceptanceRate: number;
-  usedAgent: number;
-  usedChat: number;
-  usedCli: number;
-  usedCodeReview: number;
-}
+import type { MemberRow, TeamDetailResponse } from "@/lib/types/team-detail";
 
 async function handler(request: NextRequest) {
   try {
