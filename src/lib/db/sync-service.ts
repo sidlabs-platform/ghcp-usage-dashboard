@@ -620,8 +620,8 @@ export async function fullSync(
     if (isCopilotSubEnabledForEnterprise(slug, "teams")) {
       onProgress?.({ phase: "teams", current: 0, total: 1, message: `[${sanitizeForLog(slug)}] Syncing team memberships...`, enterpriseSlug: slug });
       entTeams = await syncTeamsForEnterprise(slug);
-      cache.invalidateByPrefix("/api/teams/");
-      cache.invalidateByPrefix("/api/filters/");
+      cache.invalidateByPrefix("/api/teams");
+      cache.invalidateByPrefix("/api/filters");
     }
     heartbeatSyncLock();
 
@@ -630,7 +630,7 @@ export async function fullSync(
     if (isCopilotSubEnabledForEnterprise(slug, "seats")) {
       onProgress?.({ phase: "seats", current: 0, total: 1, message: `[${sanitizeForLog(slug)}] Syncing seat data...`, enterpriseSlug: slug });
       entSeats = await syncSeatsForEnterprise(slug);
-      cache.invalidateByPrefix("/api/seats/");
+      cache.invalidateByPrefix("/api/seats");
     }
     heartbeatSyncLock();
 
@@ -641,8 +641,8 @@ export async function fullSync(
 
     // Try 28-day reports as fallback when per-day enterprise/org data is empty
     await sync28DayFallback(slug, onProgress);
-    cache.invalidateByPrefix("/api/metrics/");
-    cache.invalidateByPrefix("/api/users/");
+    cache.invalidateByPrefix("/api/metrics");
+    cache.invalidateByPrefix("/api/users");
 
     // Sync billing reports
     onProgress?.({ phase: "billing", current: 0, total: 1, message: `[${sanitizeForLog(slug)}] Syncing billing reports...`, enterpriseSlug: slug });
@@ -650,7 +650,7 @@ export async function fullSync(
       await syncBilling(slug, (p) => {
         onProgress?.({ phase: "billing", current: p.current, total: p.total, message: p.message, enterpriseSlug: slug });
       });
-      cache.invalidateByPrefix("/api/billing/");
+      cache.invalidateByPrefix("/api/billing");
     } catch (err) {
       console.error("[Sync] [%s] Billing sync failed:", sanitizeForLog(slug), err);
     }
@@ -761,3 +761,4 @@ async function sync28DayFallback(
     }
   }
 }
+

@@ -109,7 +109,7 @@ async function executeAutoSync(): Promise<void> {
           console.log("[AutoSync] Starting GHAS sync...");
           const ghasResult = await fullGhasSync((p) => console.log(`[AutoSync] [GHAS] ${p.message}`));
           console.log("[AutoSync] GHAS sync complete:", JSON.stringify(ghasResult));
-          cache.invalidateByPrefix("/api/security/");
+          cache.invalidateByPrefix("/api/security");
         } catch (err) {
           console.error("[AutoSync] GHAS sync failed:", err);
         }
@@ -130,12 +130,12 @@ async function executeAutoSync(): Promise<void> {
           }
         }
         if (billingSynced) {
-          cache.invalidateByPrefix("/api/billing/");
+          cache.invalidateByPrefix("/api/billing");
         }
       }
 
-      cache.invalidateByPrefix("/api/metrics/");
-      cache.invalidateByPrefix("/api/users/");
+      cache.invalidateByPrefix("/api/metrics");
+      cache.invalidateByPrefix("/api/users");
       
       lastAutoSyncAt = new Date().toISOString();
     } catch (err) {
@@ -230,3 +230,4 @@ export function getAutoSyncStatus(): {
     running,
   };
 }
+
