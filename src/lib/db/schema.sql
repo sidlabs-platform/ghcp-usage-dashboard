@@ -80,6 +80,7 @@ CREATE TABLE IF NOT EXISTS user_daily_metrics (
   loc_suggested_to_delete_sum INTEGER DEFAULT 0,
   loc_added_sum INTEGER DEFAULT 0,
   loc_deleted_sum INTEGER DEFAULT 0,
+  ai_credits_used REAL DEFAULT 0,
   chat_panel_agent_mode INTEGER DEFAULT 0,
   chat_panel_ask_mode INTEGER DEFAULT 0,
   chat_panel_custom_mode INTEGER DEFAULT 0,

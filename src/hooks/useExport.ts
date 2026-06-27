@@ -32,19 +32,89 @@ export interface ExportPDFConfig {
   metadata?: ExportMetadata;
 }
 
+async function getExportErrorMessage(response: Response): Promise<string> {
+  const contentType = response.headers.get("Content-Type") || "";
+  const bodyText = await response.text().catch(() => "");
+
+  if (contentType.includes("application/json")) {
+    try {
+      const json: unknown = JSON.parse(bodyText);
+      if (
+        json &&
+        typeof json === "object" &&
+        "error" in json &&
+        typeof (json as { error?: unknown }).error === "string"
+      ) {
+        return (json as { error: string }).error;
+      }
+    } catch {
+      // Fall through to returning the raw body text.
+    }
+  }
+
+  return bodyText || `Export fetch failed: HTTP ${response.status}`;
+}
+
+function getDownloadFilename(
+  contentDisposition: string | null,
+  fallbackFilename: string,
+): string {
+  if (!contentDisposition) return fallbackFilename;
+
+  const filenameStarMatch = contentDisposition.match(/filename\*=UTF-8''([^;]+)/i);
+  if (filenameStarMatch) {
+    return decodeURIComponent(filenameStarMatch[1]);
+  }
+
+  const filenameMatch = contentDisposition.match(/filename="?([^"]+)"?/i);
+  return filenameMatch?.[1] || fallbackFilename;
+}
+
 export function useExport() {
   const [exporting, setExporting] = useState<"csv" | "pdf" | null>(null);
 
   const exportCSV = useCallback(async (config: ExportCSVConfig) => {
     setExporting("csv");
     try {
-      const allData = await fetchAllPages(
-        config.fetchUrl,
-        config.extraParams,
-        config.dataExtractor,
+      // Create new URLSearchParams for the export endpoint
+      const params = new URLSearchParams(config.extraParams);
+      
+      // Determine correct export endpoint based on fetchUrl
+      let exportUrl = config.fetchUrl;
+      if (exportUrl.startsWith("/api/users")) {
+          exportUrl = "/api/export/users";
+      }
+      
+      // If we don't have a specific export endpoint, fallback to client-side data fetching
+      if (!exportUrl.includes("/export/")) {
+        const allData = await fetchAllPages(
+          config.fetchUrl,
+          config.extraParams,
+          config.dataExtractor,
+        );
+        const csvString = arrayToCSV(allData, config.columns, config.metadata);
+        triggerDownload(csvString, `${config.filename}.csv`, "text/csv;charset=utf-8");
+        return;
+      }
+
+      // Use server-side export endpoint
+      const url = `${exportUrl}?${params.toString()}`;
+      const response = await fetch(url);
+      if (!response.ok) {
+        throw new Error(await getExportErrorMessage(response));
+      }
+
+      const blob = await response.blob();
+      const filename = getDownloadFilename(
+        response.headers.get("Content-Disposition"),
+        `${config.filename}.csv`,
       );
-      const csvString = arrayToCSV(allData, config.columns, config.metadata);
-      triggerDownload(csvString, `${config.filename}.csv`, "text/csv;charset=utf-8");
+      triggerDownload(
+        blob,
+        filename,
+        response.headers.get("Content-Type") || "text/csv;charset=utf-8",
+      );
+
     } catch (err) {
       console.error("CSV export failed:", err);
       alert(`Export failed: ${err instanceof Error ? err.message : "Unknown error"}`);

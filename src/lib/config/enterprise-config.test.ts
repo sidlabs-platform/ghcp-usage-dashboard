@@ -20,7 +20,7 @@ import {
   getClientEnterpriseMetrics,
   isOrgOnlyEnterprise,
 } from "./enterprise-config";
-import { getDashboardConfig } from "./dashboard-config";
+import { getDashboardConfig, getResolvedOrgs, DashboardConfig } from "./dashboard-config";
 
 // Mock the dashboard-config module
 vi.mock("./dashboard-config", () => ({
@@ -43,6 +43,11 @@ vi.mock("./dashboard-config", () => ({
       },
     ],
   })),
+  getResolvedOrgs: vi.fn(() => []),
+}));
+
+vi.mock("./orgs-resolver", () => ({
+  getDiscoveredOrgsFromDb: vi.fn((slug: string) => [`mocked-${slug}`]),
 }));
 
 const mockGetDashboardConfig = vi.mocked(getDashboardConfig);
@@ -161,21 +166,22 @@ describe("enterprise-config", () => {
       expect(orgs).toEqual(["org-x"]);
     });
 
-    it("returns empty array when organizations config is undefined", () => {
-      (getDashboardConfig as ReturnType<typeof vi.fn>).mockReturnValueOnce({
-        enterprises: [{ slug: "no-orgs", displayName: "No Orgs", tokenEnvVar: "T" }],
-      });
+    it("falls back to DB-discovered orgs when organizations config is undefined", () => {
+      mockGetDashboardConfig.mockReturnValue({
+        enterprises: [{ slug: "no-orgs", displayName: "No Orgs", tokenEnvVar: "T", organizations: {} }],
+      } as unknown as DashboardConfig);
       resetEnterpriseConfigCache();
       const orgs = getResolvedOrgsForEnterprise("no-orgs");
-      expect(orgs).toEqual([]);
+      expect(orgs).toEqual(["mocked-no-orgs"]);
       resetEnterpriseConfigCache();
+      // the global before/after reset will handle restoring the mock
     });
   });
 
   describe("legacy env var synthesis", () => {
     it("synthesizes config from env vars when no enterprises in config", () => {
       resetEnterpriseConfigCache();
-      mockGetDashboardConfig.mockReturnValue({ enterprises: [] } as any);
+      mockGetDashboardConfig.mockReturnValue({ enterprises: [] } as unknown as DashboardConfig);
       process.env.GITHUB_ENTERPRISE = "legacy-ent";
       process.env.GITHUB_TOKEN = "ghp_legacy";
       process.env.GITHUB_ORGS = "org1, org2";
@@ -190,7 +196,7 @@ describe("enterprise-config", () => {
 
     it("returns empty when no config and no env vars", () => {
       resetEnterpriseConfigCache();
-      mockGetDashboardConfig.mockReturnValue({ enterprises: [] } as any);
+      mockGetDashboardConfig.mockReturnValue({ enterprises: [] } as unknown as DashboardConfig);
       delete process.env.GITHUB_ENTERPRISE;
       const enterprises = getConfiguredEnterprises();
       expect(enterprises).toEqual([]);
@@ -198,7 +204,7 @@ describe("enterprise-config", () => {
 
     it("includes app env vars in synthesis when all are set", () => {
       resetEnterpriseConfigCache();
-      mockGetDashboardConfig.mockReturnValue({ enterprises: [] } as any);
+      mockGetDashboardConfig.mockReturnValue({ enterprises: [] } as unknown as DashboardConfig);
       process.env.GITHUB_ENTERPRISE = "legacy-ent";
       process.env.GITHUB_TOKEN = "ghp_legacy";
       process.env.GITHUB_APP_ID = "app1";
@@ -258,7 +264,7 @@ describe("enterprise-config", () => {
   }
 
   function setMockConfig(cfg: ReturnType<typeof makeConfig>) {
-    mockGetDashboardConfig.mockReturnValue(cfg as any);
+    mockGetDashboardConfig.mockReturnValue(cfg as unknown as DashboardConfig);
     resetEnterpriseConfigCache();
   }
 
@@ -805,14 +811,14 @@ describe("enterprise-config", () => {
             organizations: { include: ["org-x"] },
           },
         ],
-      } as any);
+      } as unknown as DashboardConfig);
       resetEnterpriseConfigCache();
       const result = resolveDefaultScope();
       expect(result).toEqual({ scope: "enterprise", scopeId: "acme-corp" });
     });
 
     it("returns org scope with empty scopeId when no enterprises configured", () => {
-      mockGetDashboardConfig.mockReturnValue({ enterprises: [] } as any);
+      mockGetDashboardConfig.mockReturnValue({ enterprises: [] } as unknown as DashboardConfig);
       resetEnterpriseConfigCache();
       delete process.env.GITHUB_ENTERPRISE;
       const result = resolveDefaultScope();
@@ -825,14 +831,14 @@ describe("enterprise-config", () => {
         enterprises: [
           { slug: "solo-ent", displayName: "Solo", tokenEnvVar: "SOLO_TOKEN" },
         ],
-      } as any);
+      } as unknown as DashboardConfig);
       resetEnterpriseConfigCache();
       const result = resolveDefaultScope();
       expect(result).toEqual({ scope: "enterprise", scopeId: "solo-ent" });
     });
 
     it("falls back to legacy env var when no config enterprises", () => {
-      mockGetDashboardConfig.mockReturnValue({} as any);
+      mockGetDashboardConfig.mockReturnValue({} as unknown as DashboardConfig);
       resetEnterpriseConfigCache();
       process.env.GITHUB_ENTERPRISE = "legacy-ent";
       process.env.GITHUB_TOKEN = "ghp_legacy";
@@ -856,7 +862,7 @@ describe("enterprise-config", () => {
       }));
       process.env.GITHUB_TOKEN = "ghp_test";
       const result = resolveDefaultScope();
-      expect(result).toEqual({ scope: "org", scopeId: "" });
+      expect(result).toEqual({ scope: "org", scopeId: "mocked-_org_only" });
       delete process.env.GITHUB_TOKEN;
       resetEnterpriseConfigCache();
     });
@@ -1040,6 +1046,7 @@ describe("enterprise-config", () => {
     describe("resolveDefaultScope — org-only", () => {
       it("returns org scope for org-only legacy config", () => {
         mockGetDashboardConfig.mockReturnValue({ enterprises: [] } as ReturnType<typeof getDashboardConfig>);
+        vi.mocked(getResolvedOrgs).mockReturnValueOnce(["my-org-1", "my-org-2"]);
         resetEnterpriseConfigCache();
         delete process.env.GITHUB_ENTERPRISE;
         process.env.GITHUB_ORGS = "my-org-1,my-org-2";

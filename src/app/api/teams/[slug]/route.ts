@@ -4,18 +4,7 @@ import { parseDateRangeParams } from "@/lib/utils";
 import { withCache } from "@/lib/cache/with-cache";
 import { withTimeout } from "@/lib/api/timeout";
 import { CACHE_TTL } from "@/lib/cache/memory-cache";
-
-interface MemberRow {
-  login: string;
-  activeDays: number;
-  locAdded: number;
-  interactions: number;
-  acceptanceRate: number;
-  usedAgent: number;
-  usedChat: number;
-  usedCli: number;
-  usedCodeReview: number;
-}
+import type { MemberRow, TeamDetailResponse } from "@/lib/types/team-detail";
 
 async function handler(request: NextRequest) {
   try {
@@ -31,12 +20,25 @@ async function handler(request: NextRequest) {
     }
     const { start, end } = rangeResult;
 
+    const source = searchParams.get("source");
+    const enterprise = searchParams.get("enterprise");
+    
     const db = getDb();
 
     // Get team info
-    const teamRow = db.prepare(
-      `SELECT team_slug, team_name, org_slug FROM team_memberships WHERE team_slug = ? LIMIT 1`,
-    ).get(slug) as { team_slug: string; team_name: string; org_slug: string | null } | undefined;
+    let teamRowSql = `SELECT team_slug, team_name, org_slug FROM team_memberships WHERE team_slug = ?`;
+    const teamRowParams: any[] = [slug];
+    if (source) {
+      teamRowSql += ` AND source = ?`;
+      teamRowParams.push(source);
+    }
+    if (enterprise) {
+      teamRowSql += ` AND enterprise_slug = ?`;
+      teamRowParams.push(enterprise);
+    }
+    teamRowSql += ` LIMIT 1`;
+    
+    const teamRow = db.prepare(teamRowSql).get(...teamRowParams) as { team_slug: string; team_name: string; org_slug: string | null } | undefined;
 
     if (!teamRow) {
       return NextResponse.json(
@@ -46,15 +48,34 @@ async function handler(request: NextRequest) {
     }
 
     // Count members
-    const countRow = db.prepare(
-      `SELECT COUNT(DISTINCT user_login) as cnt FROM team_memberships WHERE team_slug = ?`,
-    ).get(slug) as { cnt: number };
+    let countRowSql = `SELECT COUNT(DISTINCT user_login) as cnt FROM team_memberships WHERE team_slug = ?`;
+    const countRowParams: any[] = [slug];
+    if (source) {
+      countRowSql += ` AND source = ?`;
+      countRowParams.push(source);
+    }
+    if (enterprise) {
+      countRowSql += ` AND enterprise_slug = ?`;
+      countRowParams.push(enterprise);
+    }
+    const countRow = db.prepare(countRowSql).get(...countRowParams) as { cnt: number };
 
     // Aggregate member metrics directly from user_daily_metrics, scoped to team members.
     // Acceptance rate uses completion-only features (excludes agent_edit) via json_each.
+    let teamLoginsSql = `SELECT DISTINCT user_login FROM team_memberships WHERE team_slug = ?`;
+    const teamLoginsParams: any[] = [slug];
+    if (source) {
+      teamLoginsSql += ` AND source = ?`;
+      teamLoginsParams.push(source);
+    }
+    if (enterprise) {
+      teamLoginsSql += ` AND enterprise_slug = ?`;
+      teamLoginsParams.push(enterprise);
+    }
+
     const members = db.prepare(`
       WITH team_logins AS (
-        SELECT DISTINCT user_login FROM team_memberships WHERE team_slug = ?
+        ${teamLoginsSql}
       ),
       member_metrics AS (
         SELECT
@@ -102,7 +123,7 @@ async function handler(request: NextRequest) {
       LEFT JOIN member_metrics mm ON mm.user_login = tl.user_login
       LEFT JOIN completion_rates cr ON cr.user_login = tl.user_login
       ORDER BY activeDays DESC
-    `).all(slug, start, end, start, end) as MemberRow[];
+    `).all(...teamLoginsParams, start, end, start, end) as MemberRow[];
 
     // Calculate aggregates from members
     const totalLocAdded = members.reduce((s, m) => s + m.locAdded, 0);
@@ -142,6 +163,7 @@ async function handler(request: NextRequest) {
   }
 }
 
-export const GET = withTimeout(
+import { withRateLimit } from "@/lib/api/rate-limit/rate-limiter";
+export const GET = withRateLimit(withTimeout(
   withCache(handler, CACHE_TTL.MEDIUM),
-);
+));

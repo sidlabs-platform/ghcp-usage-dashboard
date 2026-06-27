@@ -42,7 +42,7 @@ vi.mock("./metrics-repo", () => ({
 
 vi.mock("./seats-repo", () => ({ upsertSeats: vi.fn() }));
 vi.mock("./summary-tables", () => ({ refreshAllSummaries: vi.fn() }));
-vi.mock("@/lib/cache/memory-cache", () => ({ cache: { invalidateAll: vi.fn() } }));
+vi.mock("@/lib/cache/memory-cache", () => ({ cache: { invalidateByPrefix: vi.fn(), invalidateAll: vi.fn() } }));
 vi.mock("./teams-repo", () => ({ upsertAllTeams: vi.fn() }));
 vi.mock("./user-teams-repo", () => ({ batchUpsertUserTeams: vi.fn() }));
 vi.mock("@/lib/utils", () => ({ datesBetween: vi.fn(() => ["2025-01-01"]) }));

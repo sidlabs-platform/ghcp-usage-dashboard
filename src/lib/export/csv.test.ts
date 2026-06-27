@@ -46,6 +46,11 @@ describe("CSV formula injection prevention", () => {
     expect(csv).toContain(`"'\rcarriage"`);
   });
 
+  it("escapes values starting with \\n", () => {
+    const csv = arrayToCSV([{ val: "\n=SUM(A1)" }], col);
+    expect(csv).toContain(`"'\n=SUM(A1)"`);
+  });
+
   it("does not escape normal values", () => {
     const csv = arrayToCSV([{ val: "hello" }], col);
     const lines = csv.split("\n");
