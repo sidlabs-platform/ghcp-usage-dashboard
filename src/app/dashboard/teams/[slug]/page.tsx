@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useParams } from "next/navigation";
+import { useParams, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { useDateRange } from "@/contexts/DateRangeContext";
@@ -48,6 +48,9 @@ interface TeamDetailResponse {
 
 export default function TeamDetailPage() {
   const { slug } = useParams<{ slug: string }>();
+  const searchParams = useSearchParams();
+  const source = searchParams.get("source");
+  const enterprise = searchParams.get("enterprise");
   const { mode, days, startDate, endDate } = useDateRange();
   const [data, setData] = useState<TeamDetailResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -64,6 +67,12 @@ export default function TeamDetailPage() {
       qp.set("endDate", endDate);
     } else {
       qp.set("days", String(days));
+    }
+    if (source) {
+      qp.set("source", source);
+    }
+    if (enterprise) {
+      qp.set("enterprise", enterprise);
     }
 
     fetch(`/api/teams/${encodeURIComponent(slug)}?${qp}`)
