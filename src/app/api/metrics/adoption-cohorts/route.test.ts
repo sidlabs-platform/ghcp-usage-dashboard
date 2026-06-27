@@ -121,5 +121,6 @@ describe("adoption-cohorts merged-by-phase", () => {
     expect(json.hasData).toBe(true);
     expect(json.hasMergeData).toBe(false);
     expect(json.totalMerged).toBe(0);
+    expect(json.mergedTrend).toHaveLength(0);
   });
 });

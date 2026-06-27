@@ -36,7 +36,7 @@ interface CohortMergedChartProps {
  * impact (shipped changes) of each cohort, not just per-user averages.
  */
 export function CohortMergedChart({ data }: CohortMergedChartProps) {
-  if (!data.length || data.every((d) => d.count === 0)) {
+  if (!data.length) {
     return (
       <Card>
         <CardHeader>
@@ -45,6 +45,21 @@ export function CohortMergedChart({ data }: CohortMergedChartProps) {
         <CardContent>
           <div className="flex h-[350px] items-center justify-center text-sm text-[hsl(var(--muted-foreground))]">
             No merged-PR data available for these cohorts
+          </div>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  if (data.every((d) => d.count === 0)) {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle>PRs Merged by Adoption Phase</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="flex h-[350px] items-center justify-center text-sm text-[hsl(var(--muted-foreground))]">
+            No pull requests were merged by these cohorts in this window.
           </div>
         </CardContent>
       </Card>

@@ -63,10 +63,12 @@ function getEnterpriseAdoptionCohorts(
 
     const byPhase: Record<number, number> = { 0: 0, 1: 0, 2: 0, 3: 0 };
     const mergedByPhase: Record<number, number> = { 0: 0, 1: 0, 2: 0, 3: 0 };
+    let dayHasMerge = false;
     for (const p of phases) {
       byPhase[p.phase] = (byPhase[p.phase] || 0) + (p.engaged_users || 0);
       if (typeof p.total_pull_requests_merged === "number") {
         hasMergeData = true;
+        dayHasMerge = true;
         mergedByPhase[p.phase] = (mergedByPhase[p.phase] || 0) + p.total_pull_requests_merged;
       }
     }
@@ -79,13 +81,15 @@ function getEnterpriseAdoptionCohorts(
       phase3: byPhase[3] || 0,
     });
 
-    mergedTrend.push({
-      day: row.day,
-      phase0: mergedByPhase[0] || 0,
-      phase1: mergedByPhase[1] || 0,
-      phase2: mergedByPhase[2] || 0,
-      phase3: mergedByPhase[3] || 0,
-    });
+    if (dayHasMerge) {
+      mergedTrend.push({
+        day: row.day,
+        phase0: mergedByPhase[0] || 0,
+        phase1: mergedByPhase[1] || 0,
+        phase2: mergedByPhase[2] || 0,
+        phase3: mergedByPhase[3] || 0,
+      });
+    }
 
     latestPhases = phases;
   }
