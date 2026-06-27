@@ -10,8 +10,9 @@ import { Section } from "@/components/ui/Section";
 import { useDateRange } from "@/contexts/DateRangeContext";
 import { useScope } from "@/contexts/ScopeContext";
 import { ExportMenu } from "@/components/ui/ExportMenu";
-import { Users, TrendingUp, Code2, Bot, Layers } from "lucide-react";
+import { Users, TrendingUp, Code2, Bot, Layers, GitMerge } from "lucide-react";
 import type { CohortDistributionData } from "@/components/charts/CohortDistributionChart";
+import type { CohortMergedData } from "@/components/charts/CohortMergedChart";
 import type { CohortTrendDataPoint } from "@/components/charts/CohortTrendChart";
 import type { TotalsByAIAdoptionPhase } from "@/lib/types/metrics";
 
@@ -23,12 +24,20 @@ const CohortTrendChart = dynamic(
   () => import("@/components/charts/CohortTrendChart").then((m) => ({ default: m.CohortTrendChart })),
   { ssr: false, loading: () => <ChartSkeleton /> },
 );
+const CohortMergedChart = dynamic(
+  () => import("@/components/charts/CohortMergedChart").then((m) => ({ default: m.CohortMergedChart })),
+  { ssr: false, loading: () => <ChartSkeleton /> },
+);
 
 interface AdoptionCohortsData {
   distribution: CohortDistributionData[];
   trend: CohortTrendDataPoint[];
   perPhaseMetrics: TotalsByAIAdoptionPhase[];
   totalEngaged: number;
+  mergedDistribution: CohortMergedData[];
+  mergedTrend: CohortTrendDataPoint[];
+  totalMerged: number;
+  hasMergeData: boolean;
   hasData: boolean;
   dataAsOf: string;
   daysLoaded: number;
@@ -58,6 +67,7 @@ export default function AdoptionCohortsPage() {
 
   const kpiRef = useRef<HTMLDivElement>(null);
   const chartsRef = useRef<HTMLDivElement>(null);
+  const mergedRef = useRef<HTMLDivElement>(null);
 
   const fetchData = useCallback(() => {
     setLoading(true);
@@ -131,7 +141,7 @@ export default function AdoptionCohortsPage() {
     );
   }
 
-  const { distribution, trend, perPhaseMetrics, totalEngaged } = data;
+  const { distribution, trend, perPhaseMetrics, totalEngaged, mergedDistribution, mergedTrend, totalMerged, hasMergeData } = data;
 
   return (
     <div>
@@ -141,7 +151,7 @@ export default function AdoptionCohortsPage() {
       >
         <ExportMenu
           pdf={{
-            sectionRefs: [kpiRef, chartsRef],
+            sectionRefs: [kpiRef, chartsRef, mergedRef],
             title: "AI Adoption Cohorts",
             filename: `adoption-cohorts-${days}d`,
             metadata: {
@@ -191,9 +201,55 @@ export default function AdoptionCohortsPage() {
         <CohortTrendChart data={trend} />
       </div>
 
+      {/* Delivery impact — total PRs merged by adoption phase (June 2026 API addition) */}
+      {hasMergeData && (
+        <Section
+          title="Delivery Impact by Phase"
+          description="Total pull requests merged by each adoption cohort — absolute throughput, not per-user averages."
+          className="mt-6"
+        >
+          <div ref={mergedRef}>
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4 mb-6">
+              <MetricCard
+                title="Total PRs Merged"
+                value={totalMerged}
+                icon={<GitMerge className="h-4 w-4" />}
+                subtitle={`${data.daysLoaded}-day window`}
+                accent="green"
+                stagger={1}
+              />
+              {mergedDistribution
+                .filter((d) => d.count > 0)
+                .map((d, i) => {
+                  const Icon = PHASE_ICONS[d.phase] ?? Users;
+                  return (
+                    <MetricCard
+                      key={d.phase}
+                      title={`${d.label} — Merged`}
+                      value={d.count}
+                      icon={<Icon className="h-4 w-4" />}
+                      subtitle={`${d.percentage.toFixed(1)}% of merged`}
+                      accent={PHASE_ACCENTS[d.phase] ?? "blue"}
+                      stagger={(Math.min(i + 2, 11)) as 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11}
+                    />
+                  );
+                })}
+            </div>
+            <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+              <CohortMergedChart data={mergedDistribution} />
+              <CohortTrendChart
+                data={mergedTrend}
+                title="PRs Merged Trend by Phase"
+                valueLabel="PRs merged"
+              />
+            </div>
+          </div>
+        </Section>
+      )}
+
       {/* Per-phase metrics table */}
       {perPhaseMetrics.length > 0 && (
-        <Section title="Per-Phase Averages" className="mt-6">
+        <Section title="Per-Phase Metrics" className="mt-6">
           <div className="overflow-x-auto rounded-xl border bg-[hsl(var(--card))]">
             <table className="w-full text-sm">
               <thead>
@@ -206,6 +262,7 @@ export default function AdoptionCohortsPage() {
                   <th className="px-4 py-3 font-medium text-right">Avg LoC Added</th>
                   <th className="px-4 py-3 font-medium text-right">Avg PRs Created</th>
                   <th className="px-4 py-3 font-medium text-right">Avg PRs Merged</th>
+                  <th className="px-4 py-3 font-medium text-right">Total PRs Merged</th>
                   <th className="px-4 py-3 font-medium text-right">Avg Merge Time</th>
                 </tr>
               </thead>
@@ -222,6 +279,11 @@ export default function AdoptionCohortsPage() {
                     <td className="px-4 py-3 text-right">{p.loc_added_avg?.toFixed(1) ?? "—"}</td>
                     <td className="px-4 py-3 text-right">{p.pull_requests_created_avg?.toFixed(1) ?? "—"}</td>
                     <td className="px-4 py-3 text-right">{p.pull_requests_merged_avg?.toFixed(1) ?? "—"}</td>
+                    <td className="px-4 py-3 text-right font-medium">
+                      {typeof p.total_pull_requests_merged === "number"
+                        ? p.total_pull_requests_merged.toLocaleString()
+                        : "—"}
+                    </td>
                     <td className="px-4 py-3 text-right">
                       {p.median_minutes_to_merge_avg != null
                         ? `${p.median_minutes_to_merge_avg.toFixed(0)} min`

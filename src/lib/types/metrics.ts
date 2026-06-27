@@ -116,6 +116,13 @@ export interface TotalsByAIAdoptionPhase {
   pull_requests_merged_avg: number;
   pull_requests_reviewed_avg: number;
   median_minutes_to_merge_avg: number | null;
+  /**
+   * Absolute number of pull requests merged by users in this phase for the
+   * period. Added by the GitHub Copilot usage metrics API in June 2026
+   * (enterprise/org reports only). Optional for backward compatibility —
+   * data synced before this field was available will not include it.
+   */
+  total_pull_requests_merged?: number;
 }
 
 // ── Enterprise/Org aggregate (day_totals) ─────────────────────────────
