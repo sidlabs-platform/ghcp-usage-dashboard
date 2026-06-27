@@ -9,6 +9,10 @@ vi.mock("@/lib/api/timeout", () => ({
   withTimeout: (handler: unknown) => handler,
 }));
 
+vi.mock("@/lib/api/rate-limit/rate-limiter", () => ({
+  withRateLimit: (handler: unknown) => handler,
+}));
+
 vi.mock("@/lib/cache/memory-cache", () => ({
   CACHE_TTL: { MEDIUM: 300 },
 }));
