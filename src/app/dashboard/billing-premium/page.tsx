@@ -95,6 +95,12 @@ export default function PremiumRequestsPage() {
   const chartsRef = useRef<HTMLDivElement>(null);
   const trendRef = useRef<HTMLDivElement>(null);
   const tableRef = useRef<HTMLDivElement>(null);
+  const userModelBreakdownRef = useRef<Record<string, UserModelBreakdownRow[]>>({});
+
+  // Keep ref in sync with state
+  useEffect(() => {
+    userModelBreakdownRef.current = userModelBreakdown;
+  }, [userModelBreakdown]);
 
   const buildParams = useCallback(() => {
     const p = new URLSearchParams();
@@ -164,7 +170,7 @@ export default function PremiumRequestsPage() {
 
   const fetchUserModelBreakdown = useCallback(async (username: string, organization: string) => {
     const key = getUserKey(username, organization);
-    if (userModelBreakdown[key]) return;
+    if (userModelBreakdownRef.current[key]) return;
 
     setLoadingUserModels((prev) => ({ ...prev, [key]: true }));
     try {
@@ -186,7 +192,7 @@ export default function PremiumRequestsPage() {
     } finally {
       setLoadingUserModels((prev) => ({ ...prev, [key]: false }));
     }
-  }, [buildScopeParams, days, exceedsQuota, selectedModel, selectedOrg, userModelBreakdown]);
+  }, [buildScopeParams, days, exceedsQuota, selectedModel, selectedOrg]);
 
   const toggleUserExpanded = useCallback((username: string, organization: string) => {
     const key = getUserKey(username, organization);

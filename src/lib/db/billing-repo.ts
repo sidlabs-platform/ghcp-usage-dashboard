@@ -722,6 +722,16 @@ export function getPremiumModelSummary(
     .all(...params) as PremiumRequestModelSummary[];
 }
 
+/**
+ * Returns per-model AI credits and USD totals for a specific user over a date range.
+ * @param start - Start date (ISO format)
+ * @param end - End date (ISO format)
+ * @param username - The user's login to query
+ * @param organization - Optional organization filter (empty string matches unassigned users)
+ * @param filters - Optional premium filters (model, exceedsQuota, scope)
+ * @param enterpriseSlugs - Optional enterprise slug filter
+ * @returns Array of model breakdowns with ai_credits and usd totals
+ */
 export function getPremiumUserModelBreakdown(
   start: string,
   end: string,
