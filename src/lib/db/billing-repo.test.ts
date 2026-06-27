@@ -40,6 +40,7 @@ function makePremiumRecord(overrides: Partial<BillingPremiumRequestRecord> = {})
     discount_amount: 0, net_amount: 1, username: "dev1", organization: "org1",
     model: "gpt-4", exceeds_quota: "FALSE", total_monthly_quota: 500,
     charge_scope: "user", input_tokens: 0, output_tokens: 0, cached_tokens: 0,
+    cost_center_name: "", aic_quantity: 100, aic_gross_amount: 1.6,
     ...overrides,
   };
 }
