@@ -47,6 +47,10 @@ export async function captureSectionsAsPDF(
 
   yOffset += METADATA_HEIGHT - 40; // space after metadata
 
+  // Detect the current page background color to match the active theme
+  const pageBackgroundColor = window.getComputedStyle(document.documentElement).backgroundColor;
+  const bgcolor = pageBackgroundColor === "rgba(0, 0, 0, 0)" ? "#ffffff" : pageBackgroundColor;
+
   // Capture each section
   for (const section of sections) {
     // Determine target dimensions based on actual DOM size multiplied by scale factor
@@ -55,50 +59,47 @@ export async function captureSectionsAsPDF(
     const width = section.offsetWidth * scale;
     const height = section.offsetHeight * scale;
     
-    // We clone the element so we can enforce light mode and reset styling
-    // to improve render fidelity
+    // Clone the element to capture it with a consistent background
+    // This ensures exported PDFs match the current theme without flicker
     const cloneWrapper = document.createElement("div");
-    // Ensure styles apply correctly in a light mode context for PDF
-    cloneWrapper.className = "light print-export-wrapper";
     cloneWrapper.style.position = "absolute";
     cloneWrapper.style.left = "-9999px";
     cloneWrapper.style.top = "-9999px";
-    // Force a white background specifically for the clone wrapper so charts have proper backing
-    cloneWrapper.style.backgroundColor = "white";
+    cloneWrapper.style.backgroundColor = bgcolor;
     
     const clone = section.cloneNode(true) as HTMLElement;
     cloneWrapper.appendChild(clone);
     document.body.appendChild(cloneWrapper);
     
     try {
-        const imgData = await domtoimage.toPng(clone, {
-          width: width,
-          height: height,
-          style: {
-            transform: `scale(${scale})`,
-            transformOrigin: "top left",
-            width: `${section.offsetWidth}px`,
-            height: `${section.offsetHeight}px`,
-          },
-          bgcolor: '#ffffff'
-        });
-        
-        // Calculate dimensions to maintain aspect ratio
-        const imgAspect = width / height;
-        const imgWidth = CONTENT_WIDTH;
-        const imgHeight = imgWidth / imgAspect;
+      const imgData = await domtoimage.toPng(clone, {
+        width: width,
+        height: height,
+        style: {
+          transform: `scale(${scale})`,
+          transformOrigin: "top left",
+          width: `${section.offsetWidth}px`,
+          height: `${section.offsetHeight}px`,
+        },
+        bgcolor: bgcolor
+      });
+      
+      // Calculate dimensions to maintain aspect ratio
+      const imgAspect = width / height;
+      const imgWidth = CONTENT_WIDTH;
+      const imgHeight = imgWidth / imgAspect;
 
-        // If image doesn't fit on current page, start a new page
-        if (yOffset + imgHeight > A4_HEIGHT_PT - MARGIN) {
-          pdf.addPage();
-          yOffset = MARGIN;
-        }
+      // If image doesn't fit on current page, start a new page
+      if (yOffset + imgHeight > A4_HEIGHT_PT - MARGIN) {
+        pdf.addPage();
+        yOffset = MARGIN;
+      }
 
-        pdf.addImage(imgData, "PNG", MARGIN, yOffset, imgWidth, imgHeight);
-        yOffset += imgHeight + 15; // 15pt gap between sections
+      pdf.addImage(imgData, "PNG", MARGIN, yOffset, imgWidth, imgHeight);
+      yOffset += imgHeight + 15; // 15pt gap between sections
     } finally {
-        // Clean up DOM
-        document.body.removeChild(cloneWrapper);
+      // Clean up DOM
+      document.body.removeChild(cloneWrapper);
     }
   }
 
