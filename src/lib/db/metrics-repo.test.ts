@@ -1026,8 +1026,8 @@ describe("ai_adoption_phase and totals_by_ai_adoption_phase", () => {
 
   it("stores and retrieves totals_by_ai_adoption_phase on enterprise metrics", () => {
     const phases = [
-      { phase: 0, label: "No cohort", version: "v1", engaged_users: 10, user_initiated_interaction_avg: 1.5, code_generation_activity_avg: 2.0, code_acceptance_activity_avg: 1.0, loc_added_avg: 50, loc_deleted_avg: 5, pull_requests_created_avg: 0.1, pull_requests_merged_avg: 0.05, pull_requests_reviewed_avg: 0.2, median_minutes_to_merge_avg: null },
-      { phase: 1, label: "Code first", version: "v1", engaged_users: 30, user_initiated_interaction_avg: 5.0, code_generation_activity_avg: 8.0, code_acceptance_activity_avg: 6.0, loc_added_avg: 200, loc_deleted_avg: 20, pull_requests_created_avg: 0.5, pull_requests_merged_avg: 0.3, pull_requests_reviewed_avg: 1.0, median_minutes_to_merge_avg: 45 },
+      { phase: 0, label: "No cohort", version: "v1", engaged_users: 10, user_initiated_interaction_avg: 1.5, code_generation_activity_avg: 2.0, code_acceptance_activity_avg: 1.0, loc_added_avg: 50, loc_deleted_avg: 5, pull_requests_created_avg: 0.1, pull_requests_merged_avg: 0.05, pull_requests_reviewed_avg: 0.2, median_minutes_to_merge_avg: null, total_pull_requests_merged: 3 },
+      { phase: 1, label: "Code first", version: "v1", engaged_users: 30, user_initiated_interaction_avg: 5.0, code_generation_activity_avg: 8.0, code_acceptance_activity_avg: 6.0, loc_added_avg: 200, loc_deleted_avg: 20, pull_requests_created_avg: 0.5, pull_requests_merged_avg: 0.3, pull_requests_reviewed_avg: 1.0, median_minutes_to_merge_avg: 45, total_pull_requests_merged: 42 },
     ];
     upsertEnterpriseDayMetrics("ent1", {
       day: "2026-06-01", enterprise_id: "ent-123",
@@ -1048,8 +1048,10 @@ describe("ai_adoption_phase and totals_by_ai_adoption_phase", () => {
     expect(results[0].totals_by_ai_adoption_phase![0].phase).toBe(0);
     expect(results[0].totals_by_ai_adoption_phase![0].label).toBe("No cohort");
     expect(results[0].totals_by_ai_adoption_phase![0].engaged_users).toBe(10);
+    expect(results[0].totals_by_ai_adoption_phase![0].total_pull_requests_merged).toBe(3);
     expect(results[0].totals_by_ai_adoption_phase![1].phase).toBe(1);
     expect(results[0].totals_by_ai_adoption_phase![1].median_minutes_to_merge_avg).toBe(45);
+    expect(results[0].totals_by_ai_adoption_phase![1].total_pull_requests_merged).toBe(42);
   });
 
   it("returns empty array for totals_by_ai_adoption_phase when field is omitted (serialized as '[]')", () => {
