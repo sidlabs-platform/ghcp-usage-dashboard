@@ -44,6 +44,18 @@ vi.mock("@tanstack/react-query", () => ({
   useQueryClient: () => ({
     invalidateQueries: mockState.invalidateQueries,
   }),
+  useQuery: ({ queryFn }: { queryFn: () => Promise<unknown> }) => {
+    const [data, setData] = React.useState<unknown>(null);
+    const [isLoading, setIsLoading] = React.useState(true);
+
+    React.useEffect(() => {
+      queryFn()
+        .then(setData)
+        .finally(() => setIsLoading(false));
+    }, [queryFn]);
+
+    return { data, isLoading, error: null };
+  },
 }));
 
 vi.mock("@/contexts/DateRangeContext", () => ({
