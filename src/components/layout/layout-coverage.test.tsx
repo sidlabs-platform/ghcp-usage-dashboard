@@ -40,11 +40,43 @@ vi.mock("next/navigation", () => ({
   usePathname: () => mockState.pathname,
 }));
 
-vi.mock("@tanstack/react-query", () => ({
-  useQueryClient: () => ({
-    invalidateQueries: mockState.invalidateQueries,
-  }),
-}));
+vi.mock("@tanstack/react-query", () => {
+  const React = require("react");
+  return {
+    useQueryClient: () => ({
+      invalidateQueries: mockState.invalidateQueries,
+    }),
+    useQuery: vi.fn(({ queryFn, queryKey }: any) => {
+      const [data, setData] = React.useState<any>(undefined);
+      const [isLoading, setIsLoading] = React.useState(true);
+      const [error, setError] = React.useState<Error | null>(null);
+
+      React.useEffect(() => {
+        let mounted = true;
+        Promise.resolve()
+          .then(() => queryFn())
+          .then((result: any) => {
+            if (mounted) {
+              setData(result);
+              setIsLoading(false);
+            }
+          })
+          .catch((err: Error) => {
+            if (mounted) {
+              setError(err);
+              setIsLoading(false);
+            }
+          });
+
+        return () => {
+          mounted = false;
+        };
+      }, [queryKey, queryFn]);
+
+      return { data, isLoading, error };
+    }),
+  };
+});
 
 vi.mock("@/contexts/DateRangeContext", () => ({
   useDateRange: () => mockState.dateRangeState,
