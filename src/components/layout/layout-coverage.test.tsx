@@ -68,6 +68,7 @@ vi.mock("@/hooks/useKeyboardShortcuts", () => ({
 
 function mockJsonResponse(payload: unknown) {
   return Promise.resolve({
+    ok: true,
     json: async () => payload,
   } as Response);
 }
