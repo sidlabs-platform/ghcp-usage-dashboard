@@ -3,9 +3,12 @@
 import React, { type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Header } from "@/components/layout/Header";
 import { Sidebar } from "@/components/layout/Sidebar";
 import { DashboardShell } from "@/components/layout/DashboardShell";
+
+let queryClient: QueryClient;
 
 const mockState = vi.hoisted(() => ({
   pathname: "/dashboard",
@@ -40,11 +43,15 @@ vi.mock("next/navigation", () => ({
   usePathname: () => mockState.pathname,
 }));
 
-vi.mock("@tanstack/react-query", () => ({
-  useQueryClient: () => ({
-    invalidateQueries: mockState.invalidateQueries,
-  }),
-}));
+vi.mock("@tanstack/react-query", async () => {
+  const actual = await vi.importActual<typeof import("@tanstack/react-query")>("@tanstack/react-query");
+  return {
+    ...actual,
+    useQueryClient: () => ({
+      invalidateQueries: mockState.invalidateQueries,
+    }),
+  };
+});
 
 vi.mock("@/contexts/DateRangeContext", () => ({
   useDateRange: () => mockState.dateRangeState,
@@ -61,6 +68,11 @@ function mockJsonResponse(payload: unknown) {
 }
 
 beforeEach(() => {
+  queryClient = new QueryClient({
+    defaultOptions: {
+      queries: { retry: false },
+    },
+  });
   mockState.pathname = "/dashboard";
   mockState.dateRangeState.mode = "preset";
   mockState.dateRangeState.days = 7;
@@ -177,7 +189,11 @@ describe("layout coverage", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    render(<Sidebar />);
+    render(
+      <QueryClientProvider client={queryClient}>
+        <Sidebar />
+      </QueryClientProvider>
+    );
 
     await screen.findByText("Enterprise A");
     expect(screen.getByText("Usage Analytics")).toBeInTheDocument();
@@ -204,7 +220,11 @@ describe("layout coverage", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    render(<Sidebar />);
+    render(
+      <QueryClientProvider client={queryClient}>
+        <Sidebar />
+      </QueryClientProvider>
+    );
 
     await screen.findByText("2 enterprises");
     fireEvent.click(screen.getByRole("button", { name: "Collapse sidebar" }));
