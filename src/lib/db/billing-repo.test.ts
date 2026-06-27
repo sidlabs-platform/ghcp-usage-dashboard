@@ -34,15 +34,23 @@ import type { BillingPremiumRequestRecord } from "@/lib/types/billing";
 
 /** Factory for premium request records with sensible defaults. */
 function makePremiumRecord(overrides: Partial<BillingPremiumRequestRecord> = {}): BillingPremiumRequestRecord {
-  return {
+  // Merge with defaults first
+  const merged = {
     date: "2026-06-10", product: "copilot", sku: "prem1", quantity: 100,
     unit_type: "token", applied_cost_per_quantity: 0.01, gross_amount: 1,
     discount_amount: 0, net_amount: 1, username: "dev1", organization: "org1",
     model: "gpt-4", exceeds_quota: "FALSE", total_monthly_quota: 500,
-    charge_scope: "user", input_tokens: 0, output_tokens: 0, cached_tokens: 0,
+    charge_scope: "user" as const, input_tokens: 0, output_tokens: 0, cached_tokens: 0,
     cost_center_name: "", aic_quantity: 100, aic_gross_amount: 1.6,
     ...overrides,
   };
+  
+  // If aic_quantity wasn't explicitly set and quantity was, derive aic_quantity from quantity
+  if (!overrides.aic_quantity && overrides.quantity !== undefined) {
+    merged.aic_quantity = overrides.quantity;
+  }
+  
+  return merged;
 }
 
 beforeAll(() => {
@@ -435,17 +443,17 @@ describe("getPremiumRequestsPaginated", () => {
 
   it("filters by exceedsQuota false", () => {
     upsertPremiumRequests("ent1", [
-      makePremiumRecord({ date: "2024-03-01", quantity: 10, gross_amount: 0.1, net_amount: 0.1, username: "q-user" }),
+      makePremiumRecord({ date: "2026-06-01", quantity: 10, gross_amount: 0.1, net_amount: 0.1, username: "q-user" }),
     ]);
-    const result = getPremiumRequestsPaginated("2024-03-01", "2024-03-01", 1, 10, "date", "asc", undefined, { exceedsQuota: false });
+    const result = getPremiumRequestsPaginated("2026-06-01", "2026-06-01", 1, 10, "date", "asc", undefined, { exceedsQuota: false });
     expect(result.records.every(r => r.exceeds_quota === "FALSE")).toBe(true);
   });
 
   it("filters by scopeOrgs alone without page-level org filter", () => {
     upsertPremiumRequests("ent1", [
-      makePremiumRecord({ date: "2024-03-02", quantity: 20, gross_amount: 0.2, net_amount: 0.2, username: "scope-u", organization: "scoped-org" }),
+      makePremiumRecord({ date: "2026-06-02", quantity: 20, gross_amount: 0.2, net_amount: 0.2, username: "scope-u", organization: "scoped-org" }),
     ]);
-    const result = getPremiumRequestsPaginated("2024-03-02", "2024-03-02", 1, 10, "date", "asc", undefined, { scopeOrgs: ["scoped-org"] });
+    const result = getPremiumRequestsPaginated("2026-06-02", "2026-06-02", 1, 10, "date", "asc", undefined, { scopeOrgs: ["scoped-org"] });
     expect(result.total).toBe(1);
   });
 });
