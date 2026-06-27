@@ -484,7 +484,6 @@ export default function PremiumRequestsPage() {
                       const modelRows = userModelBreakdown[key] || [];
                       const modelLoading = !!loadingUserModels[key];
                       return (
-<<<<<<< HEAD
                         <Fragment key={key}>
                           <tr className="hover:bg-[hsl(var(--accent))]/20 transition-colors cursor-pointer" onClick={() => toggleUserExpanded(u.username, u.organization || "") }>
                             <td className="px-4 py-2.5 font-medium">
@@ -536,20 +535,6 @@ export default function PremiumRequestsPage() {
                             </tr>
                           )}
                         </Fragment>
-=======
-                        <tr key={u.username} className="hover:bg-[hsl(var(--accent))]/20 transition-colors">
-                          <td className="px-4 py-2.5 font-medium">{u.username}</td>
-                          <td className="px-4 py-2.5 text-[hsl(var(--muted-foreground))]">{u.organization || "—"}</td>
-                          <td className="px-4 py-2.5 text-right">{fmtCredits(u.total_aic_quantity > 0 ? u.total_aic_quantity : u.total_requests)}</td>
-                          <td className="px-4 py-2.5 text-right text-emerald-600 dark:text-emerald-400">{safeNum(u.within_quota).toLocaleString()}</td>
-                          <td className="px-4 py-2.5 text-right text-red-600 dark:text-red-400">{safeNum(u.over_quota) > 0 ? safeNum(u.over_quota).toLocaleString() : "—"}</td>
-                          <td className="px-4 py-2.5 text-right text-[hsl(var(--muted-foreground))]">{safeNum(u.quota_limit) > 0 ? safeNum(u.quota_limit).toLocaleString() : "—"}</td>
-                          <td className={`px-4 py-2.5 text-right font-semibold ${utilColor}`}>
-                            {safeNum(u.utilization_pct) > 0 ? `${safeNum(u.utilization_pct).toFixed(1)}%` : "—"}
-                          </td>
-                          <td className="px-4 py-2.5 text-right font-semibold">{fmtCurrency(u.total_net)}</td>
-                        </tr>
->>>>>>> origin/main
                       );
                     })}
                   </tbody>
