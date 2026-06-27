@@ -40,11 +40,15 @@ vi.mock("next/navigation", () => ({
   usePathname: () => mockState.pathname,
 }));
 
-vi.mock("@tanstack/react-query", () => ({
-  useQueryClient: () => ({
-    invalidateQueries: mockState.invalidateQueries,
-  }),
-}));
+vi.mock("@tanstack/react-query", async () => {
+  const actual = await vi.importActual<typeof import("@tanstack/react-query")>("@tanstack/react-query");
+  return {
+    ...actual,
+    useQueryClient: () => ({
+      invalidateQueries: mockState.invalidateQueries,
+    }),
+  };
+});
 
 vi.mock("@/contexts/DateRangeContext", () => ({
   useDateRange: () => mockState.dateRangeState,

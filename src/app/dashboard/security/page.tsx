@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback, useRef } from "react";
+import { useQuery, useQueries } from "@tanstack/react-query";
 import dynamic from "next/dynamic";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { MetricCard } from "@/components/cards/MetricCard";
@@ -59,11 +60,6 @@ interface CategoryData {
 export default function SecurityPage() {
   const { days } = useDateRange();
   const { selectedOrgs } = useScope();
-  const [overview, setOverview] = useState<SecurityOverviewData | null>(null);
-  const [csData, setCsData] = useState<CategoryData | null>(null);
-  const [depData, setDepData] = useState<CategoryData | null>(null);
-  const [ssData, setSsData] = useState<CategoryData | null>(null);
-  const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
   const [syncStatus, setSyncStatus] = useState<string | null>(null);
 
@@ -72,33 +68,58 @@ export default function SecurityPage() {
   const depRef = useRef<HTMLElement>(null);
   const ssRef = useRef<HTMLElement>(null);
 
-  const fetchData= useCallback(async () => {
-    setLoading(true);
-    try {
-      // When an org is selected, use scope=org&scopeId=<org>
-      const scopeParams = selectedOrgs.length === 1
-        ? `&scope=org&scopeId=${encodeURIComponent(selectedOrgs[0])}`
-        : "";
+  const scopeParams = selectedOrgs.length === 1
+    ? `&scope=org&scopeId=${encodeURIComponent(selectedOrgs[0])}`
+    : "";
 
-      const [overviewRes, csRes, depRes, ssRes] = await Promise.all([
-        fetch(`/api/security/overview?days=${days}${scopeParams}`),
-        fetch(`/api/security/code-scanning?days=${days}${scopeParams}`),
-        fetch(`/api/security/dependabot?days=${days}${scopeParams}`),
-        fetch(`/api/security/secret-scanning?days=${days}${scopeParams}`),
-      ]);
+  const queries = useQueries({
+    queries: [
+      {
+        queryKey: ["security", "overview", days, selectedOrgs],
+        queryFn: async () => {
+          const res = await fetch(`/api/security/overview?days=${days}${scopeParams}`);
+          if (!res.ok) throw new Error("Failed");
+          return res.json() as Promise<SecurityOverviewData>;
+        },
+        staleTime: 1000 * 60 * 5,
+      },
+      {
+        queryKey: ["security", "code-scanning", days, selectedOrgs],
+        queryFn: async () => {
+          const res = await fetch(`/api/security/code-scanning?days=${days}${scopeParams}`);
+          if (!res.ok) throw new Error("Failed");
+          return res.json() as Promise<CategoryData>;
+        },
+        staleTime: 1000 * 60 * 5,
+      },
+      {
+        queryKey: ["security", "dependabot", days, selectedOrgs],
+        queryFn: async () => {
+          const res = await fetch(`/api/security/dependabot?days=${days}${scopeParams}`);
+          if (!res.ok) throw new Error("Failed");
+          return res.json() as Promise<CategoryData>;
+        },
+        staleTime: 1000 * 60 * 5,
+      },
+      {
+        queryKey: ["security", "secret-scanning", days, selectedOrgs],
+        queryFn: async () => {
+          const res = await fetch(`/api/security/secret-scanning?days=${days}${scopeParams}`);
+          if (!res.ok) throw new Error("Failed");
+          return res.json() as Promise<CategoryData>;
+        },
+        staleTime: 1000 * 60 * 5,
+      }
+    ]
+  });
 
-      setOverview(await overviewRes.json());
-      setCsData(await csRes.json());
-      setDepData(await depRes.json());
-      setSsData(await ssRes.json());
-    } catch (err) {
-      console.error("Failed to load security data:", err);
-    } finally {
-      setLoading(false);
-    }
-  }, [days, selectedOrgs]);
-
-  useEffect(() => { fetchData(); }, [fetchData]);
+  const loading = queries.some(q => q.isLoading);
+  const [overview, csData, depData, ssData] = queries.map(q => q.data) as [
+    SecurityOverviewData | undefined,
+    CategoryData | undefined,
+    CategoryData | undefined,
+    CategoryData | undefined
+  ];
 
   const triggerSync = useCallback(async () => {
     setSyncing(true);
@@ -115,7 +136,7 @@ export default function SecurityPage() {
             clearInterval(poll);
             setSyncing(false);
             setSyncStatus("Sync complete! Loading data...");
-            await fetchData();
+            queries.forEach(q => q.refetch());
             setSyncStatus(null);
           }
         } catch {
@@ -128,7 +149,7 @@ export default function SecurityPage() {
       setSyncing(false);
       setSyncStatus("Failed to start sync. Check server logs.");
     }
-  }, [fetchData]);
+  }, [queries]);
 
   // Determine if we have any actual data
   const hasData = (csData?.enabled && csData?.daily?.length > 0) ||
