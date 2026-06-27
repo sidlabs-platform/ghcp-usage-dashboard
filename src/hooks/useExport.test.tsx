@@ -76,11 +76,15 @@ describe("useExport", () => {
 
   it("surfaces server-side export failures before downloading", async () => {
     const alertSpy = vi.spyOn(window, "alert").mockImplementation(() => undefined);
+    const errorResponse = {
+      error: "Request timed out. Try a narrower date range or add filters.",
+    };
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
       ok: false,
       status: 503,
       headers: new Headers({ "Content-Type": "application/json" }),
-      json: () => Promise.resolve({ error: "Request timed out. Try a narrower date range or add filters." }),
+      text: () => Promise.resolve(JSON.stringify(errorResponse)),
+      json: () => Promise.resolve(errorResponse),
     }));
     const { result } = renderHook(() => useExport());
 
