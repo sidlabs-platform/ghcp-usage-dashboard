@@ -34,16 +34,25 @@ export interface ExportPDFConfig {
 
 async function getExportErrorMessage(response: Response): Promise<string> {
   const contentType = response.headers.get("Content-Type") || "";
+  const bodyText = await response.text().catch(() => "");
 
   if (contentType.includes("application/json")) {
-    const json = await response.json().catch(() => null);
-    if (json && typeof json === "object" && "error" in json && typeof json.error === "string") {
-      return json.error;
+    try {
+      const json: unknown = JSON.parse(bodyText);
+      if (
+        json &&
+        typeof json === "object" &&
+        "error" in json &&
+        typeof (json as { error?: unknown }).error === "string"
+      ) {
+        return (json as { error: string }).error;
+      }
+    } catch {
+      // Fall through to returning the raw body text.
     }
   }
 
-  const text = await response.text().catch(() => "");
-  return text || `Export fetch failed: HTTP ${response.status}`;
+  return bodyText || `Export fetch failed: HTTP ${response.status}`;
 }
 
 function getDownloadFilename(
