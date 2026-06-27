@@ -4,6 +4,7 @@ import { useEffect, useState, useMemo } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { useDateRange } from "@/contexts/DateRangeContext";
+import { useScope } from "@/contexts/ScopeContext";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { MetricCard } from "@/components/cards/MetricCard";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
@@ -452,6 +453,7 @@ export default function UserDetailPage() {
   const params = useParams();
   const login = typeof params.login === "string" ? decodeURIComponent(params.login) : "";
   const { mode, days, startDate, endDate } = useDateRange();
+  const { selectedOrgs, selectedEnts, selectedOrgTeams, selectedEntTeams } = useScope();
   const [data, setData] = useState<UserDetailData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -472,6 +474,11 @@ export default function UserDetailPage() {
       qp.set("days", String(days));
     }
 
+    if (selectedOrgs.length > 0) qp.set("orgs", selectedOrgs.join(","));
+    if (selectedEnts.length > 0) qp.set("enterprises", selectedEnts.join(","));
+    if (selectedOrgTeams.length > 0) qp.set("teams", selectedOrgTeams.join(","));
+    if (selectedEntTeams.length > 0) qp.set("ent_teams", selectedEntTeams.join(","));
+
     fetch(`/api/users/${encodeURIComponent(login)}?${qp}`)
       .then((res) => {
         if (!res.ok) throw new Error(`Failed to fetch user data (${res.status})`);
@@ -480,7 +487,7 @@ export default function UserDetailPage() {
       .then((json) => setData(json))
       .catch((err) => setError(err.message))
       .finally(() => setLoading(false));
-  }, [login, mode, days, startDate, endDate]);
+  }, [login, mode, days, startDate, endDate, selectedOrgs, selectedEnts, selectedOrgTeams, selectedEntTeams]);
 
   const hasChatActivity = useMemo(() => {
     if (!data?.chatModes) return false;

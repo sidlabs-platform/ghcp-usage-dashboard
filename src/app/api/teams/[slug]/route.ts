@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/db/database";
 import { parseDateRangeParams } from "@/lib/utils";
+import { parseScopeFilter } from "@/lib/api/scope-filter";
 import { withCache } from "@/lib/cache/with-cache";
 import { withTimeout } from "@/lib/api/timeout";
 import { CACHE_TTL } from "@/lib/cache/memory-cache";
@@ -33,10 +34,17 @@ async function handler(request: NextRequest) {
 
     const db = getDb();
 
+    // Scope filtering
+    const scope = parseScopeFilter(searchParams);
+    const efClause = scope.enterpriseSlugs?.length
+      ? ` AND enterprise_slug IN (${scope.enterpriseSlugs.map(() => "?").join(",")})`
+      : "";
+    const efParams = scope.enterpriseSlugs ?? [];
+
     // Get team info
     const teamRow = db.prepare(
-      `SELECT team_slug, team_name, org_slug FROM team_memberships WHERE team_slug = ? LIMIT 1`,
-    ).get(slug) as { team_slug: string; team_name: string; org_slug: string | null } | undefined;
+      `SELECT team_slug, team_name, org_slug FROM team_memberships WHERE team_slug = ?${efClause} LIMIT 1`,
+    ).get(slug, ...efParams) as { team_slug: string; team_name: string; org_slug: string | null } | undefined;
 
     if (!teamRow) {
       return NextResponse.json(
@@ -47,14 +55,14 @@ async function handler(request: NextRequest) {
 
     // Count members
     const countRow = db.prepare(
-      `SELECT COUNT(DISTINCT user_login) as cnt FROM team_memberships WHERE team_slug = ?`,
-    ).get(slug) as { cnt: number };
+      `SELECT COUNT(DISTINCT user_login) as cnt FROM team_memberships WHERE team_slug = ?${efClause}`,
+    ).get(slug, ...efParams) as { cnt: number };
 
     // Aggregate member metrics directly from user_daily_metrics, scoped to team members.
     // Acceptance rate uses completion-only features (excludes agent_edit) via json_each.
     const members = db.prepare(`
       WITH team_logins AS (
-        SELECT DISTINCT user_login FROM team_memberships WHERE team_slug = ?
+        SELECT DISTINCT user_login FROM team_memberships WHERE team_slug = ?${efClause}
       ),
       member_metrics AS (
         SELECT
@@ -102,7 +110,7 @@ async function handler(request: NextRequest) {
       LEFT JOIN member_metrics mm ON mm.user_login = tl.user_login
       LEFT JOIN completion_rates cr ON cr.user_login = tl.user_login
       ORDER BY activeDays DESC
-    `).all(slug, start, end, start, end) as MemberRow[];
+    `).all(slug, ...efParams, start, end, start, end) as MemberRow[];
 
     // Calculate aggregates from members
     const totalLocAdded = members.reduce((s, m) => s + m.locAdded, 0);
