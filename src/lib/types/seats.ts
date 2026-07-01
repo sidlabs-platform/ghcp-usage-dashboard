@@ -23,6 +23,15 @@ export interface CopilotAssigningTeam {
   html_url: string;
 }
 
+export interface CopilotSeatOrganization {
+  login: string;
+  id: number;
+  node_id?: string;
+  url?: string;
+  avatar_url?: string;
+  description?: string | null;
+}
+
 export interface CopilotSeat {
   created_at: string;
   updated_at: string;
@@ -33,6 +42,7 @@ export interface CopilotSeat {
   plan_type: string;
   assignee: CopilotSeatAssignee;
   assigning_team?: CopilotAssigningTeam;
+  organization?: CopilotSeatOrganization | null;
 }
 
 export interface CopilotSeatsResponse {

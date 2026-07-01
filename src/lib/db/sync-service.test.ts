@@ -17,7 +17,13 @@ vi.mock("@/lib/github/metrics-client", () => ({
 }));
 
 vi.mock("@/lib/github/seats-client", () => ({
-  seatsClient: { getOrgSeats: vi.fn(async () => ({ seats: [{ login: "u1" }] })) },
+  seatsClient: {
+    getEnterpriseSeats: vi.fn(async () => ({
+      totalSeats: 1,
+      seats: [makeSeat("u1", "test-org")],
+    })),
+    getOrgSeats: vi.fn(async () => ({ seats: [makeSeat("u1", "test-org")] })),
+  },
 }));
 
 vi.mock("@/lib/github/teams-client", () => ({
@@ -40,7 +46,7 @@ vi.mock("./metrics-repo", () => ({
   invalidateEnterpriseCountCache: vi.fn(),
 }));
 
-vi.mock("./seats-repo", () => ({ upsertSeats: vi.fn() }));
+vi.mock("./seats-repo", () => ({ replaceEnterpriseSeats: vi.fn((_, seatsByOrg: Map<string, unknown[]>) => Array.from(seatsByOrg.values()).reduce((sum, seats) => sum + seats.length, 0)), upsertSeats: vi.fn() }));
 vi.mock("./summary-tables", () => ({ refreshAllSummaries: vi.fn() }));
 vi.mock("@/lib/cache/memory-cache", () => ({ cache: { invalidateByPrefix: vi.fn(), invalidateAll: vi.fn() } }));
 vi.mock("./teams-repo", () => ({ upsertAllTeams: vi.fn() }));
@@ -78,8 +84,23 @@ import { teamsClient } from "@/lib/github/teams-client";
 import { getConfiguredEnterprises, getResolvedOrgsForEnterprise, getEnterpriseConfig, isCopilotSubEnabledForEnterprise, isCopilotSubEnabledForAnyEnterprise } from "@/lib/config/enterprise-config";
 import { orgsClient } from "@/lib/github/orgs-client";
 import { upsertEnterpriseOrgs } from "./orgs-repo";
+import { replaceEnterpriseSeats, upsertSeats } from "./seats-repo";
 import { batchUpsertUserTeams } from "./user-teams-repo";
 import { datesBetween } from "@/lib/utils";
+
+function makeSeat(login: string, orgLogin: string | null) {
+  return {
+    assignee: { login, id: login.length, avatar_url: `https://github.com/${login}.png` },
+    plan_type: "enterprise",
+    last_activity_at: "2025-01-01T00:00:00Z",
+    last_activity_editor: "vscode",
+    last_authenticated_at: "2025-01-01T00:00:00Z",
+    pending_cancellation_date: null,
+    created_at: "2025-01-01T00:00:00Z",
+    updated_at: "2025-01-01T00:00:00Z",
+    organization: orgLogin ? { login: orgLogin, id: orgLogin.length } : null,
+  };
+}
 
 describe("sync-service", () => {
   beforeEach(() => {
@@ -91,6 +112,14 @@ describe("sync-service", () => {
     (getConfiguredEnterprises as ReturnType<typeof vi.fn>).mockReturnValue([{ slug: "test-ent", displayName: "Test" }]);
     (getResolvedOrgsForEnterprise as ReturnType<typeof vi.fn>).mockReturnValue(["test-org"]);
     (datesBetween as ReturnType<typeof vi.fn>).mockReturnValue(["2025-01-01"]);
+    (seatsClient.getEnterpriseSeats as ReturnType<typeof vi.fn>).mockResolvedValue({
+      totalSeats: 1,
+      seats: [makeSeat("u1", "test-org")],
+    });
+    (seatsClient.getOrgSeats as ReturnType<typeof vi.fn>).mockResolvedValue({
+      totalSeats: 1,
+      seats: [makeSeat("u1", "test-org")],
+    });
   });
 
   it("syncDay fetches enterprise, users, org data, and user-team attribution", async () => {
@@ -122,9 +151,47 @@ describe("sync-service", () => {
     expect(result).toBe(0);
   });
 
-  it("syncSeats fetches org seats when enabled", async () => {
+  it("syncSeats fetches enterprise seats when enterprise mode is enabled", async () => {
     const result = await syncSeats();
     expect(result).toBe(1);
+    expect(seatsClient.getEnterpriseSeats).toHaveBeenCalledWith("test-ent", "test-ent");
+    expect(replaceEnterpriseSeats).toHaveBeenCalledWith(
+      "test-ent",
+      new Map([["test-org", [makeSeat("u1", "test-org")]]]),
+    );
+  });
+
+  it("syncSeats skips enterprise seats without organization metadata", async () => {
+    (seatsClient.getEnterpriseSeats as ReturnType<typeof vi.fn>).mockResolvedValue({
+      totalSeats: 2,
+      seats: [makeSeat("u1", "test-org"), makeSeat("u2", null)],
+    });
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const result = await syncSeats();
+
+    expect(result).toBe(1);
+    expect(replaceEnterpriseSeats).toHaveBeenCalledWith(
+      "test-ent",
+      new Map([["test-org", [makeSeat("u1", "test-org")]]]),
+    );
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("Skipped %d enterprise seat(s) without organization metadata"),
+      "test-ent",
+      1,
+    );
+    warnSpy.mockRestore();
+  });
+
+  it("syncSeats falls back to org seats when enterprise seats fail", async () => {
+    (seatsClient.getEnterpriseSeats as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("no enterprise seats"));
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const result = await syncSeats();
+
+    expect(result).toBe(1);
+    expect(upsertSeats).toHaveBeenCalledWith("test-ent", "test-org", [makeSeat("u1", "test-org")]);
+    errorSpy.mockRestore();
   });
 
   it("syncDay org-only mode fetches user metrics per org", async () => {
@@ -278,11 +345,15 @@ describe("sync-service", () => {
     expect(result.enterprises[0].seats).toBe(0);
   });
 
-  it("syncSeats handles org API errors gracefully", async () => {
+  it("syncSeats handles enterprise and org API errors gracefully", async () => {
+    (seatsClient.getEnterpriseSeats as ReturnType<typeof vi.fn>)
+      .mockRejectedValue(new Error("enterprise seats API failure"));
     (seatsClient.getOrgSeats as ReturnType<typeof vi.fn>)
       .mockRejectedValue(new Error("seats API failure"));
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     const result = await syncSeats();
     expect(result).toBe(0);
+    errorSpy.mockRestore();
   });
 
   it("incrementalSync returns 0 when enterprise disabled and no orgs", async () => {
