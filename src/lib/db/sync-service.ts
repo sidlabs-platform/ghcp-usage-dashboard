@@ -567,6 +567,14 @@ async function syncSeatsForEnterprise(slug: string): Promise<number> {
     try {
       const { seats } = await getEnterpriseSeatsSnapshot(slug);
       const { seatsByOrg, skipped } = groupSeatsByOrganization(seats);
+      if (skipped > 0 && seatsByOrg.size === 0) {
+        console.warn(
+          "[Sync] [%s] Skipped %d enterprise seat(s) without organization metadata during seat sync",
+          sanitizeForLog(slug),
+          skipped,
+        );
+        throw new Error("Enterprise seats snapshot contained no organization metadata");
+      }
       total = replaceEnterpriseSeats(slug, seatsByOrg);
       recordSync(slug, "seats", slug, null, total);
       if (skipped > 0) {

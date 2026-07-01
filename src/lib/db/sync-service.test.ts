@@ -77,7 +77,7 @@ vi.mock("./enterprise-context", () => ({
 }));
 
 import { syncDay, syncSeats, syncTeams, fullSync, backfill, incrementalSync, backfillEnterprise } from "./sync-service";
-import { isSynced, getLatestSyncDay, hasEnterpriseDataForRange, hasOrgDataForRange } from "./metrics-repo";
+import { isSynced, getLatestSyncDay, hasEnterpriseDataForRange, hasOrgDataForRange, recordSync } from "./metrics-repo";
 import { metricsClient } from "@/lib/github/metrics-client";
 import { seatsClient } from "@/lib/github/seats-client";
 import { teamsClient } from "@/lib/github/teams-client";
@@ -181,6 +181,29 @@ describe("sync-service", () => {
       1,
     );
     warnSpy.mockRestore();
+  });
+
+  it("syncSeats falls back when all enterprise seats are missing organization metadata", async () => {
+    (seatsClient.getEnterpriseSeats as ReturnType<typeof vi.fn>).mockResolvedValue({
+      totalSeats: 2,
+      seats: [makeSeat("u1", null), makeSeat("u2", null)],
+    });
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const result = await syncSeats();
+
+    expect(result).toBe(1);
+    expect(replaceEnterpriseSeats).not.toHaveBeenCalled();
+    expect(upsertSeats).toHaveBeenCalledWith("test-ent", "test-org", [makeSeat("u1", "test-org")]);
+    expect(recordSync).not.toHaveBeenCalledWith("test-ent", "seats", "test-ent", null, expect.any(Number));
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("Skipped %d enterprise seat(s) without organization metadata"),
+      "test-ent",
+      2,
+    );
+    warnSpy.mockRestore();
+    errorSpy.mockRestore();
   });
 
   it("syncSeats falls back to org seats when enterprise seats fail", async () => {
