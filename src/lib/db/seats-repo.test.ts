@@ -10,7 +10,7 @@ vi.mock("./database", () => ({
   getDb: () => db,
 }));
 
-import { upsertSeat, upsertSeats, getAllSeats, getSeatsByOrg, getSeatsPaginated, getSeatStats } from "./seats-repo";
+import { getAllSeats, getSeatStats, getSeatsByOrg, getSeatsPaginated, replaceEnterpriseSeats, upsertSeat, upsertSeats } from "./seats-repo";
 
 beforeAll(() => {
   db = new Database(":memory:");
@@ -100,6 +100,28 @@ describe("seats-repo", () => {
       const stats = getSeatStats(["acme"]);
       expect(stats.total).toBe(4);
       expect(stats.active30d + stats.inactive30d).toBe(stats.total);
+    });
+  });
+
+  describe("replaceEnterpriseSeats", () => {
+    it("refreshes an enterprise seat snapshot and removes stale rows", () => {
+      upsertSeats("snapshot-ent", "org-old", [
+        makeSeat("zoe", 90, "active_user", "2024-06-01T00:00:00Z", "vscode"),
+      ]);
+
+      const inserted = replaceEnterpriseSeats(
+        "snapshot-ent",
+        new Map([
+          ["org-new", [
+            makeSeat("zoe", 90, "active_user", "2024-06-20T00:00:00Z", "vscode"),
+            makeSeat("yan", 91, "active_user", "2024-06-21T00:00:00Z", "vscode"),
+          ]],
+        ]),
+      );
+
+      expect(inserted).toBe(2);
+      expect(getSeatsByOrg("org-old", ["snapshot-ent"])).toEqual([]);
+      expect(getSeatsByOrg("org-new", ["snapshot-ent"]).map((seat) => seat.user_login).sort()).toEqual(["yan", "zoe"]);
     });
   });
 });

@@ -19,7 +19,7 @@ import {
   heartbeatSyncLock,
   invalidateEnterpriseCountCache,
 } from "./metrics-repo";
-import { upsertSeats } from "./seats-repo";
+import { replaceEnterpriseSeats, upsertSeats } from "./seats-repo";
 import { refreshAllSummaries } from "./summary-tables";
 import { cache } from "@/lib/cache/memory-cache";
 import { upsertAllTeams } from "./teams-repo";
@@ -34,15 +34,49 @@ import { getEnterpriseContext, updateEnterpriseRegistry } from "./enterprise-con
 import { orgsClient } from "@/lib/github/orgs-client";
 import { upsertEnterpriseOrgs, clearEnterpriseOrgs } from "./orgs-repo";
 import type { UserTeamRecord } from "@/lib/types/metrics";
+import type { CopilotSeat } from "@/lib/types/seats";
 
 const BACKFILL_DAYS = parseInt(process.env.BACKFILL_DAYS || "90", 10) || 90;
 
 /** Track which enterprises have the user-teams API unavailable during this sync run */
 const userTeamsUnavailable = new Set<string>();
+const enterpriseSeatsSnapshotCache = new Map<string, { totalSeats: number; seats: CopilotSeat[] }>();
 
 /** Strip newlines/carriage returns from a string before logging to prevent log injection. */
 function sanitizeForLog(s: string): string {
   return s.replace(/\n|\r/g, "");
+}
+
+async function getEnterpriseSeatsSnapshot(enterpriseSlug: string): Promise<{ totalSeats: number; seats: CopilotSeat[] }> {
+  const cached = enterpriseSeatsSnapshotCache.get(enterpriseSlug);
+  if (cached) return cached;
+  const snapshot = await seatsClient.getEnterpriseSeats(enterpriseSlug, enterpriseSlug);
+  enterpriseSeatsSnapshotCache.set(enterpriseSlug, snapshot);
+  return snapshot;
+}
+
+function getSeatOrganizationLogin(seat: CopilotSeat): string | null {
+  const login = seat.organization?.login?.trim();
+  return login || null;
+}
+
+function groupSeatsByOrganization(seats: CopilotSeat[]): { seatsByOrg: Map<string, CopilotSeat[]>; skipped: number } {
+  const seatsByOrg = new Map<string, CopilotSeat[]>();
+  let skipped = 0;
+  for (const seat of seats) {
+    const org = getSeatOrganizationLogin(seat);
+    if (!org) {
+      skipped++;
+      continue;
+    }
+    const existing = seatsByOrg.get(org);
+    if (existing) {
+      existing.push(seat);
+    } else {
+      seatsByOrg.set(org, [seat]);
+    }
+  }
+  return { seatsByOrg, skipped };
 }
 
 export interface SyncProgress {
@@ -126,11 +160,41 @@ async function discoverOrgsIfNeeded(
     );
     return orgSlugs.length;
   } catch (err) {
-    console.warn(
-      "[Sync] [%s] Org auto-discovery failed (continuing with cached orgs): %s",
-      sanitizeForLog(enterpriseSlug),
-      err instanceof Error ? err.message : String(err),
-    );
+    const orgApiMessage = err instanceof Error ? err.message : String(err);
+    try {
+      const { seats } = await getEnterpriseSeatsSnapshot(enterpriseSlug);
+      const { seatsByOrg, skipped } = groupSeatsByOrganization(seats);
+      const orgSlugs = Array.from(seatsByOrg.keys()).sort();
+      if (orgSlugs.length > 0) {
+        clearEnterpriseOrgs(enterpriseSlug);
+        upsertEnterpriseOrgs(enterpriseSlug, orgSlugs, "discovered");
+        console.log(
+          "[Sync] [%s] Auto-discovered %d organization(s) from enterprise seats fallback; orgs with zero Copilot seats are not visible via this fallback",
+          sanitizeForLog(enterpriseSlug),
+          orgSlugs.length,
+        );
+        if (skipped > 0) {
+          console.warn(
+            "[Sync] [%s] Skipped %d enterprise seat(s) without organization metadata during org discovery",
+            sanitizeForLog(enterpriseSlug),
+            skipped,
+          );
+        }
+        return orgSlugs.length;
+      }
+      console.warn(
+        "[Sync] [%s] Org auto-discovery failed and enterprise seats fallback found no organizations (continuing with cached orgs): %s",
+        sanitizeForLog(enterpriseSlug),
+        sanitizeForLog(orgApiMessage),
+      );
+    } catch (seatErr) {
+      console.warn(
+        "[Sync] [%s] Org auto-discovery failed (continuing with cached orgs): %s; enterprise seats fallback also failed: %s",
+        sanitizeForLog(enterpriseSlug),
+        sanitizeForLog(orgApiMessage),
+        sanitizeForLog(seatErr instanceof Error ? seatErr.message : String(seatErr)),
+      );
+    }
     return 0;
   }
 }
@@ -499,6 +563,33 @@ async function syncSeatsForEnterprise(slug: string): Promise<number> {
   const orgs = getResolvedOrgsForEnterprise(slug);
   let total = 0;
 
+  if (isCopilotSubEnabledForEnterprise(slug, "enterprise")) {
+    try {
+      const { seats } = await getEnterpriseSeatsSnapshot(slug);
+      const { seatsByOrg, skipped } = groupSeatsByOrganization(seats);
+      if (skipped > 0 && seatsByOrg.size === 0) {
+        console.warn(
+          "[Sync] [%s] Skipped %d enterprise seat(s) without organization metadata during seat sync",
+          sanitizeForLog(slug),
+          skipped,
+        );
+        throw new Error("Enterprise seats snapshot contained no organization metadata");
+      }
+      total = replaceEnterpriseSeats(slug, seatsByOrg);
+      recordSync(slug, "seats", slug, null, total);
+      if (skipped > 0) {
+        console.warn(
+          "[Sync] [%s] Skipped %d enterprise seat(s) without organization metadata during seat sync",
+          sanitizeForLog(slug),
+          skipped,
+        );
+      }
+      return total;
+    } catch (err) {
+      console.error("[%s] Failed to sync enterprise seats; falling back to org seats:", sanitizeForLog(slug), err);
+    }
+  }
+
   for (const org of orgs) {
     try {
       const { seats } = await seatsClient.getOrgSeats(org, slug);
@@ -514,6 +605,7 @@ async function syncSeatsForEnterprise(slug: string): Promise<number> {
 }
 
 export async function syncSeats(): Promise<number> {
+  enterpriseSeatsSnapshotCache.clear();
   if (!isCopilotSubEnabledForAnyEnterprise("seats")) {
     console.log("[Sync] Seats sync disabled by config");
     return 0;
@@ -587,6 +679,7 @@ export async function fullSync(
 ): Promise<MultiEnterpriseSyncResult> {
   const enterprises = getConfiguredEnterprises();
   userTeamsUnavailable.clear();
+  enterpriseSeatsSnapshotCache.clear();
 
   if (enterprises.length === 0) {
     console.warn("[Sync] No enterprises configured — nothing to sync");
@@ -761,4 +854,3 @@ async function sync28DayFallback(
     }
   }
 }
-
