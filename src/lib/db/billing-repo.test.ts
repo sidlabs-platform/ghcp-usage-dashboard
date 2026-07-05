@@ -541,6 +541,17 @@ describe("getPremiumCostCenterBreakdown", () => {
     expect(rows[1].cost_center_name).toBe("small");
   });
 
+  it("breaks ties by cost_center_name ascending", () => {
+    upsertPremiumRequests("ent1", [
+      makePremiumRecord({ sku: "p1", username: "dev1", cost_center_name: "beta", aic_quantity: 100, aic_gross_amount: 2 }),
+      makePremiumRecord({ sku: "p2", username: "dev2", cost_center_name: "alpha", aic_quantity: 100, aic_gross_amount: 2 }),
+    ]);
+    const rows = getPremiumCostCenterBreakdown("2026-06-01", "2026-06-30");
+    expect(rows.map((r) => r.total_aic_quantity)).toEqual([100, 100]);
+    expect(rows.map((r) => r.total_aic_gross)).toEqual([2, 2]);
+    expect(rows.map((r) => r.cost_center_name)).toEqual(["alpha", "beta"]);
+  });
+
   it("respects model filter", () => {
     upsertPremiumRequests("ent1", [
       makePremiumRecord({ sku: "p1", username: "dev1", cost_center_name: "cc", model: "gpt-4", aic_quantity: 100, aic_gross_amount: 2 }),
@@ -597,6 +608,17 @@ describe("getPremiumOrgBreakdown", () => {
     const rows = getPremiumOrgBreakdown("2026-06-01", "2026-06-30");
     expect(rows[0].organization).toBe("big");
     expect(rows[1].organization).toBe("small");
+  });
+
+  it("breaks ties by organization ascending", () => {
+    upsertPremiumRequests("ent1", [
+      makePremiumRecord({ sku: "p1", username: "dev1", organization: "beta", aic_quantity: 100, aic_gross_amount: 2 }),
+      makePremiumRecord({ sku: "p2", username: "dev2", organization: "alpha", aic_quantity: 100, aic_gross_amount: 2 }),
+    ]);
+    const rows = getPremiumOrgBreakdown("2026-06-01", "2026-06-30");
+    expect(rows.map((r) => r.total_aic_quantity)).toEqual([100, 100]);
+    expect(rows.map((r) => r.total_aic_gross)).toEqual([2, 2]);
+    expect(rows.map((r) => r.organization)).toEqual(["alpha", "beta"]);
   });
 
   it("filters by enterprise slug", () => {

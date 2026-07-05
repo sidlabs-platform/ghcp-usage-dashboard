@@ -820,7 +820,7 @@ export function getPremiumCostCenterBreakdown(
     FROM billing_premium_requests
     ${buildWhereClause(clauses)}
     GROUP BY COALESCE(cost_center_name, '')
-    ORDER BY total_aic_quantity DESC, total_aic_gross DESC
+    ORDER BY total_aic_quantity DESC, total_aic_gross DESC, cost_center_name ASC
   `
     )
     .all(...params) as PremiumCostCenterBreakdown[];
@@ -867,7 +867,7 @@ export function getPremiumOrgBreakdown(
     FROM billing_premium_requests
     ${buildWhereClause(clauses)}
     GROUP BY COALESCE(organization, '')
-    ORDER BY total_aic_quantity DESC, total_aic_gross DESC
+    ORDER BY total_aic_quantity DESC, total_aic_gross DESC, organization ASC
   `
     )
     .all(...params) as PremiumOrgBreakdown[];
