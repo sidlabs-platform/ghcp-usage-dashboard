@@ -7,10 +7,10 @@ import { MetricCard } from "@/components/cards/MetricCard";
 import { ChartSkeleton } from "@/components/states/ChartSkeleton";
 import { useDateRange } from "@/contexts/DateRangeContext";
 import { useScope } from "@/contexts/ScopeContext";
-import { Zap, Users, Brain, AlertTriangle, Search, X } from "lucide-react";
+import { Zap, Users, Brain, AlertTriangle, Search, X, Info, Building2, Wallet } from "lucide-react";
 import { safeNum } from "@/lib/utils";
 import { ExportMenu } from "@/components/ui/ExportMenu";
-import type { BillingPremiumRequestRecord, PremiumRequestUserSummary, PremiumRequestModelSummary, PremiumDailyTrend } from "@/lib/types/billing";
+import type { BillingPremiumRequestRecord, PremiumRequestUserSummary, PremiumRequestModelSummary, PremiumDailyTrend, PremiumCostCenterBreakdown, PremiumOrgBreakdown } from "@/lib/types/billing";
 
 const PremiumModelUsageChart = dynamic(
   () => import("@/components/charts/PremiumModelUsageChart").then(m => ({ default: m.PremiumModelUsageChart })),
@@ -66,6 +66,11 @@ interface MetricsAiCreditUserSummary {
   last_active_day: string;
 }
 
+interface CoverageNote {
+  effectiveDate: string;
+  message: string;
+}
+
 const fmtCurrency = (v: number) => {
   const n = safeNum(v);
   return n >= 1_000_000 ? `$${(n / 1_000_000).toFixed(1)}M`
@@ -86,6 +91,9 @@ export default function PremiumRequestsPage() {
   const [userSummary, setUserSummary] = useState<PremiumRequestUserSummary[]>([]);
   const [modelSummary, setModelSummary] = useState<PremiumRequestModelSummary[]>([]);
   const [dailyTrend, setDailyTrend] = useState<PremiumDailyTrend[]>([]);
+  const [costCenterBreakdown, setCostCenterBreakdown] = useState<PremiumCostCenterBreakdown[]>([]);
+  const [orgBreakdown, setOrgBreakdown] = useState<PremiumOrgBreakdown[]>([]);
+  const [coverageNote, setCoverageNote] = useState<CoverageNote | null>(null);
   const [metricsAiCreditSummary, setMetricsAiCreditSummary] = useState<MetricsAiCreditUserSummary[]>([]);
   const [records, setRecords] = useState<BillingPremiumRequestRecord[]>([]);
   const [pagination, setPagination] = useState<PaginationInfo>({ page: 1, pageSize: 50, totalItems: 0, totalPages: 0 });
@@ -164,6 +172,9 @@ export default function PremiumRequestsPage() {
         setUserSummary(summaryData.userSummary || []);
         setModelSummary(summaryData.modelSummary || []);
         setDailyTrend(summaryData.dailyTrend || []);
+        setCostCenterBreakdown(summaryData.costCenterBreakdown || []);
+        setOrgBreakdown(summaryData.orgBreakdown || []);
+        setCoverageNote(summaryData.coverageNote || null);
         setMetricsAiCreditSummary(summaryData.metricsAiCreditSummary || []);
       }
     } catch (err) {
@@ -312,6 +323,18 @@ export default function PremiumRequestsPage() {
         </div>
       )}
 
+      {/* AI credit coverage caveat (2026-07-02 metrics accuracy update) */}
+      {coverageNote && (
+        <div
+          className="flex items-start gap-2 rounded-lg border border-amber-300/60 dark:border-amber-700/50 bg-amber-50 dark:bg-amber-950/30 px-4 py-2.5 text-sm text-amber-800 dark:text-amber-300"
+          role="note"
+          title={coverageNote.message}
+        >
+          <Info className="mt-0.5 h-4 w-4 shrink-0" />
+          <span>{coverageNote.message}</span>
+        </div>
+      )}
+
       {!hasData && !loading && (
         <div className="text-center py-16 text-[hsl(var(--muted-foreground))]">
           <Zap className="h-16 w-16 mx-auto mb-4 opacity-40" />
@@ -452,6 +475,95 @@ export default function PremiumRequestsPage() {
               <PremiumQuotaChart data={userSummary} />
             </div>
           </div>
+
+          {/* Attribution Breakdowns: cost center + organization (org-less included) */}
+          {(costCenterBreakdown.length > 0 || orgBreakdown.length > 0) && (
+            <div className="grid gap-6 lg:grid-cols-2">
+              <div className="rounded-xl border bg-[hsl(var(--card))] overflow-hidden">
+                <div className="px-6 py-4 border-b">
+                  <h3 className="flex items-center gap-2 text-lg font-semibold">
+                    <Wallet className="h-4 w-4 text-[hsl(var(--muted-foreground))]" />
+                    AI Credits by Cost Center
+                  </h3>
+                  <p className="text-sm text-[hsl(var(--muted-foreground))]">
+                    Usage with no assigned cost center appears as <em>Unattributed</em>.
+                  </p>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead className="border-b bg-[hsl(var(--accent))]/30">
+                      <tr>
+                        <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-[hsl(var(--muted-foreground))]">Cost Center</th>
+                        <th className="px-4 py-3 text-right text-xs font-medium uppercase tracking-wider text-[hsl(var(--muted-foreground))]">AI Credits</th>
+                        <th className="px-4 py-3 text-right text-xs font-medium uppercase tracking-wider text-[hsl(var(--muted-foreground))]">Cost</th>
+                        <th className="px-4 py-3 text-right text-xs font-medium uppercase tracking-wider text-[hsl(var(--muted-foreground))]">Users</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-[hsl(var(--border))]">
+                      {costCenterBreakdown.length === 0 && (
+                        <tr><td colSpan={4} className="px-4 py-6 text-center text-[hsl(var(--muted-foreground))]">No data available</td></tr>
+                      )}
+                      {costCenterBreakdown.map((c) => {
+                        const attributed = c.cost_center_name !== "";
+                        return (
+                          <tr key={c.cost_center_name || "__unattributed__"} className="hover:bg-[hsl(var(--accent))]/20 transition-colors">
+                            <td className="px-4 py-2.5 font-medium">
+                              {attributed ? c.cost_center_name : <span className="italic text-[hsl(var(--muted-foreground))]">Unattributed</span>}
+                            </td>
+                            <td className="px-4 py-2.5 text-right font-semibold">{fmtCredits(c.total_aic_quantity)}</td>
+                            <td className="px-4 py-2.5 text-right">{fmtCurrency(c.total_aic_gross)}</td>
+                            <td className="px-4 py-2.5 text-right text-[hsl(var(--muted-foreground))]">{c.unique_users.toLocaleString()}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              <div className="rounded-xl border bg-[hsl(var(--card))] overflow-hidden">
+                <div className="px-6 py-4 border-b">
+                  <h3 className="flex items-center gap-2 text-lg font-semibold">
+                    <Building2 className="h-4 w-4 text-[hsl(var(--muted-foreground))]" />
+                    AI Credits by Organization
+                  </h3>
+                  <p className="text-sm text-[hsl(var(--muted-foreground))]">
+                    Org-less usage (now attributed since 2026-07-02) appears as <em>No organization</em>.
+                  </p>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead className="border-b bg-[hsl(var(--accent))]/30">
+                      <tr>
+                        <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-[hsl(var(--muted-foreground))]">Organization</th>
+                        <th className="px-4 py-3 text-right text-xs font-medium uppercase tracking-wider text-[hsl(var(--muted-foreground))]">AI Credits</th>
+                        <th className="px-4 py-3 text-right text-xs font-medium uppercase tracking-wider text-[hsl(var(--muted-foreground))]">Cost</th>
+                        <th className="px-4 py-3 text-right text-xs font-medium uppercase tracking-wider text-[hsl(var(--muted-foreground))]">Users</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-[hsl(var(--border))]">
+                      {orgBreakdown.length === 0 && (
+                        <tr><td colSpan={4} className="px-4 py-6 text-center text-[hsl(var(--muted-foreground))]">No data available</td></tr>
+                      )}
+                      {orgBreakdown.map((o) => {
+                        const attributed = o.organization !== "";
+                        return (
+                          <tr key={o.organization || "__unattributed__"} className="hover:bg-[hsl(var(--accent))]/20 transition-colors">
+                            <td className="px-4 py-2.5 font-medium">
+                              {attributed ? o.organization : <span className="italic text-[hsl(var(--muted-foreground))]">No organization</span>}
+                            </td>
+                            <td className="px-4 py-2.5 text-right font-semibold">{fmtCredits(o.total_aic_quantity)}</td>
+                            <td className="px-4 py-2.5 text-right">{fmtCurrency(o.total_aic_gross)}</td>
+                            <td className="px-4 py-2.5 text-right text-[hsl(var(--muted-foreground))]">{o.unique_users.toLocaleString()}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* Per-User Summary Table */}
           {userSummary.length > 0 && (
