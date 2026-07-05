@@ -84,9 +84,33 @@ export interface IdeBreakdownRow {
   ide: string;
   locAdded: number;
   locDeleted: number;
+  locSuggestedAdd: number;
+  locSuggestedDelete: number;
   interactions: number;
   generations: number;
   acceptances: number;
+}
+
+/** A single version → distinct-user-count row (IDE or CLI version adoption). */
+export interface VersionBreakdownRow {
+  version: string;
+  users: number;
+}
+
+/** A plugin+version → distinct-user-count row (editor plugin version adoption). */
+export interface PluginVersionBreakdownRow {
+  plugin: string;
+  version: string;
+  users: number;
+}
+
+/** Suggested vs accepted LoC totals for CLI code suggestions. */
+export interface CliSuggestionStats {
+  locSuggestedAdd: number;
+  locSuggestedDelete: number;
+  locAdded: number;
+  locDeleted: number;
+  acceptanceRate: number;
 }
 
 export interface IdeTrendRow {
@@ -915,6 +939,8 @@ export function getIdeBreakdown(
       json_extract(j.value, '$.ide') as ide,
       COALESCE(SUM(json_extract(j.value, '$.loc_added_sum')), 0) as locAdded,
       COALESCE(SUM(json_extract(j.value, '$.loc_deleted_sum')), 0) as locDeleted,
+      COALESCE(SUM(json_extract(j.value, '$.loc_suggested_to_add_sum')), 0) as locSuggestedAdd,
+      COALESCE(SUM(json_extract(j.value, '$.loc_suggested_to_delete_sum')), 0) as locSuggestedDelete,
       COALESCE(SUM(json_extract(j.value, '$.user_initiated_interaction_count')), 0) as interactions,
       COALESCE(SUM(json_extract(j.value, '$.code_generation_activity_count')), 0) as generations,
       COALESCE(SUM(json_extract(j.value, '$.code_acceptance_activity_count')), 0) as acceptances
@@ -951,6 +977,102 @@ export function getIdeTrend(
     ORDER BY u.day ASC, interactions DESC
   `;
   return db.prepare(sql).all(startDay, endDay, ...filter.params, ...ef.params) as IdeTrendRow[];
+}
+
+// ── Version adoption (IDE / plugin / CLI) ─────────────────────────────
+//
+// Version-adoption breakdowns answer "how many users are currently on
+// version X?". Each user is attributed to a SINGLE version — the one from
+// their most-recently-sampled telemetry (`sampled_at`) within the window.
+// This intentionally de-duplicates a user who reports multiple samples over
+// several days. Users whose synced data predates version resolution (or who
+// otherwise lack a version) are bucketed under 'Unknown' so counts stay
+// complete and the feature degrades gracefully on older data.
+
+/**
+ * Distinct users per editor version, from `totals_by_ide[].last_known_ide_version`.
+ * Prefers each user's most-recent version sample; missing versions bucket to 'Unknown'.
+ */
+export function getIdeVersionBreakdown(
+  startDay: string,
+  endDay: string,
+  allowedLogins?: string[],
+  enterpriseSlugs?: string[],
+): VersionBreakdownRow[] {
+  const db = getDb();
+  const filter = buildLoginFilter(allowedLogins ?? []);
+  const ef = buildEnterpriseFilter(enterpriseSlugs);
+  const sql = `
+    WITH samples AS (
+      SELECT
+        u.user_login AS login,
+        json_extract(j.value, '$.last_known_ide_version.ide_version') AS version,
+        json_extract(j.value, '$.last_known_ide_version.sampled_at') AS sampled_at
+      FROM user_daily_metrics u, json_each(u.totals_by_ide) j
+      WHERE u.day >= ? AND u.day <= ?
+        AND u.totals_by_ide IS NOT NULL AND u.totals_by_ide != '[]'
+        ${filter.clause}${ef.clause}
+    ),
+    ranked AS (
+      SELECT login, version,
+        ROW_NUMBER() OVER (
+          PARTITION BY login
+          ORDER BY (CASE WHEN version IS NOT NULL THEN 1 ELSE 0 END) DESC, sampled_at DESC
+        ) AS rn
+      FROM samples
+    )
+    SELECT COALESCE(version, 'Unknown') AS version, COUNT(*) AS users
+    FROM ranked
+    WHERE rn = 1
+    GROUP BY COALESCE(version, 'Unknown')
+    ORDER BY users DESC, version ASC
+  `;
+  return db.prepare(sql).all(startDay, endDay, ...filter.params, ...ef.params) as VersionBreakdownRow[];
+}
+
+/**
+ * Distinct users per editor plugin+version, from `totals_by_ide[].last_known_plugin_version`.
+ * Prefers each user's most-recent plugin sample; missing plugin/version bucket to 'Unknown'.
+ */
+export function getPluginVersionBreakdown(
+  startDay: string,
+  endDay: string,
+  allowedLogins?: string[],
+  enterpriseSlugs?: string[],
+): PluginVersionBreakdownRow[] {
+  const db = getDb();
+  const filter = buildLoginFilter(allowedLogins ?? []);
+  const ef = buildEnterpriseFilter(enterpriseSlugs);
+  const sql = `
+    WITH samples AS (
+      SELECT
+        u.user_login AS login,
+        json_extract(j.value, '$.last_known_plugin_version.plugin') AS plugin,
+        json_extract(j.value, '$.last_known_plugin_version.plugin_version') AS version,
+        json_extract(j.value, '$.last_known_plugin_version.sampled_at') AS sampled_at
+      FROM user_daily_metrics u, json_each(u.totals_by_ide) j
+      WHERE u.day >= ? AND u.day <= ?
+        AND u.totals_by_ide IS NOT NULL AND u.totals_by_ide != '[]'
+        ${filter.clause}${ef.clause}
+    ),
+    ranked AS (
+      SELECT plugin, version, login,
+        ROW_NUMBER() OVER (
+          PARTITION BY login
+          ORDER BY (CASE WHEN version IS NOT NULL THEN 1 ELSE 0 END) DESC, sampled_at DESC
+        ) AS rn
+      FROM samples
+    )
+    SELECT
+      COALESCE(plugin, 'Unknown') AS plugin,
+      COALESCE(version, 'Unknown') AS version,
+      COUNT(*) AS users
+    FROM ranked
+    WHERE rn = 1
+    GROUP BY COALESCE(plugin, 'Unknown'), COALESCE(version, 'Unknown')
+    ORDER BY users DESC, plugin ASC, version ASC
+  `;
+  return db.prepare(sql).all(startDay, endDay, ...filter.params, ...ef.params) as PluginVersionBreakdownRow[];
 }
 
 // ── CLI user breakdown (SQL) ──────────────────────────────────────────
@@ -1014,6 +1136,125 @@ export function getCliUserBreakdown(
     LIMIT ?
   `;
   return db.prepare(sql).all(startDay, endDay, ...filter.params, ...ef.params, limit) as CliUserRow[];
+}
+
+/**
+ * Distinct users per CLI version, from `totals_by_cli.last_known_cli_version`.
+ * Prefers each user's most-recent version sample; missing versions bucket to 'Unknown'.
+ */
+export function getCliVersionBreakdown(
+  startDay: string,
+  endDay: string,
+  allowedLogins?: string[],
+  enterpriseSlugs?: string[],
+): VersionBreakdownRow[] {
+  const db = getDb();
+  const filter = buildLoginFilter(allowedLogins ?? []);
+  const ef = buildEnterpriseFilter(enterpriseSlugs);
+  const sql = `
+    WITH samples AS (
+      SELECT
+        user_login AS login,
+        json_extract(totals_by_cli, '$.last_known_cli_version.cli_version') AS version,
+        json_extract(totals_by_cli, '$.last_known_cli_version.sampled_at') AS sampled_at
+      FROM user_daily_metrics
+      WHERE day >= ? AND day <= ?
+        AND used_cli = 1
+        AND totals_by_cli IS NOT NULL AND totals_by_cli != ''
+        ${filter.clause}${ef.clause}
+    ),
+    ranked AS (
+      SELECT login, version,
+        ROW_NUMBER() OVER (
+          PARTITION BY login
+          ORDER BY (CASE WHEN version IS NOT NULL THEN 1 ELSE 0 END) DESC, sampled_at DESC
+        ) AS rn
+      FROM samples
+    )
+    SELECT COALESCE(version, 'Unknown') AS version, COUNT(*) AS users
+    FROM ranked
+    WHERE rn = 1
+    GROUP BY COALESCE(version, 'Unknown')
+    ORDER BY users DESC, version ASC
+  `;
+  return db.prepare(sql).all(startDay, endDay, ...filter.params, ...ef.params) as VersionBreakdownRow[];
+}
+
+/**
+ * Aggregate CLI code-suggestion LoC from the CLI's entry in `totals_by_ide`.
+ * The CLI reports its editor-equivalent activity as an IDE whose name is "cli"
+ * or ends with "_cli"/"-cli" (e.g. "copilot_cli"); suggested-LoC coverage is reliable on CLI
+ * 1.0.57+ and de-duplicated on 1.0.64+. Returns zeros when no CLI IDE rows exist.
+ */
+export function getCliSuggestionStats(
+  startDay: string,
+  endDay: string,
+  allowedLogins?: string[],
+  enterpriseSlugs?: string[],
+): CliSuggestionStats {
+  const db = getDb();
+  const filter = buildLoginFilter(allowedLogins ?? []);
+  const ef = buildEnterpriseFilter(enterpriseSlugs);
+  const sql = `
+    SELECT
+      COALESCE(SUM(json_extract(j.value, '$.loc_suggested_to_add_sum')), 0) as locSuggestedAdd,
+      COALESCE(SUM(json_extract(j.value, '$.loc_suggested_to_delete_sum')), 0) as locSuggestedDelete,
+      COALESCE(SUM(json_extract(j.value, '$.loc_added_sum')), 0) as locAdded,
+      COALESCE(SUM(json_extract(j.value, '$.loc_deleted_sum')), 0) as locDeleted
+    FROM user_daily_metrics u, json_each(u.totals_by_ide) j
+    WHERE u.day >= ? AND u.day <= ?
+      AND u.totals_by_ide IS NOT NULL AND u.totals_by_ide != '[]'
+      AND (
+        LOWER(json_extract(j.value, '$.ide')) = 'cli'
+        OR LOWER(json_extract(j.value, '$.ide')) LIKE '%\\_cli' ESCAPE '\\'
+        OR LOWER(json_extract(j.value, '$.ide')) LIKE '%-cli'
+      )
+      ${filter.clause}${ef.clause}
+  `;
+  const row = db.prepare(sql).get(startDay, endDay, ...filter.params, ...ef.params) as
+    | Omit<CliSuggestionStats, "acceptanceRate">
+    | undefined;
+  const base = row ?? { locSuggestedAdd: 0, locSuggestedDelete: 0, locAdded: 0, locDeleted: 0 };
+  const acceptanceRate =
+    base.locSuggestedAdd > 0 ? Math.round((base.locAdded / base.locSuggestedAdd) * 1000) / 10 : 0;
+  return { ...base, acceptanceRate };
+}
+
+/** Minimum CLI version with de-duplicated suggested-LoC reporting (changelog 2026-07-02). */
+export const MIN_RELIABLE_CLI_VERSION = "1.0.64";
+
+/**
+ * Compare two dotted numeric version strings (e.g. "1.0.64" vs "1.0.7").
+ * Returns a negative number if a<b, 0 if equal, positive if a>b.
+ * Missing or non-numeric components are treated as 0.
+ */
+export function compareVersions(a: string, b: string): number {
+  const pa = a.split(".");
+  const pb = b.split(".");
+  const len = Math.max(pa.length, pb.length);
+  for (let i = 0; i < len; i++) {
+    const na = parseInt(pa[i] ?? "0", 10);
+    const nb = parseInt(pb[i] ?? "0", 10);
+    const va = Number.isNaN(na) ? 0 : na;
+    const vb = Number.isNaN(nb) ? 0 : nb;
+    if (va !== vb) return va - vb;
+  }
+  return 0;
+}
+
+/**
+ * Count distinct users running a CLI version older than `threshold`.
+ * 'Unknown' and non-numeric version strings are excluded because their age is
+ * indeterminate. Intended for the "outdated CLI degrades metric quality" callout.
+ */
+export function countOutdatedCliUsers(
+  rows: VersionBreakdownRow[],
+  threshold: string = MIN_RELIABLE_CLI_VERSION,
+): number {
+  return rows.reduce((sum, r) => {
+    if (r.version === "Unknown" || !/^\d/.test(r.version)) return sum;
+    return compareVersions(r.version, threshold) < 0 ? sum + r.users : sum;
+  }, 0);
 }
 
 // ── Adoption daily trend (SQL) ────────────────────────────────────────

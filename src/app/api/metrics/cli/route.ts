@@ -6,6 +6,10 @@ import {
   getActiveUsersDailyTrend,
   getCliDailyVolume,
   getCliUserBreakdown,
+  getCliVersionBreakdown,
+  getCliSuggestionStats,
+  countOutdatedCliUsers,
+  MIN_RELIABLE_CLI_VERSION,
 } from "@/lib/db/aggregation-queries";
 
 export async function GET(request: Request) {
@@ -84,6 +88,13 @@ export async function GET(request: Request) {
     // Top CLI users — SQL aggregation, no getAllUserMetrics
     const topCliUsers = getCliUserBreakdown(start, end, 20, allowedLogins, enterpriseSlugs);
 
+    // CLI code-suggestion effectiveness (Insight B) — suggested vs accepted LoC.
+    const cliSuggestion = getCliSuggestionStats(start, end, allowedLogins, enterpriseSlugs);
+
+    // CLI version adoption (Insight A) — distinct users per version + outdated callout.
+    const cliVersions = getCliVersionBreakdown(start, end, allowedLogins, enterpriseSlugs);
+    const outdatedCliUsers = countOutdatedCliUsers(cliVersions);
+
     return NextResponse.json({
       dailyTrend,
       dailyTokens,
@@ -93,6 +104,10 @@ export async function GET(request: Request) {
         requestsToday: latestTokenRow?.requests ?? 0,
         avgTokensPerRequest: latestTokenRow?.avgPerRequest ?? 0,
       },
+      cliSuggestion,
+      cliVersions,
+      outdatedCliUsers,
+      minReliableCliVersion: MIN_RELIABLE_CLI_VERSION,
       topCliUsers,
     }, {
       headers: { "Cache-Control": "private, max-age=300, stale-while-revalidate=60" },

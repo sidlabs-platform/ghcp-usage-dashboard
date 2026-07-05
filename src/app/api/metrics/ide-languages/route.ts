@@ -4,6 +4,8 @@ import { parseScopeFilter } from "@/lib/api/scope-filter";
 import {
   getIdeBreakdown,
   getIdeTrend,
+  getIdeVersionBreakdown,
+  getPluginVersionBreakdown,
   getLanguageByFeatureBreakdown,
   estimateRowCount,
 } from "@/lib/db/aggregation-queries";
@@ -36,6 +38,8 @@ export async function GET(request: Request) {
       name: r.ide,
       locAdded: r.locAdded,
       locDeleted: r.locDeleted,
+      locSuggestedAdd: r.locSuggestedAdd,
+      locSuggestedDelete: r.locSuggestedDelete,
       interactions: r.interactions,
       generations: r.generations,
       acceptances: r.acceptances,
@@ -67,11 +71,18 @@ export async function GET(request: Request) {
 
     const allIdes = ideDistribution.map((i) => i.name);
 
+    // Version adoption — distinct users per editor & plugin version (Insight A).
+    // Additive keys; empty arrays when older synced data lacks version telemetry.
+    const ideVersions = getIdeVersionBreakdown(start, end, allowedLogins, enterpriseSlugs);
+    const pluginVersions = getPluginVersionBreakdown(start, end, allowedLogins, enterpriseSlugs);
+
     return NextResponse.json({
       ideDistribution,
       languageDistribution,
       ideTrend,
       allIdes,
+      ideVersions,
+      pluginVersions,
     }, {
       headers: { "Cache-Control": "private, max-age=300, stale-while-revalidate=60" },
     });
