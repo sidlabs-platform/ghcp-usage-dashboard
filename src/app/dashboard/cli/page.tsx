@@ -21,7 +21,7 @@ const CLITokenChart = dynamic(
   { ssr: false, loading: () => <ChartSkeleton /> }
 );
 import Link from "next/link";
-import { Terminal, Activity, Zap, Hash } from "lucide-react";
+import { Terminal, Activity, Zap, Hash, Code2, GitBranch, AlertTriangle } from "lucide-react";
 import { formatNumber } from "@/lib/utils";
 import { useTableSort } from "@/hooks/useTableSort";
 import { SortableHeader } from "@/components/tables/SortableHeader";
@@ -52,6 +52,19 @@ interface CLIUser {
   days: number;
 }
 
+interface CLIVersionEntry {
+  version: string;
+  users: number;
+}
+
+interface CLISuggestion {
+  locSuggestedAdd: number;
+  locSuggestedDelete: number;
+  locAdded: number;
+  locDeleted: number;
+  acceptanceRate: number;
+}
+
 interface CLIData {
   dailyTrend: DailyTrendDay[];
   dailyTokens: DailyTokenDay[];
@@ -61,6 +74,10 @@ interface CLIData {
     requestsToday: number;
     avgTokensPerRequest: number;
   };
+  cliSuggestion?: CLISuggestion;
+  cliVersions?: CLIVersionEntry[];
+  outdatedCliUsers?: number;
+  minReliableCliVersion?: string;
   topCliUsers: CLIUser[];
 }
 
@@ -83,6 +100,7 @@ export default function CLIPage() {
   const kpiRef = useRef<HTMLDivElement>(null);
   const chartsRef = useRef<HTMLDivElement>(null);
   const tableRef = useRef<HTMLDivElement>(null);
+  const versionsRef = useRef<HTMLDivElement>(null);
 
   const fetchData= useCallback(() => {
     setLoading(true);
@@ -134,6 +152,12 @@ export default function CLIPage() {
     avgPerRequest: d.avgPerRequest,
   }));
 
+  const suggestion = data.cliSuggestion;
+  const cliVersions = data.cliVersions ?? [];
+  const outdatedCliUsers = data.outdatedCliUsers ?? 0;
+  const minReliableCliVersion = data.minReliableCliVersion ?? "1.0.64";
+  const hasSuggestionData = !!suggestion && (suggestion.locSuggestedAdd > 0 || suggestion.locAdded > 0);
+
   return (
     <div>
       <PageHeader
@@ -155,7 +179,7 @@ export default function CLIPage() {
             },
           }}
           pdf={{
-            sectionRefs: [kpiRef, chartsRef, tableRef],
+            sectionRefs: [kpiRef, chartsRef, versionsRef, tableRef],
             title: "CLI Analytics",
             filename: `cli-report-${days}d`,
             metadata: {
@@ -203,6 +227,82 @@ export default function CLIPage() {
       <div ref={chartsRef} className="grid grid-cols-1 gap-6 lg:grid-cols-2 mb-6">
         <CLIUsersTrendChart data={data.dailyTrend} />
         <CLITokenChart data={tokenChartData} />
+      </div>
+
+      {/* Code suggestion effectiveness + version adoption */}
+      <div ref={versionsRef} className="mb-6">
+        {/* Code suggestion KPIs (Insight B) */}
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-3 mb-4">
+          <MetricCard
+            title="CLI LoC Suggested"
+            value={hasSuggestionData ? suggestion!.locSuggestedAdd : "—"}
+            icon={<Code2 className="h-4 w-4" />}
+            subtitle="Lines suggested to add"
+          />
+          <MetricCard
+            title="CLI LoC Accepted"
+            value={hasSuggestionData ? suggestion!.locAdded : "—"}
+            icon={<Code2 className="h-4 w-4" />}
+            subtitle="Lines added"
+          />
+          <MetricCard
+            title="CLI LoC Acceptance"
+            value={hasSuggestionData ? `${suggestion!.acceptanceRate.toFixed(1)}%` : "—"}
+            icon={<Activity className="h-4 w-4" />}
+            subtitle="Added ÷ suggested"
+          />
+        </div>
+        <p className="mb-6 text-xs text-[hsl(var(--muted-foreground))]">
+          CLI suggested-LoC is only reliable on Copilot CLI 1.0.57+ and de-duplicated on 1.0.64+.
+          Older versions may under-report and are shown as “—” when no data is available.
+        </p>
+
+        {/* Outdated CLI callout (Insight A) */}
+        {outdatedCliUsers > 0 && (
+          <div className="mb-4 flex items-start gap-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm">
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" />
+            <span>
+              <strong>{formatNumber(outdatedCliUsers)}</strong> user{outdatedCliUsers === 1 ? "" : "s"} on
+              an outdated CLI (&lt;{minReliableCliVersion}). Outdated CLI versions degrade metric quality —
+              encourage upgrading for accurate suggested-LoC reporting.
+            </span>
+          </div>
+        )}
+
+        {/* CLI versions table (Insight A) */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <GitBranch className="h-4 w-4" /> CLI Versions
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            {cliVersions.length === 0 ? (
+              <div className="flex h-32 items-center justify-center text-sm text-[hsl(var(--muted-foreground))]">
+                No CLI version data available
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b text-left text-[hsl(var(--muted-foreground))]">
+                      <th className="py-2 pr-4 font-medium">Version</th>
+                      <th className="py-2 text-right font-medium">Users</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {cliVersions.slice(0, 20).map((v) => (
+                      <tr key={v.version} className="border-b last:border-0">
+                        <td className="py-3 pr-4 font-medium">{v.version}</td>
+                        <td className="py-3 text-right">{formatNumber(v.users)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </CardContent>
+        </Card>
       </div>
 
       {/* Top CLI Users Table */}

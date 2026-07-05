@@ -25,11 +25,14 @@ import {
 import { CHART_COLORS } from "@/lib/constants";
 import { Monitor, Code2, Languages, TrendingUp } from "lucide-react";
 import { ExportMenu } from "@/components/ui/ExportMenu";
+import { formatNumber } from "@/lib/utils";
 
 interface IDEEntry {
   name: string;
   locAdded: number;
   locDeleted: number;
+  locSuggestedAdd: number;
+  locSuggestedDelete: number;
   interactions: number;
   generations: number;
   acceptances: number;
@@ -43,11 +46,24 @@ interface LanguageEntry {
   acceptances: number;
 }
 
+interface VersionEntry {
+  version: string;
+  users: number;
+}
+
+interface PluginVersionEntry {
+  plugin: string;
+  version: string;
+  users: number;
+}
+
 interface IDELangData {
   ideDistribution: IDEEntry[];
   languageDistribution: LanguageEntry[];
   ideTrend: Record<string, string | number>[];
   allIdes: string[];
+  ideVersions: VersionEntry[];
+  pluginVersions: PluginVersionEntry[];
 }
 
 const DONUT_COLORS = [
@@ -89,6 +105,7 @@ export default function IDELanguagesPage() {
   const kpiRef = useRef<HTMLDivElement>(null);
   const chartsRef = useRef<HTMLDivElement>(null);
   const trendRef = useRef<HTMLDivElement>(null);
+  const versionsRef = useRef<HTMLDivElement>(null);
 
   const fetchData= useCallback(() => {
     setLoading(true);
@@ -146,6 +163,19 @@ export default function IDELanguagesPage() {
   // Language bar chart — top 15 by LoC added
   const langBarData = data.languageDistribution.slice(0, 15);
 
+  // Suggestion effectiveness — suggested→added acceptance ratio per IDE (Insight B).
+  const ideEffectiveness = data.ideDistribution
+    .filter((ide) => ide.locSuggestedAdd > 0 || ide.locAdded > 0)
+    .map((ide) => ({
+      name: ide.name,
+      locSuggestedAdd: ide.locSuggestedAdd,
+      locAdded: ide.locAdded,
+      ratio: ide.locSuggestedAdd > 0 ? (ide.locAdded / ide.locSuggestedAdd) * 100 : null,
+    }));
+
+  const ideVersions = data.ideVersions ?? [];
+  const pluginVersions = data.pluginVersions ?? [];
+
   return (
     <div>
       <PageHeader
@@ -154,7 +184,7 @@ export default function IDELanguagesPage() {
       >
         <ExportMenu
           pdf={{
-            sectionRefs: [kpiRef, chartsRef, trendRef],
+            sectionRefs: [kpiRef, chartsRef, trendRef, versionsRef],
             title: "IDE & Languages",
             filename: `ide-languages-report-${days}d`,
             metadata: {
@@ -318,6 +348,120 @@ export default function IDELanguagesPage() {
                 ))}
               </LineChart>
             </ResponsiveContainer>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Suggestion Effectiveness + Editor/Plugin Versions */}
+      <div ref={versionsRef} className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-2">
+        {/* Suggestion effectiveness by LoC (Insight B) */}
+        <Card>
+          <CardHeader>
+            <CardTitle>Suggestion Effectiveness by LoC</CardTitle>
+          </CardHeader>
+          <CardContent>
+            {ideEffectiveness.length === 0 ? (
+              <div className="flex h-32 items-center justify-center text-sm text-[hsl(var(--muted-foreground))]">
+                No suggested-LoC data available
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b text-left text-[hsl(var(--muted-foreground))]">
+                      <th className="py-2 pr-4 font-medium">IDE / Surface</th>
+                      <th className="py-2 pr-4 text-right font-medium">LoC Suggested</th>
+                      <th className="py-2 pr-4 text-right font-medium">LoC Added</th>
+                      <th className="py-2 text-right font-medium">Accepted %</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {ideEffectiveness.map((ide) => (
+                      <tr key={ide.name} className="border-b last:border-0">
+                        <td className="py-3 pr-4 font-medium">{ide.name}</td>
+                        <td className="py-3 pr-4 text-right">{formatNumber(ide.locSuggestedAdd)}</td>
+                        <td className="py-3 pr-4 text-right">{formatNumber(ide.locAdded)}</td>
+                        <td className="py-3 text-right">
+                          {ide.ratio === null ? "—" : `${ide.ratio.toFixed(1)}%`}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                <p className="mt-3 text-xs text-[hsl(var(--muted-foreground))]">
+                  Accepted % = LoC added ÷ LoC suggested. Agent surfaces write directly and
+                  report no suggestions, so they appear as “—”.
+                </p>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* Editor versions (Insight A) */}
+        <Card>
+          <CardHeader>
+            <CardTitle>Editor Versions</CardTitle>
+          </CardHeader>
+          <CardContent>
+            {ideVersions.length === 0 ? (
+              <div className="flex h-32 items-center justify-center text-sm text-[hsl(var(--muted-foreground))]">
+                No editor version data available
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b text-left text-[hsl(var(--muted-foreground))]">
+                      <th className="py-2 pr-4 font-medium">Version</th>
+                      <th className="py-2 text-right font-medium">Users</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {ideVersions.slice(0, 15).map((v) => (
+                      <tr key={v.version} className="border-b last:border-0">
+                        <td className="py-3 pr-4 font-medium">{v.version}</td>
+                        <td className="py-3 text-right">{formatNumber(v.users)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Plugin versions (Insight A) */}
+      <Card className="mt-6">
+        <CardHeader>
+          <CardTitle>Plugin Versions</CardTitle>
+        </CardHeader>
+        <CardContent>
+          {pluginVersions.length === 0 ? (
+            <div className="flex h-32 items-center justify-center text-sm text-[hsl(var(--muted-foreground))]">
+              No plugin version data available
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b text-left text-[hsl(var(--muted-foreground))]">
+                    <th className="py-2 pr-4 font-medium">Plugin</th>
+                    <th className="py-2 pr-4 font-medium">Version</th>
+                    <th className="py-2 text-right font-medium">Users</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {pluginVersions.slice(0, 20).map((v) => (
+                    <tr key={`${v.plugin}::${v.version}`} className="border-b last:border-0">
+                      <td className="py-3 pr-4 font-medium">{v.plugin}</td>
+                      <td className="py-3 pr-4">{v.version}</td>
+                      <td className="py-3 text-right">{formatNumber(v.users)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
         </CardContent>
       </Card>
