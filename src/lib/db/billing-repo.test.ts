@@ -26,6 +26,8 @@ import {
   getPremiumUserSummary,
   getPremiumModelSummary,
   getCostCenterBreakdown,
+  getPremiumCostCenterBreakdown,
+  getPremiumOrgBreakdown,
   getRepositoryBreakdown,
   getPremiumDailyTrend,
   refreshBillingDailyAggregates,
@@ -499,6 +501,112 @@ describe("getCostCenterBreakdown", () => {
     const breakdown = getCostCenterBreakdown("2026-06-01", "2026-06-31");
     expect(breakdown).toHaveLength(1);
     expect(breakdown[0].cost_center_name).toBe("engineering");
+  });
+});
+
+describe("getPremiumCostCenterBreakdown", () => {
+  it("returns empty array with no data", () => {
+    expect(getPremiumCostCenterBreakdown("2026-06-01", "2026-06-30")).toEqual([]);
+  });
+
+  it("groups AI credits by cost center and keeps an unattributed bucket", () => {
+    upsertPremiumRequests("ent1", [
+      makePremiumRecord({ sku: "p1", username: "dev1", cost_center_name: "engineering", aic_quantity: 100, aic_gross_amount: 2 }),
+      makePremiumRecord({ sku: "p2", username: "dev2", cost_center_name: "engineering", aic_quantity: 50, aic_gross_amount: 1 }),
+      makePremiumRecord({ sku: "p3", username: "dev3", cost_center_name: "", aic_quantity: 30, aic_gross_amount: 0.5 }),
+    ]);
+    const rows = getPremiumCostCenterBreakdown("2026-06-01", "2026-06-30");
+    expect(rows).toHaveLength(2);
+
+    const eng = rows.find((r) => r.cost_center_name === "engineering")!;
+    expect(eng.total_aic_quantity).toBe(150);
+    expect(eng.total_aic_gross).toBeCloseTo(3, 5);
+    expect(eng.unique_users).toBe(2);
+    expect(eng.record_count).toBe(2);
+
+    const unattributed = rows.find((r) => r.cost_center_name === "")!;
+    expect(unattributed).toBeDefined();
+    expect(unattributed.total_aic_quantity).toBe(30);
+    expect(unattributed.total_aic_gross).toBeCloseTo(0.5, 5);
+    expect(unattributed.unique_users).toBe(1);
+  });
+
+  it("orders rows by AI credits descending", () => {
+    upsertPremiumRequests("ent1", [
+      makePremiumRecord({ sku: "p1", username: "dev1", cost_center_name: "small", aic_quantity: 10, aic_gross_amount: 0.1 }),
+      makePremiumRecord({ sku: "p2", username: "dev2", cost_center_name: "large", aic_quantity: 500, aic_gross_amount: 5 }),
+    ]);
+    const rows = getPremiumCostCenterBreakdown("2026-06-01", "2026-06-30");
+    expect(rows[0].cost_center_name).toBe("large");
+    expect(rows[1].cost_center_name).toBe("small");
+  });
+
+  it("respects model filter", () => {
+    upsertPremiumRequests("ent1", [
+      makePremiumRecord({ sku: "p1", username: "dev1", cost_center_name: "cc", model: "gpt-4", aic_quantity: 100, aic_gross_amount: 2 }),
+      makePremiumRecord({ sku: "p2", username: "dev2", cost_center_name: "cc", model: "gpt-5", aic_quantity: 40, aic_gross_amount: 1 }),
+    ]);
+    const rows = getPremiumCostCenterBreakdown("2026-06-01", "2026-06-30", { model: ["gpt-4"] });
+    expect(rows).toHaveLength(1);
+    expect(rows[0].total_aic_quantity).toBe(100);
+    expect(rows[0].unique_users).toBe(1);
+  });
+
+  it("filters by enterprise slug", () => {
+    upsertPremiumRequests("ent1", [makePremiumRecord({ sku: "p1", username: "u1", cost_center_name: "cc" })]);
+    upsertPremiumRequests("ent2", [makePremiumRecord({ sku: "p1", username: "u2", cost_center_name: "cc" })]);
+    const rows = getPremiumCostCenterBreakdown("2026-06-01", "2026-06-30", undefined, ["ent1"]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].unique_users).toBe(1);
+    const none = getPremiumCostCenterBreakdown("2026-06-01", "2026-06-30", undefined, ["no-match"]);
+    expect(none).toEqual([]);
+  });
+});
+
+describe("getPremiumOrgBreakdown", () => {
+  it("returns empty array with no data", () => {
+    expect(getPremiumOrgBreakdown("2026-06-01", "2026-06-30")).toEqual([]);
+  });
+
+  it("groups AI credits by org and keeps an org-less unattributed bucket", () => {
+    upsertPremiumRequests("ent1", [
+      makePremiumRecord({ sku: "p1", username: "dev1", organization: "org1", aic_quantity: 100, aic_gross_amount: 2 }),
+      makePremiumRecord({ sku: "p2", username: "dev2", organization: "org1", aic_quantity: 25, aic_gross_amount: 0.5 }),
+      makePremiumRecord({ sku: "p3", username: "dev3", organization: "", aic_quantity: 70, aic_gross_amount: 1.2 }),
+    ]);
+    const rows = getPremiumOrgBreakdown("2026-06-01", "2026-06-30");
+    expect(rows).toHaveLength(2);
+
+    const org1 = rows.find((r) => r.organization === "org1")!;
+    expect(org1.total_aic_quantity).toBe(125);
+    expect(org1.total_aic_gross).toBeCloseTo(2.5, 5);
+    expect(org1.unique_users).toBe(2);
+    expect(org1.record_count).toBe(2);
+
+    const orgless = rows.find((r) => r.organization === "")!;
+    expect(orgless).toBeDefined();
+    expect(orgless.total_aic_quantity).toBe(70);
+    expect(orgless.unique_users).toBe(1);
+  });
+
+  it("orders rows by AI credits descending", () => {
+    upsertPremiumRequests("ent1", [
+      makePremiumRecord({ sku: "p1", username: "dev1", organization: "small", aic_quantity: 5, aic_gross_amount: 0.1 }),
+      makePremiumRecord({ sku: "p2", username: "dev2", organization: "big", aic_quantity: 900, aic_gross_amount: 9 }),
+    ]);
+    const rows = getPremiumOrgBreakdown("2026-06-01", "2026-06-30");
+    expect(rows[0].organization).toBe("big");
+    expect(rows[1].organization).toBe("small");
+  });
+
+  it("filters by enterprise slug", () => {
+    upsertPremiumRequests("ent1", [makePremiumRecord({ sku: "p1", username: "u1", organization: "org1" })]);
+    upsertPremiumRequests("ent2", [makePremiumRecord({ sku: "p1", username: "u2", organization: "org2" })]);
+    const rows = getPremiumOrgBreakdown("2026-06-01", "2026-06-30", undefined, ["ent1"]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].organization).toBe("org1");
+    const none = getPremiumOrgBreakdown("2026-06-01", "2026-06-30", undefined, ["no-match"]);
+    expect(none).toEqual([]);
   });
 });
 
