@@ -705,6 +705,28 @@ describe("getCliSuggestionStats", () => {
     expect(stats.acceptanceRate).toBe(30);
   });
 
+  it("excludes non-CLI IDE names that merely contain cli", () => {
+    const ide = JSON.stringify([
+      { ide: "eclipse", loc_added_sum: 500, loc_suggested_to_add_sum: 500, loc_suggested_to_delete_sum: 500, loc_deleted_sum: 500 },
+      { ide: "sublime_client", loc_added_sum: 400, loc_suggested_to_add_sum: 400 },
+      { ide: "cli_tool", loc_added_sum: 300, loc_suggested_to_add_sum: 300 },
+      { ide: "cli-something", loc_added_sum: 200, loc_suggested_to_add_sum: 200 },
+      { ide: "xcli", loc_added_sum: 100, loc_suggested_to_add_sum: 100 },
+      { ide: "cli", loc_added_sum: 10, loc_suggested_to_add_sum: 20, loc_suggested_to_delete_sum: 2, loc_deleted_sum: 1 },
+      { ide: "copilot-cli", loc_added_sum: 5, loc_suggested_to_add_sum: 10, loc_suggested_to_delete_sum: 3, loc_deleted_sum: 2 },
+      { ide: "command_cli", loc_added_sum: 7, loc_suggested_to_add_sum: 14, loc_suggested_to_delete_sum: 4, loc_deleted_sum: 3 },
+      { ide: "CLI", loc_added_sum: 8, loc_suggested_to_add_sum: 16, loc_suggested_to_delete_sum: 1, loc_deleted_sum: 1 },
+    ]);
+    db.prepare(`INSERT INTO user_daily_metrics (day, enterprise_id, enterprise_slug, user_id, user_login, totals_by_ide)
+      VALUES ('2024-01-10', 'ent1', 'ent1', 1, 'u1', ?)`).run(ide);
+    const stats = getCliSuggestionStats("2024-01-01", "2024-01-31");
+    expect(stats.locSuggestedAdd).toBe(60);
+    expect(stats.locSuggestedDelete).toBe(10);
+    expect(stats.locAdded).toBe(30);
+    expect(stats.locDeleted).toBe(7);
+    expect(stats.acceptanceRate).toBe(50);
+  });
+
   it("returns acceptanceRate 0 when nothing was suggested", () => {
     const ide = JSON.stringify([{ ide: "cli", loc_added_sum: 15, loc_suggested_to_add_sum: 0 }]);
     db.prepare(`INSERT INTO user_daily_metrics (day, enterprise_id, enterprise_slug, user_id, user_login, totals_by_ide)

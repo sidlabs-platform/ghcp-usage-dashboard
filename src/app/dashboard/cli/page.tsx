@@ -156,7 +156,7 @@ export default function CLIPage() {
   const cliVersions = data.cliVersions ?? [];
   const outdatedCliUsers = data.outdatedCliUsers ?? 0;
   const minReliableCliVersion = data.minReliableCliVersion ?? "1.0.64";
-  const hasSuggestionData = !!suggestion && (suggestion.locSuggestedAdd > 0 || suggestion.locAdded > 0);
+  const hasSuggestionData = !!suggestion && (suggestion.locSuggestedAdd > 0 || suggestion.locSuggestedDelete > 0);
 
   return (
     <div>

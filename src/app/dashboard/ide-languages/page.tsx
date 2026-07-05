@@ -164,14 +164,21 @@ export default function IDELanguagesPage() {
   const langBarData = data.languageDistribution.slice(0, 15);
 
   // Suggestion effectiveness — suggested→added acceptance ratio per IDE (Insight B).
-  const ideEffectiveness = data.ideDistribution
-    .filter((ide) => ide.locSuggestedAdd > 0 || ide.locAdded > 0)
-    .map((ide) => ({
-      name: ide.name,
-      locSuggestedAdd: ide.locSuggestedAdd,
-      locAdded: ide.locAdded,
-      ratio: ide.locSuggestedAdd > 0 ? (ide.locAdded / ide.locSuggestedAdd) * 100 : null,
-    }));
+  // Only meaningful when at least one IDE actually reported suggested LoC; otherwise
+  // (legacy data with accepted-only LoC) fall back to the empty-state.
+  const hasSuggestedLoc = data.ideDistribution.some(
+    (ide) => ide.locSuggestedAdd > 0 || ide.locSuggestedDelete > 0,
+  );
+  const ideEffectiveness = hasSuggestedLoc
+    ? data.ideDistribution
+        .filter((ide) => ide.locSuggestedAdd > 0 || ide.locAdded > 0)
+        .map((ide) => ({
+          name: ide.name,
+          locSuggestedAdd: ide.locSuggestedAdd,
+          locAdded: ide.locAdded,
+          ratio: ide.locSuggestedAdd > 0 ? (ide.locAdded / ide.locSuggestedAdd) * 100 : null,
+        }))
+    : [];
 
   const ideVersions = data.ideVersions ?? [];
   const pluginVersions = data.pluginVersions ?? [];

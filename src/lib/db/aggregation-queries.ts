@@ -1182,8 +1182,8 @@ export function getCliVersionBreakdown(
 
 /**
  * Aggregate CLI code-suggestion LoC from the CLI's entry in `totals_by_ide`.
- * The CLI reports its editor-equivalent activity as an IDE whose name contains
- * "cli" (e.g. "cli", "copilot_cli"); suggested-LoC coverage is reliable on CLI
+ * The CLI reports its editor-equivalent activity as an IDE whose name is "cli"
+ * or ends with "_cli"/"-cli" (e.g. "copilot_cli"); suggested-LoC coverage is reliable on CLI
  * 1.0.57+ and de-duplicated on 1.0.64+. Returns zeros when no CLI IDE rows exist.
  */
 export function getCliSuggestionStats(
@@ -1204,7 +1204,11 @@ export function getCliSuggestionStats(
     FROM user_daily_metrics u, json_each(u.totals_by_ide) j
     WHERE u.day >= ? AND u.day <= ?
       AND u.totals_by_ide IS NOT NULL AND u.totals_by_ide != '[]'
-      AND LOWER(json_extract(j.value, '$.ide')) LIKE '%cli%'
+      AND (
+        LOWER(json_extract(j.value, '$.ide')) = 'cli'
+        OR LOWER(json_extract(j.value, '$.ide')) LIKE '%\\_cli' ESCAPE '\\'
+        OR LOWER(json_extract(j.value, '$.ide')) LIKE '%-cli'
+      )
       ${filter.clause}${ef.clause}
   `;
   const row = db.prepare(sql).get(startDay, endDay, ...filter.params, ...ef.params) as
