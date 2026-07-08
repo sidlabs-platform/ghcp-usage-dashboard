@@ -117,6 +117,13 @@ const SEARCH_INDEX: SearchEntry[] = [
     keywords: ["premium", "quota", "model", "requests", "over quota"],
     section: "Billing",
   },
+  {
+    href: "/dashboard/license-reconciliation",
+    label: "License & Credits",
+    description: "Per-user license lifecycle, seat cost, and AI-credit allocation vs. consumption",
+    keywords: ["license", "reconciliation", "seat cost", "aic", "allocation", "utilization", "budget", "cost of ownership"],
+    section: "Billing",
+  },
 ];
 
 function matchesQuery(entry: SearchEntry, query: string): boolean {
