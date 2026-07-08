@@ -69,6 +69,14 @@ async function handler(request: NextRequest) {
       },
     });
 
+    const MAX_ROWS = 10_000;
+    if (allRows.length > MAX_ROWS) {
+      return NextResponse.json(
+        { error: `Result set too large (${allRows.length} rows). Narrow the scope or reduce the date range.` },
+        { status: 400 },
+      );
+    }
+
     // KPIs and breakdowns are computed over the full (filtered) dataset so they
     // remain accurate regardless of pagination.
     const kpis = computeLicenseKPIs(allRows);
@@ -101,8 +109,8 @@ async function handler(request: NextRequest) {
       { headers: { "Cache-Control": "private, max-age=300, stale-while-revalidate=60" } },
     );
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    return NextResponse.json({ error: message }, { status: 500 });
+    console.error("License reconciliation error:", err);
+    return NextResponse.json({ error: "Internal server error" }, { status: 500 });
   }
 }
 

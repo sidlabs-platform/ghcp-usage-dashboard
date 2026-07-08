@@ -137,6 +137,7 @@ describe("getLicenseReconciliationRows", () => {
     expect(r.org_count).toBe(2);
     expect(r.plan_type).toBe("enterprise"); // highest plan wins
     expect(r.license_cost).toBe(58); // 19 + 39
+    expect(r.org_license_costs).toEqual({ org1: 19, org2: 39 });
   });
 
   it("marks pending cancellation seats inactive with a revoked date", () => {
@@ -145,6 +146,20 @@ describe("getLicenseReconciliationRows", () => {
     expect(rows[0].user_status).toBe("inactive");
     expect(rows[0].seat_status).toBe("pending_cancellation");
     expect(rows[0].user_revoked_date).toBe("2026-07-01");
+  });
+
+  it("keeps multi-seat users active while surfacing any pending cancellation", () => {
+    insertSeat({ user_login: "mixed", org_slug: "org1", pending_cancellation_date: null });
+    insertSeat({
+      user_login: "mixed",
+      org_slug: "org2",
+      pending_cancellation_date: "2026-07-03T00:00:00Z",
+    });
+
+    const row = getLicenseReconciliationRows(WINDOW)[0];
+    expect(row.user_status).toBe("active");
+    expect(row.seat_status).toBe("pending_cancellation");
+    expect(row.user_revoked_date).toBe("2026-07-03");
   });
 
   it("flags over-budget users using the per-user budget override", () => {
@@ -203,9 +218,10 @@ describe("computeLicenseKPIs", () => {
   });
 
   it("counts zero-consumption seats", () => {
-    insertSeat({ user_login: "idle" });
+    insertSeat({ user_login: "idle", org_slug: "org1" });
+    insertSeat({ user_login: "idle", org_slug: "org2" });
     const kpis = computeLicenseKPIs(getLicenseReconciliationRows(WINDOW));
-    expect(kpis.zeroConsumptionSeats).toBe(1);
+    expect(kpis.zeroConsumptionSeats).toBe(2);
   });
 });
 
@@ -223,6 +239,23 @@ describe("breakdowns", () => {
     insertSeat({ user_login: "b", org_slug: "org2" });
     const orgs = computeOrgBreakdown(getLicenseReconciliationRows(WINDOW));
     expect(orgs.map((o) => o.key).sort()).toEqual(["org1", "org2"]);
+  });
+
+  it("uses seat-level org license costs and first-org allowance attribution", () => {
+    insertSeat({ user_login: "multi", org_slug: "orgA", plan_type: "business" });
+    insertSeat({ user_login: "multi", org_slug: "orgB", plan_type: "enterprise" });
+    insertConsumption("multi", 100, 1.6);
+
+    const orgs = computeOrgBreakdown(getLicenseReconciliationRows(WINDOW));
+    const orgA = orgs.find((o) => o.key === "orgA")!;
+    const orgB = orgs.find((o) => o.key === "orgB")!;
+
+    expect(orgA.licenseCost).toBe(19);
+    expect(orgB.licenseCost).toBe(39);
+    expect(orgA.allowanceCredits).toBe(3900);
+    expect(orgB.allowanceCredits).toBe(0);
+    expect(orgA.consumedCredits).toBe(100);
+    expect(orgB.consumedCredits).toBe(0);
   });
 
   it("buckets utilization", () => {

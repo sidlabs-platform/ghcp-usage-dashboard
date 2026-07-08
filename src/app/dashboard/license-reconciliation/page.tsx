@@ -36,6 +36,43 @@ interface PaginationInfo {
 
 const PAGE_SIZE = 50;
 
+interface SortHeaderProps {
+  col: string;
+  label: string;
+  align?: "left" | "right";
+  sort: string;
+  sortDir: "asc" | "desc";
+  onSort: (col: string) => void;
+}
+
+function SortHeader({ col, label, align = "left", sort, sortDir, onSort }: SortHeaderProps) {
+  const isSorted = sort === col;
+  const alignClass = align === "right" ? "text-right" : "text-left";
+
+  return (
+    <th
+      className={`px-3 py-3 ${alignClass} text-xs font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wider cursor-pointer hover:text-[hsl(var(--foreground))] select-none`}
+      aria-sort={isSorted ? (sortDir === "asc" ? "ascending" : "descending") : "none"}
+    >
+      <span
+        className={`flex items-center gap-1 ${align === "right" ? "justify-end" : ""}`}
+        onClick={() => onSort(col)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            onSort(col);
+          }
+        }}
+        tabIndex={0}
+        role="button"
+      >
+        {label}
+        {isSorted && <span>{sortDir === "asc" ? "↑" : "↓"}</span>}
+      </span>
+    </th>
+  );
+}
+
 export default function LicenseReconciliationPage() {
   const { days } = useDateRange();
   const { hasFilter, buildScopeParams, selectedEntTeams, selectedOrgTeams, selectedOrgs } = useScope();
@@ -49,6 +86,7 @@ export default function LicenseReconciliationPage() {
   const [currency, setCurrency] = useState("USD");
   const [loading, setLoading] = useState(true);
   const [enabled, setEnabled] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   const [search, setSearch] = useState("");
   const [searchInput, setSearchInput] = useState("");
@@ -91,8 +129,13 @@ export default function LicenseReconciliationPage() {
 
   const fetchData = useCallback(async () => {
     setLoading(true);
+    setError(null);
     try {
       const res = await fetch(`/api/billing/license-reconciliation?${buildParams().toString()}`);
+      if (!res.ok) {
+        setError("Failed to load reconciliation data");
+        return;
+      }
       const data = await res.json();
       if (data.enabled === false) {
         setEnabled(false);
@@ -108,6 +151,7 @@ export default function LicenseReconciliationPage() {
       if (data.config?.currency) setCurrency(data.config.currency);
     } catch (err) {
       console.error("Failed to load license reconciliation:", err);
+      setError("Failed to load reconciliation data");
     } finally {
       setLoading(false);
     }
@@ -146,6 +190,18 @@ export default function LicenseReconciliationPage() {
     [currency],
   );
 
+  if (error) {
+    return (
+      <div className="space-y-6">
+        <PageHeader title="License & AI Credits" description="Per-user Copilot license + AI-credit reconciliation" />
+        <div className="text-center py-16 text-[hsl(var(--muted-foreground))]">
+          <AlertTriangle className="h-16 w-16 mx-auto mb-4 opacity-40" />
+          <p className="text-sm">{error}</p>
+        </div>
+      </div>
+    );
+  }
+
   if (!enabled) {
     return (
       <div className="space-y-6">
@@ -175,18 +231,6 @@ export default function LicenseReconciliationPage() {
   const hasData = !!kpis && kpis.totalUsers > 0;
   const maxPlanCredits = Math.max(1, ...planBreakdown.map((p) => Math.max(p.allowanceCredits, p.consumedCredits)));
   const maxBucket = Math.max(1, ...utilizationBuckets.map((b) => b.count));
-
-  const SortHeader = ({ col, label, align = "left" }: { col: string; label: string; align?: "left" | "right" }) => (
-    <th
-      className={`px-3 py-3 text-${align} text-xs font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wider cursor-pointer hover:text-[hsl(var(--foreground))] select-none`}
-      onClick={() => handleSort(col)}
-    >
-      <span className={`flex items-center gap-1 ${align === "right" ? "justify-end" : ""}`}>
-        {label}
-        {sort === col && <span>{sortDir === "asc" ? "↑" : "↓"}</span>}
-      </span>
-    </th>
-  );
 
   const planColor: Record<string, string> = {
     enterprise: "#8b5cf6",
@@ -355,6 +399,7 @@ export default function LicenseReconciliationPage() {
                   onKeyDown={(e) => { if (e.key === "Enter") setSearch(searchInput.trim()); }}
                   onBlur={() => setSearch(searchInput.trim())}
                   placeholder="Search user or org…"
+                  aria-label="Search users or organizations"
                   className="pl-8 pr-3 py-1.5 text-sm rounded-md border bg-[hsl(var(--background))] w-56"
                 />
               </div>
@@ -363,15 +408,15 @@ export default function LicenseReconciliationPage() {
               <table className="w-full text-sm">
                 <thead className="bg-[hsl(var(--accent))]/30">
                   <tr className="border-b">
-                    <SortHeader col="user_login" label="User" />
+                    <SortHeader col="user_login" label="User" sort={sort} sortDir={sortDir} onSort={handleSort} />
                     <th className="px-3 py-3 text-left text-xs font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wider">Orgs</th>
-                    <SortHeader col="plan_type" label="Plan" />
-                    <SortHeader col="license_assigned_date" label="Assigned" />
+                    <SortHeader col="plan_type" label="Plan" sort={sort} sortDir={sortDir} onSort={handleSort} />
+                    <SortHeader col="license_assigned_date" label="Assigned" sort={sort} sortDir={sortDir} onSort={handleSort} />
                     <th className="px-3 py-3 text-left text-xs font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wider">Status</th>
-                    <SortHeader col="license_cost" label="License $" align="right" />
-                    <SortHeader col="aic_consumed_credits" label="Consumed cr" align="right" />
-                    <SortHeader col="utilization_pct" label="Util %" align="right" />
-                    <SortHeader col="total_cost" label="Total $" align="right" />
+                    <SortHeader col="license_cost" label="License $" align="right" sort={sort} sortDir={sortDir} onSort={handleSort} />
+                    <SortHeader col="aic_consumed_credits" label="Consumed cr" align="right" sort={sort} sortDir={sortDir} onSort={handleSort} />
+                    <SortHeader col="utilization_pct" label="Util %" align="right" sort={sort} sortDir={sortDir} onSort={handleSort} />
+                    <SortHeader col="total_cost" label="Total $" align="right" sort={sort} sortDir={sortDir} onSort={handleSort} />
                   </tr>
                 </thead>
                 <tbody>

@@ -38,17 +38,20 @@ export interface LicenseReconciliationRow {
   /** Latest seat activity across the user's seats. */
   last_activity_at: string | null;
   activity_status: ActivityStatus;
-  /** direct or team:<slug>. */
+  /** Assignment source; values are "direct" or "team". */
   assigned_via: string;
-  /** active when no seat is pending cancellation. */
+  /** active when the user has at least one active (non-pending-cancellation) seat, else inactive. */
   user_status: "active" | "inactive";
+  /** pending_cancellation when at least one of the user's seats has a pending cancellation date. */
   seat_status: SeatStatus;
-  /** pending_cancellation_date when set. */
+  /** Latest pending_cancellation_date across the user's seats, or null when none. */
   user_revoked_date: string | null;
 
   // ── Cost / allocation (config-derived) ──────────────────────────────
   /** Negotiated monthly license cost summed across the user's seats (USD). */
   license_cost: number;
+  /** Per-org license cost (USD), used for accurate org breakdown. */
+  org_license_costs?: Record<string, number>;
   /** Monthly AI-credit allowance for the user's plan (credits). */
   default_aic_credits: number;
   /** Allowance value in USD (credits × creditToUsd). */
@@ -108,7 +111,11 @@ export interface UtilizationBucket {
   count: number;
 }
 
-export interface LicenseReconciliationResponse {
+export interface LicenseReconciliationDisabled {
+  enabled: false;
+}
+
+export interface LicenseReconciliationEnabled {
   enabled: true;
   kpis: LicenseReconciliationKPIs;
   rows: LicenseReconciliationRow[];
@@ -123,3 +130,7 @@ export interface LicenseReconciliationResponse {
     totalPages: number;
   };
 }
+
+export type LicenseReconciliationResponse =
+  | LicenseReconciliationEnabled
+  | LicenseReconciliationDisabled;

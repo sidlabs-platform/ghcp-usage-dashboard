@@ -102,8 +102,8 @@ function getConsumptionByUser(
     .get();
   if (!exists) return map;
 
-  const clauses = ["date >= ?", "date <= ?", `date >= '${AI_CREDITS_START_DATE}'`];
-  const params: unknown[] = [start, end];
+  const clauses = ["date >= ?", "date <= ?", "date >= ?"];
+  const params: unknown[] = [start, end, AI_CREDITS_START_DATE];
   const ent = buildEnterpriseFilter(enterpriseSlugs, "AND");
   if (ent.clause) {
     clauses.push(ent.clause.replace(/^\s*AND\s+/, ""));
@@ -169,6 +169,7 @@ export function getLicenseReconciliationRows(
     anyActive: boolean;
     revokedDate: string | null;
     licenseCost: number;
+    orgLicenseCost: Map<string, number>;
   }
   const byUser = new Map<string, Acc>();
 
@@ -189,6 +190,7 @@ export function getLicenseReconciliationRows(
         anyActive: false,
         revokedDate: null,
         licenseCost: 0,
+        orgLicenseCost: new Map<string, number>(),
       };
       byUser.set(key, acc);
     }
@@ -197,7 +199,11 @@ export function getLicenseReconciliationRows(
     if (planRank(plan) > planRank(acc.plan)) acc.plan = plan;
     if (s.org_slug) acc.orgs.add(s.org_slug);
     acc.seatCount += 1;
-    acc.licenseCost += cfg.licenseCost[plan] ?? cfg.licenseCost.unknown ?? 0;
+    const seatLicenseCost = cfg.licenseCost[plan] ?? cfg.licenseCost.unknown ?? 0;
+    acc.licenseCost += seatLicenseCost;
+    if (s.org_slug) {
+      acc.orgLicenseCost.set(s.org_slug, (acc.orgLicenseCost.get(s.org_slug) ?? 0) + seatLicenseCost);
+    }
 
     const assigned = toDateOnly(s.created_at);
     if (assigned && (!acc.assignedDate || assigned < acc.assignedDate)) acc.assignedDate = assigned;
@@ -240,8 +246,11 @@ export function getLicenseReconciliationRows(
     const utilization = defaultCredits > 0 ? (consumed.credits / defaultCredits) * 100 : 0;
     const overBudget = assignedUsd > 0 ? consumed.usd > assignedUsd : consumed.usd > 0;
 
-    // A user is active unless every seat is pending cancellation.
+    // A user is active if at least one seat is not pending cancellation.
     const userStatus: "active" | "inactive" = acc.anyActive ? "active" : "inactive";
+    const orgLicenseCosts = Object.fromEntries(
+      [...acc.orgLicenseCost.entries()].map(([org, cost]) => [org, round2(cost)]),
+    );
 
     const assignedVia = acc.hasDirect
       ? "direct"
@@ -260,9 +269,10 @@ export function getLicenseReconciliationRows(
       activity_status: deriveActivityStatus(acc.lastActivity, now),
       assigned_via: assignedVia,
       user_status: userStatus,
-      seat_status: acc.anyActive ? "active" : "pending_cancellation",
-      user_revoked_date: acc.anyActive ? null : acc.revokedDate,
+      seat_status: acc.revokedDate ? "pending_cancellation" : "active",
+      user_revoked_date: acc.revokedDate,
       license_cost: round2(acc.licenseCost),
+      org_license_costs: orgLicenseCosts,
       default_aic_credits: defaultCredits,
       default_aic_usd: round2(defaultUsd),
       aic_assigned_usd: round2(assignedUsd),
@@ -302,7 +312,7 @@ export function computeLicenseKPIs(
     if (r.user_status === "active") activeUsers += 1;
     if (r.seat_status === "pending_cancellation") pendingCancellation += 1;
     if (r.activity_status !== "active_30d") inactive30d += 1;
-    if (r.aic_consumed_credits <= 0) zeroConsumptionSeats += 1;
+    if (r.aic_consumed_credits <= 0) zeroConsumptionSeats += r.seat_count;
     totalLicenseCost += r.license_cost;
     totalAllowanceCredits += r.default_aic_credits;
     totalAssignedUsd += r.aic_assigned_usd;
@@ -339,21 +349,22 @@ export function computePlanBreakdown(
   return groupBreakdown(rows, (r) => r.plan_type);
 }
 
-/** Group breakdown by organization (a multi-org user contributes to each org). */
+/** Group breakdown by organization (a multi-org user contributes seats to each org). */
 export function computeOrgBreakdown(
   rows: LicenseReconciliationRow[],
 ): LicenseGroupBreakdown[] {
   const map = new Map<string, LicenseGroupBreakdown>();
   for (const r of rows) {
     const orgs = r.orgs.length > 0 ? r.orgs : ["(none)"];
-    // Consumption is enterprise-wide per user; attribute it to the user's first
-    // org only so org totals do not double-count a multi-org user's credits.
+    // License cost is seat-level per org when available. Allowance and
+    // consumption are per-user; attribute them to the user's first org only so
+    // org totals do not double-count a multi-org user's credits.
     orgs.forEach((org, idx) => {
       const g = ensureGroup(map, org);
       g.seats += 1;
-      g.licenseCost += r.license_cost / orgs.length;
-      g.allowanceCredits += r.default_aic_credits / orgs.length;
+      g.licenseCost += r.org_license_costs?.[org] ?? r.license_cost / orgs.length;
       if (idx === 0) {
+        g.allowanceCredits += r.default_aic_credits;
         g.consumedCredits += r.aic_consumed_credits;
         g.consumedUsd += r.aic_consumed_usd;
       }
