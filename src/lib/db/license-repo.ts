@@ -170,6 +170,7 @@ export function getLicenseReconciliationRows(
     revokedDate: string | null;
     licenseCost: number;
     orgLicenseCost: Map<string, number>;
+    orgSeatCount: Map<string, number>;
   }
   const byUser = new Map<string, Acc>();
 
@@ -191,6 +192,7 @@ export function getLicenseReconciliationRows(
         revokedDate: null,
         licenseCost: 0,
         orgLicenseCost: new Map<string, number>(),
+        orgSeatCount: new Map<string, number>(),
       };
       byUser.set(key, acc);
     }
@@ -203,6 +205,7 @@ export function getLicenseReconciliationRows(
     acc.licenseCost += seatLicenseCost;
     if (s.org_slug) {
       acc.orgLicenseCost.set(s.org_slug, (acc.orgLicenseCost.get(s.org_slug) ?? 0) + seatLicenseCost);
+      acc.orgSeatCount.set(s.org_slug, (acc.orgSeatCount.get(s.org_slug) ?? 0) + 1);
     }
 
     const assigned = toDateOnly(s.created_at);
@@ -239,7 +242,7 @@ export function getLicenseReconciliationRows(
     const defaultCredits = cfg.aicAllowance[acc.plan] ?? cfg.aicAllowance.unknown ?? 0;
     const defaultUsd = defaultCredits * cfg.creditToUsd;
 
-    const budget = cfg.perUserBudgetUsd[acc.login];
+    const budget = cfg.perUserBudgetUsd[acc.login.toLowerCase()];
     const hasBudget = typeof budget === "number";
     const assignedUsd = hasBudget ? budget : defaultUsd;
 
@@ -251,6 +254,7 @@ export function getLicenseReconciliationRows(
     const orgLicenseCosts = Object.fromEntries(
       [...acc.orgLicenseCost.entries()].map(([org, cost]) => [org, round2(cost)]),
     );
+    const orgSeatCounts = Object.fromEntries(acc.orgSeatCount.entries());
 
     const assignedVia = acc.hasDirect
       ? "direct"
@@ -273,6 +277,7 @@ export function getLicenseReconciliationRows(
       user_revoked_date: acc.revokedDate,
       license_cost: round2(acc.licenseCost),
       org_license_costs: orgLicenseCosts,
+      org_seat_counts: orgSeatCounts,
       default_aic_credits: defaultCredits,
       default_aic_usd: round2(defaultUsd),
       aic_assigned_usd: round2(assignedUsd),
@@ -361,7 +366,7 @@ export function computeOrgBreakdown(
     // org totals do not double-count a multi-org user's credits.
     orgs.forEach((org, idx) => {
       const g = ensureGroup(map, org);
-      g.seats += 1;
+      g.seats += r.org_seat_counts?.[org] ?? 1;
       g.licenseCost += r.org_license_costs?.[org] ?? r.license_cost / orgs.length;
       if (idx === 0) {
         g.allowanceCredits += r.default_aic_credits;
@@ -380,7 +385,7 @@ function groupBreakdown(
   const map = new Map<string, LicenseGroupBreakdown>();
   for (const r of rows) {
     const g = ensureGroup(map, keyFn(r));
-    g.seats += 1;
+    g.seats += r.seat_count;
     g.licenseCost += r.license_cost;
     g.allowanceCredits += r.default_aic_credits;
     g.consumedCredits += r.aic_consumed_credits;

@@ -138,6 +138,7 @@ describe("getLicenseReconciliationRows", () => {
     expect(r.plan_type).toBe("enterprise"); // highest plan wins
     expect(r.license_cost).toBe(58); // 19 + 39
     expect(r.org_license_costs).toEqual({ org1: 19, org2: 39 });
+    expect(r.org_seat_counts).toEqual({ org1: 1, org2: 1 });
   });
 
   it("marks pending cancellation seats inactive with a revoked date", () => {
@@ -162,9 +163,9 @@ describe("getLicenseReconciliationRows", () => {
     expect(row.user_revoked_date).toBe("2026-07-03");
   });
 
-  it("flags over-budget users using the per-user budget override", () => {
-    insertSeat({ user_login: "budgetuser", plan_type: "business" });
-    insertConsumption("budgetuser", 8000, 80);
+  it("flags over-budget users using the case-insensitive per-user budget override", () => {
+    insertSeat({ user_login: "BudgetUser", plan_type: "business" });
+    insertConsumption("BudgetUser", 8000, 80);
     const r = getLicenseReconciliationRows(WINDOW)[0];
     expect(r.aic_assigned_rule).toBe("per_user_budget");
     expect(r.aic_assigned_usd).toBe(50);
@@ -227,11 +228,13 @@ describe("computeLicenseKPIs", () => {
 
 describe("breakdowns", () => {
   it("groups by plan", () => {
-    insertSeat({ user_login: "a", plan_type: "business" });
+    insertSeat({ user_login: "a", org_slug: "org1", plan_type: "business" });
+    insertSeat({ user_login: "a", org_slug: "org2", plan_type: "business" });
     insertSeat({ user_login: "b", plan_type: "enterprise" });
     insertConsumption("a", 100, 1.6);
     const plans = computePlanBreakdown(getLicenseReconciliationRows(WINDOW));
     expect(plans.map((p) => p.key).sort()).toEqual(["business", "enterprise"]);
+    expect(plans.find((p) => p.key === "business")!.seats).toBe(2);
   });
 
   it("groups by org", () => {
@@ -256,6 +259,18 @@ describe("breakdowns", () => {
     expect(orgB.allowanceCredits).toBe(0);
     expect(orgA.consumedCredits).toBe(100);
     expect(orgB.consumedCredits).toBe(0);
+  });
+
+  it("counts all seats in the same org across enterprises", () => {
+    insertSeat({ enterprise_slug: "ent1", user_login: "multi", org_slug: "shared", plan_type: "business" });
+    insertSeat({ enterprise_slug: "ent2", user_login: "multi", org_slug: "shared", plan_type: "business" });
+
+    const row = getLicenseReconciliationRows(WINDOW)[0];
+    expect(row.seat_count).toBe(2);
+    expect(row.org_seat_counts).toEqual({ shared: 2 });
+
+    const org = computeOrgBreakdown([row]).find((o) => o.key === "shared")!;
+    expect(org.seats).toBe(2);
   });
 
   it("buckets utilization", () => {

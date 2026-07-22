@@ -259,6 +259,12 @@ export const DEFAULT_LICENSING: ResolvedLicensingConfig = {
  */
 export function getLicensingConfig(): ResolvedLicensingConfig {
   const configured = (getDashboardConfig().metrics.billing as BillingMetricConfig).licensing ?? {};
+  const rawBudgets = configured.perUserBudgetUsd ?? {};
+  const perUserBudgetUsd: Record<string, number> = {};
+  for (const [login, amount] of Object.entries(rawBudgets)) {
+    perUserBudgetUsd[login.toLowerCase()] = amount;
+  }
+
   return {
     creditToUsd:
       typeof configured.creditToUsd === "number" && configured.creditToUsd >= 0
@@ -267,7 +273,7 @@ export function getLicensingConfig(): ResolvedLicensingConfig {
     currency: configured.currency || DEFAULT_LICENSING.currency,
     licenseCost: { ...DEFAULT_LICENSING.licenseCost, ...(configured.licenseCost ?? {}) },
     aicAllowance: { ...DEFAULT_LICENSING.aicAllowance, ...(configured.aicAllowance ?? {}) },
-    perUserBudgetUsd: { ...(configured.perUserBudgetUsd ?? {}) },
+    perUserBudgetUsd,
   };
 }
 

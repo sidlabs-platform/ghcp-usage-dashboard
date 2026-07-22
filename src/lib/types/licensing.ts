@@ -52,6 +52,8 @@ export interface LicenseReconciliationRow {
   license_cost: number;
   /** Per-org license cost (USD), used for accurate org breakdown. */
   org_license_costs?: Record<string, number>;
+  /** Per-org seat counts, used for accurate org breakdown when users hold multiple seats. */
+  org_seat_counts?: Record<string, number>;
   /** Monthly AI-credit allowance for the user's plan (credits). */
   default_aic_credits: number;
   /** Allowance value in USD (credits × creditToUsd). */
