@@ -5,6 +5,7 @@ import { getAllUserMetrics } from "@/lib/db/metrics-repo";
 import { computeTeamSummary } from "@/lib/aggregation/team-metrics";
 import { refreshTeamSummary } from "@/lib/db/summary-tables";
 import { parseDateRangeParams } from "@/lib/utils";
+import { parseScopeFilter } from "@/lib/api/scope-filter";
 import { withCache } from "@/lib/cache/with-cache";
 import { withTimeout } from "@/lib/api/timeout";
 import { CACHE_TTL } from "@/lib/cache/memory-cache";
@@ -169,14 +170,8 @@ async function handler(request: NextRequest) {
     }
     const { start, end } = rangeResult;
 
-    const teamsParam = params.get("teams");
-    const orgsParam = params.get("orgs");
-    const selectedSlugs = teamsParam ? teamsParam.split(",").filter(Boolean) : [];
-    const selectedOrgs = orgsParam ? orgsParam.split(",").filter(Boolean) : [];
-
-    const enterprisesParam = params.get("enterprises");
-    const selectedEnterprises = enterprisesParam ? enterprisesParam.split(",").filter(Boolean) : [];
-    const enterpriseSlugs = selectedEnterprises.length > 0 ? selectedEnterprises : undefined;
+    const scopeFilter = parseScopeFilter(params);
+    const { selectedTeams: selectedSlugs, selectedOrgs, selectedEnterprises, enterpriseSlugs } = scopeFilter;
 
     const rawPage = parseInt(params.get("page") || "1", 10);
     const page = Math.max(1, Number.isNaN(rawPage) ? 1 : rawPage);

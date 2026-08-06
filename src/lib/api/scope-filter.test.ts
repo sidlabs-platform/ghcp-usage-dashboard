@@ -45,6 +45,7 @@ describe("parseScopeFilter", () => {
     mockResolve.mockReturnValue(["charlie"]);
     const result = parseScopeFilter(new URLSearchParams("teams=ent1:team-x"));
     expect(result.selectedTeams).toEqual(["team-x"]);
+    expect(result.enterpriseSlugs).toEqual(["ent1"]);
     expect(result.allowedLogins).toEqual(new Set(["charlie"]));
     expect(mockResolve).toHaveBeenCalledWith(["team-x"], [], ["ent1"]);
   });

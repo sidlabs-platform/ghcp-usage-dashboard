@@ -40,8 +40,15 @@ export function parseScopeFilter(searchParams: URLSearchParams): ParsedScopeFilt
   const selectedTeams = [...plainTeams, ...compositeTeams.map((c) => c.team)];
   const hasFilter = selectedTeams.length > 0 || selectedOrgs.length > 0 || selectedEnterprises.length > 0;
 
-  // Resolve enterprise slugs for SQL filtering (undefined = all)
-  const enterpriseSlugs = selectedEnterprises.length > 0 ? selectedEnterprises : undefined;
+  // Resolve enterprise slugs for SQL filtering (undefined = all). Composite
+  // team identifiers carry their enterprise scope when no explicit filter is set.
+  const compositeEnterprises = [...new Set(compositeTeams.map((c) => c.enterprise))];
+  const enterpriseSlugs =
+    selectedEnterprises.length > 0
+      ? selectedEnterprises
+      : compositeEnterprises.length > 0
+        ? compositeEnterprises
+        : undefined;
 
   let allowedLogins: Set<string> | undefined;
 

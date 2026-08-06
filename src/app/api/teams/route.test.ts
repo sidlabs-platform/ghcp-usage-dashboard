@@ -32,6 +32,7 @@ vi.mock("@/lib/db/database", () => ({
 
 vi.mock("@/lib/db/teams-repo", () => ({
   getAllTeamsWithMembers: vi.fn(() => []),
+  resolveFilteredUsers: vi.fn(() => []),
 }));
 
 vi.mock("@/lib/db/metrics-repo", () => ({

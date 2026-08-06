@@ -50,7 +50,7 @@ interface TeamDetailResponse {
 export default function TeamDetailPage() {
   const { slug } = useParams<{ slug: string }>();
   const { mode, days, startDate, endDate } = useDateRange();
-  const { selectedOrgs, selectedEnts, selectedOrgTeams, selectedEntTeams } = useScope();
+  const { selectedOrgs, selectedEnterprises, selectedOrgTeams, selectedEntTeams } = useScope();
   const [data, setData] = useState<TeamDetailResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -67,9 +67,14 @@ export default function TeamDetailPage() {
     } else {
       qp.set("days", String(days));
     }
-    
+    if (source) {
+      qp.set("source", source);
+    }
+    if (enterprise) {
+      qp.set("enterprise", enterprise);
+    }
     if (selectedOrgs.length > 0) qp.set("orgs", selectedOrgs.join(","));
-    if (selectedEnts.length > 0) qp.set("enterprises", selectedEnts.join(","));
+    if (selectedEnterprises.length > 0) qp.set("enterprises", selectedEnterprises.join(","));
     if (selectedOrgTeams.length > 0) qp.set("teams", selectedOrgTeams.join(","));
     if (selectedEntTeams.length > 0) qp.set("ent_teams", selectedEntTeams.join(","));
 
@@ -81,7 +86,7 @@ export default function TeamDetailPage() {
       .then((json) => setData(json as TeamDetailResponse))
       .catch((err) => setError(err instanceof Error ? err.message : String(err)))
       .finally(() => setLoading(false));
-  }, [slug, mode, days, startDate, endDate, selectedOrgs, selectedEnts, selectedOrgTeams, selectedEntTeams]);
+  }, [slug, mode, days, startDate, endDate, selectedOrgs, selectedEnterprises, selectedOrgTeams, selectedEntTeams]);
 
   if (loading) {
     return (
