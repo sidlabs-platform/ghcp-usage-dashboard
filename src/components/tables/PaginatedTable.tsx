@@ -67,6 +67,9 @@ export function PaginatedTable<T>({
   const [sortDir, setSortDir] = useState<"asc" | "desc">(defaultSortDir);
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
+  const extraParamsKey = extraParams?.toString() ?? "";
+  const previousExtraParamsKeyRef = useRef(extraParamsKey);
+  const effectivePage = previousExtraParamsKeyRef.current === extraParamsKey ? page : 1;
 
   // Debounce search
   const searchTimeoutRef = useRef<ReturnType<typeof setTimeout>>(undefined);
@@ -80,17 +83,23 @@ export function PaginatedTable<T>({
   }, []);
 
   const buildUrl = useCallback(() => {
-    const params = new URLSearchParams(extraParams?.toString() || "");
-    params.set("page", String(page));
+    const params = new URLSearchParams(extraParamsKey);
+    params.set("page", String(effectivePage));
     params.set("pageSize", String(pageSize));
     params.set("sort", sortField);
     params.set("sortDir", sortDir);
     if (debouncedSearch) params.set("search", debouncedSearch);
     return `${fetchUrl}?${params.toString()}`;
-  }, [fetchUrl, extraParams, page, pageSize, sortField, sortDir, debouncedSearch]);
+  }, [fetchUrl, extraParamsKey, effectivePage, pageSize, sortField, sortDir, debouncedSearch]);
+
+  useEffect(() => {
+    if (previousExtraParamsKeyRef.current === extraParamsKey) return;
+    previousExtraParamsKeyRef.current = extraParamsKey;
+    setPage(1);
+  }, [extraParamsKey]);
 
   const { data, isLoading, error } = useQuery({
-    queryKey: [queryKey, fetchUrl, page, pageSize, sortField, sortDir, debouncedSearch, extraParams?.toString()],
+    queryKey: [queryKey, fetchUrl, effectivePage, pageSize, sortField, sortDir, debouncedSearch, extraParamsKey],
     queryFn: async () => {
       const res = await fetch(buildUrl());
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
