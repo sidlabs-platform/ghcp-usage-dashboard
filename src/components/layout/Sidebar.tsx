@@ -75,6 +75,7 @@ const navGroups: NavGroup[] = [
       { href: "/dashboard/billing", label: "Billing", icon: Receipt, visKey: "billing" },
       { href: "/dashboard/billing-usage", label: "Metered Usage", icon: DollarSign, visKey: "billingUsage" },
       { href: "/dashboard/billing-premium", label: "AI Credits", icon: Zap, visKey: "billingPremium" },
+      { href: "/dashboard/ai-credits-users", label: "AI Credits by User", icon: Zap, visKey: "aiCreditsUsers" },
     ],
   },
 ];
