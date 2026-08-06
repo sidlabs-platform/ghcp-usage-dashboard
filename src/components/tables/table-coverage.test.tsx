@@ -50,6 +50,36 @@ function renderTable(fetchImpl: typeof fetch, onTotalChange = vi.fn()) {
   return { queryClient, onTotalChange };
 }
 
+function renderTableWithParams(fetchImpl: typeof fetch, extraParams: URLSearchParams) {
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: {
+        retry: false,
+        gcTime: 0,
+      },
+    },
+  });
+
+  vi.stubGlobal("fetch", fetchImpl);
+
+  const view = render(
+    <QueryClientProvider client={queryClient}>
+      <PaginatedTable<Row>
+        fetchUrl="/api/users"
+        extraParams={extraParams}
+        columns={columns}
+        defaultSort="name"
+        rowKey={(row) => row.id}
+        dataExtractor={(json) => json.users as Row[]}
+        queryKey="users-with-params"
+        pageSizeOptions={[1, 2]}
+      />
+    </QueryClientProvider>,
+  );
+
+  return { queryClient, ...view };
+}
+
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
@@ -133,5 +163,54 @@ describe("PaginatedTable", () => {
     );
 
     expect(await screen.findByText("No data available.")).toBeInTheDocument();
+  });
+
+  it("resets to the first page when external filter params change", async () => {
+    const requests: string[] = [];
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      requests.push(String(input));
+      return {
+        ok: true,
+        json: async () => ({
+          users: [{ id: "1", name: "Alice", score: 10 }],
+          pagination: {
+            page: 1,
+            pageSize: 1,
+            totalItems: 3,
+            totalPages: 3,
+          },
+        }),
+      } as Response;
+    });
+
+    const initialParams = new URLSearchParams({ days: "28" });
+    const view = renderTableWithParams(fetchMock, initialParams);
+
+    expect(await screen.findByText("Alice")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Next page" }));
+    await waitFor(() => {
+      expect(requests.at(-1)).toContain("page=2");
+    });
+
+    const changedParams = new URLSearchParams({ days: "7" });
+    view.rerender(
+      <QueryClientProvider client={view.queryClient}>
+        <PaginatedTable<Row>
+          fetchUrl="/api/users"
+          extraParams={changedParams}
+          columns={columns}
+          defaultSort="name"
+          rowKey={(row) => row.id}
+          dataExtractor={(json) => json.users as Row[]}
+          queryKey="users-with-params"
+          pageSizeOptions={[1, 2]}
+        />
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => {
+      expect(requests.at(-1)).toContain("days=7");
+      expect(requests.at(-1)).toContain("page=1");
+    });
   });
 });

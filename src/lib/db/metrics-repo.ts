@@ -18,9 +18,15 @@ export interface UserAiCreditsTotals {
   top_user_ai_credits_used: number;
 }
 
+export interface UserAiCreditsUsersPaginated {
+  users: UserAiCreditsSummary[];
+  total: number;
+}
+
 export interface UserAiCreditsFilters {
   userLogin?: string;
   allowedLogins?: string[];
+  search?: string;
 }
 
 /** Build optional enterprise_slug IN (...) clause for multi-enterprise filtering */
@@ -732,6 +738,66 @@ export function getUserAiCreditsSummary(
   `).all(...queryParams) as UserAiCreditsSummary[];
 }
 
+const USER_AI_CREDITS_SORT_COLUMNS = new Set([
+  "user_login",
+  "total_ai_credits_used",
+  "active_days",
+  "avg_daily_ai_credits",
+  "last_active_day",
+]);
+
+/**
+ * Return paginated user-level AI Credit totals using SQL aggregation.
+ */
+export function getUserAiCreditsUsersPaginated(
+  startDay: string,
+  endDay: string,
+  page: number,
+  pageSize: number,
+  sort: string,
+  sortDir: "asc" | "desc",
+  search?: string,
+  filters?: UserAiCreditsFilters,
+  enterpriseSlugs?: string[]
+): UserAiCreditsUsersPaginated {
+  const db = getDb();
+  const effectiveFilters: UserAiCreditsFilters | undefined = search
+    ? { ...filters, search }
+    : filters;
+  const { clauses, params } = buildUserAiCreditsWhere(startDay, endDay, effectiveFilters, enterpriseSlugs);
+
+  const safeSort = USER_AI_CREDITS_SORT_COLUMNS.has(sort) ? sort : "total_ai_credits_used";
+  const safeDir = sortDir === "asc" ? "ASC" : "DESC";
+  const offset = (page - 1) * pageSize;
+  const where = clauses.join(" AND ");
+
+  const total = (db.prepare(`
+    SELECT COUNT(*) AS cnt
+    FROM (
+      SELECT user_login
+      FROM user_daily_metrics
+      WHERE ${where}
+      GROUP BY user_login
+    )
+  `).get(...params) as { cnt: number }).cnt;
+
+  const users = db.prepare(`
+    SELECT
+      user_login,
+      COALESCE(SUM(ai_credits_used), 0) AS total_ai_credits_used,
+      COUNT(DISTINCT day) AS active_days,
+      COALESCE(SUM(ai_credits_used), 0) * 1.0 / COUNT(DISTINCT day) AS avg_daily_ai_credits,
+      MAX(day) AS last_active_day
+    FROM user_daily_metrics
+    WHERE ${where}
+    GROUP BY user_login
+    ORDER BY ${safeSort} ${safeDir}, user_login ASC
+    LIMIT ? OFFSET ?
+  `).all(...params, pageSize, offset) as UserAiCreditsSummary[];
+
+  return { users, total };
+}
+
 function buildUserAiCreditsWhere(
   startDay: string,
   endDay: string,
@@ -764,7 +830,16 @@ function buildUserAiCreditsWhere(
     }
   }
 
+  if (filters?.search) {
+    clauses.push("user_login LIKE ? ESCAPE '\\'");
+    params.push(`%${escapeSqlLike(filters.search)}%`);
+  }
+
   return { clauses, params };
+}
+
+function escapeSqlLike(value: string): string {
+  return value.replace(/[\\%_]/g, "\\$&");
 }
 
 /**
