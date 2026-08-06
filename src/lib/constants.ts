@@ -94,3 +94,16 @@ export const DATE_PRESETS = [
 ] as const;
 
 export const DEFAULT_DATE_RANGE_DAYS = 7;
+
+/**
+ * Data-quality caveat surfaced on the AI Credits page. The 2026-07-02 metrics
+ * accuracy update began attributing AI-credit usage that was previously dropped
+ * (org-less usage and users seen only via server-side telemetry). Already-reported
+ * values are unchanged, so totals for periods before this date may undercount.
+ * @see https://github.blog/changelog/2026-07-02-improved-accuracy-and-coverage-in-copilot-usage-metrics-reports/
+ */
+export const AI_CREDIT_COVERAGE_NOTE = {
+  effectiveDate: "2026-07-02",
+  message:
+    "AI-credit coverage improved on 2026-07-02 (org-less and server-side-only usage now counted); totals for earlier periods may undercount.",
+} as const;

@@ -62,6 +62,45 @@ export function upsertSeats(enterpriseSlug: string, orgSlug: string, seats: Copi
   tx();
 }
 
+/**
+ * Replace the current Copilot seat snapshot for an enterprise.
+ */
+export function replaceEnterpriseSeats(
+  enterpriseSlug: string,
+  seatsByOrg: Map<string, CopilotSeat[]>,
+): number {
+  const db = getDb();
+  const stmt = db.prepare(`
+    INSERT OR REPLACE INTO copilot_seats (
+      enterprise_slug, org_slug, user_login, user_id, plan_type, last_activity_at, last_activity_editor,
+      last_authenticated_at, assigning_team_slug, assigning_team_name,
+      pending_cancellation_date, created_at, updated_at, avatar_url
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+
+  let inserted = 0;
+  const tx = db.transaction(() => {
+    db.prepare("DELETE FROM copilot_seats WHERE enterprise_slug = ?").run(enterpriseSlug);
+    for (const [orgSlug, seats] of seatsByOrg) {
+      if (!orgSlug) continue;
+      for (const seat of seats) {
+        if (!seat.assignee?.login) continue;
+        stmt.run(
+          enterpriseSlug, orgSlug, seat.assignee.login, seat.assignee.id, seat.plan_type,
+          seat.last_activity_at, seat.last_activity_editor, seat.last_authenticated_at,
+          seat.assigning_team?.slug || null, seat.assigning_team?.name || null,
+          seat.pending_cancellation_date, seat.created_at, seat.updated_at,
+          seat.assignee.avatar_url
+        );
+        inserted++;
+      }
+    }
+  });
+
+  tx();
+  return inserted;
+}
+
 export interface SeatRow {
   org_slug: string;
   user_login: string;

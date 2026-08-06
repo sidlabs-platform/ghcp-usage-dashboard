@@ -179,6 +179,12 @@ export interface PremiumRequestModelSummary {
   total_aic_gross: number;
 }
 
+export interface PremiumUserModelBreakdown {
+  model: string;
+  ai_credits: number;
+  usd: number;
+}
+
 // ── Cost Center / Repository / Premium Daily Breakdown ────────────────
 
 export interface BillingCostCenterBreakdown {
@@ -195,6 +201,39 @@ export interface BillingRepositoryBreakdown {
   total_gross: number;
   total_discount: number;
   total_net: number;
+}
+
+/**
+ * AI Credit consumption grouped by cost center, sourced from the
+ * `billing_premium_requests` table (premium_request + ai_credit superset).
+ *
+ * `cost_center_name` is an empty string for AI-credit usage not attributed to a
+ * cost center — the UI surfaces these as an explicit "Unattributed" bucket
+ * rather than dropping them.
+ */
+export interface PremiumCostCenterBreakdown {
+  cost_center_name: string;
+  total_aic_quantity: number;
+  total_aic_gross: number;
+  unique_users: number;
+  record_count: number;
+}
+
+/**
+ * AI Credit consumption grouped by organization, sourced from the
+ * `billing_premium_requests` table.
+ *
+ * `organization` is an empty string for org-less AI-credit usage (e.g. usage
+ * not linked to an organization, which the 2026-07-02 metrics accuracy update
+ * now attributes). The UI surfaces these as an explicit "No organization /
+ * unattributed" bucket rather than dropping them from org-grouped views.
+ */
+export interface PremiumOrgBreakdown {
+  organization: string;
+  total_aic_quantity: number;
+  total_aic_gross: number;
+  unique_users: number;
+  record_count: number;
 }
 
 export interface PremiumDailyTrend {
