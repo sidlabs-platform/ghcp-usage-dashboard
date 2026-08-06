@@ -212,5 +212,8 @@ describe("PaginatedTable", () => {
       expect(requests.at(-1)).toContain("days=7");
       expect(requests.at(-1)).toContain("page=1");
     });
+    const changedFilterRequests = requests.filter((request) => request.includes("days=7"));
+    expect(changedFilterRequests).toHaveLength(1);
+    expect(changedFilterRequests[0]).toContain("page=1");
   });
 });
