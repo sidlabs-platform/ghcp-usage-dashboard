@@ -51,24 +51,17 @@ function SortHeader({ col, label, align = "left", sort, sortDir, onSort }: SortH
 
   return (
     <th
-      className={`px-3 py-3 ${alignClass} text-xs font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wider cursor-pointer hover:text-[hsl(var(--foreground))] select-none`}
+      className={alignClass}
       aria-sort={isSorted ? (sortDir === "asc" ? "ascending" : "descending") : "none"}
     >
-      <span
-        className={`flex items-center gap-1 ${align === "right" ? "justify-end" : ""}`}
+      <button
+        type="button"
+        className={`w-full px-3 py-3 flex items-center gap-1 ${align === "right" ? "justify-end" : ""} text-xs font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wider cursor-pointer hover:text-[hsl(var(--foreground))] select-none`}
         onClick={() => onSort(col)}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" || e.key === " ") {
-            e.preventDefault();
-            onSort(col);
-          }
-        }}
-        tabIndex={0}
-        role="button"
       >
         {label}
         {isSorted && <span>{sortDir === "asc" ? "↑" : "↓"}</span>}
-      </span>
+      </button>
     </th>
   );
 }
@@ -97,6 +90,8 @@ export default function LicenseReconciliationPage() {
   const kpiRef = useRef<HTMLDivElement>(null);
   const chartsRef = useRef<HTMLDivElement>(null);
   const tableRef = useRef<HTMLDivElement>(null);
+  const pageRef = useRef(page);
+  const skipNextFetch = useRef(false);
 
   const fmtMoney = useCallback(
     (v: number) => {
@@ -157,8 +152,21 @@ export default function LicenseReconciliationPage() {
     }
   }, [buildParams]);
 
-  useEffect(() => { fetchData(); }, [fetchData]);
-  useEffect(() => { setPage(1); }, [search, sort, sortDir, days, hasFilter, selectedEntTeams, selectedOrgTeams, selectedOrgs]);
+  useEffect(() => { pageRef.current = page; }, [page]);
+  useEffect(() => {
+    if (pageRef.current !== 1) {
+      // Criteria changes should reset pagination; skip the stale old-page fetch and let page=1 fetch next.
+      skipNextFetch.current = true;
+      setPage(1);
+    }
+  }, [search, sort, sortDir, days, hasFilter, selectedEntTeams, selectedOrgTeams, selectedOrgs]);
+  useEffect(() => {
+    if (skipNextFetch.current) {
+      skipNextFetch.current = false;
+      return;
+    }
+    fetchData();
+  }, [fetchData]);
 
   const handleSort = (col: string) => {
     if (sort === col) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
