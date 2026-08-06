@@ -124,6 +124,13 @@ const SEARCH_INDEX: SearchEntry[] = [
     keywords: ["license", "reconciliation", "seat cost", "aic", "allocation", "utilization", "budget", "cost of ownership"],
     section: "Billing",
   },
+  {
+    href: "/dashboard/ai-credits-users",
+    label: "AI Credits by User",
+    description: "Sortable user-level AI credit consumption",
+    keywords: ["ai credits", "user", "billing", "consumption", "usage"],
+    section: "Billing",
+  },
 ];
 
 function matchesQuery(entry: SearchEntry, query: string): boolean {

@@ -63,6 +63,7 @@ describe("config route", { timeout: 15000 }, () => {
       billing: false,
       billingUsage: false,
       billingPremium: false,
+      aiCreditsUsers: true,
     });
     expect(isCopilotSubEnabled).toHaveBeenCalledWith("userMetrics");
     expect(isCopilotSubEnabled).toHaveBeenCalledWith("pullRequests");
@@ -136,6 +137,7 @@ describe("config route", { timeout: 15000 }, () => {
       billing: true,
       billingUsage: false,
       billingPremium: true,
+      aiCreditsUsers: true,
     });
     expect(isMetricEnabledForAnyEnterprise).toHaveBeenCalledWith("copilot");
     expect(isMetricEnabledForAnyEnterprise).toHaveBeenCalledWith("billing");

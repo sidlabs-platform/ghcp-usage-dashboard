@@ -69,6 +69,7 @@ export async function GET() {
     licenseReconciliation: billingEnabled && (multiEnt
       ? (isBillingSubEnabledForAnyEnterprise("premiumRequests") || isBillingSubEnabledForAnyEnterprise("aiCredits"))
       : (isBillingSubEnabled("premiumRequests") || isBillingSubEnabled("aiCredits"))),
+    aiCreditsUsers: userMetrics,
   };
 
   return NextResponse.json({

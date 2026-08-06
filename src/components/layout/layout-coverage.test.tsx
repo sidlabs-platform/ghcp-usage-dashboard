@@ -161,7 +161,7 @@ describe("layout coverage", () => {
   });
 
   it("renders sidebar groups using visibility config and highlights the active page", async () => {
-    mockState.pathname = "/dashboard/cli";
+    mockState.pathname = "/dashboard/ai-credits-users";
     const fetchMock = vi.fn((input: RequestInfo | URL) => {
       if (String(input) === "/api/config") {
         return mockJsonResponse({
@@ -187,7 +187,8 @@ describe("layout coverage", () => {
     await screen.findByText("Enterprise A");
     expect(screen.getByText("Usage Analytics")).toBeInTheDocument();
     expect(screen.getByText("CLI Analytics").closest("a")).toHaveAttribute("href", "/dashboard/cli");
-    expect(screen.getByText("CLI Analytics").closest("a")).toHaveClass("border-l-2");
+    expect(screen.getByText("AI Credits by User").closest("a")).toHaveAttribute("href", "/dashboard/ai-credits-users");
+    expect(screen.getByText("AI Credits by User").closest("a")).toHaveClass("border-l-2");
     expect(screen.queryByText("Billing")).not.toBeInTheDocument();
     expect(screen.queryByText("AI Credits")).not.toBeInTheDocument();
   });

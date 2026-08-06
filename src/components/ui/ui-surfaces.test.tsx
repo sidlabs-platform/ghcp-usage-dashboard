@@ -81,11 +81,11 @@ describe("shared UI surfaces", () => {
 
     const dialog = await screen.findByRole("dialog", { name: "Search dashboard pages" });
     const input = screen.getByPlaceholderText(/Search pages/i);
-    fireEvent.change(input, { target: { value: "AI Credits" } });
-    expect(screen.getByText("AI Credits")).toBeInTheDocument();
+    fireEvent.change(input, { target: { value: "AI Credits by User" } });
+    expect(screen.getByText("AI Credits by User")).toBeInTheDocument();
 
     fireEvent.keyDown(dialog, { key: "Enter" });
-    expect(pushMock).toHaveBeenCalledWith("/dashboard/billing-premium");
+    expect(pushMock).toHaveBeenCalledWith("/dashboard/ai-credits-users");
   });
 
   it("shows the empty state and closes the command palette on escape", async () => {
