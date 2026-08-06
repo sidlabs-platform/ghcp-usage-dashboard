@@ -149,14 +149,17 @@ export default function AiCreditsUsersPage() {
 
   const SortHeader = ({ col, label, align = "left" }: { col: SortKey; label: string; align?: "left" | "right" }) => (
     <th
-      className={`px-4 py-3 ${align === "right" ? "text-right" : "text-left"} text-xs font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wider cursor-pointer hover:text-[hsl(var(--foreground))] select-none`}
-      onClick={() => handleSort(col)}
+      className={`px-4 py-3 ${align === "right" ? "text-right" : "text-left"} text-xs font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wider select-none`}
       aria-sort={sortKey === col ? (sortDir === "asc" ? "ascending" : "descending") : "none"}
     >
-      <span className={`flex items-center gap-1 ${align === "right" ? "justify-end" : ""}`}>
+      <button
+        type="button"
+        onClick={() => handleSort(col)}
+        className={`flex items-center gap-1 uppercase tracking-wider cursor-pointer hover:text-[hsl(var(--foreground))] focus:outline-none focus-visible:ring-2 focus-visible:ring-[hsl(var(--primary))]/40 rounded ${align === "right" ? "justify-end w-full" : ""}`}
+      >
         {label}
         {sortKey === col && <span>{sortDir === "asc" ? "↑" : "↓"}</span>}
-      </span>
+      </button>
     </th>
   );
 
