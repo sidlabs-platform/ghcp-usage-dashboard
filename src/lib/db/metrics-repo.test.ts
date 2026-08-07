@@ -33,6 +33,7 @@ import {
   getDistinctUsers,
   getAllUserMetrics,
   getUserAiCreditsSummary,
+  getUserAiCreditsUsersPaginated,
   getUserAiCreditsTotals,
   getAggregatedDailySummary,
   getFilteredOrgMetrics,
@@ -1272,6 +1273,104 @@ describe("ai_credits_used", () => {
       top_user_login: "top",
       top_user_ai_credits_used: 10,
     });
+    expect(getUserAiCreditsTotals("2026-06-19", "2026-06-20", { search: "sec" })).toEqual({
+      total_ai_credits_used: 4,
+      tracked_users: 1,
+      top_user_login: "second",
+      top_user_ai_credits_used: 4,
+    });
+    expect(getUserAiCreditsTotals("2026-06-19", "2026-06-20", { search: "%" })).toEqual({
+      total_ai_credits_used: 0,
+      tracked_users: 0,
+      top_user_login: "N/A",
+      top_user_ai_credits_used: 0,
+    });
     expect(getUserAiCreditsSummary("2026-06-19", "2026-06-20", undefined, undefined, 1)).toHaveLength(1);
+  });
+
+  it("returns paginated AI credit users with search and safe sorting", () => {
+    batchUpsertUserDayMetrics("ent1", [
+      {
+        day: "2026-07-10", enterprise_id: "ent-123", user_id: 401, user_login: "octo",
+        code_generation_activity_count: 0, code_acceptance_activity_count: 0,
+        user_initiated_interaction_count: 0,
+        loc_suggested_to_add_sum: 0, loc_suggested_to_delete_sum: 0,
+        loc_added_sum: 0, loc_deleted_sum: 0,
+        used_agent: false, used_chat: false, used_cli: false,
+        totals_by_ide: [], totals_by_feature: [], totals_by_language_feature: [],
+        totals_by_model_feature: [], totals_by_language_model: [],
+        ai_credits_used: 5,
+      },
+      {
+        day: "2026-07-11", enterprise_id: "ent-123", user_id: 401, user_login: "octo",
+        code_generation_activity_count: 0, code_acceptance_activity_count: 0,
+        user_initiated_interaction_count: 0,
+        loc_suggested_to_add_sum: 0, loc_suggested_to_delete_sum: 0,
+        loc_added_sum: 0, loc_deleted_sum: 0,
+        used_agent: false, used_chat: false, used_cli: false,
+        totals_by_ide: [], totals_by_feature: [], totals_by_language_feature: [],
+        totals_by_model_feature: [], totals_by_language_model: [],
+        ai_credits_used: 15,
+      },
+      {
+        day: "2026-07-10", enterprise_id: "ent-123", user_id: 402, user_login: "mona",
+        code_generation_activity_count: 0, code_acceptance_activity_count: 0,
+        user_initiated_interaction_count: 0,
+        loc_suggested_to_add_sum: 0, loc_suggested_to_delete_sum: 0,
+        loc_added_sum: 0, loc_deleted_sum: 0,
+        used_agent: false, used_chat: false, used_cli: false,
+        totals_by_ide: [], totals_by_feature: [], totals_by_language_feature: [],
+        totals_by_model_feature: [], totals_by_language_model: [],
+        ai_credits_used: 8,
+      },
+      {
+        day: "2026-07-10", enterprise_id: "ent-123", user_id: 403, user_login: "zero",
+        code_generation_activity_count: 0, code_acceptance_activity_count: 0,
+        user_initiated_interaction_count: 0,
+        loc_suggested_to_add_sum: 0, loc_suggested_to_delete_sum: 0,
+        loc_added_sum: 0, loc_deleted_sum: 0,
+        used_agent: false, used_chat: false, used_cli: false,
+        totals_by_ide: [], totals_by_feature: [], totals_by_language_feature: [],
+        totals_by_model_feature: [], totals_by_language_model: [],
+        ai_credits_used: 0,
+      },
+    ]);
+
+    const firstPage = getUserAiCreditsUsersPaginated(
+      "2026-07-10",
+      "2026-07-11",
+      1,
+      1,
+      "avg_daily_ai_credits",
+      "asc",
+    );
+    expect(firstPage.total).toBe(2);
+    expect(firstPage.users).toEqual([
+      {
+        user_login: "mona",
+        total_ai_credits_used: 8,
+        active_days: 1,
+        avg_daily_ai_credits: 8,
+        last_active_day: "2026-07-10",
+      },
+    ]);
+
+    const searched = getUserAiCreditsUsersPaginated(
+      "2026-07-10",
+      "2026-07-11",
+      1,
+      25,
+      "last_active_day",
+      "desc",
+      "oct",
+    );
+    expect(searched.total).toBe(1);
+    expect(searched.users[0]).toMatchObject({
+      user_login: "octo",
+      total_ai_credits_used: 20,
+      active_days: 2,
+      avg_daily_ai_credits: 10,
+      last_active_day: "2026-07-11",
+    });
   });
 });

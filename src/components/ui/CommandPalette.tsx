@@ -118,10 +118,17 @@ const SEARCH_INDEX: SearchEntry[] = [
     section: "Billing",
   },
   {
+    href: "/dashboard/license-reconciliation",
+    label: "License & Credits",
+    description: "Per-user license lifecycle, seat cost, and AI-credit allocation vs. consumption",
+    keywords: ["license", "reconciliation", "seat cost", "aic", "allocation", "utilization", "budget", "cost of ownership"],
+    section: "Billing",
+  },
+  {
     href: "/dashboard/ai-credits-users",
     label: "AI Credits by User",
-    description: "Sortable table of AI credits consumed by every user",
-    keywords: ["ai credits", "per user", "consumption", "sortable", "user", "credits"],
+    description: "Sortable user-level AI credit consumption",
+    keywords: ["ai credits", "user", "billing", "consumption", "usage"],
     section: "Billing",
   },
 ];
