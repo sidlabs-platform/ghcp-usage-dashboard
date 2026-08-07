@@ -27,20 +27,7 @@ export type {
   ResolvedLicensingValidationConfig,
   ResolvedLicensingConfig,
 } from "@/lib/config/dashboard-config";
-
-/** A billing/report month in "YYYY-MM" form (see `@/lib/licensing/periods`). */
-export type ReportPeriod = string;
-
-/**
- * A seat's assignment lifecycle, as used by `intervalOverlapsPeriod` to
- * determine whether the seat was held during a given report period.
- * Half-open interval: active from `assignedAt` (inclusive) up to but not
- * including `revokedAt`.
- */
-export interface SeatAssignmentInterval {
-  assignedAt: string | null;
-  revokedAt: string | null;
-}
+export { LicensingConfigError } from "@/lib/config/dashboard-config";
 
 /** Derived seat status for a user's license. */
 export type SeatStatus = "active" | "pending_cancellation";

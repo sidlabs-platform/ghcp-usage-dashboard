@@ -118,7 +118,8 @@ export interface LicensingConfig {
   /**
    * Time-bounded allowance overrides, applied instead of the static
    * `aicAllowance` for periods they cover. Windows must not overlap for the
-   * same plan; malformed/overlapping entries are dropped with a warning.
+   * same plan; malformed, reversed, or overlapping entries cause
+   * {@link getLicensingConfig} to throw a `LicensingConfigError`.
    */
   datedAllowances?: DatedAllowance[];
   /** Historical reconciliation / audit-trail settings. */
@@ -148,7 +149,8 @@ export interface BillingMetricConfig {
 /** Resolved historical reconciliation settings with all fields populated. */
 export interface ResolvedLicensingHistoryConfig {
   enabled: boolean;
-  reportMonths: string | string[];
+  /** Parsed, de-duplicated, sorted "YYYY-MM" report months (see `parseReportMonths`). */
+  reportMonths: string[];
   auditRetentionDays: number;
   emitSnapshots: boolean;
   snapshotDirectory: string;
@@ -183,7 +185,7 @@ export interface ResolvedLicensingConfig {
   licenseCost: Record<LicensePlanKey, number>;
   aicAllowance: Record<LicensePlanKey, number>;
   perUserBudgetUsd: Record<string, number>;
-  /** Time-bounded allowance overrides, sorted by start date; malformed/overlapping entries removed. */
+  /** Time-bounded allowance overrides, sorted by start date. Overlapping/malformed entries cause `getLicensingConfig` to throw. */
   datedAllowances: DatedAllowance[];
   history: ResolvedLicensingHistoryConfig;
   identity: ResolvedLicensingIdentityConfig;
@@ -381,7 +383,11 @@ export const DEFAULT_LICENSING: ResolvedLicensingConfig = {
   datedAllowances: [],
   history: {
     enabled: false,
-    reportMonths: "last_1_months",
+    // Placeholder only: `resolveHistoryConfig` always computes the actual
+    // default (the current month) at resolve-time via `parseReportMonths`,
+    // since the resolved shape is a concrete `string[]`, not a re-evaluable
+    // token like "last_1_months".
+    reportMonths: [],
     auditRetentionDays: 400,
     emitSnapshots: false,
     snapshotDirectory: "data/licensing-snapshots",
@@ -403,6 +409,29 @@ export const DEFAULT_LICENSING: ResolvedLicensingConfig = {
   },
 };
 
+/**
+ * Thrown by {@link getLicensingConfig} when one or more *explicitly
+ * configured* `metrics.billing.licensing` values are invalid (malformed
+ * syntax, out-of-bounds numbers, unknown plan keys, overlapping/reversed
+ * date ranges, etc.). Fields the operator never set always fall back to
+ * safe defaults and never trigger this error — it only fires for values
+ * that are present in config but invalid.
+ */
+export class LicensingConfigError extends Error {
+  /** One human-readable message per invalid field/entry found. */
+  readonly details: string[];
+
+  constructor(details: string[]) {
+    super(
+      details.length === 1
+        ? `Invalid licensing configuration: ${details[0]}`
+        : `Invalid licensing configuration (${details.length} problems found):\n- ${details.join("\n- ")}`
+    );
+    this.name = "LicensingConfigError";
+    this.details = details;
+  }
+}
+
 // Pragmatic, documented bounds used to validate historical licensing config.
 const MIN_AUDIT_RETENTION_DAYS = 1;
 const MAX_AUDIT_RETENTION_DAYS = 3650; // 10 years
@@ -412,6 +441,7 @@ const MIN_TOLERANCE_PCT = 0;
 const MAX_TOLERANCE_PCT = 100;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const AIC_CONSUMPTION_MODES: AicConsumptionMode[] = ["auto", "billing_report", "per_user_api"];
+const KNOWN_PLAN_KEYS: LicensePlanKey[] = ["business", "enterprise", "unknown"];
 
 /** True when `value` is a valid calendar date in "YYYY-MM-DD" form. */
 function isValidDateString(value: string): boolean {
@@ -422,108 +452,134 @@ function isValidDateString(value: string): boolean {
   return new Date(ms).toISOString().slice(0, 10) === value;
 }
 
-/** Filter a plan-keyed credits map down to non-negative numeric entries. */
-function sanitizeCreditsMap(
+/**
+ * Validate a plan-keyed credits map. Every configured key must be a known
+ * {@link LicensePlanKey} and every value must be a non-negative finite
+ * number; violations are appended to `errors` (collected and thrown together
+ * by the caller) rather than silently dropped. Unconfigured plan keys are
+ * simply absent from the result and fall back to defaults by the caller.
+ */
+function validateCreditsMap(
   raw: Partial<Record<LicensePlanKey, number>> | undefined,
-  contextLabel: string
+  contextLabel: string,
+  errors: string[]
 ): Partial<Record<LicensePlanKey, number>> {
   const result: Partial<Record<LicensePlanKey, number>> = {};
   for (const [plan, value] of Object.entries(raw ?? {})) {
+    if (!KNOWN_PLAN_KEYS.includes(plan as LicensePlanKey)) {
+      errors.push(
+        `licensing.${contextLabel} has unknown plan key "${plan}" (expected one of ${KNOWN_PLAN_KEYS.join(", ")})`
+      );
+      continue;
+    }
     if (typeof value === "number" && Number.isFinite(value) && value >= 0) {
       result[plan as LicensePlanKey] = value;
     } else {
-      console.warn(`[Config] Ignoring negative/invalid ${contextLabel} value for plan "${plan}": ${value}`);
+      errors.push(`licensing.${contextLabel}.${plan} must be a non-negative finite number (got ${JSON.stringify(value)})`);
     }
   }
   return result;
 }
 
 /**
- * Validate and sanitize configured `datedAllowances`: drops entries with
- * malformed dates, invalid (end before start) ranges, or negative credit
- * values, then drops any entry whose window overlaps an earlier (by start
- * date) entry for the same plan. Returns entries sorted by start date.
+ * Validate configured `datedAllowances`: malformed dates, reversed (end
+ * before start) ranges, unknown plan keys, and negative/invalid credit
+ * values are all appended to `errors`. Any dated-window overlap for the same
+ * plan is likewise an error (rather than silently dropping the overlapping
+ * entry) — dropping only the overlapping entry would silently discard valid
+ * data for any *other* plan the same entry also covers. Returns entries
+ * sorted by start date; the return value is only meaningful when `errors`
+ * remains empty (the caller throws before using it otherwise).
  */
-function sanitizeDatedAllowances(raw: DatedAllowance[] | undefined): DatedAllowance[] {
+function validateDatedAllowances(raw: DatedAllowance[] | undefined, errors: string[]): DatedAllowance[] {
   if (!raw || raw.length === 0) return [];
 
-  const candidates: DatedAllowance[] = [];
+  const parsed: DatedAllowance[] = [];
   for (const entry of raw) {
     if (!entry || typeof entry.start !== "string" || !isValidDateString(entry.start)) {
-      console.warn(`[Config] Ignoring dated allowance with malformed start date: ${JSON.stringify(entry)}`);
+      errors.push(`licensing.datedAllowances entry has a malformed start date: ${JSON.stringify(entry)}`);
       continue;
     }
     if (entry.end !== undefined && (typeof entry.end !== "string" || !isValidDateString(entry.end))) {
-      console.warn(`[Config] Ignoring dated allowance with malformed end date: ${JSON.stringify(entry)}`);
+      errors.push(`licensing.datedAllowances entry has a malformed end date: ${JSON.stringify(entry)}`);
       continue;
     }
     if (entry.end !== undefined && entry.end < entry.start) {
-      console.warn(`[Config] Ignoring dated allowance with end before start: ${JSON.stringify(entry)}`);
+      errors.push(`licensing.datedAllowances entry has end (${entry.end}) before start (${entry.start})`);
       continue;
     }
-    const credits = sanitizeCreditsMap(entry.credits, "dated allowance");
+    const credits = validateCreditsMap(entry.credits, "datedAllowances", errors);
     if (Object.keys(credits).length === 0) {
-      console.warn(`[Config] Ignoring dated allowance with no valid credit values: ${JSON.stringify(entry)}`);
+      errors.push(`licensing.datedAllowances entry has no valid credit values: ${JSON.stringify(entry)}`);
       continue;
     }
-    candidates.push({ start: entry.start, end: entry.end, credits });
+    parsed.push({ start: entry.start, end: entry.end, credits });
   }
 
-  // Sort ascending by start date so earlier windows take precedence on overlap.
-  candidates.sort((a, b) => (a.start < b.start ? -1 : a.start > b.start ? 1 : 0));
+  // Sort ascending by start date so overlap detection is deterministic.
+  const sorted = [...parsed].sort((a, b) => (a.start < b.start ? -1 : a.start > b.start ? 1 : 0));
 
-  const accepted: DatedAllowance[] = [];
-  // Track the latest accepted end date (or "open-ended") per plan.
+  // Track the latest window end date (or "open-ended") seen so far per plan.
   const lastEndByPlan = new Map<LicensePlanKey, string | null>(); // null = open-ended (no end)
 
-  for (const entry of candidates) {
+  for (const entry of sorted) {
     const plansInEntry = Object.keys(entry.credits) as LicensePlanKey[];
-    const overlaps = plansInEntry.some((plan) => {
-      const lastEnd = lastEndByPlan.get(plan);
-      if (lastEnd === undefined) return false; // no prior window for this plan
-      if (lastEnd === null) return true; // prior window is open-ended: everything after overlaps
-      return entry.start <= lastEnd;
-    });
-
-    if (overlaps) {
-      console.warn(`[Config] Ignoring dated allowance that overlaps an earlier window: ${JSON.stringify(entry)}`);
-      continue;
-    }
-
-    accepted.push(entry);
     for (const plan of plansInEntry) {
-      lastEndByPlan.set(plan, entry.end ?? null);
+      const lastEnd = lastEndByPlan.get(plan);
+      const overlaps = lastEnd !== undefined && (lastEnd === null || entry.start <= lastEnd);
+      if (overlaps) {
+        errors.push(
+          `licensing.datedAllowances has overlapping windows for plan "${plan}": window starting ${entry.start} overlaps a prior window ending ${
+            lastEnd === null ? "(open-ended)" : lastEnd
+          }`
+        );
+      }
+    }
+    for (const plan of plansInEntry) {
+      const lastEnd = lastEndByPlan.get(plan);
+      const newEnd = entry.end ?? null;
+      // Keep whichever end reaches furthest, so later overlap checks stay accurate.
+      if (lastEnd === undefined || lastEnd === null || newEnd === null || newEnd > lastEnd) {
+        lastEndByPlan.set(plan, newEnd);
+      }
     }
   }
 
-  return accepted;
+  return sorted;
 }
 
-/** Resolve `history` settings with field-level defaults and bounds applied. */
-function resolveHistoryConfig(raw: LicensingHistoryConfig | undefined): ResolvedLicensingHistoryConfig {
+/** Resolve `history` settings with field-level defaults, bounds, and syntax validation applied. */
+function resolveHistoryConfig(raw: LicensingHistoryConfig | undefined, errors: string[]): ResolvedLicensingHistoryConfig {
   const defaults = DEFAULT_LICENSING.history;
 
-  let reportMonths: string | string[] = defaults.reportMonths;
-  if (raw?.reportMonths !== undefined) {
+  let reportMonths: string[];
+  if (raw?.reportMonths === undefined) {
+    reportMonths = parseReportMonths(undefined);
+  } else {
     try {
-      parseReportMonths(raw.reportMonths); // validate syntax only; keep the raw form
-      reportMonths = raw.reportMonths;
+      reportMonths = parseReportMonths(raw.reportMonths);
     } catch (err) {
-      console.warn(
-        `[Config] Ignoring malformed licensing.history.reportMonths (${JSON.stringify(raw.reportMonths)}): ${
-          err instanceof Error ? err.message : err
+      errors.push(
+        `licensing.history.reportMonths (${JSON.stringify(raw.reportMonths)}) is invalid: ${
+          err instanceof Error ? err.message : String(err)
         }`
       );
+      reportMonths = []; // unused: caller throws before this value is read
     }
   }
 
   let auditRetentionDays = defaults.auditRetentionDays;
-  if (typeof raw?.auditRetentionDays === "number") {
-    if (raw.auditRetentionDays >= MIN_AUDIT_RETENTION_DAYS && raw.auditRetentionDays <= MAX_AUDIT_RETENTION_DAYS) {
+  if (raw?.auditRetentionDays !== undefined) {
+    if (
+      typeof raw.auditRetentionDays === "number" &&
+      Number.isFinite(raw.auditRetentionDays) &&
+      raw.auditRetentionDays >= MIN_AUDIT_RETENTION_DAYS &&
+      raw.auditRetentionDays <= MAX_AUDIT_RETENTION_DAYS
+    ) {
       auditRetentionDays = raw.auditRetentionDays;
     } else {
-      console.warn(
-        `[Config] licensing.history.auditRetentionDays (${raw.auditRetentionDays}) out of bounds [${MIN_AUDIT_RETENTION_DAYS}, ${MAX_AUDIT_RETENTION_DAYS}]; using default ${defaults.auditRetentionDays}`
+      errors.push(
+        `licensing.history.auditRetentionDays (${JSON.stringify(raw.auditRetentionDays)}) must be a number between ${MIN_AUDIT_RETENTION_DAYS} and ${MAX_AUDIT_RETENTION_DAYS}`
       );
     }
   }
@@ -551,7 +607,8 @@ function resolveIdentityConfig(raw: LicensingIdentityConfig | undefined): Resolv
 
 /** Resolve `aicConsumption` settings with field-level defaults and bounds applied. */
 function resolveAicConsumptionConfig(
-  raw: LicensingAicConsumptionConfig | undefined
+  raw: LicensingAicConsumptionConfig | undefined,
+  errors: string[]
 ): ResolvedLicensingAicConsumptionConfig {
   const defaults = DEFAULT_LICENSING.aicConsumption;
 
@@ -560,17 +617,24 @@ function resolveAicConsumptionConfig(
     if (AIC_CONSUMPTION_MODES.includes(raw.mode)) {
       mode = raw.mode;
     } else {
-      console.warn(`[Config] Ignoring invalid licensing.aicConsumption.mode "${raw.mode}"; using default "${defaults.mode}"`);
+      errors.push(
+        `licensing.aicConsumption.mode "${raw.mode}" is invalid (expected one of ${AIC_CONSUMPTION_MODES.join(", ")})`
+      );
     }
   }
 
   let concurrency = defaults.concurrency;
-  if (typeof raw?.concurrency === "number") {
-    if (raw.concurrency >= MIN_CONCURRENCY && raw.concurrency <= MAX_CONCURRENCY) {
+  if (raw?.concurrency !== undefined) {
+    if (
+      typeof raw.concurrency === "number" &&
+      Number.isFinite(raw.concurrency) &&
+      raw.concurrency >= MIN_CONCURRENCY &&
+      raw.concurrency <= MAX_CONCURRENCY
+    ) {
       concurrency = raw.concurrency;
     } else {
-      console.warn(
-        `[Config] licensing.aicConsumption.concurrency (${raw.concurrency}) out of bounds [${MIN_CONCURRENCY}, ${MAX_CONCURRENCY}]; using default ${defaults.concurrency}`
+      errors.push(
+        `licensing.aicConsumption.concurrency (${JSON.stringify(raw.concurrency)}) must be a number between ${MIN_CONCURRENCY} and ${MAX_CONCURRENCY}`
       );
     }
   }
@@ -579,16 +643,21 @@ function resolveAicConsumptionConfig(
 }
 
 /** Resolve `validation` settings with field-level defaults and bounds applied. */
-function resolveValidationConfig(raw: LicensingValidationConfig | undefined): ResolvedLicensingValidationConfig {
+function resolveValidationConfig(raw: LicensingValidationConfig | undefined, errors: string[]): ResolvedLicensingValidationConfig {
   const defaults = DEFAULT_LICENSING.validation;
 
   let aicTolerancePct = defaults.aicTolerancePct;
-  if (typeof raw?.aicTolerancePct === "number") {
-    if (raw.aicTolerancePct >= MIN_TOLERANCE_PCT && raw.aicTolerancePct <= MAX_TOLERANCE_PCT) {
+  if (raw?.aicTolerancePct !== undefined) {
+    if (
+      typeof raw.aicTolerancePct === "number" &&
+      Number.isFinite(raw.aicTolerancePct) &&
+      raw.aicTolerancePct >= MIN_TOLERANCE_PCT &&
+      raw.aicTolerancePct <= MAX_TOLERANCE_PCT
+    ) {
       aicTolerancePct = raw.aicTolerancePct;
     } else {
-      console.warn(
-        `[Config] licensing.validation.aicTolerancePct (${raw.aicTolerancePct}) out of bounds [${MIN_TOLERANCE_PCT}, ${MAX_TOLERANCE_PCT}]; using default ${defaults.aicTolerancePct}`
+      errors.push(
+        `licensing.validation.aicTolerancePct (${JSON.stringify(raw.aicTolerancePct)}) must be a number between ${MIN_TOLERANCE_PCT} and ${MAX_TOLERANCE_PCT}`
       );
     }
   }
@@ -602,32 +671,60 @@ function resolveValidationConfig(raw: LicensingValidationConfig | undefined): Re
 /**
  * Resolve the licensing config with field-level defaults applied. Safe to call
  * with no configured `licensing` block — always returns a fully populated object.
+ *
+ * Throws {@link LicensingConfigError} when any *explicitly configured* value
+ * is invalid (malformed syntax, out-of-bounds number, unknown plan key,
+ * reversed/overlapping date range, etc.) rather than silently falling back —
+ * misconfiguration should surface loudly instead of quietly reconciling
+ * against the wrong numbers. Fields left unconfigured always use safe
+ * defaults and never cause a throw.
  */
 export function getLicensingConfig(): ResolvedLicensingConfig {
   const configured = (getDashboardConfig().metrics.billing as BillingMetricConfig).licensing ?? {};
+  const errors: string[] = [];
+
   const rawBudgets = configured.perUserBudgetUsd ?? {};
   const perUserBudgetUsd: Record<string, number> = {};
   for (const [login, amount] of Object.entries(rawBudgets)) {
-    perUserBudgetUsd[login.toLowerCase()] = amount;
+    if (typeof amount === "number" && Number.isFinite(amount) && amount >= 0) {
+      perUserBudgetUsd[login.toLowerCase()] = amount;
+    } else {
+      errors.push(`licensing.perUserBudgetUsd["${login}"] must be a non-negative finite number (got ${JSON.stringify(amount)})`);
+    }
   }
 
-  const licenseCost = sanitizeCreditsMap(configured.licenseCost, "licenseCost");
-  const aicAllowance = sanitizeCreditsMap(configured.aicAllowance, "aicAllowance");
+  let creditToUsd = DEFAULT_LICENSING.creditToUsd;
+  if (configured.creditToUsd !== undefined) {
+    if (typeof configured.creditToUsd === "number" && Number.isFinite(configured.creditToUsd) && configured.creditToUsd >= 0) {
+      creditToUsd = configured.creditToUsd;
+    } else {
+      errors.push(`licensing.creditToUsd must be a non-negative finite number (got ${JSON.stringify(configured.creditToUsd)})`);
+    }
+  }
+
+  const licenseCost = validateCreditsMap(configured.licenseCost, "licenseCost", errors);
+  const aicAllowance = validateCreditsMap(configured.aicAllowance, "aicAllowance", errors);
+  const datedAllowances = validateDatedAllowances(configured.datedAllowances, errors);
+  const history = resolveHistoryConfig(configured.history, errors);
+  const identity = resolveIdentityConfig(configured.identity);
+  const aicConsumption = resolveAicConsumptionConfig(configured.aicConsumption, errors);
+  const validation = resolveValidationConfig(configured.validation, errors);
+
+  if (errors.length > 0) {
+    throw new LicensingConfigError(errors);
+  }
 
   return {
-    creditToUsd:
-      typeof configured.creditToUsd === "number" && configured.creditToUsd >= 0
-        ? configured.creditToUsd
-        : DEFAULT_LICENSING.creditToUsd,
+    creditToUsd,
     currency: configured.currency || DEFAULT_LICENSING.currency,
     licenseCost: { ...DEFAULT_LICENSING.licenseCost, ...licenseCost },
     aicAllowance: { ...DEFAULT_LICENSING.aicAllowance, ...aicAllowance },
     perUserBudgetUsd,
-    datedAllowances: sanitizeDatedAllowances(configured.datedAllowances),
-    history: resolveHistoryConfig(configured.history),
-    identity: resolveIdentityConfig(configured.identity),
-    aicConsumption: resolveAicConsumptionConfig(configured.aicConsumption),
-    validation: resolveValidationConfig(configured.validation),
+    datedAllowances,
+    history,
+    identity,
+    aicConsumption,
+    validation,
   };
 }
 

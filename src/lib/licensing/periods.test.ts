@@ -128,6 +128,22 @@ describe("intervalOverlapsPeriod", () => {
     expect(intervalOverlapsPeriod(null, null, "2026-02")).toBe(true);
     expect(intervalOverlapsPeriod(undefined, "2026-01-01", "2026-02")).toBe(false);
   });
+
+  it("throws on a non-null empty assignedAt string rather than treating it as open-ended", () => {
+    expect(() => intervalOverlapsPeriod("", null, "2026-02")).toThrow();
+  });
+
+  it("throws on a non-null empty revokedAt string rather than treating it as open-ended", () => {
+    expect(() => intervalOverlapsPeriod("2026-01-01", "", "2026-02")).toThrow();
+  });
+
+  it("throws on a malformed assignedAt date string", () => {
+    expect(() => intervalOverlapsPeriod("not-a-date", null, "2026-02")).toThrow();
+  });
+
+  it("throws on a malformed revokedAt date string", () => {
+    expect(() => intervalOverlapsPeriod("2026-01-01", "not-a-date", "2026-02")).toThrow();
+  });
 });
 
 describe("earliestRecoverablePeriod", () => {
@@ -171,5 +187,25 @@ describe("earliestRecoverablePeriod", () => {
       now: new Date("2026-08-07T00:00:00Z"),
     });
     expect(result).toBe("2026-05");
+  });
+
+  it("throws on a malformed snapshot date instead of silently skipping it", () => {
+    expect(() =>
+      earliestRecoverablePeriod({
+        snapshotDates: ["not-a-date"],
+        auditRetentionDays: 30,
+        now: new Date("2026-08-07T00:00:00Z"),
+      })
+    ).toThrow();
+  });
+
+  it("throws on a malformed archive date instead of silently skipping it", () => {
+    expect(() =>
+      earliestRecoverablePeriod({
+        archiveDates: ["2026-01-01", "not-a-date"],
+        auditRetentionDays: 30,
+        now: new Date("2026-08-07T00:00:00Z"),
+      })
+    ).toThrow();
   });
 });

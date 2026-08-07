@@ -153,9 +153,14 @@ export function cycleBoundsUtc(period: string): PeriodBounds {
 
 /**
  * Determine whether a seat's assignment interval `[assignedAt, revokedAt)`
- * overlaps the given "YYYY-MM" report period. A missing `assignedAt` is
- * treated as "always started" (-Infinity); a missing `revokedAt` is treated
- * as "still active" (+Infinity, i.e. never revoked).
+ * overlaps the given "YYYY-MM" report period.
+ *
+ * `null`/`undefined` are explicitly documented open bounds: a missing
+ * `assignedAt` is treated as "always started" (-Infinity); a missing
+ * `revokedAt` is treated as "still active" (+Infinity, i.e. never revoked).
+ * Any other value (including a non-null empty string) must be a parseable
+ * date string — a malformed or empty-but-non-null value throws rather than
+ * silently being treated as an open bound.
  */
 export function intervalOverlapsPeriod(
   assignedAt: string | null | undefined,
@@ -166,13 +171,13 @@ export function intervalOverlapsPeriod(
   const periodStart = Date.parse(start);
   const periodEnd = Date.parse(end);
 
-  const assignedMs = assignedAt ? Date.parse(assignedAt) : -Infinity;
-  const revokedMs = revokedAt ? Date.parse(revokedAt) : Infinity;
+  const assignedMs = assignedAt == null ? -Infinity : Date.parse(assignedAt);
+  const revokedMs = revokedAt == null ? Infinity : Date.parse(revokedAt);
 
   if (Number.isNaN(assignedMs)) {
     throw new Error(`Invalid assignedAt date: "${assignedAt}"`);
   }
-  if (revokedAt && Number.isNaN(revokedMs)) {
+  if (Number.isNaN(revokedMs)) {
     throw new Error(`Invalid revokedAt date: "${revokedAt}"`);
   }
 
@@ -198,6 +203,10 @@ export interface EarliestRecoverablePeriodOptions {
  *
  * Returns `null` when nothing is recoverable (no snapshots/archives and a
  * zero/negative retention window).
+ *
+ * Throws if any provided `snapshotDates`/`archiveDates` entry fails to parse
+ * as a date, rather than silently skipping it — a malformed date here would
+ * otherwise cause recoverability to be silently understated.
  */
 export function earliestRecoverablePeriod(options: EarliestRecoverablePeriodOptions): string | null {
   const { snapshotDates = [], archiveDates = [], auditRetentionDays, now = new Date() } = options;
@@ -206,7 +215,9 @@ export function earliestRecoverablePeriod(options: EarliestRecoverablePeriodOpti
   let earliestFromFiles: YearMonth | null = null;
   for (const dateStr of allDates) {
     const ms = Date.parse(dateStr);
-    if (Number.isNaN(ms)) continue;
+    if (Number.isNaN(ms)) {
+      throw new Error(`Invalid snapshot/archive date: "${dateStr}"`);
+    }
     const d = new Date(ms);
     const ym: YearMonth = { year: d.getUTCFullYear(), month: d.getUTCMonth() + 1 };
     if (!earliestFromFiles || monthIndex(ym) < monthIndex(earliestFromFiles)) {

@@ -36,6 +36,7 @@ import {
   getEffectiveBillingEnabled,
   isBillingSubEnabled,
   getLicensingConfig,
+  LicensingConfigError,
 } from "./dashboard-config";
 
 const mockReadFileSync = vi.mocked(fs.readFileSync);
@@ -174,9 +175,11 @@ describe("dashboard-config (defaults)", () => {
 
     it("resolves history/identity/aicConsumption/validation to safe defaults when unconfigured", () => {
       const config = getLicensingConfig();
+      const now = new Date();
+      const currentMonth = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}`;
       expect(config.history).toEqual({
         enabled: false,
-        reportMonths: "last_1_months",
+        reportMonths: [currentMonth],
         auditRetentionDays: 400,
         emitSnapshots: false,
         snapshotDirectory: "data/licensing-snapshots",
@@ -483,7 +486,7 @@ describe("dashboard-config (with config file)", () => {
     const config = getLicensingConfig();
     expect(config.history).toEqual({
       enabled: true,
-      reportMonths: "2026-01..2026-03",
+      reportMonths: ["2026-01", "2026-02", "2026-03"],
       auditRetentionDays: 90,
       emitSnapshots: true,
       snapshotDirectory: "custom/snapshots",
@@ -499,99 +502,127 @@ describe("dashboard-config (with config file)", () => {
     expect(config.validation).toEqual({ enabled: false, aicTolerancePct: 12 });
   });
 
-  it("getLicensingConfig falls back to default reportMonths on malformed month syntax", () => {
+  it("getLicensingConfig resolves an array of reportMonths tokens to a sorted, de-duplicated string[]", () => {
     mockReadFileSync.mockReturnValue(JSON.stringify({
-      metrics: { billing: { licensing: { history: { reportMonths: "not-a-month" } } } },
+      metrics: {
+        billing: {
+          licensing: {
+            history: { reportMonths: ["2026-03", "2026-01..2026-02", "2026-01"] },
+          },
+        },
+      },
     }));
     vi.setSystemTime(Date.now() + 230 * 60 * 1000);
     const config = getLicensingConfig();
-    expect(config.history.reportMonths).toBe("last_1_months");
+    expect(config.history.reportMonths).toEqual(["2026-01", "2026-02", "2026-03"]);
   });
 
-  it("getLicensingConfig falls back to default reportMonths on a malformed range", () => {
+  it("getLicensingConfig throws LicensingConfigError on malformed reportMonths syntax", () => {
+    mockReadFileSync.mockReturnValue(JSON.stringify({
+      metrics: { billing: { licensing: { history: { reportMonths: "not-a-month" } } } },
+    }));
+    vi.setSystemTime(Date.now() + 240 * 60 * 1000);
+    try {
+      getLicensingConfig();
+      expect.unreachable("expected getLicensingConfig to throw");
+    } catch (err) {
+      expect(err).toBeInstanceOf(LicensingConfigError);
+      expect((err as LicensingConfigError).details.some((d) => d.includes("reportMonths"))).toBe(true);
+    }
+  });
+
+  it("getLicensingConfig throws LicensingConfigError on a malformed reportMonths range", () => {
     mockReadFileSync.mockReturnValue(JSON.stringify({
       metrics: { billing: { licensing: { history: { reportMonths: "2026-03..2026-01" } } } },
     }));
-    vi.setSystemTime(Date.now() + 240 * 60 * 1000);
-    const config = getLicensingConfig();
-    expect(config.history.reportMonths).toBe("last_1_months");
+    vi.setSystemTime(Date.now() + 250 * 60 * 1000);
+    expect(() => getLicensingConfig()).toThrow(LicensingConfigError);
   });
 
-  it("getLicensingConfig clamps auditRetentionDays outside documented bounds to the default", () => {
+  it("getLicensingConfig throws LicensingConfigError when auditRetentionDays is outside documented bounds", () => {
     const base = Date.now();
 
     mockReadFileSync.mockReturnValue(JSON.stringify({
       metrics: { billing: { licensing: { history: { auditRetentionDays: 0 } } } },
     }));
-    vi.setSystemTime(base + 250 * 60 * 1000);
-    expect(getLicensingConfig().history.auditRetentionDays).toBe(400);
+    vi.setSystemTime(base + 260 * 60 * 1000);
+    expect(() => getLicensingConfig()).toThrow(LicensingConfigError);
 
     mockReadFileSync.mockReturnValue(JSON.stringify({
       metrics: { billing: { licensing: { history: { auditRetentionDays: 5000 } } } },
     }));
-    vi.setSystemTime(base + 260 * 60 * 1000);
-    expect(getLicensingConfig().history.auditRetentionDays).toBe(400);
+    vi.setSystemTime(base + 270 * 60 * 1000);
+    expect(() => getLicensingConfig()).toThrow(LicensingConfigError);
 
+    // In-bounds values do not throw.
     mockReadFileSync.mockReturnValue(JSON.stringify({
       metrics: { billing: { licensing: { history: { auditRetentionDays: 3650 } } } },
     }));
-    vi.setSystemTime(base + 270 * 60 * 1000);
+    vi.setSystemTime(base + 280 * 60 * 1000);
     expect(getLicensingConfig().history.auditRetentionDays).toBe(3650);
   });
 
-  it("getLicensingConfig clamps aicConsumption.concurrency outside documented bounds to the default", () => {
+  it("getLicensingConfig throws LicensingConfigError when aicConsumption.concurrency is outside documented bounds", () => {
     const base = Date.now();
 
     mockReadFileSync.mockReturnValue(JSON.stringify({
       metrics: { billing: { licensing: { aicConsumption: { concurrency: 0 } } } },
     }));
-    vi.setSystemTime(base + 280 * 60 * 1000);
-    expect(getLicensingConfig().aicConsumption.concurrency).toBe(4);
+    vi.setSystemTime(base + 290 * 60 * 1000);
+    expect(() => getLicensingConfig()).toThrow(LicensingConfigError);
 
     mockReadFileSync.mockReturnValue(JSON.stringify({
       metrics: { billing: { licensing: { aicConsumption: { concurrency: 21 } } } },
     }));
-    vi.setSystemTime(base + 290 * 60 * 1000);
-    expect(getLicensingConfig().aicConsumption.concurrency).toBe(4);
+    vi.setSystemTime(base + 300 * 60 * 1000);
+    expect(() => getLicensingConfig()).toThrow(LicensingConfigError);
 
+    // In-bounds values do not throw.
     mockReadFileSync.mockReturnValue(JSON.stringify({
       metrics: { billing: { licensing: { aicConsumption: { concurrency: 20 } } } },
     }));
-    vi.setSystemTime(base + 300 * 60 * 1000);
+    vi.setSystemTime(base + 310 * 60 * 1000);
     expect(getLicensingConfig().aicConsumption.concurrency).toBe(20);
   });
 
-  it("getLicensingConfig falls back to default mode on an invalid aicConsumption.mode", () => {
+  it("getLicensingConfig throws LicensingConfigError on an invalid aicConsumption.mode", () => {
     mockReadFileSync.mockReturnValue(JSON.stringify({
       metrics: { billing: { licensing: { aicConsumption: { mode: "bogus" } } } },
     }));
-    vi.setSystemTime(Date.now() + 310 * 60 * 1000);
-    expect(getLicensingConfig().aicConsumption.mode).toBe("auto");
+    vi.setSystemTime(Date.now() + 320 * 60 * 1000);
+    try {
+      getLicensingConfig();
+      expect.unreachable("expected getLicensingConfig to throw");
+    } catch (err) {
+      expect(err).toBeInstanceOf(LicensingConfigError);
+      expect((err as LicensingConfigError).details.some((d) => d.includes("aicConsumption.mode"))).toBe(true);
+    }
   });
 
-  it("getLicensingConfig clamps aicTolerancePct outside 0..100 to the default", () => {
+  it("getLicensingConfig throws LicensingConfigError when aicTolerancePct is outside 0..100", () => {
     const base = Date.now();
 
     mockReadFileSync.mockReturnValue(JSON.stringify({
       metrics: { billing: { licensing: { validation: { aicTolerancePct: -1 } } } },
     }));
-    vi.setSystemTime(base + 320 * 60 * 1000);
-    expect(getLicensingConfig().validation.aicTolerancePct).toBe(5);
+    vi.setSystemTime(base + 330 * 60 * 1000);
+    expect(() => getLicensingConfig()).toThrow(LicensingConfigError);
 
     mockReadFileSync.mockReturnValue(JSON.stringify({
       metrics: { billing: { licensing: { validation: { aicTolerancePct: 101 } } } },
     }));
-    vi.setSystemTime(base + 330 * 60 * 1000);
-    expect(getLicensingConfig().validation.aicTolerancePct).toBe(5);
+    vi.setSystemTime(base + 340 * 60 * 1000);
+    expect(() => getLicensingConfig()).toThrow(LicensingConfigError);
 
+    // In-bounds boundary value does not throw.
     mockReadFileSync.mockReturnValue(JSON.stringify({
       metrics: { billing: { licensing: { validation: { aicTolerancePct: 0 } } } },
     }));
-    vi.setSystemTime(base + 340 * 60 * 1000);
+    vi.setSystemTime(base + 350 * 60 * 1000);
     expect(getLicensingConfig().validation.aicTolerancePct).toBe(0);
   });
 
-  it("getLicensingConfig drops negative licenseCost/aicAllowance values and falls back to defaults", () => {
+  it("getLicensingConfig throws LicensingConfigError on negative licenseCost/aicAllowance values", () => {
     mockReadFileSync.mockReturnValue(JSON.stringify({
       metrics: {
         billing: {
@@ -602,10 +633,70 @@ describe("dashboard-config (with config file)", () => {
         },
       },
     }));
-    vi.setSystemTime(Date.now() + 350 * 60 * 1000);
-    const config = getLicensingConfig();
-    expect(config.licenseCost.business).toBe(19); // default preserved
-    expect(config.aicAllowance.enterprise).toBe(3900); // default preserved
+    vi.setSystemTime(Date.now() + 360 * 60 * 1000);
+    try {
+      getLicensingConfig();
+      expect.unreachable("expected getLicensingConfig to throw");
+    } catch (err) {
+      expect(err).toBeInstanceOf(LicensingConfigError);
+      const details = (err as LicensingConfigError).details;
+      expect(details.some((d) => d.includes("licenseCost.business"))).toBe(true);
+      expect(details.some((d) => d.includes("aicAllowance.enterprise"))).toBe(true);
+    }
+  });
+
+  it("getLicensingConfig throws LicensingConfigError on an unknown plan key in licenseCost/aicAllowance", () => {
+    mockReadFileSync.mockReturnValue(JSON.stringify({
+      metrics: {
+        billing: {
+          licensing: {
+            licenseCost: { bogusPlan: 25 },
+          },
+        },
+      },
+    }));
+    vi.setSystemTime(Date.now() + 370 * 60 * 1000);
+    try {
+      getLicensingConfig();
+      expect.unreachable("expected getLicensingConfig to throw");
+    } catch (err) {
+      expect(err).toBeInstanceOf(LicensingConfigError);
+      expect((err as LicensingConfigError).details.some((d) => d.includes("unknown plan key"))).toBe(true);
+    }
+  });
+
+  it("getLicensingConfig throws LicensingConfigError on a negative/invalid perUserBudgetUsd value", () => {
+    mockReadFileSync.mockReturnValue(JSON.stringify({
+      metrics: {
+        billing: {
+          licensing: {
+            perUserBudgetUsd: { "some-user": -10 },
+          },
+        },
+      },
+    }));
+    vi.setSystemTime(Date.now() + 380 * 60 * 1000);
+    try {
+      getLicensingConfig();
+      expect.unreachable("expected getLicensingConfig to throw");
+    } catch (err) {
+      expect(err).toBeInstanceOf(LicensingConfigError);
+      expect((err as LicensingConfigError).details.some((d) => d.includes("perUserBudgetUsd"))).toBe(true);
+    }
+  });
+
+  it("getLicensingConfig throws LicensingConfigError on a negative/invalid creditToUsd value", () => {
+    mockReadFileSync.mockReturnValue(JSON.stringify({
+      metrics: { billing: { licensing: { creditToUsd: -0.01 } } },
+    }));
+    vi.setSystemTime(Date.now() + 390 * 60 * 1000);
+    try {
+      getLicensingConfig();
+      expect.unreachable("expected getLicensingConfig to throw");
+    } catch (err) {
+      expect(err).toBeInstanceOf(LicensingConfigError);
+      expect((err as LicensingConfigError).details.some((d) => d.includes("creditToUsd"))).toBe(true);
+    }
   });
 
   it("getLicensingConfig accepts open-ended dated allowances and boundary dates", () => {
@@ -621,7 +712,7 @@ describe("dashboard-config (with config file)", () => {
         },
       },
     }));
-    vi.setSystemTime(Date.now() + 360 * 60 * 1000);
+    vi.setSystemTime(Date.now() + 400 * 60 * 1000);
     const config = getLicensingConfig();
     expect(config.datedAllowances).toEqual([
       { start: "2026-01-01", end: "2026-01-31", credits: { business: 1000 } },
@@ -629,7 +720,7 @@ describe("dashboard-config (with config file)", () => {
     ]);
   });
 
-  it("getLicensingConfig rejects overlapping dated allowance windows for the same plan", () => {
+  it("getLicensingConfig throws LicensingConfigError on overlapping dated allowance windows for the same plan", () => {
     mockReadFileSync.mockReturnValue(JSON.stringify({
       metrics: {
         billing: {
@@ -642,14 +733,17 @@ describe("dashboard-config (with config file)", () => {
         },
       },
     }));
-    vi.setSystemTime(Date.now() + 370 * 60 * 1000);
-    const config = getLicensingConfig();
-    expect(config.datedAllowances).toEqual([
-      { start: "2026-01-01", end: "2026-03-31", credits: { business: 1000 } },
-    ]);
+    vi.setSystemTime(Date.now() + 410 * 60 * 1000);
+    try {
+      getLicensingConfig();
+      expect.unreachable("expected getLicensingConfig to throw");
+    } catch (err) {
+      expect(err).toBeInstanceOf(LicensingConfigError);
+      expect((err as LicensingConfigError).details.some((d) => d.includes("overlapping windows"))).toBe(true);
+    }
   });
 
-  it("getLicensingConfig rejects a dated allowance that overlaps an open-ended prior window", () => {
+  it("getLicensingConfig throws LicensingConfigError on a dated allowance that overlaps an open-ended prior window", () => {
     mockReadFileSync.mockReturnValue(JSON.stringify({
       metrics: {
         billing: {
@@ -662,11 +756,8 @@ describe("dashboard-config (with config file)", () => {
         },
       },
     }));
-    vi.setSystemTime(Date.now() + 380 * 60 * 1000);
-    const config = getLicensingConfig();
-    expect(config.datedAllowances).toEqual([
-      { start: "2026-01-01", end: undefined, credits: { business: 1000 } },
-    ]);
+    vi.setSystemTime(Date.now() + 420 * 60 * 1000);
+    expect(() => getLicensingConfig()).toThrow(LicensingConfigError);
   });
 
   it("getLicensingConfig allows adjacent (non-overlapping) dated allowance windows", () => {
@@ -682,12 +773,12 @@ describe("dashboard-config (with config file)", () => {
         },
       },
     }));
-    vi.setSystemTime(Date.now() + 390 * 60 * 1000);
+    vi.setSystemTime(Date.now() + 430 * 60 * 1000);
     const config = getLicensingConfig();
     expect(config.datedAllowances).toHaveLength(2);
   });
 
-  it("getLicensingConfig rejects a dated allowance with an invalid date range (end before start)", () => {
+  it("getLicensingConfig throws LicensingConfigError on a dated allowance with an invalid date range (end before start)", () => {
     mockReadFileSync.mockReturnValue(JSON.stringify({
       metrics: {
         billing: {
@@ -699,11 +790,17 @@ describe("dashboard-config (with config file)", () => {
         },
       },
     }));
-    vi.setSystemTime(Date.now() + 400 * 60 * 1000);
-    expect(getLicensingConfig().datedAllowances).toEqual([]);
+    vi.setSystemTime(Date.now() + 440 * 60 * 1000);
+    try {
+      getLicensingConfig();
+      expect.unreachable("expected getLicensingConfig to throw");
+    } catch (err) {
+      expect(err).toBeInstanceOf(LicensingConfigError);
+      expect((err as LicensingConfigError).details.some((d) => d.includes("end") && d.includes("before start"))).toBe(true);
+    }
   });
 
-  it("getLicensingConfig rejects a dated allowance with a malformed date and with negative credits", () => {
+  it("getLicensingConfig throws LicensingConfigError on a dated allowance with a malformed date and with negative credits", () => {
     mockReadFileSync.mockReturnValue(JSON.stringify({
       metrics: {
         billing: {
@@ -716,9 +813,37 @@ describe("dashboard-config (with config file)", () => {
         },
       },
     }));
-    vi.setSystemTime(Date.now() + 410 * 60 * 1000);
-    expect(getLicensingConfig().datedAllowances).toEqual([]);
+    vi.setSystemTime(Date.now() + 450 * 60 * 1000);
+    try {
+      getLicensingConfig();
+      expect.unreachable("expected getLicensingConfig to throw");
+    } catch (err) {
+      expect(err).toBeInstanceOf(LicensingConfigError);
+      const details = (err as LicensingConfigError).details;
+      expect(details.some((d) => d.includes("malformed start date"))).toBe(true);
+      expect(details.some((d) => d.includes("datedAllowances.business"))).toBe(true);
+    }
+  });
+
+  it("getLicensingConfig throws LicensingConfigError on a dated allowance with an unknown plan key", () => {
+    mockReadFileSync.mockReturnValue(JSON.stringify({
+      metrics: {
+        billing: {
+          licensing: {
+            datedAllowances: [
+              { start: "2026-01-01", credits: { bogusPlan: 1000 } },
+            ],
+          },
+        },
+      },
+    }));
+    vi.setSystemTime(Date.now() + 460 * 60 * 1000);
+    try {
+      getLicensingConfig();
+      expect.unreachable("expected getLicensingConfig to throw");
+    } catch (err) {
+      expect(err).toBeInstanceOf(LicensingConfigError);
+      expect((err as LicensingConfigError).details.some((d) => d.includes("unknown plan key"))).toBe(true);
+    }
   });
 });
-
-
