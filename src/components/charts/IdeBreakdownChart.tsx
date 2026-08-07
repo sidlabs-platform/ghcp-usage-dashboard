@@ -7,6 +7,7 @@ import {
   YAxis,
   CartesianGrid,
   Tooltip,
+  Legend,
   ResponsiveContainer,
 } from "recharts";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card";
@@ -17,18 +18,23 @@ interface IdeBreakdownChartProps {
   title?: string;
 }
 
+const SERIES_LABELS: Record<string, string> = {
+  interactions: "Interactions",
+  locAdded: "LoC Added",
+};
+
 export function IdeBreakdownChart({
   data,
   title = "IDE / Editor Usage",
 }: Readonly<IdeBreakdownChartProps>) {
-  // Dynamic height: at least 240px, +32px per IDE row
-  const chartHeight = Math.max(240, data.length * 32 + 40);
+  // Dynamic height: at least 240px, +48px per IDE row (two bars per row)
+  const chartHeight = Math.max(240, data.length * 48 + 40);
 
   return (
     <Card>
       <CardHeader>
         <CardTitle>{title}</CardTitle>
-        <CardDescription>User-initiated interactions by editor</CardDescription>
+        <CardDescription>User-initiated interactions and lines added by editor</CardDescription>
       </CardHeader>
       <CardContent>
         <div style={{ height: chartHeight }}>
@@ -59,13 +65,20 @@ export function IdeBreakdownChart({
                 }}
                 formatter={(value: number, name: string) => [
                   value.toLocaleString(),
-                  name === "interactions" ? "Interactions" : "LoC Added",
+                  SERIES_LABELS[name] ?? name,
                 ]}
               />
+              <Legend formatter={(name: string) => SERIES_LABELS[name] ?? name} />
               <Bar
                 dataKey="interactions"
                 name="interactions"
                 fill={CHART_COLORS.vscode}
+                radius={[0, 4, 4, 0]}
+              />
+              <Bar
+                dataKey="locAdded"
+                name="locAdded"
+                fill={CHART_COLORS.locAdded}
                 radius={[0, 4, 4, 0]}
               />
             </BarChart>

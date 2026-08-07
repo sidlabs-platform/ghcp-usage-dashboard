@@ -26,6 +26,13 @@ import {
   getCompletionDailyTrend,
   getIdeBreakdown,
   getIdeTrend,
+  getIdeVersionBreakdown,
+  getPluginVersionBreakdown,
+  getCliVersionBreakdown,
+  getCliSuggestionStats,
+  compareVersions,
+  countOutdatedCliUsers,
+  MIN_RELIABLE_CLI_VERSION,
   getFeatureUsageDaily,
   getModelByFeatureBreakdown,
   getModelTrend,
@@ -497,6 +504,279 @@ describe("getIdeBreakdown", () => {
     const vs = breakdown.find((r) => r.ide === "vscode");
     expect(vs!.interactions).toBe(50);
     expect(vs!.locAdded).toBe(200);
+  });
+
+  it("sums suggested LoC add/delete across rows (Insight B)", () => {
+    const ide1 = JSON.stringify([
+      { ide: "vscode", loc_added_sum: 100, loc_suggested_to_add_sum: 250, loc_suggested_to_delete_sum: 12, loc_deleted_sum: 5, user_initiated_interaction_count: 10, code_generation_activity_count: 8, code_acceptance_activity_count: 6 },
+    ]);
+    const ide2 = JSON.stringify([
+      { ide: "vscode", loc_added_sum: 50, loc_suggested_to_add_sum: 150, loc_suggested_to_delete_sum: 8, loc_deleted_sum: 3, user_initiated_interaction_count: 5, code_generation_activity_count: 4, code_acceptance_activity_count: 3 },
+    ]);
+    db.prepare(`INSERT INTO user_daily_metrics (day, enterprise_id, enterprise_slug, user_id, user_login, totals_by_ide)
+      VALUES ('2024-01-16', 'ent1', 'ent1', 1, 'user1', ?)`).run(ide1);
+    db.prepare(`INSERT INTO user_daily_metrics (day, enterprise_id, enterprise_slug, user_id, user_login, totals_by_ide)
+      VALUES ('2024-01-17', 'ent1', 'ent1', 1, 'user1', ?)`).run(ide2);
+    const vs = getIdeBreakdown("2024-01-01", "2024-01-31").find((r) => r.ide === "vscode");
+    expect(vs!.locSuggestedAdd).toBe(400);
+    expect(vs!.locSuggestedDelete).toBe(20);
+    expect(vs!.locAdded).toBe(150);
+  });
+
+  it("defaults suggested LoC to 0 for legacy rows without the fields", () => {
+    const legacy = JSON.stringify([
+      { ide: "neovim", loc_added_sum: 40, user_initiated_interaction_count: 3, code_generation_activity_count: 2, code_acceptance_activity_count: 1, loc_deleted_sum: 0 },
+    ]);
+    db.prepare(`INSERT INTO user_daily_metrics (day, enterprise_id, enterprise_slug, user_id, user_login, totals_by_ide)
+      VALUES ('2024-01-16', 'ent1', 'ent1', 5, 'legacy', ?)`).run(legacy);
+    const nv = getIdeBreakdown("2024-01-01", "2024-01-31").find((r) => r.ide === "neovim");
+    expect(nv!.locSuggestedAdd).toBe(0);
+    expect(nv!.locSuggestedDelete).toBe(0);
+  });
+
+  it("returns empty array when no IDE data exists", () => {
+    expect(getIdeBreakdown("2024-01-01", "2024-01-31")).toEqual([]);
+  });
+});
+
+describe("getIdeVersionBreakdown", () => {
+  it("returns empty array when no IDE data exists", () => {
+    expect(getIdeVersionBreakdown("2024-01-01", "2024-01-31")).toEqual([]);
+  });
+
+  it("counts distinct users per editor version", () => {
+    const mk = (v: string) => JSON.stringify([
+      { ide: "vscode", last_known_ide_version: { ide_version: v, sampled_at: "2024-01-10T00:00:00Z" } },
+    ]);
+    db.prepare(`INSERT INTO user_daily_metrics (day, enterprise_id, enterprise_slug, user_id, user_login, totals_by_ide)
+      VALUES ('2024-01-10', 'ent1', 'ent1', 1, 'u1', ?)`).run(mk("1.90.0"));
+    db.prepare(`INSERT INTO user_daily_metrics (day, enterprise_id, enterprise_slug, user_id, user_login, totals_by_ide)
+      VALUES ('2024-01-10', 'ent1', 'ent1', 2, 'u2', ?)`).run(mk("1.90.0"));
+    db.prepare(`INSERT INTO user_daily_metrics (day, enterprise_id, enterprise_slug, user_id, user_login, totals_by_ide)
+      VALUES ('2024-01-10', 'ent1', 'ent1', 3, 'u3', ?)`).run(mk("1.91.0"));
+    const rows = getIdeVersionBreakdown("2024-01-01", "2024-01-31");
+    expect(rows.find((r) => r.version === "1.90.0")!.users).toBe(2);
+    expect(rows.find((r) => r.version === "1.91.0")!.users).toBe(1);
+  });
+
+  it("prefers the most recent sample per user across days", () => {
+    const mk = (v: string, sampledAt: string) => JSON.stringify([
+      { ide: "vscode", last_known_ide_version: { ide_version: v, sampled_at: sampledAt } },
+    ]);
+    db.prepare(`INSERT INTO user_daily_metrics (day, enterprise_id, enterprise_slug, user_id, user_login, totals_by_ide)
+      VALUES ('2024-01-10', 'ent1', 'ent1', 1, 'u1', ?)`).run(mk("1.0.0", "2024-01-10T00:00:00Z"));
+    db.prepare(`INSERT INTO user_daily_metrics (day, enterprise_id, enterprise_slug, user_id, user_login, totals_by_ide)
+      VALUES ('2024-01-12', 'ent1', 'ent1', 1, 'u1', ?)`).run(mk("2.0.0", "2024-01-12T00:00:00Z"));
+    const rows = getIdeVersionBreakdown("2024-01-01", "2024-01-31");
+    // Single user attributed only to the newest version
+    expect(rows).toEqual([{ version: "2.0.0", users: 1 }]);
+  });
+
+  it("buckets users without a version sample as Unknown", () => {
+    const withVer = JSON.stringify([
+      { ide: "vscode", last_known_ide_version: { ide_version: "3.0.0", sampled_at: "2024-01-10T00:00:00Z" } },
+    ]);
+    const noVer = JSON.stringify([{ ide: "vscode", loc_added_sum: 10 }]);
+    db.prepare(`INSERT INTO user_daily_metrics (day, enterprise_id, enterprise_slug, user_id, user_login, totals_by_ide)
+      VALUES ('2024-01-10', 'ent1', 'ent1', 1, 'u1', ?)`).run(withVer);
+    db.prepare(`INSERT INTO user_daily_metrics (day, enterprise_id, enterprise_slug, user_id, user_login, totals_by_ide)
+      VALUES ('2024-01-10', 'ent1', 'ent1', 2, 'u2', ?)`).run(noVer);
+    const rows = getIdeVersionBreakdown("2024-01-01", "2024-01-31");
+    expect(rows.find((r) => r.version === "Unknown")!.users).toBe(1);
+    expect(rows.find((r) => r.version === "3.0.0")!.users).toBe(1);
+  });
+
+  it("prefers a version-bearing sample over a same-user Unknown sample", () => {
+    const withVer = JSON.stringify([
+      { ide: "vscode", last_known_ide_version: { ide_version: "4.2.0", sampled_at: "2024-01-05T00:00:00Z" } },
+    ]);
+    const noVer = JSON.stringify([{ ide: "jetbrains", loc_added_sum: 10 }]);
+    db.prepare(`INSERT INTO user_daily_metrics (day, enterprise_id, enterprise_slug, user_id, user_login, totals_by_ide)
+      VALUES ('2024-01-05', 'ent1', 'ent1', 1, 'u1', ?)`).run(withVer);
+    db.prepare(`INSERT INTO user_daily_metrics (day, enterprise_id, enterprise_slug, user_id, user_login, totals_by_ide)
+      VALUES ('2024-01-20', 'ent1', 'ent1', 1, 'u1', ?)`).run(noVer);
+    const rows = getIdeVersionBreakdown("2024-01-01", "2024-01-31");
+    expect(rows).toEqual([{ version: "4.2.0", users: 1 }]);
+  });
+
+  it("filters by allowed logins and enterprise slugs", () => {
+    const mk = (v: string) => JSON.stringify([
+      { ide: "vscode", last_known_ide_version: { ide_version: v, sampled_at: "2024-01-10T00:00:00Z" } },
+    ]);
+    db.prepare(`INSERT INTO user_daily_metrics (day, enterprise_id, enterprise_slug, user_id, user_login, totals_by_ide)
+      VALUES ('2024-01-10', 'ent1', 'ent-a', 1, 'keep', ?)`).run(mk("5.0.0"));
+    db.prepare(`INSERT INTO user_daily_metrics (day, enterprise_id, enterprise_slug, user_id, user_login, totals_by_ide)
+      VALUES ('2024-01-10', 'ent1', 'ent-b', 2, 'drop', ?)`).run(mk("6.0.0"));
+    const byLogin = getIdeVersionBreakdown("2024-01-01", "2024-01-31", ["keep"]);
+    expect(byLogin).toEqual([{ version: "5.0.0", users: 1 }]);
+    const byEnt = getIdeVersionBreakdown("2024-01-01", "2024-01-31", undefined, ["ent-a"]);
+    expect(byEnt).toEqual([{ version: "5.0.0", users: 1 }]);
+  });
+});
+
+describe("getPluginVersionBreakdown", () => {
+  it("returns empty array when no IDE data exists", () => {
+    expect(getPluginVersionBreakdown("2024-01-01", "2024-01-31")).toEqual([]);
+  });
+
+  it("counts distinct users per plugin+version", () => {
+    const mk = (plugin: string, version: string) => JSON.stringify([
+      { ide: "vscode", last_known_plugin_version: { plugin, plugin_version: version, sampled_at: "2024-01-10T00:00:00Z" } },
+    ]);
+    db.prepare(`INSERT INTO user_daily_metrics (day, enterprise_id, enterprise_slug, user_id, user_login, totals_by_ide)
+      VALUES ('2024-01-10', 'ent1', 'ent1', 1, 'u1', ?)`).run(mk("copilot", "1.2.3"));
+    db.prepare(`INSERT INTO user_daily_metrics (day, enterprise_id, enterprise_slug, user_id, user_login, totals_by_ide)
+      VALUES ('2024-01-10', 'ent1', 'ent1', 2, 'u2', ?)`).run(mk("copilot", "1.2.3"));
+    const rows = getPluginVersionBreakdown("2024-01-01", "2024-01-31");
+    expect(rows).toEqual([{ plugin: "copilot", version: "1.2.3", users: 2 }]);
+  });
+
+  it("prefers most recent plugin sample and buckets missing as Unknown", () => {
+    const mk = (plugin: string | null, version: string | null, sampledAt: string) => JSON.stringify([
+      { ide: "vscode", last_known_plugin_version: plugin ? { plugin, plugin_version: version, sampled_at: sampledAt } : undefined },
+    ]);
+    db.prepare(`INSERT INTO user_daily_metrics (day, enterprise_id, enterprise_slug, user_id, user_login, totals_by_ide)
+      VALUES ('2024-01-10', 'ent1', 'ent1', 1, 'u1', ?)`).run(mk("copilot", "1.0.0", "2024-01-10T00:00:00Z"));
+    db.prepare(`INSERT INTO user_daily_metrics (day, enterprise_id, enterprise_slug, user_id, user_login, totals_by_ide)
+      VALUES ('2024-01-14', 'ent1', 'ent1', 1, 'u1', ?)`).run(mk("copilot", "2.0.0", "2024-01-14T00:00:00Z"));
+    db.prepare(`INSERT INTO user_daily_metrics (day, enterprise_id, enterprise_slug, user_id, user_login, totals_by_ide)
+      VALUES ('2024-01-10', 'ent1', 'ent1', 2, 'u2', ?)`).run(mk(null, null, ""));
+    const rows = getPluginVersionBreakdown("2024-01-01", "2024-01-31");
+    expect(rows.find((r) => r.plugin === "copilot" && r.version === "2.0.0")!.users).toBe(1);
+    expect(rows.find((r) => r.plugin === "Unknown" && r.version === "Unknown")!.users).toBe(1);
+  });
+});
+
+describe("getCliVersionBreakdown", () => {
+  it("returns empty array when no CLI data exists", () => {
+    expect(getCliVersionBreakdown("2024-01-01", "2024-01-31")).toEqual([]);
+  });
+
+  it("counts distinct users per CLI version, newest sample wins", () => {
+    const mk = (v: string, sampledAt: string) => JSON.stringify({
+      session_count: 1, request_count: 1, prompt_count: 1,
+      token_usage: { prompt_tokens_sum: 1, output_tokens_sum: 1, avg_tokens_per_request: 1 },
+      last_known_cli_version: { cli_version: v, sampled_at: sampledAt },
+    });
+    db.prepare(`INSERT INTO user_daily_metrics (day, enterprise_id, enterprise_slug, user_id, user_login, used_cli, totals_by_cli)
+      VALUES ('2024-01-10', 'ent1', 'ent1', 1, 'u1', 1, ?)`).run(mk("1.0.60", "2024-01-10T00:00:00Z"));
+    db.prepare(`INSERT INTO user_daily_metrics (day, enterprise_id, enterprise_slug, user_id, user_login, used_cli, totals_by_cli)
+      VALUES ('2024-01-12', 'ent1', 'ent1', 1, 'u1', 1, ?)`).run(mk("1.0.70", "2024-01-12T00:00:00Z"));
+    db.prepare(`INSERT INTO user_daily_metrics (day, enterprise_id, enterprise_slug, user_id, user_login, used_cli, totals_by_cli)
+      VALUES ('2024-01-10', 'ent1', 'ent1', 2, 'u2', 1, ?)`).run(mk("1.0.70", "2024-01-10T00:00:00Z"));
+    const rows = getCliVersionBreakdown("2024-01-01", "2024-01-31");
+    expect(rows).toEqual([{ version: "1.0.70", users: 2 }]);
+  });
+
+  it("buckets CLI users without a version sample as Unknown", () => {
+    const noVer = JSON.stringify({ session_count: 2, request_count: 3, prompt_count: 1, token_usage: { prompt_tokens_sum: 1, output_tokens_sum: 1, avg_tokens_per_request: 1 } });
+    db.prepare(`INSERT INTO user_daily_metrics (day, enterprise_id, enterprise_slug, user_id, user_login, used_cli, totals_by_cli)
+      VALUES ('2024-01-10', 'ent1', 'ent1', 9, 'legacy', 1, ?)`).run(noVer);
+    const rows = getCliVersionBreakdown("2024-01-01", "2024-01-31");
+    expect(rows).toEqual([{ version: "Unknown", users: 1 }]);
+  });
+});
+
+describe("getCliSuggestionStats", () => {
+  it("returns zeros when no CLI IDE rows exist", () => {
+    expect(getCliSuggestionStats("2024-01-01", "2024-01-31")).toEqual({
+      locSuggestedAdd: 0, locSuggestedDelete: 0, locAdded: 0, locDeleted: 0, acceptanceRate: 0,
+    });
+  });
+
+  it("sums suggested/accepted LoC from CLI IDE entries and computes acceptance rate", () => {
+    const ide = JSON.stringify([
+      { ide: "vscode", loc_added_sum: 999, loc_suggested_to_add_sum: 999 },
+      { ide: "copilot_cli", loc_added_sum: 40, loc_suggested_to_add_sum: 100, loc_suggested_to_delete_sum: 5, loc_deleted_sum: 2 },
+    ]);
+    const ide2 = JSON.stringify([
+      { ide: "cli", loc_added_sum: 20, loc_suggested_to_add_sum: 100, loc_suggested_to_delete_sum: 5, loc_deleted_sum: 1 },
+    ]);
+    db.prepare(`INSERT INTO user_daily_metrics (day, enterprise_id, enterprise_slug, user_id, user_login, totals_by_ide)
+      VALUES ('2024-01-10', 'ent1', 'ent1', 1, 'u1', ?)`).run(ide);
+    db.prepare(`INSERT INTO user_daily_metrics (day, enterprise_id, enterprise_slug, user_id, user_login, totals_by_ide)
+      VALUES ('2024-01-11', 'ent1', 'ent1', 2, 'u2', ?)`).run(ide2);
+    const stats = getCliSuggestionStats("2024-01-01", "2024-01-31");
+    // Only cli entries counted: suggested 100+100=200, added 40+20=60
+    expect(stats.locSuggestedAdd).toBe(200);
+    expect(stats.locSuggestedDelete).toBe(10);
+    expect(stats.locAdded).toBe(60);
+    expect(stats.locDeleted).toBe(3);
+    expect(stats.acceptanceRate).toBe(30);
+  });
+
+  it("excludes non-CLI IDE names that merely contain cli", () => {
+    const ide = JSON.stringify([
+      { ide: "eclipse", loc_added_sum: 500, loc_suggested_to_add_sum: 500, loc_suggested_to_delete_sum: 500, loc_deleted_sum: 500 },
+      { ide: "sublime_client", loc_added_sum: 400, loc_suggested_to_add_sum: 400 },
+      { ide: "cli_tool", loc_added_sum: 300, loc_suggested_to_add_sum: 300 },
+      { ide: "cli-something", loc_added_sum: 200, loc_suggested_to_add_sum: 200 },
+      { ide: "xcli", loc_added_sum: 100, loc_suggested_to_add_sum: 100 },
+      { ide: "cli", loc_added_sum: 10, loc_suggested_to_add_sum: 20, loc_suggested_to_delete_sum: 2, loc_deleted_sum: 1 },
+      { ide: "copilot-cli", loc_added_sum: 5, loc_suggested_to_add_sum: 10, loc_suggested_to_delete_sum: 3, loc_deleted_sum: 2 },
+      { ide: "command_cli", loc_added_sum: 7, loc_suggested_to_add_sum: 14, loc_suggested_to_delete_sum: 4, loc_deleted_sum: 3 },
+      { ide: "CLI", loc_added_sum: 8, loc_suggested_to_add_sum: 16, loc_suggested_to_delete_sum: 1, loc_deleted_sum: 1 },
+    ]);
+    db.prepare(`INSERT INTO user_daily_metrics (day, enterprise_id, enterprise_slug, user_id, user_login, totals_by_ide)
+      VALUES ('2024-01-10', 'ent1', 'ent1', 1, 'u1', ?)`).run(ide);
+    const stats = getCliSuggestionStats("2024-01-01", "2024-01-31");
+    expect(stats.locSuggestedAdd).toBe(60);
+    expect(stats.locSuggestedDelete).toBe(10);
+    expect(stats.locAdded).toBe(30);
+    expect(stats.locDeleted).toBe(7);
+    expect(stats.acceptanceRate).toBe(50);
+  });
+
+  it("returns acceptanceRate 0 when nothing was suggested", () => {
+    const ide = JSON.stringify([{ ide: "cli", loc_added_sum: 15, loc_suggested_to_add_sum: 0 }]);
+    db.prepare(`INSERT INTO user_daily_metrics (day, enterprise_id, enterprise_slug, user_id, user_login, totals_by_ide)
+      VALUES ('2024-01-10', 'ent1', 'ent1', 1, 'u1', ?)`).run(ide);
+    expect(getCliSuggestionStats("2024-01-01", "2024-01-31").acceptanceRate).toBe(0);
+  });
+
+  it("respects allowed-login filtering", () => {
+    const ide = JSON.stringify([{ ide: "cli", loc_added_sum: 10, loc_suggested_to_add_sum: 20 }]);
+    db.prepare(`INSERT INTO user_daily_metrics (day, enterprise_id, enterprise_slug, user_id, user_login, totals_by_ide)
+      VALUES ('2024-01-10', 'ent1', 'ent1', 1, 'keep', ?)`).run(ide);
+    db.prepare(`INSERT INTO user_daily_metrics (day, enterprise_id, enterprise_slug, user_id, user_login, totals_by_ide)
+      VALUES ('2024-01-10', 'ent1', 'ent1', 2, 'drop', ?)`).run(ide);
+    const stats = getCliSuggestionStats("2024-01-01", "2024-01-31", ["keep"]);
+    expect(stats.locSuggestedAdd).toBe(20);
+    expect(stats.locAdded).toBe(10);
+  });
+});
+
+describe("compareVersions", () => {
+  it("orders versions numerically, not lexically", () => {
+    expect(compareVersions("1.0.7", "1.0.64")).toBeLessThan(0);
+    expect(compareVersions("1.0.64", "1.0.7")).toBeGreaterThan(0);
+    expect(compareVersions("1.0.64", "1.0.64")).toBe(0);
+    expect(compareVersions("2.0.0", "1.9.9")).toBeGreaterThan(0);
+  });
+
+  it("treats missing and non-numeric components as 0", () => {
+    expect(compareVersions("1.0", "1.0.0")).toBe(0);
+    expect(compareVersions("1.0.0", "1")).toBe(0);
+    expect(compareVersions("1.0.x", "1.0.0")).toBe(0);
+  });
+});
+
+describe("countOutdatedCliUsers", () => {
+  it("counts users below the reliable threshold and excludes Unknown/non-numeric", () => {
+    const rows = [
+      { version: "1.0.60", users: 3 },
+      { version: "1.0.64", users: 5 },
+      { version: "1.0.70", users: 2 },
+      { version: "Unknown", users: 4 },
+      { version: "beta", users: 1 },
+    ];
+    expect(countOutdatedCliUsers(rows)).toBe(3);
+    expect(MIN_RELIABLE_CLI_VERSION).toBe("1.0.64");
+  });
+
+  it("honors a custom threshold and returns 0 when all are current", () => {
+    expect(countOutdatedCliUsers([{ version: "1.0.70", users: 2 }], "1.0.64")).toBe(0);
+    expect(countOutdatedCliUsers([{ version: "1.0.50", users: 2 }], "1.0.55")).toBe(2);
   });
 });
 

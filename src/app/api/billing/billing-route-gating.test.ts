@@ -42,6 +42,8 @@ vi.mock("@/lib/db/billing-repo", () => ({
   getPremiumUserSummary: vi.fn(() => []),
   getPremiumModelSummary: vi.fn(() => []),
   getPremiumDailyTrend: vi.fn(() => []),
+  getPremiumCostCenterBreakdown: vi.fn(() => []),
+  getPremiumOrgBreakdown: vi.fn(() => []),
   getRepositoryBreakdown: vi.fn(() => []),
 }));
 

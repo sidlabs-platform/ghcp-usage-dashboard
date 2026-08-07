@@ -147,7 +147,7 @@ export async function GET(request: NextRequest) {
       headers: { "Cache-Control": "private, max-age=300, stale-while-revalidate=60" },
     });
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    return NextResponse.json({ error: message }, { status: 500 });
+    console.error("Failed to build AI usage metrics", err);
+    return NextResponse.json({ error: "Internal server error" }, { status: 500 });
   }
 }

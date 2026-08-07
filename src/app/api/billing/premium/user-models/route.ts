@@ -3,9 +3,10 @@ import { isBillingSubEnabledForAnyEnterprise } from "@/lib/config/enterprise-con
 import { getDateRange, parseAndClampDays } from "@/lib/utils";
 import { getPremiumUserModelBreakdown } from "@/lib/db/billing-repo";
 import type { PremiumFilters } from "@/lib/db/billing-repo";
-import { resolveFilteredUsers } from "@/lib/db/teams-repo";
+import { parseScopeFilter } from "@/lib/api/scope-filter";
 import { withCache } from "@/lib/cache/with-cache";
 import { withTimeout } from "@/lib/api/timeout";
+import { withRateLimit } from "@/lib/api/rate-limit/rate-limiter";
 import { CACHE_TTL } from "@/lib/cache/memory-cache";
 
 async function handler(request: NextRequest) {
@@ -29,15 +30,9 @@ async function handler(request: NextRequest) {
     const days = daysResult.days;
     const { start, end } = getDateRange(days);
 
-    // Parse scope filter (teams/orgs/enterprises)
-    const teamsParam = params.get("teams");
-    const orgsParam = params.get("orgs");
-    const enterprisesParam = params.get("enterprises");
-    const selectedTeams = teamsParam ? teamsParam.split(",").filter(Boolean) : [];
-    const selectedOrgs = orgsParam ? orgsParam.split(",").filter(Boolean) : [];
-    const selectedEnterprises = enterprisesParam ? enterprisesParam.split(",").filter(Boolean) : [];
-    const enterpriseSlugs = selectedEnterprises.length > 0 ? selectedEnterprises : undefined;
-    const hasScope = selectedTeams.length > 0 || selectedOrgs.length > 0;
+    // Parse scope filter (teams/orgs/enterprises) via the shared parser
+    const scopeFilter = parseScopeFilter(params);
+    const { selectedOrgs, allowedLogins, enterpriseSlugs } = scopeFilter;
 
     const filters: PremiumFilters = {
       organization: params.get("organization")?.split(",").filter(Boolean),
@@ -47,8 +42,8 @@ async function handler(request: NextRequest) {
           : undefined,
     };
 
-    if (hasScope) {
-      filters.allowedLogins = resolveFilteredUsers(selectedTeams, selectedOrgs, enterpriseSlugs);
+    if (allowedLogins) {
+      filters.allowedLogins = Array.from(allowedLogins);
       if (selectedOrgs.length > 0) filters.scopeOrgs = selectedOrgs;
     }
 
@@ -72,9 +67,9 @@ async function handler(request: NextRequest) {
       headers: { "Cache-Control": "private, max-age=300, stale-while-revalidate=60" },
     });
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    return NextResponse.json({ error: message }, { status: 500 });
+    console.error("Failed to fetch premium user model breakdown", err);
+    return NextResponse.json({ error: "Internal server error" }, { status: 500 });
   }
 }
 
-export const GET = withTimeout(withCache(handler, CACHE_TTL.MEDIUM));
+export const GET = withRateLimit(withTimeout(withCache(handler, CACHE_TTL.MEDIUM)));

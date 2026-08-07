@@ -5,6 +5,8 @@ import {
   getPremiumUserSummary,
   getPremiumModelSummary,
   getPremiumDailyTrend,
+  getPremiumCostCenterBreakdown,
+  getPremiumOrgBreakdown,
 } from "@/lib/db/billing-repo";
 import type { PremiumFilters } from "@/lib/db/billing-repo";
 import {
@@ -16,6 +18,7 @@ import { parseScopeFilter } from "@/lib/api/scope-filter";
 import { withCache } from "@/lib/cache/with-cache";
 import { withTimeout } from "@/lib/api/timeout";
 import { CACHE_TTL } from "@/lib/cache/memory-cache";
+import { AI_CREDIT_COVERAGE_NOTE } from "@/lib/constants";
 
 async function handler(request: NextRequest) {
   try {
@@ -54,6 +57,8 @@ async function handler(request: NextRequest) {
     const userSummary = getPremiumUserSummary(start, end, filters, enterpriseSlugs);
     const modelSummary = getPremiumModelSummary(start, end, filters, enterpriseSlugs);
     const dailyTrend = getPremiumDailyTrend(start, end, filters, enterpriseSlugs);
+    const costCenterBreakdown = getPremiumCostCenterBreakdown(start, end, filters, enterpriseSlugs);
+    const orgBreakdown = getPremiumOrgBreakdown(start, end, filters, enterpriseSlugs);
     const metricsAiCreditsFilters: UserAiCreditsFilters = {
       userLogin: filters.username,
       allowedLogins: scope.allowedLogins ? Array.from(scope.allowedLogins) : undefined,
@@ -101,6 +106,9 @@ async function handler(request: NextRequest) {
       userSummary,
       modelSummary,
       dailyTrend,
+      costCenterBreakdown,
+      orgBreakdown,
+      coverageNote: AI_CREDIT_COVERAGE_NOTE,
       metricsAiCreditSummary,
       daysLoaded: days,
     }, {

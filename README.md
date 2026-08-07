@@ -43,7 +43,8 @@ A comprehensive dashboard for visualizing GitHub Copilot usage metrics, GHAS sec
 | **🖥️ IDE & Languages** | IDE distribution, language heatmap, version tracking |
 | **💰 Billing** | Cost overview, product/org/user breakdowns, cost trends |
 | **📈 Metered Usage** | Detailed metered usage reports by product, org, and user |
-| **⚡ Premium Requests** | Premium request consumption, model breakdown, user-level analysis |
+| **⚡ AI Credits** | AI credit consumption, model breakdown, user-level analysis |
+| **👤 AI Credits by User** | Sortable user-level AI credit consumption table |
 
 ### Additional Capabilities
 
@@ -343,6 +344,10 @@ Detailed metered usage reports broken down by product, organization, and user. R
 
 AI credit consumption with model-level breakdown and user-level analysis. Supports both legacy premium requests and the new AI credits billing model (effective June 2026). Requires `billing.premiumRequests: true` or `billing.aiCredits: true`.
 
+### 👤 AI Credits by User
+
+Sortable per-user AI credit consumption from the Usage Metrics API. Supports the global date range, enterprise/team/org scope filters, search, pagination, and CSV export.
+
 ---
 
 ## Page Visibility Reference
@@ -365,6 +370,7 @@ Which config toggles control the visibility of each sidebar page:
 | Billing | `billing.enabled` + `copilot.enterprise` + `GITHUB_ENTERPRISE` env var |
 | Metered Usage | Billing visible + `billing.meteredUsage` |
 | AI Credits | Billing visible + `billing.premiumRequests` OR `billing.aiCredits` |
+| AI Credits by User | `copilot.enabled` + `copilot.userMetrics` |
 
 ---
 

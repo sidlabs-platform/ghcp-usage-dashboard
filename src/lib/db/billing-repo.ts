@@ -18,6 +18,8 @@ import type {
   PremiumRequestModelSummary,
   PremiumUserModelBreakdown,
   PremiumDailyTrend,
+  PremiumCostCenterBreakdown,
+  PremiumOrgBreakdown,
 } from "@/lib/types/billing";
 
 const AI_CREDITS_START_DATE = "2026-06-01";
@@ -776,6 +778,100 @@ export function getPremiumUserModelBreakdown(
 }
 
 // ── Cost Center / Repository / Premium Daily Breakdowns ───────────────
+
+/**
+ * Returns AI Credit consumption grouped by cost center over a date range,
+ * sourced from the `billing_premium_requests` table (the ai_credit report is a
+ * superset of premium_request). Uses `aic_quantity` for the credit total and
+ * `aic_gross_amount` for the billed cost.
+ *
+ * Rows with no cost center assigned are retained with an empty `cost_center_name`
+ * so the caller can surface an explicit "Unattributed" bucket rather than
+ * dropping org-less / cost-center-less usage.
+ *
+ * @param start - Inclusive start date (ISO `YYYY-MM-DD`).
+ * @param end - Inclusive end date (ISO `YYYY-MM-DD`).
+ * @param filters - Optional premium filters (model, org, exceedsQuota, scope).
+ * @param enterpriseSlugs - Optional enterprise slug allow-list.
+ * @returns Cost-center breakdown rows sorted by AI credits then cost, descending.
+ */
+export function getPremiumCostCenterBreakdown(
+  start: string,
+  end: string,
+  filters?: PremiumFilters,
+  enterpriseSlugs?: string[]
+): PremiumCostCenterBreakdown[] {
+  const db = getDb();
+  const clauses: string[] = ["date >= ?", "date <= ?", `date >= '${AI_CREDITS_START_DATE}'`];
+  const params: unknown[] = [start, end];
+  const { clause: entClause, params: entParams } = buildEnterpriseFilter(enterpriseSlugs);
+  if (entClause) { clauses.push(entClause.replace(/^\s*AND\s+/, "")); params.push(...entParams); }
+  appendPremiumFilters(clauses, params, filters);
+
+  return db
+    .prepare(
+      `
+    SELECT
+      COALESCE(cost_center_name, '')     AS cost_center_name,
+      COALESCE(SUM(aic_quantity), 0)     AS total_aic_quantity,
+      COALESCE(SUM(aic_gross_amount), 0) AS total_aic_gross,
+      COUNT(DISTINCT username)           AS unique_users,
+      COUNT(*)                           AS record_count
+    FROM billing_premium_requests
+    ${buildWhereClause(clauses)}
+    GROUP BY COALESCE(cost_center_name, '')
+    ORDER BY total_aic_quantity DESC, total_aic_gross DESC, cost_center_name ASC
+  `
+    )
+    .all(...params) as PremiumCostCenterBreakdown[];
+}
+
+/**
+ * Returns AI Credit consumption grouped by organization over a date range,
+ * sourced from the `billing_premium_requests` table. Uses `aic_quantity` for
+ * the credit total and `aic_gross_amount` for the billed cost.
+ *
+ * Org-less rows (empty `organization`) are intentionally NOT filtered out — the
+ * 2026-07-02 metrics accuracy update now attributes AI-credit usage that is not
+ * linked to an organization, and this breakdown keeps that usage visible as an
+ * explicit "No organization / unattributed" bucket instead of dropping it.
+ *
+ * @param start - Inclusive start date (ISO `YYYY-MM-DD`).
+ * @param end - Inclusive end date (ISO `YYYY-MM-DD`).
+ * @param filters - Optional premium filters (model, org, exceedsQuota, scope).
+ * @param enterpriseSlugs - Optional enterprise slug allow-list.
+ * @returns Organization breakdown rows sorted by AI credits then cost, descending.
+ */
+export function getPremiumOrgBreakdown(
+  start: string,
+  end: string,
+  filters?: PremiumFilters,
+  enterpriseSlugs?: string[]
+): PremiumOrgBreakdown[] {
+  const db = getDb();
+  const clauses: string[] = ["date >= ?", "date <= ?", `date >= '${AI_CREDITS_START_DATE}'`];
+  const params: unknown[] = [start, end];
+  const { clause: entClause, params: entParams } = buildEnterpriseFilter(enterpriseSlugs);
+  if (entClause) { clauses.push(entClause.replace(/^\s*AND\s+/, "")); params.push(...entParams); }
+  appendPremiumFilters(clauses, params, filters);
+
+  return db
+    .prepare(
+      `
+    SELECT
+      COALESCE(organization, '')         AS organization,
+      COALESCE(SUM(aic_quantity), 0)     AS total_aic_quantity,
+      COALESCE(SUM(aic_gross_amount), 0) AS total_aic_gross,
+      COUNT(DISTINCT username)           AS unique_users,
+      COUNT(*)                           AS record_count
+    FROM billing_premium_requests
+    ${buildWhereClause(clauses)}
+    GROUP BY COALESCE(organization, '')
+    ORDER BY total_aic_quantity DESC, total_aic_gross DESC, organization ASC
+  `
+    )
+    .all(...params) as PremiumOrgBreakdown[];
+}
 
 export function getCostCenterBreakdown(
   start: string,
