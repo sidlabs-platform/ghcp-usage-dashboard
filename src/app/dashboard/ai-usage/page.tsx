@@ -48,14 +48,18 @@ export default function AiUsagePage() {
 
   const kpiRef = useRef<HTMLDivElement>(null);
   const chartsRef = useRef<HTMLDivElement>(null);
+  // Guards against a slow earlier request overwriting a newer selection's data
+  const requestIdRef = useRef(0);
 
   const fetchData = useCallback(() => {
+    const requestId = ++requestIdRef.current;
+    const controller = new AbortController();
     setLoading(true);
     const params = new URLSearchParams({ days: String(days) });
     const scopeParams = buildScopeParams();
     scopeParams.forEach((v, k) => params.set(k, v));
 
-    fetch(`/api/metrics/ai-usage?${params}`)
+    fetch(`/api/metrics/ai-usage?${params}`, { signal: controller.signal })
       .then(async (res) => {
         if (!res.ok) {
           const body = await res.json().catch(() => ({}));
@@ -63,12 +67,23 @@ export default function AiUsagePage() {
         }
         return res.json() as Promise<AiUsageResponse>;
       })
-      .then((d) => { setData(d); setError(null); })
-      .catch((err) => setError(err.message))
-      .finally(() => setLoading(false));
+      .then((d) => {
+        if (requestId !== requestIdRef.current) return;
+        setData(d);
+        setError(null);
+      })
+      .catch((err) => {
+        if (err.name === "AbortError" || requestId !== requestIdRef.current) return;
+        setError(err.message);
+      })
+      .finally(() => {
+        if (requestId === requestIdRef.current) setLoading(false);
+      });
+
+    return () => controller.abort();
   }, [days, buildScopeParams]);
 
-  useEffect(() => { fetchData(); }, [fetchData]);
+  useEffect(() => fetchData(), [fetchData]);
 
   if (loading) {
     return (

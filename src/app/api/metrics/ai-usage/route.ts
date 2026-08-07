@@ -2,6 +2,10 @@ import { NextRequest, NextResponse } from "next/server";
 import { getDateRange, datesBetween, parseAndClampDays } from "@/lib/utils";
 import { FEATURE_LABELS } from "@/lib/constants";
 import { parseScopeFilter } from "@/lib/api/scope-filter";
+import { withCache } from "@/lib/cache/with-cache";
+import { withTimeout } from "@/lib/api/timeout";
+import { withRateLimit } from "@/lib/api/rate-limit/rate-limiter";
+import { CACHE_TTL } from "@/lib/cache/memory-cache";
 import {
   getCompletionDailyTrend,
   getCompletionTotals,
@@ -14,27 +18,83 @@ import {
 
 // ── Response shape ────────────────────────────────────────────────────
 
+/** Rolling distinct-user counts for a single day. */
+export interface ActiveUsersTrendPoint {
+  day: string;
+  daily: number;
+  weekly: number;
+  monthly: number;
+}
+
+/** Completion vs agent lines-of-code for a single day. */
+export interface LocTrendPoint {
+  day: string;
+  completionSuggested: number;
+  completionAccepted: number;
+  agentAdded: number;
+  agentDeleted: number;
+}
+
+/** Completion-only acceptance for a single day. */
+export interface AcceptanceTrendPoint {
+  day: string;
+  suggested: number;
+  accepted: number;
+  /** Event-count ratio (accepted/generated) as a percentage. */
+  rate: number;
+}
+
+/** Per-editor activity totals for the selected range. */
+export interface IdeBreakdownRow {
+  ide: string;
+  interactions: number;
+  locAdded: number;
+  acceptances: number;
+  generations: number;
+}
+
+/** Per-feature activity totals for the selected range. */
+export interface FeatureBreakdownRow {
+  feature: string;
+  featureLabel: string;
+  locAdded: number;
+  interactions: number;
+  acceptances: number;
+}
+
+/** Per-language lines-of-code totals for the selected range. */
+export interface LanguageBreakdownRow {
+  language: string;
+  locAdded: number;
+  locSuggested: number;
+}
+
+/** Headline numbers shown as KPI cards. */
+export interface AiUsageKpis {
+  monthlyActiveUsers: number;
+  avgDailyActiveUsers: number;
+  /** DAU/MAU stickiness as a percentage. */
+  stickiness: number;
+  /** Completion-only acceptance rate, excluding agent activity. */
+  completionAcceptanceRate: number;
+  completionLocAccepted: number;
+  agentLocAdded: number;
+  totalInteractions: number;
+}
+
 export interface AiUsageResponse {
-  activeUsersTrend: { day: string; daily: number; weekly: number; monthly: number }[];
-  locTrend: { day: string; completionSuggested: number; completionAccepted: number; agentAdded: number; agentDeleted: number }[];
-  acceptanceTrend: { day: string; suggested: number; accepted: number; rate: number }[];
-  ideBreakdown: { ide: string; interactions: number; locAdded: number; acceptances: number; generations: number }[];
-  featureBreakdown: { feature: string; featureLabel: string; locAdded: number; interactions: number; acceptances: number }[];
-  languageBreakdown: { language: string; locAdded: number; locSuggested: number }[];
-  kpis: {
-    monthlyActiveUsers: number;
-    avgDailyActiveUsers: number;
-    stickiness: number;
-    completionAcceptanceRate: number;
-    completionLocAccepted: number;
-    agentLocAdded: number;
-    totalInteractions: number;
-  };
+  activeUsersTrend: ActiveUsersTrendPoint[];
+  locTrend: LocTrendPoint[];
+  acceptanceTrend: AcceptanceTrendPoint[];
+  ideBreakdown: IdeBreakdownRow[];
+  featureBreakdown: FeatureBreakdownRow[];
+  languageBreakdown: LanguageBreakdownRow[];
+  kpis: AiUsageKpis;
 }
 
 // ── GET handler ───────────────────────────────────────────────────────
 
-export async function GET(request: NextRequest) {
+async function handler(request: NextRequest) {
   try {
     const params = request.nextUrl.searchParams;
     const daysResult = parseAndClampDays(params.get("days"), 7);
@@ -117,9 +177,10 @@ export async function GET(request: NextRequest) {
 
     // ── KPIs ──────────────────────────────────────────────────────────
     const totals = getCompletionTotals(startDay, endDay, allowedLogins, enterpriseSlugs);
-    const dailyCounts = rollingRows.map((r) => r.daily);
-    const avgDailyActiveUsers = dailyCounts.length > 0
-      ? dailyCounts.reduce((s, n) => s + n, 0) / dailyCounts.length
+    // Average over every day in the range — days with no activity are absent
+    // from rollingRows and must still count as zero, or sparse periods inflate the average.
+    const avgDailyActiveUsers = activeUsersTrend.length > 0
+      ? activeUsersTrend.reduce((s, d) => s + d.daily, 0) / activeUsersTrend.length
       : 0;
     // Latest rolling 30-day window count (MAU) within the selected range
     const monthlyActiveUsers = rollingRows.length > 0
@@ -151,3 +212,5 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });
   }
 }
+
+export const GET = withRateLimit(withTimeout(withCache(handler, CACHE_TTL.MEDIUM)));
