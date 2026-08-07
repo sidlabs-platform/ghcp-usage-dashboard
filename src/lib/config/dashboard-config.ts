@@ -19,6 +19,30 @@ export interface CopilotMetricConfig {
   pullRequests?: boolean;
 }
 
+/**
+ * License + AI-Credit reconciliation settings. These drive the
+ * License & AI Credits view, which joins synced seat data with per-user
+ * AI-credit consumption and applies negotiated pricing / allowances that are
+ * NOT returned by the GitHub API and therefore must be configured.
+ *
+ * All fields are optional; {@link getLicensingConfig} fills in field-level
+ * defaults so partial config (or none at all) still works out of the box.
+ */
+export interface LicensingConfig {
+  /** USD value of one AI credit. GitHub flex-billing default: 0.01. */
+  creditToUsd?: number;
+  /** ISO currency code for display. Default: "USD". */
+  currency?: string;
+  /** Monthly negotiated seat list price (USD) per normalized plan type. */
+  licenseCost?: Partial<Record<LicensePlanKey, number>>;
+  /** Monthly AI-credit allowance (credits) per normalized plan type. */
+  aicAllowance?: Partial<Record<LicensePlanKey, number>>;
+  /** Optional per-user AI-credit budget override (USD), keyed by login. */
+  perUserBudgetUsd?: Record<string, number>;
+}
+
+export type LicensePlanKey = "business" | "enterprise" | "unknown";
+
 export interface BillingMetricConfig {
   enabled: boolean;
   /** Sync metered usage (summarized + detailed) reports. */
@@ -27,6 +51,17 @@ export interface BillingMetricConfig {
   premiumRequests?: boolean;
   /** Sync AI credit reports (replaces premium requests as of June 2026). */
   aiCredits?: boolean;
+  /** License + AI-credit reconciliation pricing/allowance settings. */
+  licensing?: LicensingConfig;
+}
+
+/** Resolved licensing config with all fields populated. */
+export interface ResolvedLicensingConfig {
+  creditToUsd: number;
+  currency: string;
+  licenseCost: Record<LicensePlanKey, number>;
+  aicAllowance: Record<LicensePlanKey, number>;
+  perUserBudgetUsd: Record<string, number>;
 }
 
 export interface MetricConfig {
@@ -201,6 +236,45 @@ export function isBillingSubEnabled(sub: "meteredUsage" | "premiumRequests" | "a
   if (!getEffectiveBillingEnabled()) return false;
   const config = getDashboardConfig();
   return (config.metrics.billing as BillingMetricConfig)[sub] ?? true;
+}
+
+// --- Licensing (License & AI Credits reconciliation) helpers ---
+
+/**
+ * Built-in defaults for license pricing and AI-credit allowances. These mirror
+ * the GitHub Copilot flex-billing list prices used by the copilot-aic-report
+ * tool. Override any field via `metrics.billing.licensing` in dashboard-config.json.
+ */
+export const DEFAULT_LICENSING: ResolvedLicensingConfig = {
+  creditToUsd: 0.01,
+  currency: "USD",
+  licenseCost: { business: 19, enterprise: 39, unknown: 0 },
+  aicAllowance: { business: 1900, enterprise: 3900, unknown: 0 },
+  perUserBudgetUsd: {},
+};
+
+/**
+ * Resolve the licensing config with field-level defaults applied. Safe to call
+ * with no configured `licensing` block — always returns a fully populated object.
+ */
+export function getLicensingConfig(): ResolvedLicensingConfig {
+  const configured = (getDashboardConfig().metrics.billing as BillingMetricConfig).licensing ?? {};
+  const rawBudgets = configured.perUserBudgetUsd ?? {};
+  const perUserBudgetUsd: Record<string, number> = {};
+  for (const [login, amount] of Object.entries(rawBudgets)) {
+    perUserBudgetUsd[login.toLowerCase()] = amount;
+  }
+
+  return {
+    creditToUsd:
+      typeof configured.creditToUsd === "number" && configured.creditToUsd >= 0
+        ? configured.creditToUsd
+        : DEFAULT_LICENSING.creditToUsd,
+    currency: configured.currency || DEFAULT_LICENSING.currency,
+    licenseCost: { ...DEFAULT_LICENSING.licenseCost, ...(configured.licenseCost ?? {}) },
+    aicAllowance: { ...DEFAULT_LICENSING.aicAllowance, ...(configured.aicAllowance ?? {}) },
+    perUserBudgetUsd,
+  };
 }
 
 // --- Organization helpers ---
