@@ -10,6 +10,38 @@ import type { LicensePlanKey } from "@/lib/config/dashboard-config";
 
 export type { LicensePlanKey } from "@/lib/config/dashboard-config";
 
+// Re-exported so consumers of historical licensing reconciliation can import
+// everything they need from a single `@/lib/types/licensing` module, without
+// duplicating the underlying config type definitions (source of truth stays
+// in `@/lib/config/dashboard-config`).
+export type {
+  DatedAllowance,
+  AicConsumptionMode,
+  LicensingHistoryConfig,
+  LicensingIdentityConfig,
+  LicensingAicConsumptionConfig,
+  LicensingValidationConfig,
+  ResolvedLicensingHistoryConfig,
+  ResolvedLicensingIdentityConfig,
+  ResolvedLicensingAicConsumptionConfig,
+  ResolvedLicensingValidationConfig,
+  ResolvedLicensingConfig,
+} from "@/lib/config/dashboard-config";
+
+/** A billing/report month in "YYYY-MM" form (see `@/lib/licensing/periods`). */
+export type ReportPeriod = string;
+
+/**
+ * A seat's assignment lifecycle, as used by `intervalOverlapsPeriod` to
+ * determine whether the seat was held during a given report period.
+ * Half-open interval: active from `assignedAt` (inclusive) up to but not
+ * including `revokedAt`.
+ */
+export interface SeatAssignmentInterval {
+  assignedAt: string | null;
+  revokedAt: string | null;
+}
+
 /** Derived seat status for a user's license. */
 export type SeatStatus = "active" | "pending_cancellation";
 
