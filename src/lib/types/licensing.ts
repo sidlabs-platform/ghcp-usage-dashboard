@@ -7,8 +7,10 @@
 // configured pricing / allowances.
 
 import type { LicensePlanKey } from "@/lib/config/dashboard-config";
+import type { SeatLedgerConfidence } from "@/lib/licensing/seat-ledger";
 
 export type { LicensePlanKey } from "@/lib/config/dashboard-config";
+export type { SeatLedgerConfidence } from "@/lib/licensing/seat-ledger";
 
 // Re-exported so consumers of historical licensing reconciliation can import
 // everything they need from a single `@/lib/types/licensing` module, without
@@ -178,10 +180,22 @@ export interface LicensePeriodFilterQuery {
   orgLogins?: string[];
   /** Matches user_login, resolved_user_login, or holder_key. */
   logins?: string[];
+  /**
+   * Team/org-resolved login allowlist, matched against the same three
+   * identity columns as {@link logins} (user_login, resolved_user_login,
+   * holder_key). Same fail-closed convention as `LicenseReconciliationFilters.allowedLogins`
+   * in `license-repo.ts` (there a `Set<string>`; a readonly array here so it
+   * parameterizes directly into a SQL `IN`/`OR` clause) — `undefined` means
+   * unrestricted, but an explicitly **empty** array means zero rows match
+   * (the caller resolved a team/org scope with no members), never
+   * "unrestricted". Combines with {@link logins}/org/enterprise filters via
+   * `AND`, so a login must satisfy every provided filter.
+   */
+  allowedLogins?: readonly string[];
   planTypes?: string[];
   accountStates?: string[];
   seatStatuses?: string[];
-  historyConfidence?: string[];
+  historyConfidence?: SeatLedgerConfidence[];
   /** Free-text search across login/org/external-identity columns. */
   search?: string;
 }

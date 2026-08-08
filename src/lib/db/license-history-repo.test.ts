@@ -1,9 +1,57 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from "vitest";
-import Database from "better-sqlite3";
+import { DatabaseSync } from "node:sqlite";
 import path from "path";
 import fs from "fs";
 
-let db: Database.Database;
+/**
+ * Minimal better-sqlite3-compatible facade backed by Node's built-in
+ * `node:sqlite` (`DatabaseSync`). Used here — instead of `better-sqlite3`
+ * directly — because that package's native binding cannot be located/loaded
+ * under this environment's Node version, which otherwise makes every test in
+ * this file skip before any assertion runs. This is a real, in-process
+ * SQLite engine exercising the production repo's real SQL/params/transaction
+ * logic, not a mock of query results: `license-history-repo.ts` is never
+ * modified, and this facade only translates the handful of better-sqlite3
+ * API shapes (`pragma`, `.transaction`, positional `?` binding) that
+ * `node:sqlite` spells slightly differently.
+ */
+class TestDb {
+  private readonly raw: DatabaseSync;
+  constructor(location: string) {
+    this.raw = new DatabaseSync(location);
+  }
+  pragma(clause: string): void {
+    this.raw.exec(`PRAGMA ${clause};`);
+  }
+  exec(sql: string): void {
+    this.raw.exec(sql);
+  }
+  prepare(sql: string) {
+    const stmt = this.raw.prepare(sql);
+    return {
+      run: (...params: unknown[]) => stmt.run(...(params as never[])),
+      get: (...params: unknown[]) => stmt.get(...(params as never[])),
+      all: (...params: unknown[]) => stmt.all(...(params as never[])),
+    };
+  }
+  transaction<Args extends unknown[]>(fn: (...args: Args) => void): (...args: Args) => void {
+    return (...args: Args) => {
+      this.raw.exec("BEGIN");
+      try {
+        fn(...args);
+        this.raw.exec("COMMIT");
+      } catch (err) {
+        this.raw.exec("ROLLBACK");
+        throw err;
+      }
+    };
+  }
+  close(): void {
+    this.raw.close();
+  }
+}
+
+let db: TestDb;
 
 vi.mock("./database", () => ({
   getDb: () => db,
@@ -34,7 +82,7 @@ import {
 
 const SCHEMA_DIR = path.join(process.cwd(), "src", "lib", "db");
 
-function execSchema(database: Database.Database, file: string): void {
+function execSchema(database: TestDb, file: string): void {
   database.exec(fs.readFileSync(path.join(SCHEMA_DIR, file), "utf-8"));
 }
 
@@ -64,7 +112,7 @@ function makePeriodRow(overrides: Partial<LicensePeriodRowInput> = {}): LicenseP
     currency: "USD",
     rowSource: "materialized",
     consumptionSource: "billing_report",
-    historyConfidence: "high",
+    historyConfidence: "exact_snapshot",
     dataQualityNotes: [],
     asOfUtc: "2026-01-31T23:59:59Z",
     generatedAtUtc: "2026-02-01T00:00:00Z",
@@ -73,7 +121,7 @@ function makePeriodRow(overrides: Partial<LicensePeriodRowInput> = {}): LicenseP
 }
 
 beforeAll(() => {
-  db = new Database(":memory:");
+  db = new TestDb(":memory:");
   db.pragma("journal_mode = WAL");
   db.pragma("foreign_keys = ON");
   // Simulate a pre-existing database: main schema + billing schema first,
@@ -324,7 +372,7 @@ describe("replaceMaterializedPeriod + queryLicensePeriodRows", () => {
         holderKey: "user2",
         resolvedUserLogin: "user2",
         planType: "enterprise",
-        historyConfidence: "low",
+        historyConfidence: "live_snapshot_only",
         aicConsumedUsd: 40,
         aicAssignedUsd: 19,
         defaultAicUsd: 19,
@@ -384,7 +432,7 @@ describe("replaceMaterializedPeriod + queryLicensePeriodRows", () => {
     const byPlan = queryLicensePeriodRows({ enterpriseSlug: "ent1", planTypes: ["enterprise"] });
     expect(byPlan.pagination.totalItems).toBe(1);
 
-    const byConfidence = queryLicensePeriodRows({ enterpriseSlug: "ent1", historyConfidence: ["low"] });
+    const byConfidence = queryLicensePeriodRows({ enterpriseSlug: "ent1", historyConfidence: ["live_snapshot_only"] });
     expect(byConfidence.pagination.totalItems).toBe(1);
 
     const bySeatStatus = queryLicensePeriodRows({ enterpriseSlug: "ent1", seatStatuses: ["active"] });
@@ -392,6 +440,174 @@ describe("replaceMaterializedPeriod + queryLicensePeriodRows", () => {
 
     const byAccountState = queryLicensePeriodRows({ enterpriseSlug: "ent1", accountStates: ["active"] });
     expect(byAccountState.pagination.totalItems).toBe(3);
+  });
+
+  describe("confidence vocabulary", () => {
+    // Regression test for the fictional high/medium/low ranking that used to
+    // back CONFIDENCE_RANK_SQL/RANK_TO_CONFIDENCE: persisted
+    // history_confidence values are always one of the four real
+    // SeatLedgerConfidence strings (see seat-ledger.ts), never "high"/"low".
+    it("persists and returns all four real SeatLedgerConfidence values unchanged on the detail view", () => {
+      replaceMaterializedPeriod("ent1", "2026-17", [
+        makePeriodRow({ orgLogin: "org1", holderKey: "h-exact", resolvedUserLogin: "h-exact", historyConfidence: "exact_snapshot" }),
+        makePeriodRow({ orgLogin: "org1", holderKey: "h-audit", resolvedUserLogin: "h-audit", historyConfidence: "audit_reconstructed" }),
+        makePeriodRow({ orgLogin: "org1", holderKey: "h-live", resolvedUserLogin: "h-live", historyConfidence: "live_snapshot_only" }),
+        makePeriodRow({ orgLogin: "org1", holderKey: "h-unrec", resolvedUserLogin: "h-unrec", historyConfidence: "unrecoverable" }),
+      ]);
+      const result = queryLicensePeriodRows({ enterpriseSlug: "ent1", periods: ["2026-17"] });
+      const byHolder = new Map(result.rows.map((r) => [r.holderKey, r.historyConfidence]));
+      expect(byHolder.get("h-exact")).toBe("exact_snapshot");
+      expect(byHolder.get("h-audit")).toBe("audit_reconstructed");
+      expect(byHolder.get("h-live")).toBe("live_snapshot_only");
+      expect(byHolder.get("h-unrec")).toBe("unrecoverable");
+    });
+
+    it("filters the detail view by each of the four real confidence values individually", () => {
+      replaceMaterializedPeriod("ent1", "2026-18", [
+        makePeriodRow({ orgLogin: "org1", holderKey: "h-exact2", resolvedUserLogin: "h-exact2", historyConfidence: "exact_snapshot" }),
+        makePeriodRow({ orgLogin: "org1", holderKey: "h-audit2", resolvedUserLogin: "h-audit2", historyConfidence: "audit_reconstructed" }),
+        makePeriodRow({ orgLogin: "org1", holderKey: "h-unrec2", resolvedUserLogin: "h-unrec2", historyConfidence: "unrecoverable" }),
+      ]);
+      for (const [confidence, holder] of [
+        ["exact_snapshot", "h-exact2"],
+        ["audit_reconstructed", "h-audit2"],
+        ["unrecoverable", "h-unrec2"],
+      ] as const) {
+        const result = queryLicensePeriodRows({ enterpriseSlug: "ent1", periods: ["2026-18"], historyConfidence: [confidence] });
+        expect(result.rows.map((r) => r.holderKey)).toEqual([holder]);
+      }
+    });
+
+    it("rolls up confidence with worst-wins semantics: a resolved login spanning best and worst confidence rows reports the worst", () => {
+      // Same resolved login held across two orgs in one period: one row
+      // exact_snapshot (best), one row unrecoverable (worst). The rollup
+      // must surface "unrecoverable" — the worst-attested constituent row —
+      // not the best, matching seat-ledger.ts's own worst-wins convention
+      // for aggregating confidence across multiple underlying observations.
+      replaceMaterializedPeriod("ent1", "2026-19", [
+        makePeriodRow({ orgLogin: "org1", holderKey: "worst-wins", resolvedUserLogin: "worst-wins", historyConfidence: "exact_snapshot" }),
+        makePeriodRow({ orgLogin: "org2", holderKey: "worst-wins", resolvedUserLogin: "worst-wins", historyConfidence: "unrecoverable" }),
+      ]);
+      const rollup = queryLicensePeriodRows({ enterpriseSlug: "ent1", periods: ["2026-19"], view: "rollup" });
+      const row = rollup.rows.find((r) => r.resolvedUserLogin === "worst-wins");
+      expect(row?.historyConfidence).toBe("unrecoverable");
+    });
+
+    it("rolls up confidence with worst-wins semantics across every adjacent pair of the four real values", () => {
+      const pairs: readonly [string, string][] = [
+        ["exact_snapshot", "audit_reconstructed"],
+        ["audit_reconstructed", "live_snapshot_only"],
+        ["live_snapshot_only", "unrecoverable"],
+      ];
+      let periodSuffix = 90;
+      for (const [better, worse] of pairs) {
+        const period = `2026-${periodSuffix++}`;
+        replaceMaterializedPeriod("ent1", period, [
+          makePeriodRow({ orgLogin: "org1", holderKey: "pair-user", resolvedUserLogin: "pair-user", historyConfidence: better as never }),
+          makePeriodRow({ orgLogin: "org2", holderKey: "pair-user", resolvedUserLogin: "pair-user", historyConfidence: worse as never }),
+        ]);
+        const rollup = queryLicensePeriodRows({ enterpriseSlug: "ent1", periods: [period], view: "rollup" });
+        const row = rollup.rows.find((r) => r.resolvedUserLogin === "pair-user");
+        expect(row?.historyConfidence).toBe(worse);
+      }
+    });
+
+    it("rolls up a single-row group to that row's own confidence (no aggregation artifact)", () => {
+      replaceMaterializedPeriod("ent1", "2026-30", [
+        makePeriodRow({ orgLogin: "org1", holderKey: "solo-audit", resolvedUserLogin: "solo-audit", historyConfidence: "audit_reconstructed" }),
+      ]);
+      const rollup = queryLicensePeriodRows({ enterpriseSlug: "ent1", periods: ["2026-30"], view: "rollup" });
+      const row = rollup.rows.find((r) => r.resolvedUserLogin === "solo-audit");
+      expect(row?.historyConfidence).toBe("audit_reconstructed");
+    });
+  });
+
+  describe("allowedLogins (team/org-resolved fail-closed filter)", () => {
+    // Dedicated fixture (own period, not the shared outer beforeEach data):
+    // each holder has userLogin/resolvedUserLogin/holderKey all equal to its
+    // own name, so allowedLogins matches are unambiguous (the shared "2026-01"
+    // fixture reuses makePeriodRow's default userLogin "user1" for its
+    // second row too, which would make an allowedLogins: ["user1"] test
+    // ambiguously also match that row via the user_login column).
+    beforeEach(() => {
+      replaceMaterializedPeriod("ent1", "2026-40", [
+        makePeriodRow({ orgLogin: "org1", holderKey: "alice", userLogin: "alice", resolvedUserLogin: "alice" }),
+        makePeriodRow({ orgLogin: "org2", holderKey: "bob", userLogin: "bob", resolvedUserLogin: "bob", planType: "enterprise" }),
+      ]);
+    });
+
+    it("restricts the detail view to a single allowed login", () => {
+      const result = queryLicensePeriodRows({ enterpriseSlug: "ent1", periods: ["2026-40"], allowedLogins: ["alice"] });
+      expect(result.rows.map((r) => r.holderKey)).toEqual(["alice"]);
+    });
+
+    it("restricts the detail view to many allowed logins", () => {
+      const result = queryLicensePeriodRows({ enterpriseSlug: "ent1", periods: ["2026-40"], allowedLogins: ["alice", "bob"] });
+      expect(result.rows.map((r) => r.holderKey).sort()).toEqual(["alice", "bob"]);
+    });
+
+    it("fails closed to zero rows for an EMPTY allowedLogins array — never unrestricted", () => {
+      const result = queryLicensePeriodRows({ enterpriseSlug: "ent1", periods: ["2026-40"], allowedLogins: [] });
+      expect(result.rows).toEqual([]);
+      expect(result.pagination.totalItems).toBe(0);
+    });
+
+    it("leaves the query unrestricted when allowedLogins is omitted (undefined)", () => {
+      const withUndefined = queryLicensePeriodRows({ enterpriseSlug: "ent1", periods: ["2026-40"] });
+      expect(withUndefined.pagination.totalItems).toBe(2);
+    });
+
+    it("restricts the rollup view identically to the detail view", () => {
+      const rollup = queryLicensePeriodRows({ enterpriseSlug: "ent1", periods: ["2026-40"], allowedLogins: ["alice"], view: "rollup" });
+      expect(rollup.rows.map((r) => r.resolvedUserLogin)).toEqual(["alice"]);
+
+      const emptyRollup = queryLicensePeriodRows({ enterpriseSlug: "ent1", periods: ["2026-40"], allowedLogins: [], view: "rollup" });
+      expect(emptyRollup.rows).toEqual([]);
+    });
+
+    it("combines safely (AND) with the existing `logins` filter — narrows further, never widens", () => {
+      // bob is allowed AND explicitly requested via `logins` -> matches.
+      const both = queryLicensePeriodRows({
+        enterpriseSlug: "ent1",
+        periods: ["2026-40"],
+        allowedLogins: ["alice", "bob"],
+        logins: ["bob"],
+      });
+      expect(both.rows.map((r) => r.holderKey)).toEqual(["bob"]);
+
+      // bob is requested via `logins` but NOT in the allowed set -> zero rows.
+      const excluded = queryLicensePeriodRows({
+        enterpriseSlug: "ent1",
+        periods: ["2026-40"],
+        allowedLogins: ["alice"],
+        logins: ["bob"],
+      });
+      expect(excluded.rows).toEqual([]);
+    });
+
+    it("combines safely (AND) with org and enterprise filters", () => {
+      const byOrg = queryLicensePeriodRows({
+        enterpriseSlug: "ent1",
+        periods: ["2026-40"],
+        allowedLogins: ["alice", "bob"],
+        orgLogins: ["org2"],
+      });
+      expect(byOrg.rows.map((r) => r.holderKey)).toEqual(["bob"]);
+
+      // Enterprise isolation still applies even when the login would be
+      // allowed: userX only exists under ent2 (from the outer beforeEach).
+      const wrongEnterprise = queryLicensePeriodRows({
+        enterpriseSlug: "ent1",
+        allowedLogins: ["userX"],
+      });
+      expect(wrongEnterprise.rows).toEqual([]);
+
+      const rightEnterprise = queryLicensePeriodRows({
+        enterpriseSlug: "ent2",
+        allowedLogins: ["userX"],
+      });
+      expect(rightEnterprise.rows.map((r) => r.holderKey)).toEqual(["userX"]);
+    });
   });
 
   it("matches the `logins` filter through each of its three distinct column branches", () => {
@@ -800,9 +1016,9 @@ describe("replaceMaterializedPeriod + queryLicensePeriodRows", () => {
   describe("getMaterializedPeriodKPIs / getMaterializedPlanBreakdown / getMaterializedOrgBreakdown / hasMaterializedRows", () => {
     // Fixture (from the outer beforeEach): ent1/2026-01 has
     //   - user1/org1: business, licenseCost 19, defaultAicCredits 300, defaultAicUsd 19,
-    //     aicAssignedUsd 19, aicConsumedCredits 100, aicConsumedUsd 6.33, high confidence
+    //     aicAssignedUsd 19, aicConsumedCredits 100, aicConsumedUsd 6.33, exact_snapshot confidence
     //   - user2/org2: enterprise, licenseCost 19, defaultAicCredits 300, defaultAicUsd 19,
-    //     aicAssignedUsd 19, aicConsumedCredits 100, aicConsumedUsd 40 (over budget), low confidence
+    //     aicAssignedUsd 19, aicConsumedCredits 100, aicConsumedUsd 40 (over budget), live_snapshot_only confidence
     // plus ent1/2026-02 (user1/org1) and ent2/2026-01 (userX/org9), excluded by the period/enterprise filter below.
 
     it("computes KPI totals in SQL, scoped to the requested enterprise/period only", () => {
@@ -874,15 +1090,76 @@ describe("replaceMaterializedPeriod + queryLicensePeriodRows", () => {
       expect(getMaterializedPeriodKPIs({ enterpriseSlug: "ent1", periods: ["2026-01"], planTypes: ["enterprise"] }).totalRows).toBe(1);
       expect(getMaterializedPeriodKPIs({ enterpriseSlug: "ent1", periods: ["2026-01"], orgLogins: ["org1"] }).totalRows).toBe(1);
       expect(getMaterializedPeriodKPIs({ enterpriseSlug: "ent1", periods: ["2026-01"], logins: ["user2"] }).totalRows).toBe(1);
-      expect(getMaterializedPeriodKPIs({ enterpriseSlug: "ent1", periods: ["2026-01"], historyConfidence: ["low"] }).totalRows).toBe(1);
+      expect(getMaterializedPeriodKPIs({ enterpriseSlug: "ent1", periods: ["2026-01"], historyConfidence: ["live_snapshot_only"] }).totalRows).toBe(1);
       expect(getMaterializedPeriodKPIs({ enterpriseSlugs: ["ent1", "ent2"], periods: ["2026-01"] }).totalRows).toBe(3);
+    });
+
+    describe("allowedLogins applied uniformly to KPIs/breakdowns/hasMaterializedRows", () => {
+      // Own dedicated period (distinct userLogin/resolvedUserLogin/holderKey
+      // per holder), same rationale as the detail/rollup allowedLogins block
+      // above — avoids the shared "2026-01" fixture's userLogin overlap.
+      beforeEach(() => {
+        replaceMaterializedPeriod("ent1", "2026-41", [
+          makePeriodRow({ orgLogin: "org1", holderKey: "carol", userLogin: "carol", resolvedUserLogin: "carol" }),
+          makePeriodRow({ orgLogin: "org2", holderKey: "dave", userLogin: "dave", resolvedUserLogin: "dave", planType: "enterprise" }),
+        ]);
+      });
+
+      it("scopes KPI totals to a single allowed login", () => {
+        const kpis = getMaterializedPeriodKPIs({ enterpriseSlug: "ent1", periods: ["2026-41"], allowedLogins: ["carol"] });
+        expect(kpis.totalRows).toBe(1);
+        expect(kpis.totalUsers).toBe(1);
+      });
+
+      it("scopes KPI totals to many allowed logins", () => {
+        const kpis = getMaterializedPeriodKPIs({ enterpriseSlug: "ent1", periods: ["2026-41"], allowedLogins: ["carol", "dave"] });
+        expect(kpis.totalRows).toBe(2);
+      });
+
+      it("fails closed to zero KPI totals for an EMPTY allowedLogins array", () => {
+        const kpis = getMaterializedPeriodKPIs({ enterpriseSlug: "ent1", periods: ["2026-41"], allowedLogins: [] });
+        expect(kpis.totalRows).toBe(0);
+        expect(kpis.totalUsers).toBe(0);
+        expect(kpis.totalLicenseCost).toBe(0);
+        expect(kpis.overallUtilizationPct).toBe(0);
+      });
+
+      it("fails closed to an empty plan breakdown for an EMPTY allowedLogins array", () => {
+        expect(getMaterializedPlanBreakdown({ enterpriseSlug: "ent1", periods: ["2026-41"], allowedLogins: [] })).toEqual([]);
+      });
+
+      it("scopes the plan breakdown to allowed logins", () => {
+        const plans = getMaterializedPlanBreakdown({ enterpriseSlug: "ent1", periods: ["2026-41"], allowedLogins: ["carol"] });
+        expect(plans.map((p) => p.key)).toEqual(["business"]);
+      });
+
+      it("fails closed to an empty org breakdown for an EMPTY allowedLogins array", () => {
+        expect(getMaterializedOrgBreakdown({ enterpriseSlug: "ent1", periods: ["2026-41"], allowedLogins: [] })).toEqual([]);
+      });
+
+      it("scopes the org breakdown to allowed logins", () => {
+        const orgs = getMaterializedOrgBreakdown({ enterpriseSlug: "ent1", periods: ["2026-41"], allowedLogins: ["dave"] });
+        expect(orgs.map((o) => o.key)).toEqual(["org2"]);
+      });
+
+      it("fails closed to false for hasMaterializedRows when allowedLogins is an EMPTY array, even though rows exist", () => {
+        expect(hasMaterializedRows({ enterpriseSlug: "ent1", periods: ["2026-41"], allowedLogins: [] })).toBe(false);
+      });
+
+      it("still detects materialized rows via hasMaterializedRows when allowedLogins contains a matching login", () => {
+        expect(hasMaterializedRows({ enterpriseSlug: "ent1", periods: ["2026-41"], allowedLogins: ["carol"] })).toBe(true);
+      });
+
+      it("reports no materialized rows via hasMaterializedRows when allowedLogins contains only non-matching logins", () => {
+        expect(hasMaterializedRows({ enterpriseSlug: "ent1", periods: ["2026-41"], allowedLogins: ["nobody-such-user"] })).toBe(false);
+      });
     });
   });
 });
 
 describe("empty tables", () => {
   it("returns zero/empty results from a freshly-created, unpopulated schema", () => {
-    const emptyDb = new Database(":memory:");
+    const emptyDb = new TestDb(":memory:");
     execSchema(emptyDb, "schema.sql");
     execSchema(emptyDb, "billing-schema.sql");
     execSchema(emptyDb, "licensing-schema.sql");

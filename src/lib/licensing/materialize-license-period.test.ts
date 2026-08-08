@@ -294,6 +294,18 @@ describe("materializeLicensePeriodRows: assignment source/confidence/provenance/
     expect(result.rows[0].historyConfidence).toBe("audit_reconstructed");
   });
 
+  // Regression coverage for all four real SeatLedgerConfidence values (not
+  // just "audit_reconstructed" above) — this module's historyConfidence
+  // field is a plain SeatLedgerConfidence pass-through (simplified from the
+  // redundant `SeatLedgerConfidence | "unrecoverable"`, since "unrecoverable"
+  // was already a member of that union).
+  it("preserves exact_snapshot, live_snapshot_only, and unrecoverable confidence tiers unchanged", () => {
+    for (const confidence of ["exact_snapshot", "live_snapshot_only", "unrecoverable"] as const) {
+      const result = materializeLicensePeriodRows(baseInput({ seatRows: [seatRow({ confidence })] }));
+      expect(result.rows[0].historyConfidence).toBe(confidence);
+    }
+  });
+
   it("passes through the assigned_via metadata when supplied", () => {
     const result = materializeLicensePeriodRows(
       baseInput({ seatMetadata: { [licensePeriodCanonicalKey("org1", "user1")]: { planType: "business", assignedVia: "team" } } })

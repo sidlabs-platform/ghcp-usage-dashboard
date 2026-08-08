@@ -10,6 +10,7 @@
 import { getDb } from "./database";
 import { buildOrderBy, buildLimitOffset, type PaginationParams } from "@/lib/api/pagination";
 import type { LicensePeriodFilterQuery, LicenseHistoryKPIs, LicenseHistoryGroupBreakdown } from "@/lib/types/licensing";
+import type { SeatLedgerConfidence } from "@/lib/licensing/seat-ledger";
 
 // ── Deterministic JSON serialization ─────────────────────────────────
 
@@ -207,7 +208,7 @@ export interface LicensePeriodRowRecord {
   currency: string;
   rowSource: string;
   consumptionSource: string | null;
-  historyConfidence: string;
+  historyConfidence: SeatLedgerConfidence;
   dataQualityNotes: unknown[];
   asOfUtc: string;
   generatedAtUtc: string;
@@ -239,7 +240,18 @@ export interface LicenseRollupRowRecord {
   aicConsumedUsd: number;
   utilizationPct: number;
   currency: string;
-  historyConfidence: string;
+  /**
+   * Worst (most conservative) {@link SeatLedgerConfidence} across every row
+   * folded into this rollup group — a single low-confidence row must never
+   * be masked by other, better-attested rows for the same resolved login
+   * (see `CONFIDENCE_RANK_SQL`/`worstConfidence` in `seat-ledger.ts` for the
+   * same worst-wins convention applied there). `"unknown"` is a defensive
+   * sentinel that should be unreachable in practice — every group has at
+   * least one row, and every persisted row's `history_confidence` is one of
+   * the four real {@link SeatLedgerConfidence} values — but is returned
+   * rather than throwing if a row's value is ever missing/corrupt.
+   */
+  historyConfidence: SeatLedgerConfidence | "unknown";
 }
 
 /**
@@ -368,6 +380,23 @@ function appendPeriodFilters(clauses: string[], params: unknown[], query: Licens
     clauses.push(`(${parts.join(" OR ")})`);
     for (const login of query.logins) params.push(login, login, login);
   }
+  // Team/org-resolved login allowlist (see LicensePeriodFilterQuery.allowedLogins
+  // doc). Distinguished from `logins` above: `undefined` means unrestricted,
+  // but an explicitly *empty* array must fail closed to zero rows — the
+  // caller resolved a team/org scope with no members, never "unrestricted".
+  // A hard `1 = 0` clause (rather than skipping the filter) is what makes
+  // that failure mode safe: it can never accidentally be OR'd away by a
+  // later clause, and it composes identically whether this is the only
+  // filter or combined with others via the shared AND-joined `clauses` list.
+  if (query.allowedLogins !== undefined) {
+    if (query.allowedLogins.length === 0) {
+      clauses.push("1 = 0");
+    } else {
+      const parts = query.allowedLogins.map(() => `(user_login = ? OR resolved_user_login = ? OR holder_key = ?)`);
+      clauses.push(`(${parts.join(" OR ")})`);
+      for (const login of query.allowedLogins) params.push(login, login, login);
+    }
+  }
   if (query.planTypes?.length) {
     clauses.push(`plan_type IN (${query.planTypes.map(() => "?").join(",")})`);
     params.push(...query.planTypes);
@@ -436,15 +465,39 @@ function mapDetailRow(row: Record<string, unknown>): LicensePeriodRowRecord {
     currency: row.currency as string,
     rowSource: row.row_source as string,
     consumptionSource: (row.consumption_source as string | null) ?? null,
-    historyConfidence: row.history_confidence as string,
+    historyConfidence: row.history_confidence as SeatLedgerConfidence,
     dataQualityNotes: parseJsonArray(row.data_quality_notes as string | null),
     asOfUtc: row.as_of_utc as string,
     generatedAtUtc: row.generated_at_utc as string,
   };
 }
 
-const CONFIDENCE_RANK_SQL = `CASE history_confidence WHEN 'high' THEN 3 WHEN 'medium' THEN 2 WHEN 'low' THEN 1 ELSE 0 END`;
-const RANK_TO_CONFIDENCE: Record<number, string> = { 3: "high", 2: "medium", 1: "low", 0: "unknown" };
+// Rank the four real `SeatLedgerConfidence` values (see seat-ledger.ts's own
+// module doc and `worstConfidence`/`CONFIDENCE_WORST_TO_BEST`) from best (3)
+// to worst (0), so `MIN(CONFIDENCE_RANK_SQL)` over a GROUP BY picks out the
+// single worst confidence present in the group. A rollup row summarizes
+// potentially many detail rows (different periods/orgs) for one resolved
+// login; reporting anything better than the worst constituent row's
+// confidence would silently hide a low-confidence period/org behind a
+// better-attested one — the same "worst wins" rationale documented for
+// seat-ledger.ts's own per-(period,org) coverage aggregation. `ELSE -1`
+// covers a defensive fallback for any unexpected/corrupt value (never
+// produced by this module's own writers, which only ever persist one of the
+// four real values).
+const CONFIDENCE_RANK_SQL = `CASE history_confidence
+  WHEN 'exact_snapshot' THEN 3
+  WHEN 'audit_reconstructed' THEN 2
+  WHEN 'live_snapshot_only' THEN 1
+  WHEN 'unrecoverable' THEN 0
+  ELSE -1
+END`;
+const RANK_TO_CONFIDENCE: Record<number, SeatLedgerConfidence | "unknown"> = {
+  3: "exact_snapshot",
+  2: "audit_reconstructed",
+  1: "live_snapshot_only",
+  0: "unrecoverable",
+  [-1]: "unknown",
+};
 
 // Same "assigned budget, falling back to the plan default" semantics as the
 // rollup's JS mapping (`aicAssignedUsd || defaultAicUsd`): SQLite doesn't

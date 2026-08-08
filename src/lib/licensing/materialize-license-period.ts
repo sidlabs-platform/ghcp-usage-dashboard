@@ -66,7 +66,17 @@ export const CONSUMPTION_SOURCE_PRECEDENCE: ConsumptionSourceKind[] = [
   "usage_metrics_fallback",
 ];
 
-/** A single raw consumption record from one source, prior to per-key aggregation. */
+/**
+ * A single raw consumption record from one source, prior to per-key
+ * aggregation. Deliberately has no `netUsd` field: this materializer only
+ * ever surfaces `grossUsd` as `aicConsumedUsd` (see `finalizeRow`'s callers
+ * below) — net-of-discount consumption has no downstream semantic here. Net
+ * USD *is* tracked (and persisted) one layer up, in the raw per-source
+ * evidence rows written by `license-history-repo.ts`'s `upsertAicConsumption`
+ * (`LicenseAicConsumptionInput.netUsd` → `license_aic_consumption.net_usd`)
+ * — that's a distinct, audit-trail concern from this module's canonical
+ * per-(org, holder) reconciliation row.
+ */
 export interface ConsumptionRecordInput {
   source: ConsumptionSourceKind;
   /** Org login attribution, or null/empty for an enterprise-only (unattributed) record. Never copied across a holder's other org seats — see module doc comment. */
@@ -74,7 +84,6 @@ export interface ConsumptionRecordInput {
   holderKey: string;
   credits?: number;
   grossUsd?: number;
-  netUsd?: number | null;
 }
 
 // ── Seat metadata side-channel ───────────────────────────────────────────
@@ -158,7 +167,7 @@ export interface MaterializedLicensePeriodRow {
   currency: string;
   rowSource: string;
   consumptionSource: string | null;
-  historyConfidence: SeatLedgerConfidence | "unrecoverable";
+  historyConfidence: SeatLedgerConfidence;
   dataQualityNotes: string[];
   /** consumed / effective-budget × 100. Zero when there is no assigned or default budget (safe zero-budget semantics). */
   utilizationPct: number;
@@ -286,7 +295,6 @@ function resolveAllowanceCredits(period: string, plan: LicensePlanKey, config: R
 interface AggregatedConsumption {
   credits: number;
   grossUsd: number;
-  netUsd: number | null;
 }
 
 /**
@@ -307,14 +315,12 @@ function aggregateConsumption(records: ConsumptionRecordInput[]): Map<string, Ma
     }
     const credits = record.credits ?? 0;
     const grossUsd = record.grossUsd ?? 0;
-    const netUsd = record.netUsd ?? null;
     const existing = bySource.get(record.source);
     if (existing) {
       existing.credits += credits;
       existing.grossUsd += grossUsd;
-      existing.netUsd = existing.netUsd == null || netUsd == null ? null : existing.netUsd + netUsd;
     } else {
-      bySource.set(record.source, { credits, grossUsd, netUsd });
+      bySource.set(record.source, { credits, grossUsd });
     }
   }
   return byKey;
