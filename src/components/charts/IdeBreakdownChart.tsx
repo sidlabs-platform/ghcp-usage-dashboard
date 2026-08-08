@@ -1,5 +1,6 @@
 "use client";
 
+import type { NameType, ValueType } from "recharts/types/component/DefaultTooltipContent";
 import {
   BarChart,
   Bar,
@@ -13,8 +14,15 @@ import {
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card";
 import { CHART_COLORS } from "@/lib/constants";
 
+/** Row shape consumed by the IDE breakdown chart. */
+export interface IdeBreakdownChartRow {
+  ide: string;
+  interactions: number;
+  locAdded: number;
+}
+
 interface IdeBreakdownChartProps {
-  data: { ide: string; interactions: number; locAdded: number }[];
+  data: IdeBreakdownChartRow[];
   title?: string;
 }
 
@@ -22,6 +30,19 @@ const SERIES_LABELS: Record<string, string> = {
   interactions: "Interactions",
   locAdded: "LoC Added",
 };
+
+function formatTooltipValue(value: ValueType): string {
+  if (Array.isArray(value)) {
+    return value.map((item) => formatTooltipValue(item)).join(", ");
+  }
+
+  return typeof value === "number" ? value.toLocaleString() : value;
+}
+
+function formatSeriesName(name: unknown): string {
+  const key = String(name);
+  return SERIES_LABELS[key] ?? key;
+}
 
 export function IdeBreakdownChart({
   data,
@@ -63,12 +84,12 @@ export function IdeBreakdownChart({
                   borderColor: "hsl(var(--border))",
                   borderRadius: 8,
                 }}
-                formatter={(value: number, name: string) => [
-                  value.toLocaleString(),
-                  SERIES_LABELS[name] ?? name,
+                formatter={(value: ValueType, name: NameType) => [
+                  formatTooltipValue(value),
+                  formatSeriesName(name),
                 ]}
               />
-              <Legend formatter={(name: string) => SERIES_LABELS[name] ?? name} />
+              <Legend formatter={(name: unknown) => formatSeriesName(name)} />
               <Bar
                 dataKey="interactions"
                 name="interactions"
