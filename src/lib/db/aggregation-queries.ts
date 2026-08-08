@@ -159,19 +159,24 @@ export interface CliUserRow {
 /**
  * Build a parameterized `AND <column> IN (...)` login filter clause.
  *
- * `column` is always an internal SQL column/table-qualified expression
- * (e.g. `"user_login"` or `"p.login"`) supplied by trusted call sites —
- * never derived from request input — while the login values themselves
- * are always bound as parameters.
+ * `column` is restricted to a fixed literal union of internal SQL
+ * column/table-qualified expressions actually used by call sites in this
+ * codebase — never an arbitrary string, and never derived from request
+ * input — while the login values themselves are always bound as
+ * parameters. Widening the type would let a future call site interpolate
+ * an unreviewed identifier into the SQL string, so any new column must be
+ * added to the union explicitly.
  *
  * By default an empty `allowedLogins` array means "no filter" (existing
  * behavior for current callers). Pass `emptyMeansNoRows = true` to instead
  * render a clause that matches zero rows (`AND 1 = 0`) when the caller has
  * explicitly scoped the request down to no allowed logins.
  */
+export type LoginFilterColumn = "user_login" | "u.user_login";
+
 export function buildLoginFilter(
   allowedLogins: string[],
-  column: string = "user_login",
+  column: LoginFilterColumn = "user_login",
   emptyMeansNoRows: boolean = false,
 ): { clause: string; params: string[] } {
   if (allowedLogins.length === 0) {
@@ -181,9 +186,14 @@ export function buildLoginFilter(
   return { clause: `AND ${column} IN (${placeholders})`, params: allowedLogins };
 }
 
+/** `column` is restricted to a fixed literal union of internal SQL
+ * column/table-qualified expressions actually used by call sites in this
+ * codebase — see {@link LoginFilterColumn} for the rationale. */
+export type EnterpriseFilterColumn = "enterprise_slug" | "u.enterprise_slug";
+
 export function buildEnterpriseFilter(
   slugs?: string[],
-  column: string = "enterprise_slug",
+  column: EnterpriseFilterColumn = "enterprise_slug",
 ): { clause: string; params: string[] } {
   if (!slugs || slugs.length === 0) return { clause: "", params: [] };
   const placeholders = slugs.map(() => "?").join(",");

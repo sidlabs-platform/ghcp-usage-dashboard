@@ -19,7 +19,12 @@
 // user/day carry identical values.
 
 import { getDb } from "./database";
-import { buildLoginFilter, buildEnterpriseFilter } from "./aggregation-queries";
+import {
+  buildLoginFilter,
+  buildEnterpriseFilter,
+  type LoginFilterColumn,
+  type EnterpriseFilterColumn,
+} from "./aggregation-queries";
 import type {
   CopilotAppKpis,
   CopilotAppAdoptionTrendPoint,
@@ -65,25 +70,14 @@ const HAS_APP_ACTIVITY = `(
   )
 )`;
 
-/** SQL fragment: adopter-list inclusion rule — a true flag, non-null dedicated
- * App totals (even if all-zero), or the presence of an App feature row. */
-const IS_APP_ADOPTER_ROW = `(
-  used_copilot_app = 1
-  OR totals_by_copilot_app IS NOT NULL
-  OR EXISTS (
-    SELECT 1 FROM json_each(totals_by_feature) f
-    WHERE json_extract(f.value, '$.feature') = 'copilot_app'
-  )
-)`;
-
 /** Resolve the day/login/enterprise filter clauses shared by every query in
  * this module. `allowedLogins === undefined` means unfiltered; an explicit
  * empty array means "no rows" (never silently falls back to unfiltered). */
 function resolveFilters(
   allowedLogins: string[] | undefined,
   enterpriseSlugs: string[] | undefined,
-  loginColumn: string = "user_login",
-  enterpriseColumn: string = "enterprise_slug",
+  loginColumn: LoginFilterColumn = "user_login",
+  enterpriseColumn: EnterpriseFilterColumn = "enterprise_slug",
 ): { login: { clause: string; params: string[] }; enterprise: { clause: string; params: string[] } } {
   const login =
     allowedLogins === undefined
@@ -358,6 +352,7 @@ export function getCopilotAppModelBreakdown(
       WHERE u.day >= ? AND u.day <= ? ${login.clause}${enterprise.clause}
         AND u.totals_by_model_feature IS NOT NULL AND u.totals_by_model_feature != '[]'
         AND json_extract(j.value, '$.feature') = 'copilot_app'
+        AND json_extract(j.value, '$.model') IS NOT NULL
     ),
     deduped AS (
       SELECT day, user_login, model, MAX(COALESCE(interactions, 0)) as interactions
@@ -402,6 +397,7 @@ export function getCopilotAppLanguageBreakdown(
       WHERE u.day >= ? AND u.day <= ? ${login.clause}${enterprise.clause}
         AND u.totals_by_language_feature IS NOT NULL AND u.totals_by_language_feature != '[]'
         AND json_extract(j.value, '$.feature') = 'copilot_app'
+        AND json_extract(j.value, '$.language') IS NOT NULL
     ),
     deduped AS (
       SELECT
@@ -489,25 +485,42 @@ function mapAggregateDayRow(r: RawAggregateDayRow): CopilotAppAggregateDay {
 /** Shared CTE body for the enterprise/org aggregate fallback queries. Always
  * reads from a single fixed table name supplied internally (never from
  * caller/request input) and never cross-joins the dedicated-totals fields
- * with the `totals_by_feature` array in the same GROUP BY. */
+ * with the `totals_by_feature` array in the same GROUP BY.
+ *
+ * `sourceActiveUsers` (the adoption-rate denominator) sums `daily_active_users`
+ * only for rows that carry App support evidence on that same row — a non-null
+ * `daily_active_copilot_app_users`, a non-null `totals_by_copilot_app`, or a
+ * `copilot_app` entry in `totals_by_feature`. An unsupported row (e.g. a
+ * legacy enterprise/org with no App tracking at all) never inflates the
+ * denominator just because a *different*, supported row shares the same day. */
 function aggregateDailySql(table: "enterprise_daily_metrics" | "org_daily_metrics", extraWhere: string): string {
+  const rowSupported = `(
+    daily_active_copilot_app_users IS NOT NULL
+    OR totals_by_copilot_app IS NOT NULL
+    OR EXISTS (
+      SELECT 1 FROM json_each(totals_by_feature) f
+      WHERE json_extract(f.value, '$.feature') = 'copilot_app'
+    )
+  )`;
   return `
     WITH base AS (
-      SELECT day, daily_active_users, daily_active_copilot_app_users, totals_by_copilot_app, totals_by_feature
+      SELECT
+        day, daily_active_users, daily_active_copilot_app_users, totals_by_copilot_app, totals_by_feature,
+        CASE WHEN ${rowSupported} THEN 1 ELSE 0 END as row_supported
       FROM ${table}
       WHERE day >= ? AND day <= ? ${extraWhere}
     ),
     dedicated AS (
       SELECT
         day,
-        COALESCE(SUM(daily_active_users), 0) as sourceActiveUsers,
+        COALESCE(SUM(CASE WHEN row_supported = 1 THEN daily_active_users ELSE 0 END), 0) as sourceActiveUsers,
         COALESCE(SUM(daily_active_copilot_app_users), 0) as activeUsers,
         COALESCE(SUM(json_extract(totals_by_copilot_app, '$.session_count')), 0) as sessions,
         COALESCE(SUM(json_extract(totals_by_copilot_app, '$.request_count')), 0) as requests,
         COALESCE(SUM(json_extract(totals_by_copilot_app, '$.prompt_count')), 0) as prompts,
         COALESCE(SUM(json_extract(totals_by_copilot_app, '$.token_usage.prompt_tokens_sum')), 0) as promptTokens,
         COALESCE(SUM(json_extract(totals_by_copilot_app, '$.token_usage.output_tokens_sum')), 0) as outputTokens,
-        MAX(CASE WHEN daily_active_copilot_app_users IS NOT NULL OR totals_by_copilot_app IS NOT NULL THEN 1 ELSE 0 END) as flagSupported
+        MAX(row_supported) as flagSupported
       FROM base
       GROUP BY day
     ),
@@ -595,18 +608,72 @@ const ADOPTER_SORT_COLUMNS: Record<string, string> = {
   locDeleted: "locDeleted",
 };
 
+/** Explicit adopter column list used by the data query — deliberately never
+ * `SELECT *`, so the shape returned to callers can't silently drift from
+ * {@link CopilotAppAdopter} when the CTE gains new internal columns. */
+const ADOPTER_COLUMNS =
+  "login, activeDays, sessions, requests, prompts, promptTokens, outputTokens, locAdded, locDeleted";
+
 export interface CopilotAppAdoptersResult {
   adopters: CopilotAppAdopter[];
   total: number;
 }
 
+const ADOPTER_MAX_PAGE_SIZE = 200;
+
+/** Defensively normalize a caller-supplied page number to a finite integer
+ * >= 1. Non-finite input (NaN/Infinity), zero, negative, or fractional
+ * values are coerced rather than trusted, since this value flows directly
+ * into an OFFSET computation. */
+function normalizeAdopterPage(page: number): number {
+  if (!Number.isFinite(page)) return 1;
+  const truncated = Math.trunc(page);
+  return truncated >= 1 ? truncated : 1;
+}
+
+/** Defensively normalize a caller-supplied page size to a finite integer
+ * clamped to [1, 200], since this value flows directly into a LIMIT. */
+function normalizeAdopterPageSize(pageSize: number): number {
+  if (!Number.isFinite(pageSize)) return 1;
+  const truncated = Math.trunc(pageSize);
+  if (truncated < 1) return 1;
+  if (truncated > ADOPTER_MAX_PAGE_SIZE) return ADOPTER_MAX_PAGE_SIZE;
+  return truncated;
+}
+
+/** Runtime-normalize a sort direction to `"asc" | "desc"`. The parameter
+ * type already claims this, but callers on the API boundary parse it from
+ * a query string, so this guards against a value that only *looks* like
+ * `"asc" | "desc"` at compile time (e.g. cast through `unknown`). Anything
+ * other than exactly `"asc"` is treated as `"desc"`. */
+function normalizeAdopterSortDir(sortDir: "asc" | "desc"): "asc" | "desc" {
+  return sortDir === "asc" ? "asc" : "desc";
+}
+
+/** Escape SQLite `LIKE` metacharacters (`%`, `_`, and the escape character
+ * itself, `\`) so free-text search matches those characters literally
+ * instead of as wildcards. Must be paired with `LIKE ? ESCAPE '\'` at the
+ * call site. */
+function escapeLikePattern(input: string): string {
+  return input.replace(/\\/g, "\\\\").replace(/%/g, "\\%").replace(/_/g, "\\_");
+}
+
 /**
- * Paginated Copilot App adopter roster. A login is included when it has a
- * true `used_copilot_app` flag, non-null dedicated App totals (even if
- * all-zero), or an App feature row — deduplicated per (day, user_login)
- * across enterprises before summing period totals. Sorting is restricted to
- * a fixed column allowlist; an unrecognized `sortField` falls back to
- * `sessions` and a non-"asc" `sortDir` is treated as `desc`.
+ * Paginated Copilot App adopter roster. A login is included using the same
+ * activity predicate as `appActiveUsers` in {@link getCopilotAppUserSummary}
+ * — a true `used_copilot_app` flag, positive dedicated App counters, or a
+ * `copilot_app` feature row with positive activity — so the adopter table
+ * reflects actual App *usage*, not merely rows where App telemetry is
+ * schema-supported (a supported-but-zero row, e.g. an explicit `false` flag
+ * paired with all-zero dedicated totals, is excluded). `activeDays` counts
+ * only days meeting that same activity predicate. Rows are deduplicated per
+ * (day, user_login) across enterprises before summing period totals.
+ * Sorting is restricted to a fixed column allowlist; an unrecognized
+ * `sortField` falls back to `sessions`. `page`/`pageSize`/`sortDir` are
+ * defensively re-normalized at runtime (see {@link normalizeAdopterPage},
+ * {@link normalizeAdopterPageSize}, {@link normalizeAdopterSortDir}) since
+ * they typically originate from parsed request query parameters. Search
+ * text is matched literally — `%`, `_`, and `\` are escaped before binding.
  */
 export function getCopilotAppAdopters(
   startDay: string,
@@ -621,17 +688,19 @@ export function getCopilotAppAdopters(
 ): CopilotAppAdoptersResult {
   const db = getDb();
   const { login, enterprise } = resolveFilters(allowedLogins, enterpriseSlugs);
-  const searchClause = search ? "AND user_login LIKE ?" : "";
-  const searchParams = search ? [`%${search}%`] : [];
+  const searchClause = search ? "AND user_login LIKE ? ESCAPE '\\'" : "";
+  const searchParams = search ? [`%${escapeLikePattern(search)}%`] : [];
   const sqlSort = ADOPTER_SORT_COLUMNS[sortField] ?? "sessions";
-  const sqlDir = sortDir === "asc" ? "ASC" : "DESC";
+  const sqlDir = normalizeAdopterSortDir(sortDir) === "asc" ? "ASC" : "DESC";
+  const normalizedPage = normalizeAdopterPage(page);
+  const normalizedPageSize = normalizeAdopterPageSize(pageSize);
 
   const cteSql = `
     WITH app_rows AS (
       SELECT day, user_login, totals_by_copilot_app, totals_by_feature
       FROM user_daily_metrics
       WHERE day >= ? AND day <= ? ${login.clause}${enterprise.clause} ${searchClause}
-        AND ${IS_APP_ADOPTER_ROW}
+        AND ${HAS_APP_ACTIVITY}
     ),
     dedicated_per_day AS (
       SELECT
@@ -686,12 +755,30 @@ export function getCopilotAppAdopters(
   `;
   const cteParams = [startDay, endDay, ...login.params, ...enterprise.params, ...searchParams];
 
+  const offset = (normalizedPage - 1) * normalizedPageSize;
+  // COUNT(*) OVER() rides along with the data query so a normal, non-empty
+  // page only executes the (potentially expensive) CTE once. When the
+  // requested page is beyond the last page, LIMIT/OFFSET yields zero rows
+  // and the window function never runs — so we fall back to a dedicated
+  // count-only query in that case to keep `total` correct.
+  const dataSql = `
+    ${cteSql}
+    SELECT ${ADOPTER_COLUMNS}, COUNT(*) OVER() as totalCount
+    FROM totals
+    ORDER BY ${sqlSort} ${sqlDir}, login ASC
+    LIMIT ? OFFSET ?
+  `;
+  const rows = db.prepare(dataSql).all(...cteParams, normalizedPageSize, offset) as (CopilotAppAdopter & {
+    totalCount: number;
+  })[];
+
+  if (rows.length > 0) {
+    const total = rows[0].totalCount;
+    const adopters = rows.map(({ totalCount: _totalCount, ...adopter }) => adopter);
+    return { adopters, total };
+  }
+
   const countSql = `${cteSql} SELECT COUNT(*) as total FROM totals`;
   const countRow = db.prepare(countSql).get(...cteParams) as { total: number };
-
-  const offset = (page - 1) * pageSize;
-  const dataSql = `${cteSql} SELECT * FROM totals ORDER BY ${sqlSort} ${sqlDir}, login ASC LIMIT ? OFFSET ?`;
-  const rows = db.prepare(dataSql).all(...cteParams, pageSize, offset) as CopilotAppAdopter[];
-
-  return { adopters: rows, total: countRow.total };
+  return { adopters: [], total: countRow.total };
 }

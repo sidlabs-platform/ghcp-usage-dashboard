@@ -239,6 +239,85 @@ beforeAll(() => {
     null,
   );
 
+  // ── grace: duplicated across acme/beta on the same day with DIFFERING
+  // (not identical) dedicated-totals values, placed on its own day
+  // (2025-04-05) so it doesn't perturb the shared START/END fixtures.
+  // This pins the MAX-before-SUM dedup policy unambiguously: a bug that
+  // summed duplicates, averaged them, or took the first/last row would
+  // all disagree with plain MAX(9, 2) = 9.
+  const graceTotalsAcme = JSON.stringify({
+    session_count: 9, request_count: 6, prompt_count: 3,
+    token_usage: { prompt_tokens_sum: 900, output_tokens_sum: 300, avg_tokens_per_request: 300 },
+  });
+  const graceTotalsBeta = JSON.stringify({
+    session_count: 2, request_count: 1, prompt_count: 1,
+    token_usage: { prompt_tokens_sum: 200, output_tokens_sum: 50, avg_tokens_per_request: 200 },
+  });
+  const graceFeatureAcme = JSON.stringify([
+    { feature: "copilot_app", loc_added_sum: 70, loc_deleted_sum: 8, loc_suggested_to_add_sum: 0, loc_suggested_to_delete_sum: 0, code_generation_activity_count: 9, code_acceptance_activity_count: 6, user_initiated_interaction_count: 9 },
+  ]);
+  const graceFeatureBeta = JSON.stringify([
+    { feature: "copilot_app", loc_added_sum: 4, loc_deleted_sum: 1, loc_suggested_to_add_sum: 0, loc_suggested_to_delete_sum: 0, code_generation_activity_count: 2, code_acceptance_activity_count: 1, user_initiated_interaction_count: 2 },
+  ]);
+  insertUser.run(
+    "2025-04-05", "ent1", "acme", 7, "grace",
+    9, 6, 9, 0, 0, 70, 8, 0, 0, 0, 1,
+    "[]", graceFeatureAcme, "[]", "[]", "[]",
+    graceTotalsAcme,
+  );
+  insertUser.run(
+    "2025-04-05", "ent2", "beta", 7, "grace",
+    2, 1, 2, 0, 0, 4, 1, 0, 0, 0, 1,
+    "[]", graceFeatureBeta, "[]", "[]", "[]",
+    graceTotalsBeta,
+  );
+
+  // ── hank: malformed copilot_app model/language feature entries missing
+  // their `model`/`language` key entirely — must never surface as a
+  // breakdown row with a null `name`. Placed on 2025-04-06, its own
+  // isolated day, alongside ivy's well-formed entries so the breakdown
+  // functions are proven to keep good rows while dropping bad ones.
+  insertUser.run(
+    "2025-04-06", "ent1", "acme", 8, "hank",
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, null,
+    "[]", "[]",
+    JSON.stringify([{ feature: "copilot_app", code_generation_activity_count: 2, loc_added_sum: 9, loc_deleted_sum: 1 }]), // no `language`
+    JSON.stringify([{ feature: "copilot_app", user_initiated_interaction_count: 5 }]), // no `model`
+    "[]",
+    null,
+  );
+  insertUser.run(
+    "2025-04-06", "ent1", "acme", 9, "ivy",
+    4, 2, 4, 0, 0, 20, 2, 0, 0, 0, 1,
+    "[]", "[]",
+    JSON.stringify([{ language: "rust", feature: "copilot_app", code_generation_activity_count: 4, loc_added_sum: 20, loc_deleted_sum: 2 }]),
+    JSON.stringify([{ model: "grok-2", feature: "copilot_app", user_initiated_interaction_count: 11 }]),
+    "[]",
+    JSON.stringify({
+      session_count: 3, request_count: 4, prompt_count: 2,
+      token_usage: { prompt_tokens_sum: 100, output_tokens_sum: 50, avg_tokens_per_request: 75 },
+    }),
+  );
+
+  // ── Bulk synthetic adopters for pagination-clamp tests, isolated on
+  // their own day (2025-05-01) so they never leak into the shared
+  // START/END assertions above. 205 rows so a pageSize clamp to 200 is
+  // actually observable (vs. requesting more rows than exist).
+  const insertBulk = db.prepare(`
+    INSERT INTO user_daily_metrics (
+      day, enterprise_id, enterprise_slug, user_id, user_login,
+      used_copilot_app, totals_by_feature, totals_by_language_feature,
+      totals_by_model_feature, totals_by_language_model, totals_by_copilot_app
+    ) VALUES (?, ?, ?, ?, ?, ?, '[]', '[]', '[]', '[]', NULL)
+  `);
+  const insertBulkTx = db.transaction(() => {
+    for (let i = 1; i <= 205; i++) {
+      const login = `bulk_user_${String(i).padStart(3, "0")}`;
+      insertBulk.run("2025-05-01", "ent1", "acme", 1000 + i, login, 1);
+    }
+  });
+  insertBulkTx();
+
   // ── Enterprise aggregate rows ──
   const insertEnterprise = db.prepare(`
     INSERT INTO enterprise_daily_metrics (
@@ -357,11 +436,38 @@ describe("getCopilotAppUserSummary", () => {
     expect(result.sessions).toBe(5); // alice only (bob is zero)
   });
 
-  it("scopes to enterpriseSlugs when provided", () => {
+  it("scopes to enterpriseSlugs when provided, changing supportedRows relative to unfiltered", () => {
     // alice's beta-duplicate row should not double her totals even when
     // scoping to a single enterprise.
     const result = getCopilotAppUserSummary(START, END, undefined, ["acme"]);
     expect(result.sessions).toBe(6);
+    // Unfiltered supportedRows is 6 (alice's acme+beta day1 rows + her acme
+    // day2 row + bob + erin + frank). Scoping to acme alone drops alice's
+    // beta row, so supportedRows must visibly change to 5 — proving the
+    // enterprise filter is actually applied to the supported-row count,
+    // not just to the summed totals.
+    expect(result.supportedRows).toBe(5);
+    const unfiltered = getCopilotAppUserSummary(START, END);
+    expect(unfiltered.supportedRows).toBe(6);
+    expect(result.supportedRows).not.toBe(unfiltered.supportedRows);
+  });
+
+  it("dedups a user duplicated across enterprises with DIFFERING values via MAX, never SUM/average", () => {
+    // grace: acme reports session_count=9, beta reports session_count=2 for
+    // the same user/day. A correct MAX-before-SUM dedup yields 9. A bug that
+    // summed the duplicates would yield 11; one that averaged them would
+    // yield 5.5; one that picked an arbitrary row could yield either 9 or 2
+    // nondeterministically. Only 9 is consistent with MAX every time.
+    const result = getCopilotAppUserSummary("2025-04-05", "2025-04-05", ["grace"]);
+    expect(result.sessions).toBe(9);
+    expect(result.requests).toBe(6);
+    expect(result.prompts).toBe(3);
+    expect(result.promptTokens).toBe(900);
+    expect(result.outputTokens).toBe(300);
+    expect(result.codeGenerations).toBe(9);
+    expect(result.codeAcceptances).toBe(6);
+    expect(result.locAdded).toBe(70);
+    expect(result.locDeleted).toBe(8);
   });
 });
 
@@ -407,6 +513,10 @@ describe("getCopilotAppDailyCodeImpact", () => {
     expect(day2.locAdded).toBe(30);
     expect(day2.locDeleted).toBe(5);
   });
+
+  it("returns an empty trend for an explicitly empty allowedLogins array", () => {
+    expect(getCopilotAppDailyCodeImpact(START, END, [])).toEqual([]);
+  });
 });
 
 describe("getCopilotAppModelBreakdown", () => {
@@ -419,6 +529,19 @@ describe("getCopilotAppModelBreakdown", () => {
     // gpt-4o (non-App) must never appear
     expect(rows.find((r) => r.name === "gpt-4o")).toBeUndefined();
   });
+
+  it("returns an empty breakdown for an explicitly empty allowedLogins array", () => {
+    expect(getCopilotAppModelBreakdown(START, END, [])).toEqual([]);
+  });
+
+  it("excludes copilot_app model-feature entries with a null/missing model name", () => {
+    // hank's copilot_app model entry has no `model` key at all (json_extract
+    // returns NULL); it must never surface as a row with name === null, and
+    // ivy's well-formed "grok-2" entry must still come through untouched.
+    const rows = getCopilotAppModelBreakdown("2025-04-06", "2025-04-06");
+    expect(rows).toEqual([{ name: "grok-2", interactions: 11 }]);
+    expect(rows.every((r) => typeof r.name === "string")).toBe(true);
+  });
 });
 
 describe("getCopilotAppLanguageBreakdown", () => {
@@ -429,6 +552,19 @@ describe("getCopilotAppLanguageBreakdown", () => {
       { name: "go", interactions: 4, locAdded: 12, locDeleted: 3 }, // frank
     ]);
     expect(rows.find((r) => r.name === "typescript")).toBeUndefined();
+  });
+
+  it("returns an empty breakdown for an explicitly empty allowedLogins array", () => {
+    expect(getCopilotAppLanguageBreakdown(START, END, [])).toEqual([]);
+  });
+
+  it("excludes copilot_app language-feature entries with a null/missing language name", () => {
+    // hank's copilot_app language entry has no `language` key at all; it
+    // must never surface as a row with name === null, while ivy's
+    // well-formed "rust" entry still comes through untouched.
+    const rows = getCopilotAppLanguageBreakdown("2025-04-06", "2025-04-06");
+    expect(rows).toEqual([{ name: "rust", interactions: 4, locAdded: 20, locDeleted: 2 }]);
+    expect(rows.every((r) => typeof r.name === "string")).toBe(true);
   });
 });
 
@@ -507,10 +643,33 @@ describe("getEnterpriseCopilotAppDaily", () => {
     expect(rows).toEqual([]);
   });
 
-  it("only ever queries the fixed enterprise_daily_metrics table (never a caller-provided table name)", () => {
-    // No table-name parameter exists on the exported signature; this test
-    // documents/guards that invariant by checking the function arity.
-    expect(getEnterpriseCopilotAppDaily.length).toBe(3);
+  it("excludes an unsupported enterprise's daily_active_users from sourceActiveUsers when mixed with supported enterprises on the same day", () => {
+    // gamma (unsupported, daily_active_users=40) shares 2025-04-01 with
+    // acme (50) and beta (30), both supported. A denominator bug that
+    // summed daily_active_users across ALL rows for the day (rather than
+    // only rows with App support evidence) would report 120 instead of 80.
+    const rows = getEnterpriseCopilotAppDaily(START, END, ["acme", "beta", "gamma"]);
+    const day1 = rows.find((r) => r.day === "2025-04-01")!;
+    expect(day1.sourceActiveUsers).toBe(80); // 50 (acme) + 30 (beta); gamma's 40 excluded
+    expect(day1.isSupported).toBe(true);
+    // activeUsers (the numerator) is unaffected either way since gamma's
+    // daily_active_copilot_app_users is NULL and SUM() already ignores NULLs.
+    expect(day1.activeUsers).toBe(8);
+  });
+
+  it("queries only the fixed enterprise_daily_metrics table, never org_daily_metrics", () => {
+    // Behavioral replacement for a brittle function-arity check: capture the
+    // actual SQL text the function prepares and assert it reads from its one
+    // intended source table.
+    const prepareSpy = vi.spyOn(db, "prepare");
+    try {
+      getEnterpriseCopilotAppDaily(START, END, ["acme"]);
+      const sqlText = prepareSpy.mock.calls.map((call) => String(call[0])).join("\n");
+      expect(sqlText).toContain("FROM enterprise_daily_metrics");
+      expect(sqlText).not.toContain("org_daily_metrics");
+    } finally {
+      prepareSpy.mockRestore();
+    }
   });
 });
 
@@ -531,14 +690,52 @@ describe("getOrganizationCopilotAppDaily", () => {
     const rows = getOrganizationCopilotAppDaily("contoso-org", START, END, ["gamma"]);
     expect(rows).toEqual([]);
   });
+
+  it("queries only the fixed org_daily_metrics table, never enterprise_daily_metrics", () => {
+    const prepareSpy = vi.spyOn(db, "prepare");
+    try {
+      getOrganizationCopilotAppDaily("contoso-org", START, END);
+      const sqlText = prepareSpy.mock.calls.map((call) => String(call[0])).join("\n");
+      expect(sqlText).toContain("FROM org_daily_metrics");
+      expect(sqlText).not.toContain("enterprise_daily_metrics");
+    } finally {
+      prepareSpy.mockRestore();
+    }
+  });
 });
 
 describe("getCopilotAppAdopters", () => {
-  it("includes logins via true flag, non-null App totals, or an App feature row; excludes legacy absence", () => {
+  it("includes logins via true used_copilot_app flag, positive dedicated totals, or a positive App feature row; excludes zero-activity/legacy rows", () => {
+    // bob has used_copilot_app=false and a non-null totals_by_copilot_app
+    // object, but every counter in it is zero — that's schema *support*,
+    // not actual *activity*, so per the adopters/active-KPI alignment he
+    // must be excluded from the adopter table (unlike the old
+    // evidence-only semantics that used to include him).
     const { adopters, total } = getCopilotAppAdopters(START, END, 1, 10, "sessions", "desc");
     const logins = adopters.map((a) => a.login).sort();
-    expect(logins).toEqual(["alice", "bob", "erin", "frank"]);
-    expect(total).toBe(4);
+    expect(logins).toEqual(["alice", "erin", "frank"]);
+    expect(logins).not.toContain("bob");
+    expect(total).toBe(3);
+  });
+
+  it("has no zero-only adopter row: every adopter has activeDays >= 1 and at least one positive activity metric", () => {
+    const { adopters } = getCopilotAppAdopters(START, END, 1, 10, "sessions", "desc");
+    for (const adopter of adopters) {
+      expect(adopter.activeDays).toBeGreaterThanOrEqual(1);
+      const hasPositiveActivity =
+        adopter.sessions > 0 ||
+        adopter.requests > 0 ||
+        adopter.prompts > 0 ||
+        adopter.locAdded > 0 ||
+        adopter.locDeleted > 0;
+      expect(hasPositiveActivity).toBe(true);
+    }
+  });
+
+  it("adopter total equals the distinct active-user KPI (appActiveUsers) for the same scope", () => {
+    const { total } = getCopilotAppAdopters(START, END, 1, 10, "sessions", "desc");
+    const kpi = getCopilotAppUserSummary(START, END);
+    expect(total).toBe(kpi.appActiveUsers);
   });
 
   it("deduplicates the same login/day across enterprises before summing period totals", () => {
@@ -560,9 +757,28 @@ describe("getCopilotAppAdopters", () => {
     expect(total).toBe(1);
   });
 
+  it("escapes literal %, _, and backslash in the search text instead of treating them as SQL LIKE wildcards", () => {
+    // None of the fixture logins contain literal '%' or '_' characters. An
+    // unescaped LIKE '%<search>%' would treat '%' as "match anything" and
+    // '_' as "match any one character" — so searching for these literal
+    // characters would incorrectly match every/some login if the escape
+    // clause were missing or broken.
+    const percent = getCopilotAppAdopters(START, END, 1, 10, "sessions", "desc", "%");
+    expect(percent.adopters).toEqual([]);
+    expect(percent.total).toBe(0);
+
+    const underscore = getCopilotAppAdopters(START, END, 1, 10, "sessions", "desc", "_");
+    expect(underscore.adopters).toEqual([]);
+    expect(underscore.total).toBe(0);
+
+    const backslash = getCopilotAppAdopters(START, END, 1, 10, "sessions", "desc", "\\");
+    expect(backslash.adopters).toEqual([]);
+    expect(backslash.total).toBe(0);
+  });
+
   it("sorts by every allowlisted field", () => {
     const byLogin = getCopilotAppAdopters(START, END, 1, 10, "login", "asc").adopters.map((a) => a.login);
-    expect(byLogin).toEqual(["alice", "bob", "erin", "frank"]);
+    expect(byLogin).toEqual(["alice", "erin", "frank"]);
 
     const byActiveDays = getCopilotAppAdopters(START, END, 1, 10, "activeDays", "desc").adopters.map((a) => a.login);
     expect(byActiveDays[0]).toBe("alice");
@@ -585,6 +801,10 @@ describe("getCopilotAppAdopters", () => {
 
     const byOutputTokens = getCopilotAppAdopters(START, END, 1, 10, "outputTokens", "desc").adopters.map((a) => a.login);
     expect(byOutputTokens[0]).toBe("alice");
+
+    // Numeric ascending sort: frank (sessions=0) < erin (sessions=1) < alice (sessions=5).
+    const bySessionsAsc = getCopilotAppAdopters(START, END, 1, 10, "sessions", "asc").adopters.map((a) => a.login);
+    expect(bySessionsAsc).toEqual(["frank", "erin", "alice"]);
   });
 
   it("falls back to sessions ordering for an invalid sort field, and to desc for an invalid direction", () => {
@@ -603,10 +823,21 @@ describe("getCopilotAppAdopters", () => {
     const page1 = getCopilotAppAdopters(START, END, 1, 2, "login", "asc");
     const page2 = getCopilotAppAdopters(START, END, 2, 2, "login", "asc");
     expect(page1.adopters).toHaveLength(2);
-    expect(page2.adopters).toHaveLength(2);
-    expect(page1.total).toBe(4);
-    expect(page2.total).toBe(4);
-    expect([...page1.adopters, ...page2.adopters].map((a) => a.login)).toEqual(["alice", "bob", "erin", "frank"]);
+    expect(page2.adopters).toHaveLength(1);
+    expect(page1.total).toBe(3);
+    expect(page2.total).toBe(3);
+    expect([...page1.adopters, ...page2.adopters].map((a) => a.login)).toEqual(["alice", "erin", "frank"]);
+  });
+
+  it("search and pagination remain mutually consistent across pages", () => {
+    // "a" matches alice and frank (both contain the letter 'a'), not erin.
+    const page1 = getCopilotAppAdopters(START, END, 1, 1, "login", "asc", "a");
+    const page2 = getCopilotAppAdopters(START, END, 2, 1, "login", "asc", "a");
+    expect(page1.total).toBe(2);
+    expect(page2.total).toBe(2);
+    expect(page1.adopters).toHaveLength(1);
+    expect(page2.adopters).toHaveLength(1);
+    expect([...page1.adopters, ...page2.adopters].map((a) => a.login)).toEqual(["alice", "frank"]);
   });
 
   it("returns empty for an explicit empty allowedLogins array, and unfiltered results for undefined", () => {
@@ -615,20 +846,64 @@ describe("getCopilotAppAdopters", () => {
     expect(empty.total).toBe(0);
 
     const unfiltered = getCopilotAppAdopters(START, END, 1, 10, "sessions", "desc", undefined, undefined);
-    expect(unfiltered.total).toBe(4);
+    expect(unfiltered.total).toBe(3);
   });
 
-  it("excludes a row with used_copilot_app=false, null dedicated totals, and no App feature row (unlike bob)", () => {
+  it("excludes a row with used_copilot_app=false, null dedicated totals, and no App feature row (dave), and also excludes an all-zero supported row (bob)", () => {
     // dave (2025-04-03): used_copilot_app=0, totals_by_copilot_app=NULL, and
-    // no copilot_app entry in totals_by_feature — none of the three
-    // adopter-evidence signals are present, so he must be excluded.
-    // bob (2025-04-01) also has used_copilot_app=0, but his non-null
-    // totals_by_copilot_app object (even all-zero counters) still counts as
-    // App telemetry, so he remains included.
+    // no copilot_app entry in totals_by_feature — none of the adopter
+    // activity signals are present, so he must be excluded.
+    // bob (2025-04-01): used_copilot_app=0 and a non-null but all-zero
+    // totals_by_copilot_app object — schema support without any actual
+    // activity, so he is excluded too under the activity-aligned semantics.
     const { adopters, total } = getCopilotAppAdopters("2025-04-01", "2025-04-03", 1, 10, "sessions", "desc");
     const logins = adopters.map((a) => a.login).sort();
-    expect(logins).toEqual(["alice", "bob", "erin", "frank"]);
+    expect(logins).toEqual(["alice", "erin", "frank"]);
     expect(logins).not.toContain("dave");
-    expect(total).toBe(4);
+    expect(logins).not.toContain("bob");
+    expect(total).toBe(3);
+  });
+
+  it("clamps page to a minimum of 1 for page<=0 and truncates fractional page numbers", () => {
+    const zero = getCopilotAppAdopters("2025-05-01", "2025-05-01", 0, 10, "login", "asc");
+    const negative = getCopilotAppAdopters("2025-05-01", "2025-05-01", -5, 10, "login", "asc");
+    const one = getCopilotAppAdopters("2025-05-01", "2025-05-01", 1, 10, "login", "asc");
+    expect(zero.adopters).toEqual(one.adopters);
+    expect(negative.adopters).toEqual(one.adopters);
+
+    const fractional = getCopilotAppAdopters("2025-05-01", "2025-05-01", 1.9, 10, "login", "asc");
+    expect(fractional.adopters).toEqual(one.adopters);
+  });
+
+  it("clamps pageSize to a minimum of 1 for pageSize<=0", () => {
+    const zero = getCopilotAppAdopters("2025-05-01", "2025-05-01", 1, 0, "login", "asc");
+    expect(zero.adopters).toHaveLength(1);
+    expect(zero.total).toBe(205);
+
+    const negative = getCopilotAppAdopters("2025-05-01", "2025-05-01", 1, -20, "login", "asc");
+    expect(negative.adopters).toHaveLength(1);
+  });
+
+  it("clamps pageSize to a maximum of 200 for pageSize>200", () => {
+    const result = getCopilotAppAdopters("2025-05-01", "2025-05-01", 1, 500, "login", "asc");
+    expect(result.adopters).toHaveLength(200);
+    expect(result.total).toBe(205);
+  });
+
+  it("normalizes an invalid runtime sortDir to desc despite the TS type, without throwing", () => {
+    const invalid = getCopilotAppAdopters(
+      START, END, 1, 10, "sessions", "banana" as unknown as "asc" | "desc",
+    );
+    const desc = getCopilotAppAdopters(START, END, 1, 10, "sessions", "desc");
+    expect(invalid.adopters.map((a) => a.login)).toEqual(desc.adopters.map((a) => a.login));
+  });
+
+  it("returns an empty adopter array but the correct total when the requested page is beyond the final page", () => {
+    // Scope has 3 adopters total; requesting page 99 with pageSize 10 is far
+    // beyond the last page, so the primary windowed query returns zero rows
+    // and the count-only fallback must still report the true total.
+    const beyond = getCopilotAppAdopters(START, END, 99, 10, "sessions", "desc");
+    expect(beyond.adopters).toEqual([]);
+    expect(beyond.total).toBe(3);
   });
 });
