@@ -64,12 +64,21 @@ const CAPABILITY_ALT_SCOPES: Record<PreflightCapability, readonly string[]> = {
 // Minimal read-only probe endpoints used when scope headers are unavailable
 // (fine-grained PATs and GitHub App installation tokens don't emit
 // X-OAuth-Scopes). Each is the cheapest read call that indicates access.
+// billing_usage and aic_consumption both resolve to the enterprise billing
+// reports endpoint — that's the one real, currently-supported endpoint for
+// both classic premium-request and AI Credit usage reporting (see
+// billing-client.ts's `billingPath`); there is no standalone
+// "premium_requests/usage" endpoint, so probing one would always produce a
+// false negative (404) regardless of actual access.
 const PROBE_ENDPOINTS: Record<PreflightCapability, (slug: string) => string> = {
   copilot_seats: (slug) => `/enterprises/${slug}/copilot/billing/seats?per_page=1`,
-  billing_usage: (slug) => `/enterprises/${slug}/settings/billing/usage`,
-  aic_consumption: (slug) => `/enterprises/${slug}/settings/billing/premium_requests/usage`,
+  billing_usage: (slug) => `/enterprises/${slug}/settings/billing/reports`,
+  aic_consumption: (slug) => `/enterprises/${slug}/settings/billing/reports`,
   audit_log: (slug) => `/enterprises/${slug}/audit-log?per_page=1`,
   membership: (slug) => `/enterprises/${slug}/consumed-licenses?per_page=1`,
+  // identity is never probed directly — see preflightEnterpriseAuth, which
+  // infers it from the initial /rate_limit success. Kept here only so the
+  // Record<PreflightCapability, ...> type stays exhaustive.
   identity: () => `/user`,
 };
 
@@ -160,16 +169,28 @@ export async function preflightEnterpriseAuth(enterpriseSlug: string): Promise<E
     enterpriseSlug,
   });
 
-  const scopesHeader = identity.headers["x-oauth-scopes"];
-  const hasClassicScopes = scopesHeader !== undefined;
+  // An empty or whitespace-only header is treated the same as a missing one:
+  // it does not reliably distinguish "classic PAT with zero scopes" from
+  // "header simply not populated", so we fall through to probing rather than
+  // risk a false "unsupported" across every capability.
+  const rawScopesHeader = identity.headers["x-oauth-scopes"];
+  const trimmedScopesHeader = rawScopesHeader?.trim();
+  const hasClassicScopes = !!trimmedScopesHeader && trimmedScopesHeader.length > 0;
   const scopes = hasClassicScopes
-    ? scopesHeader.split(",").map((s) => s.trim()).filter(Boolean)
+    ? trimmedScopesHeader.split(",").map((s) => s.trim()).filter(Boolean)
     : [];
 
   const capabilities: CapabilityResult[] = [];
   for (const capability of ALL_CAPABILITIES) {
     let status: CapabilityStatus;
-    if (hasClassicScopes) {
+    if (capability === "identity") {
+      // A successful authenticated /rate_limit call already proves identity
+      // is resolvable for this credential — that's stronger evidence than
+      // any single scope, so identity is supported regardless of whether
+      // read:user/user was granted (classic PAT) or probing is otherwise
+      // needed (fine-grained PAT / GitHub App token).
+      status = "supported";
+    } else if (hasClassicScopes) {
       status = CAPABILITY_ALT_SCOPES[capability].some((scope) => scopes.includes(scope))
         ? "supported"
         : "unsupported";

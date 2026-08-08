@@ -118,6 +118,37 @@ describe("preflightEnterpriseAuth — fine-grained/App token probing", () => {
     expect(result.ok).toBe(true);
   });
 
+  it("probes billing_usage and aic_consumption against the real billing reports endpoint", async () => {
+    mockFetchWithMeta.mockImplementation(async (path: string) => {
+      if (path === "/rate_limit") return { data: {}, status: 200, headers: {} };
+      return { data: {}, status: 200, headers: {} };
+    });
+
+    await preflightEnterpriseAuth("acme-corp");
+
+    const calledPaths = mockFetchWithMeta.mock.calls.map((call) => call[0]);
+    // billing_usage must probe the real reports endpoint (not a nonexistent /usage path).
+    expect(calledPaths).toContain("/enterprises/acme-corp/settings/billing/reports");
+    // aic_consumption must NOT probe a nonexistent premium_requests path.
+    expect(calledPaths).not.toEqual(
+      expect.arrayContaining([expect.stringContaining("premium_requests")]),
+    );
+  });
+
+  it("marks identity as supported via the probe path without issuing a separate /user probe", async () => {
+    mockFetchWithMeta.mockImplementation(async (path: string) => {
+      if (path === "/rate_limit") return { data: {}, status: 200, headers: {} };
+      if (path.includes("/copilot/billing/seats")) return { data: {}, status: 200, headers: {} };
+      throw new GitHubApiError(403, path, "Forbidden");
+    });
+
+    const result = await preflightEnterpriseAuth("acme-corp");
+
+    expect(statusOf(result, "identity")?.status).toBe("supported");
+    const calledPaths = mockFetchWithMeta.mock.calls.map((call) => call[0]);
+    expect(calledPaths).not.toContain("/user");
+  });
+
   it("reports unknown when a probe fails with a non-auth, non-scope error", async () => {
     mockFetchWithMeta.mockImplementation(async (path: string) => {
       if (path === "/rate_limit") {
@@ -137,6 +168,16 @@ describe("preflightEnterpriseAuth — fine-grained/App token probing", () => {
     expect(result.ok).toBe(true);
   });
 
+  it("rethrows a 401 from an individual capability probe instead of reporting it as unsupported", async () => {
+    mockFetchWithMeta.mockImplementation(async (path: string) => {
+      if (path === "/rate_limit") return { data: {}, status: 200, headers: {} };
+      if (path.includes("/copilot/billing/seats")) return { data: {}, status: 200, headers: {} };
+      throw new GitHubApiError(401, path, "Bad credentials");
+    });
+
+    await expect(preflightEnterpriseAuth("acme-corp")).rejects.toThrow(GitHubApiError);
+  });
+
   it("never includes raw response headers or tokens in probe capability messages", async () => {
     mockFetchWithMeta.mockImplementation(async (path: string) => {
       if (path === "/rate_limit") return { data: {}, status: 200, headers: {} };
@@ -148,6 +189,49 @@ describe("preflightEnterpriseAuth — fine-grained/App token probing", () => {
     for (const capability of result.capabilities) {
       expect(capability.message).not.toMatch(/bearer|token|x-oauth-scopes/i);
     }
+  });
+});
+
+describe("preflightEnterpriseAuth — identity capability", () => {
+  it("is supported after a successful classic-PAT /rate_limit check even without read:user scope", async () => {
+    mockFetchWithMeta.mockResolvedValue({
+      data: {},
+      status: 200,
+      // No read:user or user scope granted at all.
+      headers: { "x-oauth-scopes": "manage_billing:copilot" },
+    });
+
+    const result = await preflightEnterpriseAuth("acme-corp");
+
+    expect(statusOf(result, "identity")?.status).toBe("supported");
+  });
+});
+
+describe("preflightEnterpriseAuth — empty/whitespace scope header", () => {
+  it("treats an empty X-OAuth-Scopes header as unavailable scope data and falls through to probing", async () => {
+    mockFetchWithMeta.mockImplementation(async (path: string) => {
+      if (path === "/rate_limit") return { data: {}, status: 200, headers: { "x-oauth-scopes": "" } };
+      if (path.includes("/copilot/billing/seats")) return { data: {}, status: 200, headers: {} };
+      throw new GitHubApiError(403, path, "Forbidden");
+    });
+
+    const result = await preflightEnterpriseAuth("acme-corp");
+
+    // Falling through to probing (rather than treating "" as zero granted
+    // scopes) lets copilot_seats be confirmed supported by the probe.
+    expect(statusOf(result, "copilot_seats")?.status).toBe("supported");
+  });
+
+  it("treats a whitespace-only X-OAuth-Scopes header as unavailable scope data and falls through to probing", async () => {
+    mockFetchWithMeta.mockImplementation(async (path: string) => {
+      if (path === "/rate_limit") return { data: {}, status: 200, headers: { "x-oauth-scopes": "   " } };
+      if (path.includes("/copilot/billing/seats")) return { data: {}, status: 200, headers: {} };
+      throw new GitHubApiError(403, path, "Forbidden");
+    });
+
+    const result = await preflightEnterpriseAuth("acme-corp");
+
+    expect(statusOf(result, "copilot_seats")?.status).toBe("supported");
   });
 });
 

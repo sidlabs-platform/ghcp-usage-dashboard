@@ -369,6 +369,10 @@ const BACKOFF_CAP_MS = 30_000;
 // Ceiling applied to explicit server-provided waits (Retry-After / reset)
 // so a misbehaving upstream can't stall a request indefinitely.
 const SERVER_HINT_CAP_MS = 120_000;
+// Sentinel status used for GitHubApiError when no HTTP response was ever
+// received (DNS failure, connection refused, timeout, etc.) — 0 is not a
+// valid HTTP status code, so it's unambiguous as a "transport failure" marker.
+const TRANSPORT_FAILURE_STATUS = 0;
 
 function isSecondaryRateLimitBody(bodyText: string): boolean {
   const lower = bodyText.toLowerCase();
@@ -395,6 +399,9 @@ async function safeResponseText(resp: Response): Promise<string> {
  * - 403 is retryable only when it carries secondary/abuse rate-limit signals
  *   (a Retry-After header, or a recognizable phrase in the body). Plain 403s
  *   (missing scope, disabled feature, etc.) still fail fast.
+ * This is the single source of truth for retry classification — every
+ * failure branch below routes through it so there's no duplicated (and
+ * potentially drifting) logic.
  */
 function isRetryableFailure(status: number, resp: Response, bodyText: string): boolean {
   if (status === 429 || status >= 500) return true;
@@ -406,27 +413,52 @@ function isRetryableFailure(status: number, resp: Response, bodyText: string): b
 }
 
 /**
- * Compute the wait time before the next retry attempt.
- * Priority: Retry-After header > X-RateLimit-Reset header > capped
- * exponential backoff with full jitter.
+ * Capped exponential backoff with full jitter: random(0, min(cap, base*2^attempt)).
+ * Exported (as a thin wrapper) so tests can assert exact, deterministic
+ * values by stubbing Math.random instead of relying on fake-timer ranges.
  */
-function computeRetryDelayMs(attempt: number, resp: Response): number {
-  const retryAfter = resp.headers.get("retry-after");
-  const parsedRetryAfter = retryAfter ? parseInt(retryAfter, 10) : NaN;
+function jitterBackoffMs(attempt: number): number {
+  const exponential = Math.min(BACKOFF_CAP_MS, BACKOFF_BASE_MS * Math.pow(2, attempt));
+  return Math.random() * exponential;
+}
+
+/**
+ * Compute the wait time before the next retry attempt, given the raw
+ * Retry-After and X-RateLimit-Reset header values (or null if absent).
+ * Priority: Retry-After header > X-RateLimit-Reset header > capped
+ * exponential backoff with full jitter. Server-provided hints are capped at
+ * `SERVER_HINT_CAP_MS` so a misbehaving upstream can't stall indefinitely.
+ */
+function computeRetryDelayMs(attempt: number, retryAfterHeader: string | null, resetHeader: string | null): number {
+  const parsedRetryAfter = retryAfterHeader ? parseInt(retryAfterHeader, 10) : NaN;
   if (Number.isFinite(parsedRetryAfter) && parsedRetryAfter > 0) {
     return Math.min(parsedRetryAfter * 1000, SERVER_HINT_CAP_MS);
   }
 
-  const reset = resp.headers.get("x-ratelimit-reset");
-  const parsedReset = reset ? parseInt(reset, 10) : NaN;
+  const parsedReset = resetHeader ? parseInt(resetHeader, 10) : NaN;
   if (Number.isFinite(parsedReset)) {
     const waitMs = parsedReset * 1000 - Date.now();
     if (waitMs > 0) return Math.min(waitMs, SERVER_HINT_CAP_MS);
   }
 
-  // Capped exponential backoff with full jitter: random(0, min(cap, base*2^attempt)).
-  const exponential = Math.min(BACKOFF_CAP_MS, BACKOFF_BASE_MS * Math.pow(2, attempt));
-  return Math.random() * exponential;
+  return jitterBackoffMs(attempt);
+}
+
+function computeRetryDelayMsForResponse(attempt: number, resp: Response): number {
+  return computeRetryDelayMs(attempt, resp.headers.get("retry-after"), resp.headers.get("x-ratelimit-reset"));
+}
+
+/**
+ * @internal Pure, deterministic access to the retry backoff formula — for
+ * testing only. Lets tests assert exact delay values (e.g. with Math.random
+ * stubbed to 0 or 1) instead of relying on loose fake-timer ranges.
+ */
+export function _computeRetryDelayMsForTesting(
+  attempt: number,
+  retryAfterHeader: string | null = null,
+  resetHeader: string | null = null,
+): number {
+  return computeRetryDelayMs(attempt, retryAfterHeader, resetHeader);
 }
 
 export interface GithubFetchMetaOptions {
@@ -445,13 +477,47 @@ export interface GithubFetchMetaResult<T> {
   headers: Record<string, string>;
 }
 
+// Header names that extraHeaders may never set, case-insensitively — these
+// are owned by the request primitive itself: real credentials, and the
+// content type that matches the JSON body we actually send.
+const PROTECTED_REQUEST_HEADER_NAMES = new Set(["authorization", "content-type"]);
+
+/**
+ * Merge auth headers with caller-supplied extraHeaders into a real Headers
+ * instance (so header-name matching is case-insensitive, matching what the
+ * underlying fetch implementation will do), while guaranteeing extraHeaders
+ * can never override Authorization or the JSON body's Content-Type.
+ */
+function buildRequestHeaders(
+  authHeaders: Record<string, string>,
+  extraHeaders: Record<string, string> | undefined,
+  hasJsonBody: boolean,
+): Headers {
+  const headers = new Headers(authHeaders);
+  if (extraHeaders) {
+    for (const [key, value] of Object.entries(extraHeaders)) {
+      if (PROTECTED_REQUEST_HEADER_NAMES.has(key.toLowerCase())) continue;
+      headers.set(key, value);
+    }
+  }
+  if (hasJsonBody) headers.set("Content-Type", "application/json");
+  return headers;
+}
+
 /**
  * @internal Authenticated request primitive shared by githubFetch and the
  * GraphQL/preflight clients. Reuses validated URL construction, enterprise
  * token selection, auth readiness, adaptive rate tracking, and hardened
  * retry behavior. Returns the parsed body alongside status and a small
  * allowlisted set of response headers — the Authorization header sent on
- * the request is never exposed on the returned result.
+ * the request is never exposed on the returned result, and extraHeaders can
+ * never override Authorization or Content-Type.
+ *
+ * Retry exhaustion (for retryable 429/5xx/secondary-403 failures, or
+ * repeated transport-level failures such as a refused connection) throws a
+ * typed GitHubApiError carrying the last observed status/body — transport
+ * failures use a `0` sentinel status — so callers like the auth preflight
+ * can classify "unknown" outcomes instead of only ever seeing a generic error.
  */
 export async function githubFetchWithMeta<T>(
   path: string,
@@ -462,17 +528,38 @@ export async function githubFetchWithMeta<T>(
   await ensureAuthReady(ctx.mode);
   const url = buildValidatedUrl(path, ctx.mode);
 
+  let lastStatus = TRANSPORT_FAILURE_STATUS;
+  let lastBody = "";
+
   for (let attempt = 0; attempt < retries; attempt++) {
     await adaptiveRateDelay(ctx.mode, ctx.enterpriseSlug);
-    const hdrs = await headersForAuth(ctx.mode, ctx.enterpriseSlug);
-    if (extraHeaders) Object.assign(hdrs, extraHeaders);
-    const init: RequestInit = { method, headers: hdrs, cache: "no-store" };
-    if (body !== undefined) {
-      init.body = JSON.stringify(body);
-      hdrs["Content-Type"] = "application/json";
+    const authHeaders = await headersForAuth(ctx.mode, ctx.enterpriseSlug);
+    const headers = buildRequestHeaders(authHeaders, extraHeaders, body !== undefined);
+    const init: RequestInit = { method, headers, cache: "no-store" };
+    if (body !== undefined) init.body = JSON.stringify(body);
+
+    let resp: Response;
+    try {
+      resp = await fetch(url, init);
+    } catch (err) {
+      // Transport-level failure — no HTTP response was ever received (DNS,
+      // connection refused, timeout, etc.). Treat it like any other
+      // retryable failure so a transient network blip doesn't need special
+      // handling by callers.
+      lastStatus = TRANSPORT_FAILURE_STATUS;
+      lastBody = err instanceof Error ? err.message : String(err);
+      if (attempt < retries - 1) {
+        const waitMs = jitterBackoffMs(attempt);
+        console.warn(
+          "GitHub API transport error on %s, retrying in %dms (attempt %d/%d): %s",
+          path.replace(/\n|\r/g, ""), Math.round(waitMs), attempt + 1, retries, lastBody.replace(/\n|\r/g, ""),
+        );
+        await sleep(waitMs);
+        continue;
+      }
+      break;
     }
 
-    const resp = await fetch(url, init);
     updateRateLimit(resp, ctx.mode, ctx.enterpriseSlug);
 
     if (resp.ok) {
@@ -484,34 +571,35 @@ export async function githubFetchWithMeta<T>(
       return { data: null as T, status: 204, headers: selectResponseHeaders(resp) };
     }
 
-    // 429/5xx are always retryable — no need to read the body.
-    if (resp.status === 429 || resp.status >= 500) {
-      const waitMs = computeRetryDelayMs(attempt, resp);
-      console.warn(
-        "GitHub API %d on %s, retrying in %dms (attempt %d/%d)",
-        resp.status, path.replace(/\n|\r/g, ""), Math.round(waitMs), attempt + 1, retries,
-      );
-      await sleep(waitMs);
-      continue;
-    }
-
     const bodyText = await safeResponseText(resp);
 
-    // 403 is only retryable when it carries secondary/abuse rate-limit signals.
-    if (resp.status === 403 && isRetryableFailure(resp.status, resp, bodyText)) {
-      const waitMs = computeRetryDelayMs(attempt, resp);
-      console.warn(
-        "GitHub API %d on %s, retrying in %dms (attempt %d/%d)",
-        resp.status, path.replace(/\n|\r/g, ""), Math.round(waitMs), attempt + 1, retries,
-      );
-      await sleep(waitMs);
-      continue;
+    if (isRetryableFailure(resp.status, resp, bodyText)) {
+      lastStatus = resp.status;
+      lastBody = bodyText;
+      if (attempt < retries - 1) {
+        const waitMs = computeRetryDelayMsForResponse(attempt, resp);
+        console.warn(
+          "GitHub API %d on %s, retrying in %dms (attempt %d/%d)",
+          resp.status, path.replace(/\n|\r/g, ""), Math.round(waitMs), attempt + 1, retries,
+        );
+        await sleep(waitMs);
+        continue;
+      }
+      break;
     }
 
     throw new GitHubApiError(resp.status, path, bodyText);
   }
 
-  throw new Error(`GitHub API failed after ${retries} retries on ${path.replace(/\n|\r/g, "")}`);
+  // Exhausted all retry attempts on a retryable failure — preserve the last
+  // observed status/body as a typed GitHubApiError instead of a generic
+  // Error, so callers (e.g. the auth preflight) can classify the outcome
+  // (e.g. "unknown") rather than only ever seeing an opaque failure.
+  throw new GitHubApiError(
+    lastStatus,
+    path,
+    lastBody || `Exhausted ${retries} retries with no response body.`,
+  );
 }
 
 export async function githubFetch<T>(path: string, retries = 3, authMode?: AuthMode, enterpriseSlug?: string): Promise<T> {

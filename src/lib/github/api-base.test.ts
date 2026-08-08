@@ -1,4 +1,10 @@
-import { describe, it, expect, vi, beforeEach, afterAll } from "vitest";
+import { describe, it, expect, vi, beforeEach, beforeAll, afterEach, afterAll } from "vitest";
+import http from "node:http";
+import type { AddressInfo } from "node:net";
+
+// Captured before any test stubs `global.fetch` — used by the real-network
+// integration tests further down, which need genuine network I/O.
+let realFetch: typeof fetch;
 
 vi.mock("./app-auth", () => ({
   isAppAuthConfigured: vi.fn(() => false),
@@ -9,8 +15,12 @@ vi.mock("./app-auth", () => ({
   getInstallationTokenForEnterprise: vi.fn(),
 }));
 
-import { resolveAuthMode, githubFetch, githubFetchPaginated, githubFetchPaginatedWithCutoff, githubFetchCursorPaginatedWithCutoff, fetchNDJSON, GitHubApiError, _setEnterpriseSlugsForTesting, githubFetchWithMeta, _resetRateLimitStateForTesting } from "./api-base";
-import { isAppAuthConfigured, isAppAuthConfiguredForEnterprise, getInstallationToken, validateAppAuth } from "./app-auth";
+import { resolveAuthMode, githubFetch, githubFetchPaginated, githubFetchPaginatedWithCutoff, githubFetchCursorPaginatedWithCutoff, fetchNDJSON, GitHubApiError, _setEnterpriseSlugsForTesting, githubFetchWithMeta, _resetRateLimitStateForTesting, _computeRetryDelayMsForTesting } from "./api-base";
+import { isAppAuthConfigured, isAppAuthConfiguredForEnterprise, getInstallationToken, getInstallationTokenForEnterprise, validateAppAuth } from "./app-auth";
+
+beforeAll(() => {
+  realFetch = globalThis.fetch;
+});
 
 const mockIsApp = isAppAuthConfigured as ReturnType<typeof vi.fn>;
 const mockIsAppEnt = isAppAuthConfiguredForEnterprise as ReturnType<typeof vi.fn>;
@@ -125,8 +135,16 @@ describe("githubFetch", () => {
 
   it("throws after exhausting retries on 500", async () => {
     const mockFetch = fetch as unknown as ReturnType<typeof vi.fn>;
-    mockFetch.mockResolvedValue({ ok: false, status: 500, headers: new Map() });
-    await expect(githubFetch("/orgs/my-org/info", 2)).rejects.toThrow("GitHub API failed after 2 retries");
+    mockFetch.mockResolvedValue({ ok: false, status: 500, headers: new Map(), text: () => Promise.resolve("upstream exploded") });
+    await expect(githubFetch("/orgs/my-org/info", 2)).rejects.toThrow(GitHubApiError);
+    try {
+      await githubFetch("/orgs/my-org/info", 2);
+      throw new Error("expected githubFetch to reject");
+    } catch (err) {
+      expect(err).toBeInstanceOf(GitHubApiError);
+      expect((err as GitHubApiError).status).toBe(500);
+      expect((err as Error).message).toContain("upstream exploded");
+    }
   });
 
   it("throws when GITHUB_TOKEN is not set", async () => {
@@ -733,9 +751,308 @@ describe("githubFetchWithMeta", () => {
     vi.useRealTimers();
   });
 
-  it("throws after exhausting retries with the standard error message", async () => {
+  it("throws a GitHubApiError preserving status/body after exhausting retries", async () => {
     const mockFetch = fetch as unknown as ReturnType<typeof vi.fn>;
-    mockFetch.mockResolvedValue({ ok: false, status: 500, headers: new Map() });
-    await expect(githubFetchWithMeta("/orgs/my-org/info", { retries: 2 })).rejects.toThrow("GitHub API failed after 2 retries");
+    mockFetch.mockResolvedValue({ ok: false, status: 500, headers: new Map(), text: () => Promise.resolve("upstream exploded") });
+    await expect(githubFetchWithMeta("/orgs/my-org/info", { retries: 2 })).rejects.toMatchObject({
+      name: "GitHubApiError",
+      status: 500,
+    });
+    try {
+      await githubFetchWithMeta("/orgs/my-org/info", { retries: 2 });
+      throw new Error("expected githubFetchWithMeta to reject");
+    } catch (err) {
+      expect(err).toBeInstanceOf(GitHubApiError);
+      expect((err as GitHubApiError).status).toBe(500);
+      expect((err as Error).message).toContain("upstream exploded");
+    }
   });
+
+  it("throws a GitHubApiError with a transport sentinel status when fetch itself keeps rejecting", async () => {
+    const mockFetch = fetch as unknown as ReturnType<typeof vi.fn>;
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    mockFetch.mockRejectedValue(new TypeError("fetch failed: ECONNREFUSED"));
+    await expect(githubFetchWithMeta("/orgs/my-org/info", { retries: 2 })).rejects.toBeInstanceOf(GitHubApiError);
+    try {
+      await githubFetchWithMeta("/orgs/my-org/info", { retries: 2 });
+      throw new Error("expected githubFetchWithMeta to reject");
+    } catch (err) {
+      expect(err).toBeInstanceOf(GitHubApiError);
+      expect((err as GitHubApiError).status).toBe(0);
+      expect((err as Error).message).toContain("ECONNREFUSED");
+    }
+    warnSpy.mockRestore();
+  });
+
+  it("retries a transient transport failure and succeeds on a later attempt", async () => {
+    const mockFetch = fetch as unknown as ReturnType<typeof vi.fn>;
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    mockFetch
+      .mockRejectedValueOnce(new TypeError("fetch failed"))
+      .mockResolvedValueOnce({ ok: true, status: 200, json: () => Promise.resolve({ ok: true }), headers: new Map() });
+    const result = await githubFetchWithMeta<{ ok: boolean }>("/orgs/my-org/info", { retries: 2 });
+    expect(result.data.ok).toBe(true);
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+    warnSpy.mockRestore();
+  });
+
+  it("never lets extraHeaders override the Authorization header, case-insensitively", async () => {
+    const mockFetch = fetch as unknown as ReturnType<typeof vi.fn>;
+    mockFetch.mockResolvedValue({ ok: true, status: 200, json: () => Promise.resolve({}), headers: new Map() });
+    await githubFetchWithMeta("/orgs/my-org/info", {
+      extraHeaders: { authorization: "Bearer attacker-supplied-token", Authorization: "Bearer another-attempt" },
+    });
+    const [, init] = mockFetch.mock.calls[0];
+    const sentHeaders = new Headers(init.headers as HeadersInit);
+    expect(sentHeaders.get("authorization")).toBe("Bearer test-token-123");
+  });
+
+  it("never lets extraHeaders override the JSON body Content-Type header", async () => {
+    const mockFetch = fetch as unknown as ReturnType<typeof vi.fn>;
+    mockFetch.mockResolvedValue({ ok: true, status: 200, json: () => Promise.resolve({}), headers: new Map() });
+    await githubFetchWithMeta("/graphql", {
+      method: "POST",
+      body: { query: "{ viewer { login } }" },
+      extraHeaders: { "content-type": "text/plain", "Content-Type": "text/plain" },
+    });
+    const [, init] = mockFetch.mock.calls[0];
+    const sentHeaders = new Headers(init.headers as HeadersInit);
+    expect(sentHeaders.get("content-type")).toBe("application/json");
+  });
+
+  it("still applies non-protected extraHeaders", async () => {
+    const mockFetch = fetch as unknown as ReturnType<typeof vi.fn>;
+    mockFetch.mockResolvedValue({ ok: true, status: 200, json: () => Promise.resolve({}), headers: new Map() });
+    await githubFetchWithMeta("/orgs/my-org/info", { extraHeaders: { "X-Custom-Header": "custom-value" } });
+    const [, init] = mockFetch.mock.calls[0];
+    const sentHeaders = new Headers(init.headers as HeadersInit);
+    expect(sentHeaders.get("x-custom-header")).toBe("custom-value");
+  });
+
+  it("reuses validated URL construction — rejects disallowed origins", async () => {
+    await expect(
+      githubFetchWithMeta("https://evil.com/api/data", { authMode: "pat" }),
+    ).rejects.toThrow("disallowed origin");
+  });
+
+  it("reuses enterprise token selection for App auth mode", async () => {
+    mockIsAppEnt.mockReturnValue(true);
+    (validateAppAuth as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+    (getInstallationTokenForEnterprise as ReturnType<typeof vi.fn>).mockResolvedValue("ent-app-token");
+    const mockFetch = fetch as unknown as ReturnType<typeof vi.fn>;
+    mockFetch.mockResolvedValue({ ok: true, status: 200, json: () => Promise.resolve({ ok: true }), headers: new Map() });
+    const result = await githubFetchWithMeta<{ ok: boolean }>("/orgs/my-org/info", { enterpriseSlug: "ent1" });
+    expect(result.data.ok).toBe(true);
+    expect(getInstallationTokenForEnterprise).toHaveBeenCalledWith("ent1");
+  });
+
+  it("treats a real ok:true, status:204 response as null data (matching real fetch semantics)", async () => {
+    const mockFetch = fetch as unknown as ReturnType<typeof vi.fn>;
+    mockFetch.mockResolvedValue({
+      ok: true,
+      status: 204,
+      json: () => Promise.reject(new Error("should not be called for 204")),
+      headers: new Map([["x-ratelimit-remaining", "42"]]),
+    });
+    const result = await githubFetchWithMeta("/orgs/my-org/info");
+    expect(result.data).toBeNull();
+    expect(result.status).toBe(204);
+    expect(result.headers["x-ratelimit-remaining"]).toBe("42");
+  });
+});
+
+describe("githubFetch — 204 behavior (regression)", () => {
+  it("returns null on a real ok:true, status:204 response", async () => {
+    const mockFetch = fetch as unknown as ReturnType<typeof vi.fn>;
+    mockFetch.mockResolvedValue({
+      ok: true,
+      status: 204,
+      json: () => Promise.reject(new Error("should not be called for 204")),
+      headers: new Map(),
+    });
+    const result = await githubFetch("/orgs/my-org/info");
+    expect(result).toBeNull();
+  });
+});
+
+describe("_computeRetryDelayMsForTesting (pure backoff formula, direct/fast)", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("returns 0 for any attempt when Math.random is 0 (full jitter lower bound)", () => {
+    vi.spyOn(Math, "random").mockReturnValue(0);
+    expect(_computeRetryDelayMsForTesting(0)).toBe(0);
+    expect(_computeRetryDelayMsForTesting(5)).toBe(0);
+  });
+
+  it("caps at exactly 30000ms when Math.random is 1, regardless of attempt count", () => {
+    vi.spyOn(Math, "random").mockReturnValue(1);
+    expect(_computeRetryDelayMsForTesting(0)).toBe(1000);
+    expect(_computeRetryDelayMsForTesting(4)).toBe(16000);
+    expect(_computeRetryDelayMsForTesting(5)).toBe(30000); // uncapped would be 32000
+    expect(_computeRetryDelayMsForTesting(20)).toBe(30000);
+  });
+
+  it("honors a Retry-After header directly, capped at 120s", () => {
+    expect(_computeRetryDelayMsForTesting(0, "30")).toBe(30_000);
+    expect(_computeRetryDelayMsForTesting(0, "500")).toBe(120_000);
+  });
+
+  it("falls through to jitter when Retry-After is non-numeric or zero", () => {
+    vi.spyOn(Math, "random").mockReturnValue(0);
+    expect(_computeRetryDelayMsForTesting(0, "not-a-number")).toBe(0);
+    expect(_computeRetryDelayMsForTesting(0, "0")).toBe(0);
+  });
+
+  it("honors X-RateLimit-Reset when Retry-After is absent, capped at 120s", () => {
+    const farFuture = Math.floor(Date.now() / 1000) + 99_999;
+    expect(_computeRetryDelayMsForTesting(0, null, String(farFuture))).toBe(120_000);
+
+    const near = Math.floor(Date.now() / 1000) + 10;
+    const delay = _computeRetryDelayMsForTesting(0, null, String(near));
+    expect(delay).toBeGreaterThan(9_000);
+    expect(delay).toBeLessThanOrEqual(10_000);
+  });
+});
+
+describe("retry backoff computation (deterministic, via githubFetchWithMeta)", () => {
+  it("retries near-instantly when Math.random returns 0 (full jitter lower bound)", async () => {
+    vi.useFakeTimers();
+    const mockFetch = fetch as unknown as ReturnType<typeof vi.fn>;
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const randSpy = vi.spyOn(Math, "random").mockReturnValue(0);
+    mockFetch
+      .mockResolvedValueOnce({ ok: false, status: 500, headers: new Map() })
+      .mockResolvedValueOnce({ ok: true, status: 200, json: () => Promise.resolve({ ok: true }), headers: new Map() });
+    const promise = githubFetchWithMeta<{ ok: boolean }>("/orgs/my-org/info");
+    await vi.advanceTimersByTimeAsync(0);
+    const result = await promise;
+    expect(result.data.ok).toBe(true);
+    randSpy.mockRestore();
+    warnSpy.mockRestore();
+    vi.useRealTimers();
+  });
+
+  it("caps the backoff at exactly 30000ms when Math.random returns 1, even at high attempt counts", async () => {
+    vi.useFakeTimers();
+    const mockFetch = fetch as unknown as ReturnType<typeof vi.fn>;
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const randSpy = vi.spyOn(Math, "random").mockReturnValue(1);
+    // 6 failures (attempts 0..5); attempt 5 would be 32000ms uncapped, so the
+    // cap must bring the 6th retry's wait down to exactly 30000ms.
+    for (let i = 0; i < 6; i++) {
+      mockFetch.mockResolvedValueOnce({ ok: false, status: 500, headers: new Map() });
+    }
+    mockFetch.mockResolvedValueOnce({ ok: true, status: 200, json: () => Promise.resolve({ ok: true }), headers: new Map() });
+    const promise = githubFetchWithMeta<{ ok: boolean }>("/orgs/my-org/info", { retries: 7 });
+    // Sum of capped delays for attempts 0..5: 1000+2000+4000+8000+16000+30000 = 61000ms.
+    await vi.advanceTimersByTimeAsync(61000);
+    const result = await promise;
+    expect(result.data.ok).toBe(true);
+    expect(mockFetch).toHaveBeenCalledTimes(7);
+    randSpy.mockRestore();
+    warnSpy.mockRestore();
+    vi.useRealTimers();
+  });
+
+  it("caps a Retry-After request at 120s even if the header asks for longer", async () => {
+    vi.useFakeTimers();
+    const mockFetch = fetch as unknown as ReturnType<typeof vi.fn>;
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    mockFetch
+      .mockResolvedValueOnce({ ok: false, status: 429, headers: new Map([["retry-after", "99999"]]) })
+      .mockResolvedValueOnce({ ok: true, status: 200, json: () => Promise.resolve({ ok: true }), headers: new Map() });
+    const promise = githubFetchWithMeta<{ ok: boolean }>("/orgs/my-org/info");
+    // Advancing exactly to the 120s cap must be enough — anything short of it must not be.
+    await vi.advanceTimersByTimeAsync(120_000);
+    const result = await promise;
+    expect(result.data.ok).toBe(true);
+    warnSpy.mockRestore();
+    vi.useRealTimers();
+  });
+
+  it("does not resolve before the capped Retry-After wait elapses", async () => {
+    vi.useFakeTimers();
+    const mockFetch = fetch as unknown as ReturnType<typeof vi.fn>;
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    mockFetch
+      .mockResolvedValueOnce({ ok: false, status: 429, headers: new Map([["retry-after", "99999"]]) })
+      .mockResolvedValueOnce({ ok: true, status: 200, json: () => Promise.resolve({ ok: true }), headers: new Map() });
+    let resolved = false;
+    const promise = githubFetchWithMeta<{ ok: boolean }>("/orgs/my-org/info").then((r) => { resolved = true; return r; });
+    await vi.advanceTimersByTimeAsync(119_999);
+    expect(resolved).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    await promise;
+    expect(resolved).toBe(true);
+    warnSpy.mockRestore();
+    vi.useRealTimers();
+  });
+});
+
+describe("githubFetchWithMeta — real network integration (retry exhaustion, item 1)", () => {
+  const originalApiBase = process.env.GITHUB_API_BASE;
+  let server: http.Server | undefined;
+
+  afterEach(async () => {
+    if (server) {
+      await new Promise<void>((resolve) => server!.close(() => resolve()));
+      server = undefined;
+    }
+    if (originalApiBase === undefined) {
+      delete process.env.GITHUB_API_BASE;
+    } else {
+      process.env.GITHUB_API_BASE = originalApiBase;
+    }
+    vi.resetModules();
+  });
+
+  it("preserves a real GitHubApiError status/body from a live HTTP 500 server after exhausting retries", async () => {
+    let requestCount = 0;
+    server = http.createServer((_req, res) => {
+      requestCount++;
+      res.writeHead(500, { "Content-Type": "text/plain" });
+      res.end("upstream exploded for real");
+    });
+    await new Promise<void>((resolve) => server!.listen(0, "127.0.0.1", resolve));
+    const port = (server.address() as AddressInfo).port;
+    process.env.GITHUB_API_BASE = `http://127.0.0.1:${port}`;
+    process.env.GITHUB_TOKEN = "test-token-123";
+
+    vi.resetModules();
+    const randSpy = vi.spyOn(Math, "random").mockReturnValue(0);
+    vi.stubGlobal("fetch", realFetch);
+
+    const mod = await import("./api-base");
+    try {
+      await mod.githubFetchWithMeta("/rate_limit", { retries: 2 });
+      throw new Error("expected rejection");
+    } catch (err) {
+      expect(err).toBeInstanceOf(mod.GitHubApiError);
+      expect((err as InstanceType<typeof mod.GitHubApiError>).status).toBe(500);
+      expect((err as Error).message).toContain("upstream exploded for real");
+    }
+    expect(requestCount).toBe(2);
+    randSpy.mockRestore();
+  });
+
+  it("preserves a transport-failure GitHubApiError when the connection is refused across all retries", async () => {
+    process.env.GITHUB_API_BASE = "http://127.0.0.1:1";
+    process.env.GITHUB_TOKEN = "test-token-123";
+
+    vi.resetModules();
+    const randSpy = vi.spyOn(Math, "random").mockReturnValue(0);
+    vi.stubGlobal("fetch", realFetch);
+
+    const mod = await import("./api-base");
+    try {
+      await mod.githubFetchWithMeta("/rate_limit", { retries: 2 });
+      throw new Error("expected rejection");
+    } catch (err) {
+      expect(err).toBeInstanceOf(mod.GitHubApiError);
+      expect((err as InstanceType<typeof mod.GitHubApiError>).status).toBe(0);
+    }
+    randSpy.mockRestore();
+  }, 15000);
 });

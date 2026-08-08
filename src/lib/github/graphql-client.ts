@@ -44,12 +44,24 @@ export interface GraphQLResult<T> {
 
 // ── Sanitization ───────────────────────────────────────────────────────
 
-// Redact anything that looks like a GitHub token so error messages echoed
-// back from the API (which may quote request fragments) can never leak one.
-const TOKEN_PATTERN = /gh[pousr]_[A-Za-z0-9]{10,}/g;
+// Redact anything that looks like a GitHub credential so error messages
+// echoed back from the API (which may quote request fragments) can never
+// leak one. Covers:
+//  - classic tokens/PATs: ghp_, gho_, ghu_, ghs_, ghr_
+//  - fine-grained PATs: github_pat_...
+//  - raw Bearer-scheme values in an Authorization header/message
+const TOKEN_PATTERNS: RegExp[] = [
+  /gh[pousr]_[A-Za-z0-9]{10,}/g,
+  /github_pat_[A-Za-z0-9_]{10,}/g,
+  /\bbearer\s+[A-Za-z0-9._-]{10,}/gi,
+];
 
 function sanitizeMessage(message: string): string {
-  return message.replace(TOKEN_PATTERN, "[redacted]").replace(/\n|\r/g, " ");
+  let sanitized = message;
+  for (const pattern of TOKEN_PATTERNS) {
+    sanitized = sanitized.replace(pattern, "[redacted]");
+  }
+  return sanitized.replace(/\n|\r/g, " ");
 }
 
 function warningsFromErrors(errors: GraphQLError[] | undefined): string[] {
@@ -93,11 +105,13 @@ export async function githubGraphQL<T>(
 
 /** A GraphQL Relay-style connection: nodes (which may include nulls) + pageInfo. */
 export interface GraphQLConnection<TNode> {
-  nodes: (TNode | null | undefined)[];
-  pageInfo: {
+  /** May be absent or null entirely on some partial-error responses. */
+  nodes?: (TNode | null | undefined)[] | null;
+  /** May be absent or null entirely on some partial-error responses. */
+  pageInfo?: {
     hasNextPage: boolean;
     endCursor: string | null;
-  };
+  } | null;
 }
 
 export interface GraphQLPaginationOptions extends GraphQLRequestOptions {
@@ -114,9 +128,13 @@ export interface GraphQLPaginatedResult<TNode> {
  * Page through a GraphQL connection using the `after` cursor convention.
  * The caller's query must accept an `$after: String` variable and expose a
  * `pageInfo { hasNextPage endCursor }` selection reachable via
- * `extractConnection`. Null nodes are skipped, partial per-page errors are
- * preserved as warnings (pagination continues), and iteration is bounded by
- * `maxPages` to guard against a misbehaving or looping API.
+ * `extractConnection`. Null/missing nodes and a null/missing `pageInfo` are
+ * tolerated (treated as "no more items"/"no next page" respectively) rather
+ * than throwing, partial per-page errors are preserved as warnings
+ * (pagination continues), and iteration is bounded by `maxPages` to guard
+ * against a misbehaving or looping API — if the guard trips while the API
+ * still reports more pages available, a warning is added so callers know
+ * the result set is incomplete.
  */
 export async function githubGraphQLPaginated<TNode, TData>(
   query: string,
@@ -140,12 +158,26 @@ export async function githubGraphQLPaginated<TNode, TData>(
     const connection = extractConnection(result.data);
     if (!connection) break;
 
-    for (const node of connection.nodes) {
+    for (const node of connection.nodes ?? []) {
       if (node !== null && node !== undefined) nodes.push(node);
     }
 
-    if (!connection.pageInfo.hasNextPage || !connection.pageInfo.endCursor) break;
-    after = connection.pageInfo.endCursor;
+    const pageInfo = connection.pageInfo;
+    const hasNextPage = !!pageInfo?.hasNextPage;
+    const endCursor = pageInfo?.endCursor ?? null;
+
+    if (!hasNextPage || !endCursor) break;
+
+    if (page === maxPages - 1) {
+      // More pages are available, but we've hit the safety cap — surface
+      // that so callers don't mistake a truncated result for a complete one.
+      warnings.push(
+        `Pagination truncated after reaching the ${maxPages}-page limit while more results were still available.`,
+      );
+      break;
+    }
+
+    after = endCursor;
   }
 
   return { nodes, warnings };

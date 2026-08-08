@@ -89,6 +89,46 @@ describe("githubGraphQL", () => {
     expect(result.warnings[0]).not.toContain("ghp_abcdef1234567890");
   });
 
+  it("sanitizes fine-grained github_pat_ tokens", async () => {
+    mockFetchWithMeta.mockResolvedValue({
+      data: {
+        data: null,
+        errors: [{ message: "Bad credentials: token github_pat_11ABCDEFG0123456789_abcdefghijklmnop rejected" }],
+      },
+      status: 200,
+      headers: {},
+    });
+    const result = await githubGraphQL("query { viewer { login } }");
+    expect(result.warnings[0]).not.toContain("github_pat_11ABCDEFG0123456789_abcdefghijklmnop");
+    expect(result.warnings[0]).toContain("[redacted]");
+  });
+
+  it("sanitizes all classic gh_ token variants (ghp_, gho_, ghu_, ghs_, ghr_)", async () => {
+    const variants = ["ghp_abcdefghij1234567890", "gho_abcdefghij1234567890", "ghu_abcdefghij1234567890", "ghs_abcdefghij1234567890", "ghr_abcdefghij1234567890"];
+    for (const token of variants) {
+      mockFetchWithMeta.mockResolvedValue({
+        data: { data: null, errors: [{ message: `Bad credentials: token ${token} rejected` }] },
+        status: 200,
+        headers: {},
+      });
+      const result = await githubGraphQL("query { viewer { login } }");
+      expect(result.warnings[0]).not.toContain(token);
+    }
+  });
+
+  it("sanitizes Bearer-prefixed token values", async () => {
+    mockFetchWithMeta.mockResolvedValue({
+      data: {
+        data: null,
+        errors: [{ message: "Authorization failed for header: Bearer abcdef0123456789ghijkl" }],
+      },
+      status: 200,
+      headers: {},
+    });
+    const result = await githubGraphQL("query { viewer { login } }");
+    expect(result.warnings[0]).not.toContain("abcdef0123456789ghijkl");
+  });
+
   it("returns null data when the response has no data field", async () => {
     mockFetchWithMeta.mockResolvedValue({
       data: { errors: [{ message: "Something failed" }] },
@@ -220,6 +260,122 @@ describe("githubGraphQLPaginated", () => {
 
     expect(mockFetchWithMeta).toHaveBeenCalledTimes(3);
     expect(result.nodes).toHaveLength(3);
+    // hasNextPage was still true when the max-page guard kicked in — that
+    // must surface as a warning so callers know results are incomplete.
+    expect(result.warnings.some((w) => /max.?page|truncat/i.test(w))).toBe(true);
+  });
+
+  it("does not warn about truncation when pagination ends naturally before the max-page guard", async () => {
+    mockFetchWithMeta.mockResolvedValueOnce({
+      data: {
+        data: {
+          organization: {
+            members: {
+              nodes: [{ id: "1", name: "Alice" }],
+              pageInfo: { hasNextPage: false, endCursor: null },
+            },
+          },
+        },
+      },
+      status: 200,
+      headers: {},
+    });
+
+    const result = await githubGraphQLPaginated<Node, ConnectionData>(
+      "query { organization { members(first: 1) { nodes { id name } pageInfo { hasNextPage endCursor } } } }",
+      extractMembers,
+      { maxPages: 10 },
+    );
+
+    expect(result.warnings.some((w) => /max.?page|truncat/i.test(w))).toBe(false);
+  });
+
+  it("tolerates a connection with missing nodes without throwing", async () => {
+    mockFetchWithMeta.mockResolvedValueOnce({
+      data: {
+        data: {
+          organization: {
+            // `nodes` omitted entirely — some GraphQL responses drop it
+            // rather than returning an empty array.
+            members: { pageInfo: { hasNextPage: false, endCursor: null } },
+          },
+        },
+      },
+      status: 200,
+      headers: {},
+    });
+
+    const result = await githubGraphQLPaginated<Node, ConnectionData>(
+      "query { organization { members(first: 1) { nodes { id name } pageInfo { hasNextPage endCursor } } } }",
+      extractMembers,
+    );
+
+    expect(result.nodes).toEqual([]);
+    expect(result.warnings).toEqual([]);
+  });
+
+  it("tolerates a connection with missing pageInfo without throwing, preserving warnings", async () => {
+    mockFetchWithMeta.mockResolvedValueOnce({
+      data: {
+        data: {
+          organization: {
+            // `pageInfo` omitted entirely.
+            members: { nodes: [{ id: "1", name: "Alice" }] },
+          },
+        },
+        errors: [{ message: "pageInfo could not be resolved" }],
+      },
+      status: 200,
+      headers: {},
+    });
+
+    const result = await githubGraphQLPaginated<Node, ConnectionData>(
+      "query { organization { members(first: 1) { nodes { id name } pageInfo { hasNextPage endCursor } } } }",
+      extractMembers,
+    );
+
+    expect(result.nodes).toHaveLength(1);
+    expect(result.warnings).toHaveLength(1);
+    expect(result.warnings[0]).toContain("pageInfo could not be resolved");
+  });
+
+  it("tolerates individual null entries mixed with a missing nodes array across pages", async () => {
+    mockFetchWithMeta
+      .mockResolvedValueOnce({
+        data: {
+          data: {
+            organization: {
+              members: {
+                nodes: [null, { id: "1", name: "Alice" }],
+                pageInfo: { hasNextPage: true, endCursor: "cursor-1" },
+              },
+            },
+          },
+        },
+        status: 200,
+        headers: {},
+      })
+      .mockResolvedValueOnce({
+        data: {
+          data: {
+            organization: {
+              // Second page has no nodes at all and no pageInfo.
+              members: {},
+            },
+          },
+        },
+        status: 200,
+        headers: {},
+      });
+
+    const result = await githubGraphQLPaginated<Node, ConnectionData>(
+      "query($after: String) { organization { members(first: 1, after: $after) { nodes { id name } pageInfo { hasNextPage endCursor } } } }",
+      extractMembers,
+    );
+
+    expect(result.nodes).toHaveLength(1);
+    expect(result.nodes[0].id).toBe("1");
+    expect(mockFetchWithMeta).toHaveBeenCalledTimes(2);
   });
 
   it("collects warnings from partial errors across pages without throwing", async () => {
