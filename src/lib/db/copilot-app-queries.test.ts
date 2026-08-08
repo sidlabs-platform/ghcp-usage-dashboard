@@ -906,4 +906,56 @@ describe("getCopilotAppAdopters", () => {
     expect(beyond.adopters).toEqual([]);
     expect(beyond.total).toBe(3);
   });
+
+  it("falls back to sessions ordering (never throws or emits invalid SQL) for prototype-property sortField values", () => {
+    // A plain-object lookup (`ADOPTER_SORT_COLUMNS[sortField] ?? "sessions"`)
+    // would resolve "constructor"/"toString" through the prototype chain to
+    // an inherited function instead of missing the allowlist, bypassing the
+    // `??` fallback and interpolating that function into the ORDER BY
+    // clause as invalid SQL. "__proto__" is a further special case some
+    // object-key handling mishandles entirely. All three must behave
+    // identically to the documented "sessions" fallback.
+    const sessionsSort = getCopilotAppAdopters(START, END, 1, 10, "sessions", "desc").adopters.map((a) => a.login);
+
+    for (const sortField of ["constructor", "toString", "__proto__"]) {
+      const result = getCopilotAppAdopters(START, END, 1, 10, sortField, "desc");
+      expect(result.adopters.map((a) => a.login)).toEqual(sessionsSort);
+      expect(result.total).toBe(3);
+    }
+  });
+
+  it("caps an astronomically large finite page (1e308) to MAX_ADOPTER_PAGE without throwing, returning an empty page with the correct total", () => {
+    // 1e308 is finite but its (page - 1) * pageSize offset would otherwise
+    // be far beyond Number.MAX_SAFE_INTEGER (and, depending on pageSize,
+    // could even compute to Infinity) — this must be capped rather than
+    // fed directly into the SQL OFFSET.
+    expect(() => getCopilotAppAdopters(START, END, 1e308, 10, "sessions", "desc")).not.toThrow();
+    const result = getCopilotAppAdopters(START, END, 1e308, 10, "sessions", "desc");
+    expect(result.adopters).toEqual([]);
+    expect(result.total).toBe(3);
+  });
+
+  it("caps a page value that would overflow MAX_SAFE_INTEGER after multiplication by pageSize, without throwing", () => {
+    // Number.MAX_SAFE_INTEGER as `page` with the max pageSize (200) would
+    // compute an offset of (MAX_SAFE_INTEGER - 1) * 200, which overflows
+    // Number.MAX_SAFE_INTEGER and loses integer precision if not capped.
+    const hugePage = Number.MAX_SAFE_INTEGER;
+    expect(() => getCopilotAppAdopters(START, END, hugePage, 200, "sessions", "desc")).not.toThrow();
+    const result = getCopilotAppAdopters(START, END, hugePage, 200, "sessions", "desc");
+    expect(result.adopters).toEqual([]);
+    expect(result.total).toBe(3);
+  });
+
+  it("uses the documented default page size (50) for a non-finite pageSize (NaN/Infinity)", () => {
+    // 205-row scope: a default of 50 should return a full 50-row first page,
+    // distinct from the `1`-row floor applied to finite-but-invalid sizes
+    // like 0 or -20 (covered by the pageSize<=0 test above).
+    const nan = getCopilotAppAdopters("2025-05-01", "2025-05-01", 1, NaN, "login", "asc");
+    expect(nan.adopters).toHaveLength(50);
+    expect(nan.total).toBe(205);
+
+    const infinite = getCopilotAppAdopters("2025-05-01", "2025-05-01", 1, Infinity, "login", "asc");
+    expect(infinite.adopters).toHaveLength(50);
+    expect(infinite.total).toBe(205);
+  });
 });

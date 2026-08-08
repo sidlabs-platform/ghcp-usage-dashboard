@@ -314,6 +314,21 @@ export interface OverviewData {
 export interface CopilotAppKpis {
   periodActiveUsers: number;
   appActiveUsers: number;
+  /**
+   * `appActiveUsers / periodActiveUsers * 100` — the App-active distinct
+   * user count divided by *all* period-active scoped users (not just users
+   * with App telemetry support), per the approved product definition for
+   * user-level adoption rate. This is intentionally a different
+   * denominator than the enterprise/org aggregate fallback's
+   * `sourceActiveUsers` (see {@link CopilotAppAggregateDay.sourceActiveUsers}):
+   * at user level every scoped user's `user_daily_metrics` row is known and
+   * countable, so the full scoped population is the correct denominator.
+   * At aggregate level, only rows with explicit App support evidence can be
+   * safely summed into the denominator — see
+   * {@link CopilotAppAggregateDay.sourceActiveUsers} for why. Do not
+   * "align" these two denominators; they measure different things by
+   * design.
+   */
   adoptionRate: number;
   sessions: number;
   requests: number;
@@ -367,10 +382,23 @@ export interface CopilotAppAdopter {
   locDeleted: number;
 }
 
-/** Which underlying data source served a Copilot App analytics response. */
+/** Which underlying data source served a Copilot App analytics response.
+ * `"users"` is the precise per-user-row source (see
+ * {@link CopilotAppKpis.adoptionRate}); `"enterprise"`/`"organization"` are
+ * the aggregate fallback used when user-row data isn't available/permitted,
+ * with the coarser `sourceActiveUsers` denominator (see
+ * {@link CopilotAppAggregateDay.sourceActiveUsers}); `"none"` means no
+ * Copilot App data was found for the scope. The UI must read this field
+ * (together with {@link CopilotAppCapabilities}) to identify when it is
+ * displaying aggregate-fallback data rather than silently presenting it as
+ * equivalent to user-level data. */
 export type CopilotAppDataSource = "users" | "enterprise" | "organization" | "none";
 
-/** Feature capabilities available for the resolved Copilot App data source. */
+/** Feature capabilities available for the resolved Copilot App data source.
+ * The aggregate fallback (`dataSource: "enterprise" | "organization"`)
+ * cannot support per-user views, so `adopters` is always `false` in that
+ * case; API/UI callers must check this rather than assuming every
+ * `CopilotAppDataSource` supports the full user-level feature set. */
 export interface CopilotAppCapabilities {
   adopters: boolean;
   scopedFiltering: boolean;
@@ -378,6 +406,12 @@ export interface CopilotAppCapabilities {
   languageBreakdown: boolean;
 }
 
+/** Top-level Copilot App analytics response. `dataSource` and
+ * `capabilities` together let the UI distinguish a precise user-level
+ * response from an enterprise/organization aggregate fallback (see
+ * {@link CopilotAppDataSource} and {@link CopilotAppKpis.adoptionRate}) —
+ * the two sources use intentionally different adoption-rate denominators
+ * and must never be presented as interchangeable without that context. */
 export interface CopilotAppAnalyticsResponse {
   hasCopilotAppData: boolean;
   dataSource: CopilotAppDataSource;
@@ -397,9 +431,23 @@ export interface CopilotAppAdoptersResponse {
   totalPages: number;
 }
 
-/** One day of Copilot App activity from an enterprise/org aggregate fallback. */
+/** One day of Copilot App activity from an enterprise/org aggregate
+ * fallback (used when precise per-user data isn't available/permitted —
+ * see {@link CopilotAppDataSource}). */
 export interface CopilotAppAggregateDay {
   day: string;
+  /**
+   * Sum of `daily_active_users` restricted to rows carrying explicit
+   * Copilot App support evidence for that day (see
+   * {@link CopilotAppKpis.adoptionRate} for the contrast with the
+   * user-level denominator). This deliberately excludes rows from
+   * enterprises/orgs with no App tracking at all, so a partial App rollout
+   * across a multi-enterprise/org scope doesn't dilute the adoption-rate
+   * denominator with users who could never have used the App. Because of
+   * this restriction, `sourceActiveUsers` is *not* directly comparable to
+   * `periodActiveUsers` in {@link CopilotAppKpis} — it is scoped to
+   * App-supported rows only, not the full active-user population.
+   */
   sourceActiveUsers: number;
   activeUsers: number;
   sessions: number;

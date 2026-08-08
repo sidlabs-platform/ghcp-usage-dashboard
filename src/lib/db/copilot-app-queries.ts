@@ -71,8 +71,21 @@ const HAS_APP_ACTIVITY = `(
 )`;
 
 /** Resolve the day/login/enterprise filter clauses shared by every query in
- * this module. `allowedLogins === undefined` means unfiltered; an explicit
- * empty array means "no rows" (never silently falls back to unfiltered). */
+ * this module.
+ *
+ * `allowedLogins === undefined` means unfiltered; an explicit empty array
+ * means "no rows" (never silently falls back to unfiltered) — see
+ * {@link buildLoginFilter}'s `emptyMeansNoRows` parameter, always passed as
+ * `true` here.
+ *
+ * `enterpriseSlugs` has the opposite empty-array behavior, inherited from
+ * {@link buildEnterpriseFilter}: `undefined` *and* an explicit empty array
+ * (`[]`) both mean unfiltered (no enterprise clause is added). This
+ * asymmetry with `allowedLogins` is intentional — enterprise scoping is an
+ * optional narrowing dimension layered on top of the login/day scope, not
+ * an independent "did the caller scope this down to nothing" signal, so an
+ * empty list never zeroes out results the login/day filters already scoped
+ * correctly. */
 function resolveFilters(
   allowedLogins: string[] | undefined,
   enterpriseSlugs: string[] | undefined,
@@ -161,8 +174,12 @@ export function getCopilotAppUserSummary(
     outputTokens: number;
   };
 
-  const featureLogin = allowedLogins === undefined ? { clause: "", params: [] as string[] } : buildLoginFilter(allowedLogins, "u.user_login", true);
-  const featureEnterprise = buildEnterpriseFilter(enterpriseSlugs, "u.enterprise_slug");
+  const { login: featureLogin, enterprise: featureEnterprise } = resolveFilters(
+    allowedLogins,
+    enterpriseSlugs,
+    "u.user_login",
+    "u.enterprise_slug",
+  );
   const featureSql = `
     WITH app_feature AS (
       SELECT
@@ -284,8 +301,7 @@ export function getCopilotAppDailyCodeImpact(
   enterpriseSlugs?: string[],
 ): CopilotAppCodeImpactPoint[] {
   const db = getDb();
-  const login = allowedLogins === undefined ? { clause: "", params: [] as string[] } : buildLoginFilter(allowedLogins, "u.user_login", true);
-  const enterprise = buildEnterpriseFilter(enterpriseSlugs, "u.enterprise_slug");
+  const { login, enterprise } = resolveFilters(allowedLogins, enterpriseSlugs, "u.user_login", "u.enterprise_slug");
 
   const sql = `
     WITH app_feature AS (
@@ -338,8 +354,7 @@ export function getCopilotAppModelBreakdown(
   enterpriseSlugs?: string[],
 ): CopilotAppBreakdown[] {
   const db = getDb();
-  const login = allowedLogins === undefined ? { clause: "", params: [] as string[] } : buildLoginFilter(allowedLogins, "u.user_login", true);
-  const enterprise = buildEnterpriseFilter(enterpriseSlugs, "u.enterprise_slug");
+  const { login, enterprise } = resolveFilters(allowedLogins, enterpriseSlugs, "u.user_login", "u.enterprise_slug");
 
   const sql = `
     WITH raw AS (
@@ -381,8 +396,7 @@ export function getCopilotAppLanguageBreakdown(
   enterpriseSlugs?: string[],
 ): CopilotAppBreakdown[] {
   const db = getDb();
-  const login = allowedLogins === undefined ? { clause: "", params: [] as string[] } : buildLoginFilter(allowedLogins, "u.user_login", true);
-  const enterprise = buildEnterpriseFilter(enterpriseSlugs, "u.enterprise_slug");
+  const { login, enterprise } = resolveFilters(allowedLogins, enterpriseSlugs, "u.user_login", "u.enterprise_slug");
 
   const sql = `
     WITH raw AS (
@@ -596,17 +610,35 @@ export function getOrganizationCopilotAppDaily(
 
 // ── Adopters (paginated) ─────────────────────────────────────────────────
 
-const ADOPTER_SORT_COLUMNS: Record<string, string> = {
-  login: "login",
-  activeDays: "activeDays",
-  sessions: "sessions",
-  requests: "requests",
-  prompts: "prompts",
-  promptTokens: "promptTokens",
-  outputTokens: "outputTokens",
-  locAdded: "locAdded",
-  locDeleted: "locDeleted",
-};
+/** Allowlisted adopter sort fields, keyed by the API-facing field name and
+ * valued with the actual SQL column to sort by. Deliberately a `Map` rather
+ * than a plain object/`Record`: a plain object's keys are looked up through
+ * the prototype chain, so a caller-supplied `sortField` of `"constructor"`,
+ * `"toString"`, or `"__proto__"` would resolve to an inherited
+ * `Object.prototype` value (a function, not a column name) instead of
+ * failing the lookup — bypassing the `?? "sessions"` fallback and producing
+ * invalid SQL. `Map.prototype.get` has no such prototype-chain lookup, so
+ * any key not explicitly inserted below simply misses. */
+const ADOPTER_SORT_COLUMNS: ReadonlyMap<string, string> = new Map([
+  ["login", "login"],
+  ["activeDays", "activeDays"],
+  ["sessions", "sessions"],
+  ["requests", "requests"],
+  ["prompts", "prompts"],
+  ["promptTokens", "promptTokens"],
+  ["outputTokens", "outputTokens"],
+  ["locAdded", "locAdded"],
+  ["locDeleted", "locDeleted"],
+]);
+
+/** Resolve a caller-supplied adopter sort field to its allowlisted SQL
+ * column via {@link ADOPTER_SORT_COLUMNS}, falling back to `"sessions"` for
+ * any field not on the allowlist — including prototype property names like
+ * `"constructor"`, `"toString"`, or `"__proto__"` that a plain-object
+ * lookup would otherwise resolve incorrectly. */
+function resolveAdopterSortColumn(sortField: string): string {
+  return ADOPTER_SORT_COLUMNS.get(sortField) ?? "sessions";
+}
 
 /** Explicit adopter column list used by the data query — deliberately never
  * `SELECT *`, so the shape returned to callers can't silently drift from
@@ -620,21 +652,40 @@ export interface CopilotAppAdoptersResult {
 }
 
 const ADOPTER_MAX_PAGE_SIZE = 200;
+/** Documented default page size used when a caller supplies a non-finite
+ * `pageSize` (NaN/Infinity) — distinct from the `1` floor applied to
+ * finite-but-out-of-range values (see {@link normalizeAdopterPageSize}),
+ * since a non-finite value carries no usable signal about intended size. */
+const ADOPTER_DEFAULT_PAGE_SIZE = 50;
+/** Upper bound on the normalized page number. Combined with
+ * {@link ADOPTER_MAX_PAGE_SIZE}, this caps the largest possible
+ * `(page - 1) * pageSize` OFFSET at 1_000_000 * 200 = 200,000,000 — far
+ * below `Number.MAX_SAFE_INTEGER`, so the OFFSET computation can never
+ * overflow to `Infinity`/`NaN` or lose integer precision, no matter how
+ * large a `page` value a caller supplies (e.g. `1e308`). Any page beyond
+ * this is already far past the last real page for realistic dataset sizes,
+ * so capping it only affects out-of-range requests, which already return an
+ * empty adopter array. */
+const MAX_ADOPTER_PAGE = 1_000_000;
 
 /** Defensively normalize a caller-supplied page number to a finite integer
- * >= 1. Non-finite input (NaN/Infinity), zero, negative, or fractional
- * values are coerced rather than trusted, since this value flows directly
- * into an OFFSET computation. */
+ * in `[1, MAX_ADOPTER_PAGE]`. Non-finite input (NaN/Infinity), zero,
+ * negative, or fractional values are coerced rather than trusted, and huge
+ * finite values (e.g. `1e308`) are capped, since this value flows directly
+ * into an OFFSET computation that must stay a safe, non-negative integer. */
 function normalizeAdopterPage(page: number): number {
   if (!Number.isFinite(page)) return 1;
   const truncated = Math.trunc(page);
-  return truncated >= 1 ? truncated : 1;
+  if (truncated < 1) return 1;
+  return Math.min(truncated, MAX_ADOPTER_PAGE);
 }
 
-/** Defensively normalize a caller-supplied page size to a finite integer
- * clamped to [1, 200], since this value flows directly into a LIMIT. */
+/** Defensively normalize a caller-supplied page size. A non-finite value
+ * (NaN/Infinity) falls back to the documented default of
+ * {@link ADOPTER_DEFAULT_PAGE_SIZE}; a finite value is truncated and
+ * clamped to `[1, 200]`, since this value flows directly into a LIMIT. */
 function normalizeAdopterPageSize(pageSize: number): number {
-  if (!Number.isFinite(pageSize)) return 1;
+  if (!Number.isFinite(pageSize)) return ADOPTER_DEFAULT_PAGE_SIZE;
   const truncated = Math.trunc(pageSize);
   if (truncated < 1) return 1;
   if (truncated > ADOPTER_MAX_PAGE_SIZE) return ADOPTER_MAX_PAGE_SIZE;
@@ -668,12 +719,15 @@ function escapeLikePattern(input: string): string {
  * paired with all-zero dedicated totals, is excluded). `activeDays` counts
  * only days meeting that same activity predicate. Rows are deduplicated per
  * (day, user_login) across enterprises before summing period totals.
- * Sorting is restricted to a fixed column allowlist; an unrecognized
- * `sortField` falls back to `sessions`. `page`/`pageSize`/`sortDir` are
- * defensively re-normalized at runtime (see {@link normalizeAdopterPage},
- * {@link normalizeAdopterPageSize}, {@link normalizeAdopterSortDir}) since
- * they typically originate from parsed request query parameters. Search
- * text is matched literally — `%`, `_`, and `\` are escaped before binding.
+ * Sorting is restricted to a fixed column allowlist via
+ * {@link resolveAdopterSortColumn}; an unrecognized or prototype-property
+ * `sortField` (e.g. `"constructor"`, `"toString"`, `"__proto__"`) falls
+ * back to `sessions` rather than throwing or emitting invalid SQL.
+ * `page`/`pageSize`/`sortDir` are defensively re-normalized at runtime (see
+ * {@link normalizeAdopterPage}, {@link normalizeAdopterPageSize},
+ * {@link normalizeAdopterSortDir}) since they typically originate from
+ * parsed request query parameters. Search text is matched literally — `%`,
+ * `_`, and `\` are escaped before binding.
  */
 export function getCopilotAppAdopters(
   startDay: string,
@@ -690,7 +744,7 @@ export function getCopilotAppAdopters(
   const { login, enterprise } = resolveFilters(allowedLogins, enterpriseSlugs);
   const searchClause = search ? "AND user_login LIKE ? ESCAPE '\\'" : "";
   const searchParams = search ? [`%${escapeLikePattern(search)}%`] : [];
-  const sqlSort = ADOPTER_SORT_COLUMNS[sortField] ?? "sessions";
+  const sqlSort = resolveAdopterSortColumn(sortField);
   const sqlDir = normalizeAdopterSortDir(sortDir) === "asc" ? "ASC" : "DESC";
   const normalizedPage = normalizeAdopterPage(page);
   const normalizedPageSize = normalizeAdopterPageSize(pageSize);
@@ -755,7 +809,12 @@ export function getCopilotAppAdopters(
   `;
   const cteParams = [startDay, endDay, ...login.params, ...enterprise.params, ...searchParams];
 
-  const offset = (normalizedPage - 1) * normalizedPageSize;
+  // `normalizedPage` is capped to MAX_ADOPTER_PAGE and `normalizedPageSize`
+  // to ADOPTER_MAX_PAGE_SIZE above, so this product is bounded well under
+  // Number.MAX_SAFE_INTEGER; the explicit clamp below is a defensive
+  // belt-and-braces guard so OFFSET can never become a non-safe-integer
+  // even if either cap is changed independently in the future.
+  const offset = Math.min(Math.max(0, (normalizedPage - 1) * normalizedPageSize), Number.MAX_SAFE_INTEGER);
   // COUNT(*) OVER() rides along with the data query so a normal, non-empty
   // page only executes the (potentially expensive) CTE once. When the
   // requested page is beyond the last page, LIMIT/OFFSET yields zero rows
@@ -774,7 +833,20 @@ export function getCopilotAppAdopters(
 
   if (rows.length > 0) {
     const total = rows[0].totalCount;
-    const adopters = rows.map(({ totalCount: _totalCount, ...adopter }) => adopter);
+    // Map explicitly to the CopilotAppAdopter shape (rather than
+    // destructuring `totalCount` out) so no field is discarded via an
+    // unused-variable pattern that trips the no-unused-vars lint rule.
+    const adopters: CopilotAppAdopter[] = rows.map((row) => ({
+      login: row.login,
+      activeDays: row.activeDays,
+      sessions: row.sessions,
+      requests: row.requests,
+      prompts: row.prompts,
+      promptTokens: row.promptTokens,
+      outputTokens: row.outputTokens,
+      locAdded: row.locAdded,
+      locDeleted: row.locDeleted,
+    }));
     return { adopters, total };
   }
 
