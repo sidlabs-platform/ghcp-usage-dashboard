@@ -25,7 +25,8 @@ export type AicConsumptionErrorKind =
   | "forbidden" // 403 — credential lacks access to the endpoint (capability/run-level)
   | "unavailable" // any other non-retryable HTTP failure — endpoint not supported/reachable
   | "malformed" // 2xx response body did not match the expected shape
-  | "transport_error"; // network/transport failure (including retries exhausted)
+  | "transport_error" // network/transport failure (including retries exhausted)
+  | "internal_error"; // an unexpected, non-API failure (e.g. a programmer bug) — never mislabeled as "malformed"
 
 export interface AicConsumptionRecord {
   /** "YYYY-MM" billing period the usage was queried for. */
@@ -91,7 +92,15 @@ const DEFAULT_CREDIT_TO_USD = 0.01;
 
 // ── Response normalization ───────────────────────────────────────────────
 
-/** Thrown internally when a 2xx response body does not match the expected shape. */
+/**
+ * Thrown internally when a 2xx response body does not match the expected
+ * shape. Deliberately **user-neutral** — the message never embeds a login —
+ * so it can be safely reused as the shared `detail` when a single
+ * capability-level failure is copied across an entire batch (see
+ * `toBatchFailureResult`); each per-user display message is only ever
+ * constructed later, in `buildErrorMessage`, which is the sole place a
+ * login is added to the text.
+ */
 class MalformedAicResponseError extends Error {}
 
 function firstFiniteNumber(...values: unknown[]): number | undefined {
@@ -110,15 +119,14 @@ function normalizeAicUsageResponse(
   fallbackOrgLogin: string | null,
 ): AicConsumptionRecord {
   if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
-    throw new MalformedAicResponseError(`AI credit usage response for user "${userLogin}" was not a JSON object`);
+    // User-neutral message — never embeds `userLogin` (see MalformedAicResponseError docs).
+    throw new MalformedAicResponseError("response was not a JSON object");
   }
   const body = raw as Record<string, unknown>;
 
   const credits = firstFiniteNumber(body.credits, body.quantity, body.ai_credits);
   if (credits === undefined) {
-    throw new MalformedAicResponseError(
-      `AI credit usage response for user "${userLogin}" is missing a numeric credits/quantity value`
-    );
+    throw new MalformedAicResponseError("response is missing a numeric credits/quantity value");
   }
 
   const grossUsd =
@@ -147,7 +155,9 @@ function normalizeAicUsageResponse(
  * both for a single freshly-classified error and to *regenerate* a distinct,
  * correctly-user-named message for every user when a single capability-level
  * failure (from the preflight probe) is copied across an entire batch — so
- * no user ever sees another user's login embedded in their message.
+ * no user ever sees another user's login embedded in their message. `detail`
+ * (when present) must always be user-neutral text — the *only* place a
+ * login is ever woven into the message is here, per-call, for `userLogin`.
  */
 function buildErrorMessage(kind: AicConsumptionErrorKind, userLogin: string, detail?: string): string {
   switch (kind) {
@@ -161,8 +171,12 @@ function buildErrorMessage(kind: AicConsumptionErrorKind, userLogin: string, det
       return `AI credit usage endpoint returned HTTP ${detail ?? "?"} for user "${userLogin}"`;
     case "malformed":
       return detail
-        ? `${detail} (user "${userLogin}")`
+        ? `Malformed AI credit usage response for user "${userLogin}": ${detail}`
         : `Malformed AI credit usage response for user "${userLogin}"`;
+    case "internal_error":
+      return detail
+        ? `Unexpected internal error fetching AI credit usage for user "${userLogin}": ${detail}`
+        : `Unexpected internal error fetching AI credit usage for user "${userLogin}"`;
   }
 }
 
@@ -181,12 +195,20 @@ function classifyError(err: unknown, userLogin: string): AicConsumptionError {
     return { status: "unavailable", userLogin, message: buildErrorMessage("unavailable", userLogin, detail), detail };
   }
   if (err instanceof MalformedAicResponseError) {
+    // err.message is guaranteed user-neutral (see MalformedAicResponseError docs).
     return { status: "malformed", userLogin, message: buildErrorMessage("malformed", userLogin, err.message), detail: err.message };
   }
-  // Any other unexpected failure (e.g. a JSON parse error surfaced as a
-  // SyntaxError) is treated as malformed rather than aborting the batch.
+  // Any other unexpected failure (e.g. a programmer bug surfaced as a
+  // TypeError, or some other non-network, non-API-shape exception) is
+  // deliberately NOT classified as "malformed" — that classification means
+  // "the API replied but its body didn't match the expected shape", which
+  // this is not. Isolating it as its own "internal_error" kind (rather than
+  // re-throwing) preserves this batch's per-user isolation guarantee — one
+  // user's unexpected failure never aborts the other concurrent fetches —
+  // while still keeping it clearly distinguishable from both a genuine
+  // malformed API response and a false "ok".
   const detail = err instanceof Error ? err.message : String(err);
-  return { status: "malformed", userLogin, message: buildErrorMessage("malformed", userLogin, detail), detail };
+  return { status: "internal_error", userLogin, message: buildErrorMessage("internal_error", userLogin, detail), detail };
 }
 
 /**
@@ -283,11 +305,12 @@ async function fetchOneUser(
  *    404 is an isolated per-user result — it never triggers a fallback and
  *    processing of the remaining users continues normally.
  *  - `not_found` (404) is the *only* isolated, per-user classification.
- *    `forbidden`, `unavailable`, `malformed`, and `transport_error` are all
- *    treated identically as capability/run-level signals when observed on
- *    the preflight probe — each remains individually distinguishable in the
- *    returned results (statuses are never collapsed into one another), but
- *    all four equally trigger the org fallback (when configured).
+ *    `forbidden`, `unavailable`, `malformed`, `transport_error`, and
+ *    `internal_error` are all treated identically as capability/run-level
+ *    signals when observed on the preflight probe — each remains
+ *    individually distinguishable in the returned results (statuses are
+ *    never collapsed into one another), but all five equally trigger the
+ *    org fallback (when configured).
  *  - `users` is deduped case-insensitively before any request is made
  *    (GitHub logins are case-insensitive), preserving first-seen casing and
  *    order, so exactly **one call is issued per distinct holder** — never

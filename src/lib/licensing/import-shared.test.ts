@@ -118,7 +118,7 @@ describe("readImportFile", () => {
     expect(() => readImportFile(p)).toThrow(ImportFileError);
   });
 
-  it("produces different fingerprints for files with identical content but different mtimes/paths", () => {
+  it("produces different fingerprints for files with identical content but different paths (fingerprint retains path as normalized source identity)", () => {
     const p1 = writeFixture("dup1.txt", "same content");
     const p2 = writeFixture("dup2.txt", "same content");
     const r1 = readImportFile(p1);
@@ -133,6 +133,30 @@ describe("readImportFile", () => {
     const r1 = readImportFile(p);
     const r2 = readImportFile(p);
     expect(r1.fingerprint).toBe(r2.fingerprint);
+  });
+
+  it("produces a stable fingerprint when the same path is rewritten with byte-identical content at a different mtime (content-stable, not volatile-metadata-stable)", () => {
+    const p = writeFixture("rewrite-same-bytes.txt", "identical content");
+    const r1 = readImportFile(p);
+
+    // Rewrite the exact same bytes, then force an unambiguously different
+    // mtime (re-writing alone may not reliably change mtime at typical
+    // filesystem timestamp resolution) — this simulates a byte-identical
+    // re-export at a later time, which must be idempotent.
+    fs.writeFileSync(p, "identical content", "utf-8");
+    const future = new Date(Date.now() + 60_000);
+    fs.utimesSync(p, future, future);
+
+    const r2 = readImportFile(p);
+    expect(r2.fingerprint).toBe(r1.fingerprint);
+  });
+
+  it("changes the fingerprint when the same path's content changes, independent of mtime", () => {
+    const p = writeFixture("rewrite-different-bytes.txt", "version one");
+    const r1 = readImportFile(p);
+    fs.writeFileSync(p, "version two", "utf-8");
+    const r2 = readImportFile(p);
+    expect(r2.fingerprint).not.toBe(r1.fingerprint);
   });
 });
 
@@ -300,5 +324,26 @@ describe("parseDelimitedText", () => {
     const parsed = parseDelimitedText("");
     expect(parsed.headers).toEqual([]);
     expect(parsed.rows).toEqual([]);
+  });
+
+  it("treats a quoted all-empty row as real data, not a blank line to silently drop", () => {
+    // Every field is explicitly quoted (`""`) — a deliberate empty-value
+    // row, not an accidental blank line — so it must survive tokenization
+    // as a data row (downstream row-level validation, e.g. in
+    // aic-csv-import.ts, is what should flag/skip it as malformed).
+    const csv = 'a,b,c\n"","",""\n1,2,3\n';
+    const parsed = parseDelimitedText(csv);
+    expect(parsed.rows).toHaveLength(2);
+    expect(parsed.rows[0]).toEqual({ a: "", b: "", c: "" });
+    expect(parsed.rows[1]).toEqual({ a: "1", b: "2", c: "3" });
+  });
+
+  it("still treats a truly blank line (no quotes, no commas) as a non-data line to skip", () => {
+    const csv = "a,b,c\n1,2,3\n\n4,5,6\n";
+    const parsed = parseDelimitedText(csv);
+    expect(parsed.rows).toEqual([
+      { a: "1", b: "2", c: "3" },
+      { a: "4", b: "5", c: "6" },
+    ]);
   });
 });

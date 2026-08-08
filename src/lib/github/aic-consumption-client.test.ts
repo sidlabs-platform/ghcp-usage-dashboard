@@ -334,6 +334,35 @@ describe("fetchAicConsumptionForUsers — endpoint-wide fallback", () => {
     const messages = result.results.map((r) => ("message" in r ? r.message : ""));
     expect(new Set(messages).size).toBe(3); // all distinct — none copied verbatim from another user
   });
+
+  it("never leaks the preflight user's login into another user's message when a malformed preflight failure is copied across the batch (no org fallback configured)", async () => {
+    // The preflight probe always fetches the first user ("alice") first;
+    // every user gets a malformed (non-object) response body.
+    mockFetchWithMeta.mockResolvedValue(okResponse("garbage"));
+
+    const result = await fetchAicConsumptionForUsers({
+      enterpriseSlug: "acme",
+      year: 2026,
+      month: 1,
+      users: ["alice", "bob", "carol"],
+    });
+
+    expect(result.fellBackToOrg).toBe(false);
+    expect(result.results).toHaveLength(3);
+
+    const allLogins = ["alice", "bob", "carol"];
+    for (const r of result.results) {
+      expect(r.status).toBe("malformed");
+      if (!("message" in r)) continue;
+      expect(r.message).toContain(r.userLogin);
+      for (const otherLogin of allLogins) {
+        if (otherLogin === r.userLogin) continue;
+        // Regression: bob's (or carol's) message must never contain the
+        // preflight user's ("alice") login, or any other user's login.
+        expect(r.message.toLowerCase()).not.toContain(otherLogin.toLowerCase());
+      }
+    }
+  });
 });
 
 describe("fetchAicConsumptionForUsers — error classification", () => {
@@ -394,6 +423,43 @@ describe("fetchAicConsumptionForUsers — error classification", () => {
     const byUser = new Map(result.results.map((r) => [r.userLogin, r]));
     expect(byUser.get("alice")?.status).toBe("ok");
     expect(byUser.get("bob")?.status).toBe("malformed");
+    expect(byUser.get("carol")?.status).toBe("ok");
+  });
+
+  it("classifies an unexpected programmer error (e.g. TypeError) as internal_error — never mislabeled as malformed or ok", async () => {
+    mockFetchWithMeta.mockRejectedValue(new TypeError("Cannot read properties of undefined (reading 'foo')"));
+
+    const result = await fetchAicConsumptionForUsers({
+      enterpriseSlug: "acme",
+      year: 2026,
+      month: 1,
+      users: ["alice"],
+    });
+
+    expect(result.results[0].status).not.toBe("malformed");
+    expect(result.results[0].status).not.toBe("ok");
+    expect(result.results[0].status).toBe("internal_error");
+    if ("message" in result.results[0]) {
+      expect(result.results[0].message).toContain("alice");
+    }
+  });
+
+  it("isolates a TypeError to the single affected user without aborting the rest of the batch", async () => {
+    mockFetchWithMeta.mockImplementation((p: string) => {
+      if (p.includes("user=bob")) return Promise.reject(new TypeError("boom"));
+      return Promise.resolve(okResponse({ credits: 1 }));
+    });
+
+    const result = await fetchAicConsumptionForUsers({
+      enterpriseSlug: "acme",
+      year: 2026,
+      month: 1,
+      users: ["alice", "bob", "carol"],
+    });
+
+    const byUser = new Map(result.results.map((r) => [r.userLogin, r]));
+    expect(byUser.get("alice")?.status).toBe("ok");
+    expect(byUser.get("bob")?.status).toBe("internal_error");
     expect(byUser.get("carol")?.status).toBe("ok");
   });
 });

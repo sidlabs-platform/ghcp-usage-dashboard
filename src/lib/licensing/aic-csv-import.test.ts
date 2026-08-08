@@ -97,6 +97,20 @@ describe("importAicConsumptionCsv — quoting, duplicates, missing values", () =
     expect(result.warnings[0]).toMatch(/credits/i);
   });
 
+  it("treats a quoted all-empty CSV row as data — reported as a skipped/malformed row, not silently dropped", () => {
+    const p = writeFixture(
+      "quoted-empty-row.csv",
+      'period,org,user,credits\n"","","",""\n2026-01,acme-org,bob,120\n',
+    );
+    const result = importAicConsumptionCsv(p);
+    // The quoted-all-empty row survives tokenization and is then reported
+    // (missing period/user/credits) rather than vanishing without a trace.
+    expect(result.records).toHaveLength(1);
+    expect(result.records[0].userLogin).toBe("bob");
+    expect(result.skippedRows).toBe(1);
+    expect(result.warnings.length).toBeGreaterThan(0);
+  });
+
   it("warns about malformed rows (mismatched column counts) but still attempts to import them", () => {
     const p = writeFixture(
       "malformed-row.csv",

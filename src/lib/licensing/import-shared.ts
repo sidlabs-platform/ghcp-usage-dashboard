@@ -98,8 +98,18 @@ function isValidUtf8(buffer: Buffer): boolean {
  * server configuration (never raw URL/query input — see module docs).
  * Validates: the path exists and resolves to a regular file, its size is
  * within `maxBytes`, and its content is valid UTF-8. Returns the decoded
- * content plus a fingerprint derived from the content and file metadata
- * (size, mtime, basename) — never logs raw content.
+ * content plus a fingerprint — never logs raw content.
+ *
+ * **Fingerprint semantics**: the fingerprint is a pure function of the
+ * file's *content* plus its *basename* (a normalized, non-volatile source
+ * identity — e.g. distinguishing "the same bytes imported from two
+ * differently-named configured sources"). It deliberately excludes every
+ * volatile filesystem attribute (mtime, size-on-disk, inode, etc.), so a
+ * byte-identical re-export of the same source — even rewritten at a later
+ * time — always produces the *same* fingerprint. This is what makes
+ * re-imports idempotent: callers can compare fingerprints to detect "this
+ * exact source was already imported" without being defeated by a export
+ * tool simply touching the file's mtime on every run.
  *
  * Every failure is a typed {@link ImportFileError} whose `reason` lets
  * callers distinguish a missing optional source (`"not_found"`, and for the
@@ -154,11 +164,10 @@ export function readImportFile(configuredPath: string, options: ReadImportFileOp
   }
 
   const content = buffer.toString("utf-8");
-  const fingerprint = computeFingerprint(content, {
-    path: displayName,
-    size: stat.size,
-    mtimeMs: stat.mtimeMs,
-  });
+  // Deliberately content-stable: only `path` (the basename) is mixed in as
+  // normalized source identity. No volatile filesystem metadata (mtime,
+  // stat.size, inode, etc.) is ever included — see the docstring above.
+  const fingerprint = computeFingerprint(content, { path: displayName });
 
   return { content, fingerprint };
 }
@@ -239,13 +248,35 @@ export interface ParsedDelimitedText {
  *  - Escaped quotes (doubled "")
  *  - Multiline quoted fields (newlines inside quotes)
  *  - CRLF and LF line endings
- * Blank lines (all-empty fields) are skipped rather than treated as data.
+ * A truly blank line (no characters at all between newlines — not even an
+ * empty quoted field) is skipped rather than treated as data. A row whose
+ * field(s) were *explicitly quoted* (e.g. `"","",""`) is always kept as
+ * real data, even when every quoted value happens to be empty — that's a
+ * deliberate empty-value row, not an accidental blank line, and callers
+ * (e.g. `aic-csv-import.ts`'s row-level validation) are responsible for
+ * reporting/skipping it as malformed rather than the tokenizer silently
+ * discarding it.
  */
 function tokenizeCsv(content: string): string[][] {
   const rows: string[][] = [];
   let currentRow: string[] = [];
   let currentField = "";
   let inQuotes = false;
+  // True when any field in the row-in-progress was wrapped in quotes, even
+  // if it ended up empty — distinguishes a deliberate empty *value* from an
+  // accidental blank *line*.
+  let rowHasQuotedField = false;
+
+  const flushRow = () => {
+    currentRow.push(currentField);
+    currentField = "";
+    const isBlankLine = currentRow.length === 1 && currentRow[0].length === 0 && !rowHasQuotedField;
+    if (!isBlankLine) {
+      rows.push(currentRow);
+    }
+    currentRow = [];
+    rowHasQuotedField = false;
+  };
 
   for (let i = 0; i < content.length; i++) {
     const ch = content[i];
@@ -263,27 +294,20 @@ function tokenizeCsv(content: string): string[][] {
       }
     } else if (ch === '"') {
       inQuotes = true;
+      rowHasQuotedField = true;
     } else if (ch === ",") {
       currentRow.push(currentField);
       currentField = "";
     } else if (ch === "\r") {
       // skip CR, handle LF next
     } else if (ch === "\n") {
-      currentRow.push(currentField);
-      currentField = "";
-      if (currentRow.some((v) => v.length > 0)) {
-        rows.push(currentRow);
-      }
-      currentRow = [];
+      flushRow();
     } else {
       currentField += ch;
     }
   }
 
-  currentRow.push(currentField);
-  if (currentRow.some((v) => v.length > 0)) {
-    rows.push(currentRow);
-  }
+  flushRow();
 
   return rows;
 }
