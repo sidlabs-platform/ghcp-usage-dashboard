@@ -21,7 +21,10 @@ import { CLIUsersTrendChart } from "@/components/charts/CLIUsersTrendChart";
 import { CLIvsIDEChart } from "@/components/charts/CLIvsIDEChart";
 import { CohortDistributionChart } from "@/components/charts/CohortDistributionChart";
 import { CohortTrendChart } from "@/components/charts/CohortTrendChart";
-import { CopilotAppAdoptionVolumeChart } from "@/components/charts/CopilotAppAdoptionVolumeChart";
+import {
+  CopilotAppAdoptionVolumeChart,
+  AdoptionVolumeTooltip,
+} from "@/components/charts/CopilotAppAdoptionVolumeChart";
 import { CopilotAppCodeImpactChart } from "@/components/charts/CopilotAppCodeImpactChart";
 import { FeatureBreakdownChart } from "@/components/charts/FeatureBreakdownChart";
 import { FeatureUsageStackedChart } from "@/components/charts/FeatureUsageStackedChart";
@@ -179,6 +182,48 @@ describe("chart component coverage", () => {
     expect(plotted).toEqual([
       { day: "2026-07-29", activeUsers: 12, sessions: 40, requests: 90, prompts: 150 },
     ]);
+  });
+
+  it("AdoptionVolumeTooltip surfaces the prompts value for the hovered day even though prompts isn't a plotted series", () => {
+    // Regression test: Recharts' default Tooltip payload only ever contains
+    // the plotted series (active users, sessions, requests) for this chart —
+    // prompts is intentionally not plotted, so it must be looked up from the
+    // original data by day and rendered through the custom tooltip content,
+    // not relied upon to appear in `payload`.
+    const data = [
+      { day: "2026-07-29", activeUsers: 12, sessions: 40, requests: 90, prompts: 150 },
+      { day: "2026-07-30", activeUsers: 14, sessions: 45, requests: 95, prompts: 175 },
+    ];
+
+    render(
+      <AdoptionVolumeTooltip
+        active
+        label="2026-07-30"
+        payload={[
+          { name: "Active Users", value: 14, color: "#f97316", dataKey: "activeUsers" },
+          { name: "Sessions", value: 45, color: "#3b82f6", dataKey: "sessions" },
+          { name: "Requests", value: 95, color: "#8b5cf6", dataKey: "requests" },
+        ]}
+        data={data}
+      />,
+    );
+
+    expect(screen.getByText("Prompts")).toBeInTheDocument();
+    expect(screen.getByText("175")).toBeInTheDocument();
+    // The plotted series still render alongside prompts.
+    expect(screen.getByText("Active Users")).toBeInTheDocument();
+    expect(screen.getByText("14")).toBeInTheDocument();
+  });
+
+  it("AdoptionVolumeTooltip renders nothing when inactive or the payload is empty", () => {
+    const data = [{ day: "2026-07-29", activeUsers: 12, sessions: 40, requests: 90, prompts: 150 }];
+
+    const inactive = render(<AdoptionVolumeTooltip active={false} label="2026-07-29" payload={[]} data={data} />);
+    expect(inactive.container.firstChild).toBeNull();
+    inactive.unmount();
+
+    const emptyPayload = render(<AdoptionVolumeTooltip active label="2026-07-29" payload={[]} data={data} />);
+    expect(emptyPayload.container.firstChild).toBeNull();
   });
 
   it("CopilotAppCodeImpactChart passes App code-impact fields to the chart", () => {

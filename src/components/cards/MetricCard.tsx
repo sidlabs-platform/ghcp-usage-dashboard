@@ -57,12 +57,17 @@ export function MetricCard({
   trendColor,
   stagger,
 }: MetricCardProps) {
+  // "raw" means "display the exact value" — it must never be abbreviated
+  // (e.g. 3456 -> "3.5K"), only locale-formatted (e.g. 3456 -> "3,456"),
+  // unlike the default "number" format which abbreviates large values.
   const displayValue =
     typeof value === "string"
       ? value
       : format === "percent"
         ? formatPercent(value)
-        : formatNumber(value);
+        : format === "raw"
+          ? value.toLocaleString()
+          : formatNumber(value);
 
   const sparkColor = trendColor ?? (accent ? accentHex[accent] : "#3b82f6");
 
