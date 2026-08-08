@@ -54,16 +54,8 @@ beforeEach(() => {
     if (sql.includes("as completionAccepted")) {
       return {
         all: vi.fn(() => [
-          { day: "2024-01-01", completionSuggested: 55, completionAccepted: 65, agentAdded: 20, agentDeleted: 2, compGenCount: 9, compAcceptCount: 3, appAdded: 3, appDeleted: 1, appGenCount: 1, appAcceptCount: 1 },
-          { day: "2024-01-02", completionSuggested: 58, completionAccepted: 75, agentAdded: 20, agentDeleted: 3, compGenCount: 9, compAcceptCount: 3, appAdded: 2, appDeleted: 0, appGenCount: 0, appAcceptCount: 0 },
-        ]),
-      };
-    }
-    if (sql.includes("AS completionLocDeleted")) {
-      return {
-        all: vi.fn(() => [
-          { day: "2024-01-01", completionLocDeleted: 3 },
-          { day: "2024-01-02", completionLocDeleted: 4 },
+          { day: "2024-01-01", completionSuggested: 55, completionAccepted: 65, completionDeleted: 3, agentAdded: 20, agentDeleted: 2, compGenCount: 9, compAcceptCount: 3, appAdded: 3, appDeleted: 1, appGenCount: 1, appAcceptCount: 1 },
+          { day: "2024-01-02", completionSuggested: 58, completionAccepted: 75, completionDeleted: 4, agentAdded: 20, agentDeleted: 3, compGenCount: 9, compAcceptCount: 3, appAdded: 2, appDeleted: 0, appGenCount: 0, appAcceptCount: 0 },
         ]),
       };
     }
@@ -208,7 +200,15 @@ describe("user detail route", { timeout: 10000 }, () => {
     const response = await GET(new NextRequest("http://localhost/api/users/octocat?days=7"));
 
     expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toEqual({
+    const body = await response.json();
+    // completionLocSuggested (55/58, from getCompletionDailyTrend's strict
+    // IS_COMPLETION_SQL allowlist) must be strictly less than the top-level
+    // locSuggested (60/60, loc_suggested_to_add_sum across ALL features) in
+    // this fixture — proving copilot_app/chat_inline/unknown suggested LoC
+    // that inflates the top-level field never leaks into completionLocSuggested.
+    expect(body.dailyActivity[0].completionLocSuggested).toBeLessThan(body.dailyActivity[0].locSuggested);
+    expect(body.dailyActivity[1].completionLocSuggested).toBeLessThan(body.dailyActivity[1].locSuggested);
+    expect(body).toEqual({
       user: "octocat",
       dailyActivity: [
         {
@@ -223,6 +223,7 @@ describe("user detail route", { timeout: 10000 }, () => {
           aiCreditsUsed: 1,
           agentLocAdded: 20,
           agentLocDeleted: 2,
+          completionLocSuggested: 55,
           completionLocAccepted: 65,
           completionLocDeleted: 3,
           appLocAdded: 3,
@@ -240,6 +241,7 @@ describe("user detail route", { timeout: 10000 }, () => {
           aiCreditsUsed: 0.5,
           agentLocAdded: 20,
           agentLocDeleted: 3,
+          completionLocSuggested: 58,
           completionLocAccepted: 75,
           completionLocDeleted: 4,
           appLocAdded: 2,

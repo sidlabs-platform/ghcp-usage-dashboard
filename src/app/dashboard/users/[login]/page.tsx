@@ -35,8 +35,10 @@ interface DailyActivity {
   agentLocAdded: number;
   agentLocDeleted: number;
   // Strict completion-only LoC (server-computed via the IS_COMPLETION_SQL
-  // allowlist) — the same basis as summary.completionLocAccepted/
-  // completionLocDeleted, so the daily chart and the summary card agree.
+  // allowlist) — the same basis as summary.totalLocSuggested/
+  // completionLocAccepted/completionLocDeleted, so the daily chart and the
+  // summary card agree.
+  completionLocSuggested: number;
   completionLocAccepted: number;
   completionLocDeleted: number;
   appLocAdded: number;
@@ -160,7 +162,7 @@ function LoadingSkeleton() {
 function LocTrendChart({ data }: { data: DailyActivity[] }) {
   const chartData = useMemo(() => data.map((d) => ({
     day: d.day,
-    locSuggested: d.locSuggested,
+    completionLocSuggested: d.completionLocSuggested,
     completionLocAccepted: d.completionLocAccepted,
     agentLocAdded: d.agentLocAdded,
     locSuggestedDelete: d.locSuggestedDelete,
@@ -181,14 +183,16 @@ function LocTrendChart({ data }: { data: DailyActivity[] }) {
               <YAxis tick={{ fontSize: 12 }} stroke="hsl(var(--muted-foreground))" />
               <Tooltip contentStyle={tooltipStyle} />
               <Legend />
+              {/* completionLocSuggested/completionLocAccepted/completionLocDeleted are
+                  server-computed via the strict IS_COMPLETION_SQL allowlist — the same
+                  fields the summary cards use — so this chart and the cards never
+                  disagree, and copilot_app/chat_inline/unknown/agent_edit activity
+                  never inflates these series. */}
               <Area
-                type="monotone" dataKey="locSuggested" name="LoC Suggested"
+                type="monotone" dataKey="completionLocSuggested" name="LoC Suggested"
                 stroke={CHART_COLORS.locSuggested} fill={CHART_COLORS.locSuggested}
                 fillOpacity={0.15} strokeWidth={2}
               />
-              {/* completionLocAccepted/completionLocDeleted are server-computed via the
-                  strict IS_COMPLETION_SQL allowlist — the same fields the summary
-                  cards use — so this chart and the cards never disagree. */}
               <Area
                 type="monotone" dataKey="completionLocAccepted" name="LoC Accepted (Completions)"
                 stroke={CHART_COLORS.locAccepted} fill={CHART_COLORS.locAccepted}

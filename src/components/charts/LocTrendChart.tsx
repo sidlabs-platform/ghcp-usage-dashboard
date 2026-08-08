@@ -25,10 +25,6 @@ interface LocTrendChartProps {
   }[];
 }
 
-// Related-but-distinct shade for the App "Deleted" series (orange-500/orange-800), so it reads as
-// part of the same App surface family as CHART_COLORS.copilotApp without being a washed-out
-// duplicate; paired with strokeDasharray below to further differentiate it at a glance.
-
 export function LocTrendChart({ data }: LocTrendChartProps) {
   return (
     <Card>
@@ -97,6 +93,11 @@ export function LocTrendChart({ data }: LocTrendChartProps) {
                 fill={CHART_COLORS.copilotApp}
                 fillOpacity={0.15}
               />
+              {/* Related-but-distinct shade (orange-500/orange-800) for the App "Deleted"
+                  series, so it reads as part of the same App surface family as
+                  CHART_COLORS.copilotApp above without being a washed-out duplicate;
+                  paired with strokeDasharray to further differentiate it at a glance.
+                  See CHART_COLORS.copilotAppDeleted in constants.ts for the full rationale. */}
               <Area
                 type="monotone"
                 dataKey="appDeleted"

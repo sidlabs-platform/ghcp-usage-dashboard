@@ -1,11 +1,12 @@
 // @vitest-environment jsdom
 //
-// Proves the user detail dashboard page's daily LoC chart and summary card
-// agree on "LoC Accepted (Completions)": both must be built from the strict
-// server-computed completionLocAccepted field (IS_COMPLETION_SQL allowlist),
-// never from top-level locAccepted minus agentLocAdded (which still includes
-// copilot_app/chat_inline/unknown activity and would let the chart diverge
-// from the card).
+// Proves the user detail dashboard page's daily LoC chart and summary cards
+// agree on "LoC Suggested" and "LoC Accepted (Completions)": all three must be
+// built from the strict server-computed completionLocSuggested/
+// completionLocAccepted fields (IS_COMPLETION_SQL allowlist), never from the
+// top-level locSuggested/locAccepted fields (which still include
+// copilot_app/chat_inline/unknown activity, and locAccepted minus
+// agentLocAdded specifically, and would let the chart diverge from the cards).
 import React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render, screen } from "@testing-library/react";
@@ -84,6 +85,9 @@ const apiResponse = {
       day: "2024-01-01",
       codeGen: 100,
       codeAccept: 80,
+      // Top-level locSuggested includes completion (400) + copilot_app/chat_inline/
+      // unknown suggested LoC (100 extra). If the chart plotted this field directly,
+      // it would show 500 instead of the correct completion-only 400.
       locSuggested: 500,
       // Top-level locAccepted includes completion (300) + agent (100) + copilot_app (150).
       // If the chart subtracted only agentLocAdded, it would show 450 (300 + 150) —
@@ -95,6 +99,7 @@ const apiResponse = {
       aiCreditsUsed: 2,
       agentLocAdded: 100,
       agentLocDeleted: 20,
+      completionLocSuggested: 400,
       completionLocAccepted: 300,
       completionLocDeleted: 15,
       appLocAdded: 150,
@@ -114,7 +119,7 @@ const apiResponse = {
     acceptanceRate: 80,
     agentLocAdded: 100,
     agentLocDeleted: 20,
-    totalLocSuggested: 300,
+    totalLocSuggested: 400,
     completionLocAccepted: 300,
     completionLocDeleted: 15,
     completionAcceptanceRate: 75,
@@ -140,7 +145,7 @@ describe("user detail page — LoC chart/card consistency", () => {
     vi.unstubAllGlobals();
   });
 
-  it("uses the same strict completionLocAccepted/completionLocDeleted for both the daily chart and the summary card", async () => {
+  it("uses the same strict completionLocSuggested/completionLocAccepted/completionLocDeleted for both the daily chart and the summary card", async () => {
     vi.stubGlobal("fetch", vi.fn(() =>
       Promise.resolve({
         ok: true,
@@ -154,17 +159,25 @@ describe("user detail page — LoC chart/card consistency", () => {
       render(<Page />);
     });
 
-    // Card: summary.completionLocAccepted / completionLocDeleted (strict, server-side).
+    // Card: summary.totalLocSuggested / completionLocAccepted / completionLocDeleted (strict, server-side).
+    expect(screen.getByTestId("metric-LoC Suggested")).toHaveTextContent("400");
     expect(screen.getByTestId("metric-LoC Accepted")).toHaveTextContent("300");
     expect(screen.getByTestId("metric-LoC Deleted")).toHaveTextContent("15");
 
-    // Chart: must plot the SAME strict per-day values — not
+    // Chart: must plot the SAME strict per-day values — not the top-level
+    // locSuggested (500, which wrongly includes 100 LoC of copilot_app/
+    // chat_inline/unknown suggested activity), and not
     // Math.max(0, locAccepted - agentLocAdded) (which would be 450, wrongly
     // including the day's 150 copilot_app LoC).
+    expect(chartState.areaDataByKey.completionLocSuggested).toEqual([400]);
     expect(chartState.areaDataByKey.completionLocAccepted).toEqual([300]);
     expect(chartState.areaDataByKey.completionLocDeleted).toEqual([15]);
 
+    // The chart must never key off the raw top-level locSuggested field.
+    expect(chartState.areaDataByKey.locSuggested).toBeUndefined();
+
     // Card and chart must agree exactly.
+    expect(chartState.areaDataByKey.completionLocSuggested![0]).toBe(apiResponse.summary.totalLocSuggested);
     expect(chartState.areaDataByKey.completionLocAccepted![0]).toBe(apiResponse.summary.completionLocAccepted);
     expect(chartState.areaDataByKey.completionLocDeleted![0]).toBe(apiResponse.summary.completionLocDeleted);
   });

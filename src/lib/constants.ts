@@ -51,6 +51,12 @@ export const CHART_COLORS = {
 export const FEATURE_LABELS: Record<string, string> = {
   code_completion: "Code Completions",
   inline_chat: "Inline Chat",
+  // Legacy/alternate feature name for inline chat, distinct from `inline_chat`.
+  // Kept here only so this broad display label renders correctly wherever raw
+  // feature usage is shown; it is intentionally excluded from IS_COMPLETION_SQL/
+  // isCompletionFeature() completion-acceptance classification (per authoritative
+  // GitHub Copilot Usage Metrics API semantics), so it must never be added to
+  // that allowlist.
   chat_inline: "Inline Chat",
   chat_panel: "Chat Panel",
   chat_panel_ask_mode: "Chat – Ask",

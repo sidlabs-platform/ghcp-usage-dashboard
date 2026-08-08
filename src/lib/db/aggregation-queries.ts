@@ -131,6 +131,10 @@ export interface CompletionDailyRow {
   day: string;
   completionSuggested: number;
   completionAccepted: number;
+  // Strict completion-only loc_deleted_sum (IS_COMPLETION_SQL allowlist) — the
+  // same basis as completionSuggested/completionAccepted, so callers never
+  // need a separate per-day query to get a consistent "completion deleted" figure.
+  completionDeleted: number;
   agentAdded: number;
   agentDeleted: number;
   compGenCount: number;
@@ -922,6 +926,8 @@ export function getCompletionDailyTrend(
         THEN json_extract(j.value, '$.loc_suggested_to_add_sum') ELSE 0 END), 0) as completionSuggested,
       COALESCE(SUM(CASE WHEN ${IS_COMPLETION_SQL}
         THEN json_extract(j.value, '$.loc_added_sum') ELSE 0 END), 0) as completionAccepted,
+      COALESCE(SUM(CASE WHEN ${IS_COMPLETION_SQL}
+        THEN json_extract(j.value, '$.loc_deleted_sum') ELSE 0 END), 0) as completionDeleted,
       COALESCE(SUM(CASE WHEN ${IS_AGENT_SQL}
         THEN json_extract(j.value, '$.loc_added_sum') ELSE 0 END), 0) as agentAdded,
       COALESCE(SUM(CASE WHEN ${IS_AGENT_SQL}
@@ -965,6 +971,8 @@ export function getCompletionTotals(
         THEN json_extract(j.value, '$.loc_suggested_to_add_sum') ELSE 0 END), 0) as completionSuggested,
       COALESCE(SUM(CASE WHEN ${IS_COMPLETION_SQL}
         THEN json_extract(j.value, '$.loc_added_sum') ELSE 0 END), 0) as completionAccepted,
+      COALESCE(SUM(CASE WHEN ${IS_COMPLETION_SQL}
+        THEN json_extract(j.value, '$.loc_deleted_sum') ELSE 0 END), 0) as completionDeleted,
       COALESCE(SUM(CASE WHEN ${IS_AGENT_SQL}
         THEN json_extract(j.value, '$.loc_added_sum') ELSE 0 END), 0) as agentAdded,
       COALESCE(SUM(CASE WHEN ${IS_AGENT_SQL}
@@ -988,7 +996,7 @@ export function getCompletionTotals(
   `;
   const row = db.prepare(sql).get(startDay, endDay, ...filter.params, ...ef.params) as CompletionDailyRow | undefined;
   return row ?? {
-    day: '', completionSuggested: 0, completionAccepted: 0, agentAdded: 0, agentDeleted: 0,
+    day: '', completionSuggested: 0, completionAccepted: 0, completionDeleted: 0, agentAdded: 0, agentDeleted: 0,
     compGenCount: 0, compAcceptCount: 0, appAdded: 0, appDeleted: 0, appGenCount: 0, appAcceptCount: 0,
   };
 }

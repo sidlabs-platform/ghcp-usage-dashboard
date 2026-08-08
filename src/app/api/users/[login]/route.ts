@@ -24,11 +24,13 @@ interface DailyActivity {
   aiCreditsUsed: number;
   agentLocAdded: number;
   agentLocDeleted: number;
-  // Strict completion-only LoC (IS_COMPLETION_SQL allowlist) — the same value
-  // the summary card's completionLocAccepted/completionLocDeleted are built
-  // from, so the daily chart and the card never disagree. Unlike locAccepted
-  // (top-level loc_added_sum, which also includes agent_edit and copilot_app
-  // writes), this excludes both.
+  // Strict completion-only LoC (IS_COMPLETION_SQL allowlist) — the same values
+  // the summary card's totalLocSuggested/completionLocAccepted/completionLocDeleted
+  // are built from, so the daily chart and the card never disagree. Unlike
+  // locSuggested/locAccepted (top-level loc_suggested_to_add_sum/loc_added_sum,
+  // which also include copilot_app/chat_inline/unknown and agent_edit writes),
+  // these exclude all of them.
+  completionLocSuggested: number;
   completionLocAccepted: number;
   completionLocDeleted: number;
   // Copilot App LoC, broken out for future use — never folded into completion.
@@ -141,7 +143,7 @@ async function handler(request: NextRequest) {
 
     // Daily activity (with per-day agent LOC extracted from agent_edit JSON)
     // Use CASE WHEN json_valid() to guard against empty/malformed agent_edit values
-    type DailyActivityRow = Omit<DailyActivity, "completionLocAccepted" | "completionLocDeleted" | "appLocAdded" | "appLocDeleted">;
+    type DailyActivityRow = Omit<DailyActivity, "completionLocSuggested" | "completionLocAccepted" | "completionLocDeleted" | "appLocAdded" | "appLocDeleted">;
     const dailyActivityRows = db.prepare(`
       SELECT day,
         COALESCE(code_generation_activity_count, 0) AS codeGen,
@@ -164,29 +166,21 @@ async function handler(request: NextRequest) {
     // code-generation route uses (getCompletionDailyTrend), scoped to this
     // single user. This is a separate query merged in JS by day, NOT a join
     // against the query above, so it can never multiply dailyActivity rows.
+    // getCompletionDailyTrend supplies completionSuggested/completionAccepted/
+    // completionDeleted/appAdded/appDeleted all from the same strict
+    // IS_COMPLETION_SQL / IS_COPILOT_APP_SQL allowlists, so no extra per-day
+    // query is needed to fill in any of these fields.
     const completionTrendByDay = new Map(
       getCompletionDailyTrend(start, end, [decodedLogin], scope.enterpriseSlugs).map((r) => [r.day, r]),
     );
-
-    // getCompletionDailyTrend does not track completion loc_deleted_sum, so
-    // compute it separately with the same strict IS_COMPLETION_SQL allowlist,
-    // GROUP BY day (no row multiplication — one row per day, merged by day key).
-    const completionLocDeletedRows = db.prepare(`
-      SELECT u.day,
-        COALESCE(SUM(CASE WHEN ${IS_COMPLETION_SQL} THEN json_extract(j.value, '$.loc_deleted_sum') ELSE 0 END), 0) AS completionLocDeleted
-      FROM user_daily_metrics u, json_each(u.totals_by_feature) j
-      WHERE u.user_login = ? AND u.day BETWEEN ? AND ?
-        AND u.totals_by_feature IS NOT NULL AND u.totals_by_feature != '[]'${efClause}
-      GROUP BY u.day
-    `).all(decodedLogin, start, end, ...efParams) as { day: string; completionLocDeleted: number }[];
-    const completionLocDeletedByDay = new Map(completionLocDeletedRows.map((r) => [r.day, r.completionLocDeleted]));
 
     const dailyActivity: DailyActivity[] = dailyActivityRows.map((row) => {
       const trend = completionTrendByDay.get(row.day);
       return {
         ...row,
+        completionLocSuggested: trend?.completionSuggested ?? 0,
         completionLocAccepted: trend?.completionAccepted ?? 0,
-        completionLocDeleted: completionLocDeletedByDay.get(row.day) ?? 0,
+        completionLocDeleted: trend?.completionDeleted ?? 0,
         appLocAdded: trend?.appAdded ?? 0,
         appLocDeleted: trend?.appDeleted ?? 0,
       };
