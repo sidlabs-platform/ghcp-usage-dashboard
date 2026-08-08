@@ -21,6 +21,8 @@ import { CLIUsersTrendChart } from "@/components/charts/CLIUsersTrendChart";
 import { CLIvsIDEChart } from "@/components/charts/CLIvsIDEChart";
 import { CohortDistributionChart } from "@/components/charts/CohortDistributionChart";
 import { CohortTrendChart } from "@/components/charts/CohortTrendChart";
+import { CopilotAppAdoptionVolumeChart } from "@/components/charts/CopilotAppAdoptionVolumeChart";
+import { CopilotAppCodeImpactChart } from "@/components/charts/CopilotAppCodeImpactChart";
 import { FeatureBreakdownChart } from "@/components/charts/FeatureBreakdownChart";
 import { FeatureUsageStackedChart } from "@/components/charts/FeatureUsageStackedChart";
 import { LanguageBarChart } from "@/components/charts/LanguageBarChart";
@@ -101,6 +103,8 @@ describe("chart component coverage", () => {
     { name: "CLIvsIDEChart", element: <CLIvsIDEChart data={[]} /> },
     { name: "CohortDistributionChart", element: <CohortDistributionChart data={[]} /> },
     { name: "CohortTrendChart", element: <CohortTrendChart data={[]} /> },
+    { name: "CopilotAppAdoptionVolumeChart", element: <CopilotAppAdoptionVolumeChart data={[]} /> },
+    { name: "CopilotAppCodeImpactChart", element: <CopilotAppCodeImpactChart data={[]} /> },
     { name: "FeatureBreakdownChart", element: <FeatureBreakdownChart data={[]} /> },
     { name: "FeatureUsageStackedChart", element: <FeatureUsageStackedChart data={[]} /> },
     { name: "LanguageBarChart", element: <LanguageBarChart data={[]} /> },
@@ -156,6 +160,43 @@ describe("chart component coverage", () => {
     const chart = screen.getByTestId("AreaChart");
     expect(chart.getAttribute("data-json")).toContain("\"appAdded\":30");
     expect(chart.getAttribute("data-json")).toContain("\"appDeleted\":4");
+  });
+
+  it("CopilotAppAdoptionVolumeChart passes App adoption/volume fields to the chart", () => {
+    render(
+      <CopilotAppAdoptionVolumeChart
+        data={[{ day: "2026-07-29", activeUsers: 12, sessions: 40, requests: 90, prompts: 150 }]}
+      />,
+    );
+
+    const chart = screen.getByTestId("ComposedChart");
+    const plotted = JSON.parse(chart.getAttribute("data-json") ?? "[]") as Array<{
+      day: string;
+      activeUsers: number;
+      sessions: number;
+      requests: number;
+    }>;
+    expect(plotted).toEqual([
+      { day: "2026-07-29", activeUsers: 12, sessions: 40, requests: 90, prompts: 150 },
+    ]);
+  });
+
+  it("CopilotAppCodeImpactChart passes App code-impact fields to the chart", () => {
+    render(
+      <CopilotAppCodeImpactChart
+        data={[{ day: "2026-07-29", generations: 30, acceptances: 18, locAdded: 200, locDeleted: 25 }]}
+      />,
+    );
+
+    const chart = screen.getByTestId("ComposedChart");
+    const plotted = JSON.parse(chart.getAttribute("data-json") ?? "[]") as Array<{
+      day: string;
+      generations: number;
+      locAdded: number;
+    }>;
+    expect(plotted).toEqual([
+      { day: "2026-07-29", generations: 30, acceptances: 18, locAdded: 200, locDeleted: 25 },
+    ]);
   });
 
   it("renders AutofixInsightChart with computed chart data", () => {
