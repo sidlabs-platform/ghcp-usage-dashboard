@@ -493,6 +493,102 @@ describe("buildSeatLedger — canonical org separation for multi-org users", () 
   });
 });
 
+describe("buildSeatLedger — per-interval GitHub identity attribution (Task 6 regression)", () => {
+  it("attributes a closed later interval's own githubUserId, not the first interval's, when a login holderKey is reassigned to a different numeric account (closed/closed)", () => {
+    const result = buildSeatLedger({ enterpriseSlug: "acme-corp",
+      auditEvents: [
+        auditEvent({ eventId: "e1", holderKey: "login:reused", githubUserId: 100, action: "assign", occurredAt: "2026-01-05T00:00:00Z" }),
+        auditEvent({ eventId: "e2", holderKey: "login:reused", githubUserId: 100, action: "cancel", occurredAt: "2026-01-20T00:00:00Z" }),
+        auditEvent({ eventId: "e3", holderKey: "login:reused", githubUserId: 200, action: "assign", occurredAt: "2026-03-05T00:00:00Z" }),
+        auditEvent({ eventId: "e4", holderKey: "login:reused", githubUserId: 200, action: "cancel", occurredAt: "2026-03-25T00:00:00Z" }),
+      ],
+      periods: ["2026-01", "2026-03"],
+      currentPeriod: "2026-04",
+    });
+    const jan = result.rows.find((r) => r.holderKey === "login:reused" && r.billingPeriod === "2026-01");
+    const mar = result.rows.find((r) => r.holderKey === "login:reused" && r.billingPeriod === "2026-03");
+    expect(jan?.githubUserId).toBe(100);
+    expect(mar?.githubUserId).toBe(200);
+  });
+
+  it("attributes a still-open later interval's own githubUserId, not the first interval's, when a login holderKey is reassigned to a different numeric account (closed/open)", () => {
+    const result = buildSeatLedger({ enterpriseSlug: "acme-corp",
+      auditEvents: [
+        auditEvent({ eventId: "e1", holderKey: "login:reused", githubUserId: 100, action: "assign", occurredAt: "2026-01-05T00:00:00Z" }),
+        auditEvent({ eventId: "e2", holderKey: "login:reused", githubUserId: 100, action: "cancel", occurredAt: "2026-01-20T00:00:00Z" }),
+        auditEvent({ eventId: "e3", holderKey: "login:reused", githubUserId: 200, action: "assign", occurredAt: "2026-03-05T00:00:00Z" }),
+      ],
+      periods: ["2026-01", "2026-03"],
+      currentPeriod: "2026-03",
+    });
+    const jan = result.rows.find((r) => r.holderKey === "login:reused" && r.billingPeriod === "2026-01");
+    const mar = result.rows.find((r) => r.holderKey === "login:reused" && r.billingPeriod === "2026-03");
+    expect(jan?.githubUserId).toBe(100);
+    expect(jan?.revokedAt).not.toBeNull();
+    expect(mar?.githubUserId).toBe(200);
+    expect(mar?.revokedAt).toBeNull();
+  });
+
+  it("attributes the selected (latest) within-month interval's own githubUserId, not an earlier stale interval's, when different numeric accounts hold the same login holderKey within one month", () => {
+    const result = buildSeatLedger({ enterpriseSlug: "acme-corp",
+      auditEvents: [
+        auditEvent({ eventId: "e1", holderKey: "login:reused", githubUserId: 100, action: "assign", occurredAt: "2026-01-01T00:00:00Z" }),
+        auditEvent({ eventId: "e2", holderKey: "login:reused", githubUserId: 100, action: "cancel", occurredAt: "2026-01-05T00:00:00Z" }),
+        auditEvent({ eventId: "e3", holderKey: "login:reused", githubUserId: 200, action: "assign", occurredAt: "2026-01-10T00:00:00Z" }),
+      ],
+      periods: ["2026-01"],
+      currentPeriod: "2026-02",
+    });
+    const row = result.rows.find((r) => r.holderKey === "login:reused" && r.billingPeriod === "2026-01");
+    expect(row?.assignedAt).toBe("2026-01-10T00:00:00.000Z");
+    expect(row?.githubUserId).toBe(200);
+  });
+
+  it("retains an interval's githubUserId across a refresh that repeats the same non-null ID", () => {
+    const result = buildSeatLedger({ enterpriseSlug: "acme-corp",
+      auditEvents: [
+        auditEvent({ eventId: "e1", holderKey: "login:steady", githubUserId: 100, action: "assign", occurredAt: "2026-01-01T00:00:00Z" }),
+        auditEvent({ eventId: "e2", holderKey: "login:steady", githubUserId: 100, action: "refresh", occurredAt: "2026-01-15T00:00:00Z" }),
+        auditEvent({ eventId: "e3", holderKey: "login:steady", githubUserId: 100, action: "cancel", occurredAt: "2026-01-25T00:00:00Z" }),
+      ],
+      periods: ["2026-01"],
+      currentPeriod: "2026-02",
+    });
+    const row = result.rows.find((r) => r.holderKey === "login:steady" && r.billingPeriod === "2026-01");
+    expect(row?.githubUserId).toBe(100);
+    const coverage = result.coverage.find((c) => c.billingPeriod === "2026-01" && c.orgLogin === "acme");
+    expect(coverage?.warnings.some((w) => w.toLowerCase().includes("conflict"))).toBe(false);
+  });
+
+  it("preserves the interval's original githubUserId (never silently overwritten) and surfaces a deterministic warning when a later event within the same still-active interval carries a conflicting non-null ID", () => {
+    const build = () =>
+      buildSeatLedger({ enterpriseSlug: "acme-corp",
+        auditEvents: [
+          auditEvent({ eventId: "e1", holderKey: "login:conflict", githubUserId: 100, action: "assign", occurredAt: "2026-01-01T00:00:00Z" }),
+          auditEvent({ eventId: "e2", holderKey: "login:conflict", githubUserId: 200, action: "refresh", occurredAt: "2026-01-15T00:00:00Z" }),
+          auditEvent({ eventId: "e3", holderKey: "login:conflict", githubUserId: 200, action: "cancel", occurredAt: "2026-01-25T00:00:00Z" }),
+        ],
+        periods: ["2026-01"],
+        currentPeriod: "2026-02",
+      });
+    const first = build();
+    const second = build();
+
+    const row = first.rows.find((r) => r.holderKey === "login:conflict" && r.billingPeriod === "2026-01");
+    // Preserved: the interval's ID from the assignment event that opened it, never silently overwritten.
+    expect(row?.githubUserId).toBe(100);
+
+    const coverage = first.coverage.find((c) => c.billingPeriod === "2026-01" && c.orgLogin === "acme");
+    expect(coverage?.warnings.some((w) => w.toLowerCase().includes("conflict"))).toBe(true);
+    // No raw numeric IDs leaked into the warning text.
+    expect(coverage?.warnings.some((w) => w.includes("100") || w.includes("200"))).toBe(false);
+    expect(first.warnings.some((w) => w.toLowerCase().includes("conflict"))).toBe(true);
+
+    // Deterministic across repeated calls with identical input.
+    expect(first).toEqual(second);
+  });
+});
+
 describe("buildSeatLedger — confidence classification", () => {
   it("classifies exactly exact_snapshot | audit_reconstructed | live_snapshot_only | unrecoverable", () => {
     const validValues = new Set(["exact_snapshot", "audit_reconstructed", "live_snapshot_only", "unrecoverable"]);

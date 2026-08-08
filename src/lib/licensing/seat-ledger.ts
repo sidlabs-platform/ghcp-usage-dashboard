@@ -152,7 +152,21 @@ export interface SeatLedgerCoverage {
 export interface SeatLedgerResult {
   rows: SeatLedgerRow[];
   coverage: SeatLedgerCoverage[];
-  /** Ledger-wide warnings not tied to a single (period, org) pair (e.g. dropped malformed events). */
+  /**
+   * Ledger-wide warnings not tied to a single (period, org) coverage entry.
+   * Currently populated exclusively by holder-key/numeric-GitHub-ID
+   * attribution conflicts: a `holderKey` (e.g. a reused login) observing a
+   * non-null `githubUserId` that conflicts with the ID already attributed
+   * to a still-active reconstructed interval, with no intervening
+   * assignment transition to disambiguate which account the interval
+   * belongs to (see `ReconstructedInterval.hasConflict`). One entry per
+   * distinct (org, holderKey) conflict, deduplicated and sorted
+   * deterministically, regardless of how many periods/rows the conflicted
+   * interval spans — the same conflict is also mirrored onto every
+   * affected `SeatLedgerCoverage.warnings` entry. Never empty by
+   * construction when no such conflict occurred; contains no numeric IDs,
+   * logins, or other PII.
+   */
   warnings: string[];
 }
 
@@ -260,6 +274,23 @@ function sortEventsDeterministically(events: SeatLedgerAuditEventInput[]): (Seat
 interface ReconstructedInterval {
   assignedAt: string;
   revokedAt: string | null;
+  /** GitHub user ID attributed to *this* interval — set from the assignment event that opened it, never inherited/reused from a different interval in the same (org, holder) group. A login `holderKey` can be reused by a different numeric GitHub account across separate intervals; each interval must carry its own attribution. */
+  githubUserId: number | null;
+  /**
+   * True when a non-transition event (an assign/refresh observed while this
+   * interval was already active) carried a non-null `githubUserId`
+   * conflicting with the ID already attributed to this interval. The
+   * original attribution is always preserved — a conflicting ID is never
+   * silently applied — but this flag lets the caller surface a
+   * deterministic coverage/ledger warning for the ambiguity.
+   */
+  hasConflict: boolean;
+}
+
+/** Result of replaying one (org, holder) group's events: its reconstructed intervals, plus whether any interval in the group observed a conflicting non-null `githubUserId` (see `ReconstructedInterval.hasConflict`). */
+interface ReconstructedGroup {
+  intervals: ReconstructedInterval[];
+  hasConflict: boolean;
 }
 
 /**
@@ -275,35 +306,72 @@ interface ReconstructedInterval {
  *    stray cancel is a no-op (never a negative/fabricated interval).
  *  - A still-active interval at the end of the event stream is left open
  *    (`revokedAt: null`) — a missing cancellation, not an error.
+ *
+ * GitHub identity attribution follows deterministic refresh semantics:
+ * closing/opening an interval (an actual assignment transition) is the
+ * only time its `githubUserId` is (re)established, taken from the event
+ * that opens it. Any other event observed while the interval is already
+ * active (a repeated assign, or a refresh) may only *fill in* a still-null
+ * ID; a conflicting non-null ID is never applied over an already-known one
+ * — the original attribution is preserved and `hasConflict` is set instead,
+ * so the ambiguity is surfaced rather than silently resolved either way. A
+ * refresh that repeats the same non-null ID is a pure no-op (retains it).
  */
-function reconstructIntervals(sortedEvents: SeatLedgerAuditEventInput[]): ReconstructedInterval[] {
+function reconstructIntervals(sortedEvents: SeatLedgerAuditEventInput[]): ReconstructedGroup {
   const intervals: ReconstructedInterval[] = [];
   let active = false;
   let currentStart: string | null = null;
+  let currentGithubUserId: number | null = null;
+  let currentHasConflict = false;
+  let groupHasConflict = false;
 
   for (const event of sortedEvents) {
     if (event.action === "assign" || event.action === "refresh") {
       if (!active) {
+        // Assignment transition: opens a new interval, cleanly attributed
+        // to this event's GitHub user ID.
         active = true;
         currentStart = event.occurredAt;
+        currentGithubUserId = event.githubUserId ?? null;
+        currentHasConflict = false;
+      } else if (event.githubUserId != null) {
+        // Non-transition event while already active: never overwrite an
+        // established ID, only fill in a still-unknown one.
+        if (currentGithubUserId == null) {
+          currentGithubUserId = event.githubUserId;
+        } else if (currentGithubUserId !== event.githubUserId) {
+          currentHasConflict = true;
+          groupHasConflict = true;
+        }
       }
-      // else: already active — no-op, regardless of assign vs refresh.
     } else {
       // action === "cancel"
       if (active) {
-        intervals.push({ assignedAt: currentStart as string, revokedAt: event.occurredAt });
+        intervals.push({
+          assignedAt: currentStart as string,
+          revokedAt: event.occurredAt,
+          githubUserId: currentGithubUserId,
+          hasConflict: currentHasConflict,
+        });
         active = false;
         currentStart = null;
+        currentGithubUserId = null;
+        currentHasConflict = false;
       }
       // else: nothing active — stray cancel, no-op.
     }
   }
 
   if (active) {
-    intervals.push({ assignedAt: currentStart as string, revokedAt: null });
+    intervals.push({
+      assignedAt: currentStart as string,
+      revokedAt: null,
+      githubUserId: currentGithubUserId,
+      hasConflict: currentHasConflict,
+    });
   }
 
-  return intervals;
+  return { intervals, hasConflict: groupHasConflict };
 }
 
 /** ISO-normalize a timestamp (via `Date.parse`/`toISOString`) so equivalent instants always compare/compare equal regardless of the source's original formatting. */
@@ -383,7 +451,7 @@ export function buildSeatLedger(options: BuildSeatLedgerOptions): SeatLedgerResu
   const enterpriseSlug = normalizeEnterpriseSlug(options.enterpriseSlug);
   const { auditEvents = [], snapshots = [], liveSeats = [], periods, currentPeriod } = options;
 
-  if (!Number.isInteger(periods.length) || periods.length === 0) {
+  if (periods.length === 0) {
     return { rows: [], coverage: [], warnings: [] };
   }
   if (periods.length > MAX_REPORT_MONTHS) {
@@ -426,24 +494,21 @@ export function buildSeatLedger(options: BuildSeatLedgerOptions): SeatLedgerResu
     eventsByGroup.set(key, list);
   }
 
-  const intervalsByGroup = new Map<string, { githubUserId: number | null; intervals: ReconstructedInterval[] }>();
+  const intervalsByGroup = new Map<string, ReconstructedGroup>();
   for (const [key, groupEvents] of eventsByGroup) {
     const sorted = sortEventsDeterministically(groupEvents);
-    const intervals = reconstructIntervals(sorted);
-    const githubUserId = sorted.find((e) => e.githubUserId != null)?.githubUserId ?? null;
-    intervalsByGroup.set(key, { githubUserId, intervals });
+    intervalsByGroup.set(key, reconstructIntervals(sorted));
   }
 
   // ── Universe of (org, holder) groups considered across all sources. ──
+  // `snapshotIndex` keys are prefixed with billingPeriod (`period\0org\0holder`);
+  // stripping that prefix already yields every (org, holder) group any
+  // snapshot ever contributes — re-scanning the raw `snapshots` array here
+  // would be provably redundant, since every snapshot is indexed above.
   const allGroupKeys = new Set<string>([...snapshotIndex.keys(), ...liveIndex.keys(), ...intervalsByGroup.keys()].map((k) => {
-    // snapshotIndex keys are prefixed with billingPeriod; strip it back to the bare group key for the union.
     const parts = k.split("\u0000");
     return parts.length === 3 ? `${parts[1]}\u0000${parts[2]}` : k;
   }));
-  // Also include groups that only ever appear via snapshots for periods not in this union (defensive; snapshotIndex already covers this via the map above).
-  for (const snapshot of snapshots) {
-    allGroupKeys.add(groupKey(normalizeOrgLogin(snapshot.orgLogin), snapshot.holderKey));
-  }
 
   // Distinct orgs across all sources, used to enumerate coverage even for periods/orgs with zero holders (e.g. wholly unrecoverable periods for a known org).
   const allOrgs = new Set<string>();
@@ -465,7 +530,7 @@ export function buildSeatLedger(options: BuildSeatLedgerOptions): SeatLedgerResu
     unrecoverable: 0,
   });
 
-  const recordCoverage = (period: string, org: string, confidence: SeatLedgerConfidence, warning?: string) => {
+  const recordCoverage = (period: string, org: string, confidence: SeatLedgerConfidence, warning?: string | string[]) => {
     const key = `${period}\u0000${org}`;
     let entry = coverageMap.get(key);
     if (!entry) {
@@ -473,8 +538,23 @@ export function buildSeatLedger(options: BuildSeatLedgerOptions): SeatLedgerResu
       coverageMap.set(key, entry);
     }
     entry.counts[confidence]++;
-    if (warning) entry.warnings.add(warning);
+    if (warning) {
+      for (const w of Array.isArray(warning) ? warning : [warning]) entry.warnings.add(w);
+    }
   };
+
+  // Ledger-wide warnings not tied to a single (period, org) pair — currently
+  // populated exclusively by holder-key/numeric-GitHub-ID attribution
+  // conflicts (see `ReconstructedInterval.hasConflict`): a login `holderKey`
+  // observing more than one non-null `githubUserId` while a single
+  // reconstructed interval remained active, without an intervening
+  // assignment transition to disambiguate which account the interval
+  // belongs to. Deduplicated per (org, holderKey) group and deterministic
+  // (sorted) regardless of how many periods/rows the conflicted interval
+  // overlaps. Never contains numeric IDs, logins, or other PII — only the
+  // opaque `holderKey`/`orgLogin` already used elsewhere in this module's
+  // warning text.
+  const ledgerWarnings = new Set<string>();
 
   for (const period of periods) {
     for (const groupKeyStr of allGroupKeys) {
@@ -513,21 +593,27 @@ export function buildSeatLedger(options: BuildSeatLedgerOptions): SeatLedgerResu
           billingPeriod: period,
           orgLogin: org,
           holderKey,
-          githubUserId: reconstructed?.githubUserId ?? null,
+          githubUserId: overlapping.githubUserId,
           observedLogin: null,
           assignedAt: toIsoInstant(overlapping.assignedAt),
           revokedAt: overlapping.revokedAt ? toIsoInstant(overlapping.revokedAt) : null,
           confidence: "audit_reconstructed",
           source: "audit_reconstructed",
         });
-        recordCoverage(
-          period,
-          org,
-          "audit_reconstructed",
-          multipleOverlap
-            ? `Multiple audit-reconstructed assignment intervals overlap period ${period} for holder "${holderKey}" in org "${org}"; deterministically selected the interval reflecting the holder's final state for the month (assignedAt ${toIsoInstant(overlapping.assignedAt)}).`
-            : undefined,
-        );
+        const tierWarnings: string[] = [];
+        if (multipleOverlap) {
+          tierWarnings.push(
+            `Multiple audit-reconstructed assignment intervals overlap period ${period} for holder "${holderKey}" in org "${org}"; deterministically selected the interval reflecting the holder's final state for the month (assignedAt ${toIsoInstant(overlapping.assignedAt)}).`,
+          );
+        }
+        if (overlapping.hasConflict) {
+          const conflictWarning = `Conflicting non-null GitHub user IDs observed for holder "${holderKey}" in org "${org}" while a single audit-reconstructed assignment interval remained active (period ${period}); retained the interval's originally attributed GitHub user ID rather than silently overwriting it.`;
+          tierWarnings.push(conflictWarning);
+          ledgerWarnings.add(
+            `Holder-key/numeric-GitHub-ID conflict: holder "${holderKey}" in org "${org}" observed a conflicting non-null GitHub user ID within a single reconstructed assignment interval; the interval's original attribution was preserved.`,
+          );
+        }
+        recordCoverage(period, org, "audit_reconstructed", tierWarnings.length > 0 ? tierWarnings : undefined);
         continue;
       }
 
@@ -592,5 +678,5 @@ export function buildSeatLedger(options: BuildSeatLedgerOptions): SeatLedgerResu
     return a.holderKey.localeCompare(b.holderKey);
   });
 
-  return { rows, coverage, warnings: [] };
+  return { rows, coverage, warnings: [...ledgerWarnings].sort() };
 }
