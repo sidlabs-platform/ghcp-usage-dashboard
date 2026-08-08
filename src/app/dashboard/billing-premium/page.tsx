@@ -187,6 +187,13 @@ export default function PremiumRequestsPage() {
   useEffect(() => { fetchData(); }, [fetchData]);
   useEffect(() => { setPage(1); }, [search, selectedModel, selectedOrg, exceedsQuota, sort, sortDir, hasFilter, selectedEntTeams, selectedOrgTeams, scopeOrgs]);
 
+  // Model breakdown rows are cached per user; drop the cache whenever the query
+  // that produced them changes, otherwise expanded rows show stale numbers.
+  useEffect(() => {
+    setUserModelBreakdown({});
+    setExpandedUsers({});
+  }, [days, selectedModel, selectedOrg, exceedsQuota, hasFilter, selectedEntTeams, selectedOrgTeams, scopeOrgs]);
+
   const handleSort = (col: string) => {
     if (sort === col) setSortDir(d => d === "asc" ? "desc" : "asc");
     else { setSort(col); setSortDir("desc"); }
@@ -597,12 +604,18 @@ export default function PremiumRequestsPage() {
                       const modelLoading = !!loadingUserModels[key];
                       return (
                         <Fragment key={key}>
-                          <tr className="hover:bg-[hsl(var(--accent))]/20 transition-colors cursor-pointer" onClick={() => toggleUserExpanded(u.username, u.organization || "") }>
+                          <tr className="hover:bg-[hsl(var(--accent))]/20 transition-colors">
                             <td className="px-4 py-2.5 font-medium">
-                              <span className="inline-flex items-center gap-2">
-                                <span className="text-xs text-[hsl(var(--muted-foreground))]">{expanded ? "▾" : "▸"}</span>
+                              <button
+                                type="button"
+                                onClick={() => toggleUserExpanded(u.username, u.organization || "")}
+                                aria-expanded={expanded}
+                                className="inline-flex items-center gap-2 rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-[hsl(var(--ring))]"
+                              >
+                                <span aria-hidden="true" className="text-xs text-[hsl(var(--muted-foreground))]">{expanded ? "▾" : "▸"}</span>
                                 {u.username}
-                              </span>
+                                <span className="sr-only">{expanded ? "Collapse" : "Expand"} model breakdown</span>
+                              </button>
                             </td>
                             <td className="px-4 py-2.5 text-[hsl(var(--muted-foreground))]">{u.organization || "—"}</td>
                             <td className="px-4 py-2.5 text-right">{safeNum(u.total_requests).toLocaleString(undefined, { maximumFractionDigits: 2 })}</td>
@@ -725,8 +738,8 @@ export default function PremiumRequestsPage() {
                     <SortHeader col="username" label="User" />
                     <SortHeader col="organization" label="Org" />
                     <SortHeader col="model" label="Model" />
-                    <SortHeader col="quantity" label="AI Credits" />
-                    <SortHeader col="gross_amount" label="USD" />
+                    <SortHeader col="aic_quantity" label="AI Credits" />
+                    <SortHeader col="aic_gross_amount" label="USD" />
                     <SortHeader col="net_amount" label="Legacy Net" />
                     <th className="px-3 py-3 text-left text-xs font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wider">Exceeds Quota</th>
                     <th className="px-3 py-3 text-right text-xs font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wider">Monthly Quota</th>

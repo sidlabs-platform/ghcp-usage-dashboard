@@ -21,6 +21,7 @@ build/
 
 # debug
 npm-debug.log*
+test_logs*.txt
 
 # local env files
 .env*.local
