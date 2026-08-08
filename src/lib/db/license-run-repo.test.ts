@@ -73,6 +73,8 @@ import {
   serializeLicenseRunReport,
   renderLicenseRunReportText,
 } from "./license-run-repo";
+import { summarizeIdentityResolution, summarizeHistoryCoverage } from "../licensing/reconciliation-checks";
+import type { SeatLedgerCoverage } from "../licensing/seat-ledger";
 
 const SCHEMA_DIR = path.join(process.cwd(), "src", "lib", "db");
 
@@ -580,6 +582,99 @@ describe("buildLicenseRunReport / serializeLicenseRunReport / renderLicenseRunRe
     expect(rendered).not.toMatch(/leaked/);
   });
 
+  it("redacts an unsafe holderKey deterministically instead of leaking it, while a safe holderKey passes through unchanged", () => {
+    const runId = startLicenseRun({ enterpriseSlug: "ent1", requestedPeriods: ["2026-01"] });
+    const maliciousHolderKey = "attacker@evil.com <script>alert(1)</script>";
+    recordLicenseRunDiagnostics({
+      runId,
+      finish: {
+        status: "warning",
+        unresolvedIdentities: [{ holderKey: maliciousHolderKey, reason: "no_login" }],
+      },
+      checks: [],
+    });
+    const run = getLicenseRun(runId)!;
+    const report = buildLicenseRunReport(run, [], []);
+
+    expect(report.unresolvedIdentities).toHaveLength(1);
+    const sanitizedHolderKey = (report.unresolvedIdentities[0] as { holderKey: string }).holderKey;
+    expect(sanitizedHolderKey).not.toBe(maliciousHolderKey);
+    expect(sanitizedHolderKey).not.toContain("attacker");
+    expect(sanitizedHolderKey).not.toContain("evil.com");
+    expect(sanitizedHolderKey).not.toContain("<script>");
+    expect(sanitizedHolderKey).toMatch(/^redacted:[a-f0-9]{12}$/);
+
+    // Deterministic: re-building the report from the same stored value
+    // produces the exact same redacted marker every time.
+    const report2 = buildLicenseRunReport(run, [], []);
+    expect((report2.unresolvedIdentities[0] as { holderKey: string }).holderKey).toBe(sanitizedHolderKey);
+
+    const serialized = serializeLicenseRunReport(report);
+    expect(serialized).not.toMatch(/attacker/);
+    expect(serialized).not.toMatch(/evil\.com/i);
+    expect(serialized).not.toMatch(/script/);
+    const rendered = renderLicenseRunReportText(report);
+    expect(rendered).not.toMatch(/attacker/);
+    expect(rendered).not.toMatch(/evil\.com/i);
+  });
+
+  it("omits a non-finite/negative/non-integer or string githubUserId rather than surfacing an invalid value", () => {
+    const runId = startLicenseRun({ enterpriseSlug: "ent1", requestedPeriods: ["2026-01"] });
+    recordLicenseRunDiagnostics({
+      runId,
+      finish: {
+        status: "warning",
+        unresolvedIdentities: [
+          { holderKey: "holder1", githubUserId: "42", reason: "no_login" },
+          { holderKey: "holder2", githubUserId: -5, reason: "no_login" },
+          { holderKey: "holder3", githubUserId: 3.5, reason: "no_login" },
+          { holderKey: "holder4", githubUserId: 99, reason: "no_login" },
+        ],
+      },
+      checks: [],
+    });
+    const run = getLicenseRun(runId)!;
+    const report = buildLicenseRunReport(run, [], []);
+    const byHolder = Object.fromEntries(
+      (report.unresolvedIdentities as { holderKey: string; githubUserId?: number }[]).map((e) => [e.holderKey, e])
+    );
+    expect(byHolder.holder1.githubUserId).toBeUndefined();
+    expect(byHolder.holder2.githubUserId).toBeUndefined();
+    expect(byHolder.holder3.githubUserId).toBeUndefined();
+    expect(byHolder.holder4.githubUserId).toBe(99);
+  });
+
+  it("restricts reason to a fixed safe set, mapping unknown/free-text reasons (including embedded email/external-id/token content) to 'unknown'", () => {
+    const runId = startLicenseRun({ enterpriseSlug: "ent1", requestedPeriods: ["2026-01"] });
+    const maliciousReason = "external_id=abc123 email=leaked@example.com token=ghp_abcdefghijklmnopqrstuvwxyz012345";
+    recordLicenseRunDiagnostics({
+      runId,
+      finish: {
+        status: "warning",
+        unresolvedIdentities: [
+          { holderKey: "holder1", reason: maliciousReason },
+          { holderKey: "holder2", reason: "no_login" },
+        ],
+      },
+      checks: [],
+    });
+    const run = getLicenseRun(runId)!;
+    const report = buildLicenseRunReport(run, [], []);
+    const byHolder = Object.fromEntries(
+      (report.unresolvedIdentities as { holderKey: string; reason?: string }[]).map((e) => [e.holderKey, e])
+    );
+    expect(byHolder.holder1.reason).toBe("unknown");
+    expect(byHolder.holder2.reason).toBe("no_login");
+
+    const serialized = serializeLicenseRunReport(report);
+    expect(serialized).not.toMatch(/leaked@example\.com/);
+    expect(serialized).not.toMatch(/ghp_/);
+    expect(serialized).not.toMatch(/external_id=abc123/);
+    const rendered = renderLicenseRunReportText(report);
+    expect(rendered).not.toMatch(/leaked@example\.com/);
+    expect(rendered).not.toMatch(/ghp_/);
+  });
+
   it("sorts unresolved identities deterministically by holderKey", () => {
     const runId = startLicenseRun({ enterpriseSlug: "ent1", requestedPeriods: ["2026-01"] });
     recordLicenseRunDiagnostics({
@@ -670,8 +765,243 @@ describe("buildLicenseRunReport / serializeLicenseRunReport / renderLicenseRunRe
     expect(report.warnings).toEqual([]);
     expect(report.unresolvedIdentities).toEqual([]);
     expect(report.checkCounts).toEqual({ pass: 0, warning: 0, fail: 0 });
+    expect(report.diagnostics).toEqual({
+      materializedRowCount: 0,
+      activeSeatRowCount: 0,
+      consumptionRowCount: 0,
+      consumedCredits: 0,
+      consumedUsd: 0,
+      identityResolution: { bySource: [], unresolvedHolderKeys: [] },
+      historyCoverage: [],
+      sourceStateSummary: [],
+      apiRequestCounts: { total: 0, bySource: {} },
+    });
     const rendered = renderLicenseRunReportText(report);
     expect(typeof rendered).toBe("string");
     expect(rendered.length).toBeGreaterThan(0);
   });
 });
+
+describe("buildLicenseRunReport typed diagnostics (materialized rows, identity resolution, history coverage, source states, API requests)", () => {
+  it("exposes deterministic empty defaults for every diagnostics field when no diagnostics input is given", () => {
+    const runId = startLicenseRun({ enterpriseSlug: "ent1", requestedPeriods: ["2026-01"] });
+    const run = getLicenseRun(runId)!;
+    const report = buildLicenseRunReport(run, [], []);
+    expect(report.diagnostics).toEqual({
+      materializedRowCount: 0,
+      activeSeatRowCount: 0,
+      consumptionRowCount: 0,
+      consumedCredits: 0,
+      consumedUsd: 0,
+      identityResolution: { bySource: [], unresolvedHolderKeys: [] },
+      historyCoverage: [],
+      sourceStateSummary: [],
+      apiRequestCounts: { total: 0, bySource: {} },
+    });
+  });
+
+  it("builds a full, deterministic diagnostics report from realistic Task 6/7/check-shaped inputs, and both JSON and text expose sorted periods, counts, summaries, request counts, checks/warnings and elapsed", () => {
+    // Realistic Task 7 (materialize-license-period) shaped row count inputs.
+    const materializedRowCount = 3;
+    const activeSeatRowCount = 2;
+
+    // Realistic Task 6 (identity-resolver) shaped rows summarized via the
+    // already-exported `summarizeIdentityResolution` (reused, not reimplemented).
+    const identityResolution = summarizeIdentityResolution([
+      { holderKey: "user1", identityResolutionSource: "seat", resolvedUserLogin: "user1" },
+      { holderKey: "user2", identityResolutionSource: "audit", resolvedUserLogin: "user2" },
+      { holderKey: "user3", identityResolutionSource: "unresolved", resolvedUserLogin: null },
+    ]);
+
+    // Realistic Task 6 (seat-ledger) shaped coverage summarized via the
+    // already-exported `summarizeHistoryCoverage` (reused, not reimplemented).
+    const coverage: SeatLedgerCoverage[] = [
+      {
+        enterpriseSlug: "ent1",
+        billingPeriod: "2026-01",
+        orgLogin: "org1",
+        confidence: "exact_snapshot",
+        counts: { exact_snapshot: 2, audit_reconstructed: 0, live_snapshot_only: 0, unrecoverable: 0 },
+        warnings: [],
+      },
+      {
+        enterpriseSlug: "ent1",
+        billingPeriod: "2026-01",
+        orgLogin: "org2",
+        confidence: "live_snapshot_only",
+        counts: { exact_snapshot: 0, audit_reconstructed: 0, live_snapshot_only: 1, unrecoverable: 0 },
+        warnings: [],
+      },
+    ];
+    const historyCoverage = summarizeHistoryCoverage(coverage);
+
+    const runId = startLicenseRun({
+      enterpriseSlug: "ent1",
+      requestedPeriods: ["2026-02", "2026-01"],
+      startedAt: "2026-02-01T00:00:00.000Z",
+    });
+    recordLicenseRunDiagnostics({
+      runId,
+      finish: {
+        status: "warning",
+        completedAt: "2026-02-01T00:00:07.000Z",
+        warnings: ["partial_seat_snapshot"],
+      },
+      checks: [
+        { checkName: "seat_count", billingPeriod: "2026-01", orgLogin: "org1", status: "pass", message: "ok" },
+        { checkName: "history_coverage", billingPeriod: "2026-01", orgLogin: "org2", status: "warning", message: "limited reconstruction" },
+      ],
+      sourceStates: [
+        { enterpriseSlug: "ent1", source: "seat_snapshot", billingPeriod: "2026-01", status: "ok" },
+        { enterpriseSlug: "ent1", source: "audit_log", billingPeriod: "2026-01", status: "ok" },
+      ],
+    });
+
+    const run = getLicenseRun(runId)!;
+    const checks = listLicenseChecks(runId);
+    const sourceStates = listLicenseSourceState("ent1");
+
+    const report = buildLicenseRunReport(run, checks, sourceStates, {
+      materializedRowCount,
+      activeSeatRowCount,
+      consumptionRowCount: 2,
+      consumedCredits: 500,
+      consumedUsd: 5,
+      identityResolution,
+      historyCoverage,
+      apiRequestCounts: { total: 12, bySource: { seat_snapshot: 7, audit_log: 5 } },
+    });
+
+    expect(report.requestedPeriods).toEqual(["2026-01", "2026-02"]);
+    expect(report.elapsedMs).toBe(7000);
+    expect(report.checkCounts).toEqual({ pass: 1, warning: 1, fail: 0 });
+    expect(report.warnings).toEqual(["partial_seat_snapshot"]);
+
+    expect(report.diagnostics.materializedRowCount).toBe(3);
+    expect(report.diagnostics.activeSeatRowCount).toBe(2);
+    expect(report.diagnostics.consumptionRowCount).toBe(2);
+    expect(report.diagnostics.consumedCredits).toBe(500);
+    expect(report.diagnostics.consumedUsd).toBe(5);
+    expect(report.diagnostics.identityResolution.bySource).toEqual([
+      { source: "audit", count: 1 },
+      { source: "seat", count: 1 },
+      { source: "unresolved", count: 1 },
+    ]);
+    expect(report.diagnostics.identityResolution.unresolvedHolderKeys).toEqual(["user3"]);
+    expect(report.diagnostics.historyCoverage).toEqual([
+      { confidence: "exact_snapshot", count: 1 },
+      { confidence: "live_snapshot_only", count: 1 },
+    ]);
+    expect(report.diagnostics.sourceStateSummary.map((s) => s.source)).toEqual(["audit_log", "seat_snapshot"]);
+    expect(report.diagnostics.apiRequestCounts).toEqual({ total: 12, bySource: { audit_log: 5, seat_snapshot: 7 } });
+
+    const serialized = serializeLicenseRunReport(report);
+    const parsed = JSON.parse(serialized);
+    expect(parsed.requestedPeriods).toEqual(["2026-01", "2026-02"]);
+    expect(parsed.checkCounts).toEqual({ pass: 1, warning: 1, fail: 0 });
+    expect(parsed.warnings).toEqual(["partial_seat_snapshot"]);
+    expect(parsed.elapsedMs).toBe(7000);
+    expect(parsed.diagnostics.materializedRowCount).toBe(3);
+    expect(parsed.diagnostics.activeSeatRowCount).toBe(2);
+    expect(parsed.diagnostics.apiRequestCounts.total).toBe(12);
+
+    const rendered = renderLicenseRunReportText(report);
+    expect(rendered).toContain("2026-01, 2026-02");
+    expect(rendered).toContain("Materialized rows: 3");
+    expect(rendered).toContain("Active/seat rows: 2");
+    expect(rendered).toContain("audit=1");
+    expect(rendered).toContain("seat=1");
+    expect(rendered).toContain("unresolved=1");
+    expect(rendered).toContain("exact_snapshot=1");
+    expect(rendered).toContain("live_snapshot_only=1");
+    expect(rendered).toContain("total=12");
+    expect(rendered).toContain("seat_snapshot=7");
+    expect(rendered).toContain("audit_log=5");
+    expect(rendered).toContain("partial_seat_snapshot");
+    expect(rendered).toContain("seat_count");
+    expect(rendered).toContain("Elapsed: 7000ms");
+  });
+
+  it("bounds a caller-provided apiRequestCounts.bySource/total to safe non-negative integers", () => {
+    const runId = startLicenseRun({ enterpriseSlug: "ent1", requestedPeriods: ["2026-01"] });
+    const run = getLicenseRun(runId)!;
+    const report = buildLicenseRunReport(run, [], [], {
+      apiRequestCounts: { total: -5, bySource: { good: 3, bad: NaN, negative: -1 } },
+    });
+    expect(report.diagnostics.apiRequestCounts.total).toBe(0);
+    expect(report.diagnostics.apiRequestCounts.bySource).toEqual({ good: 3, bad: 0, negative: 0 });
+  });
+});
+
+describe("report content sanitization (legacy sourceStats/warnings/errorMessage)", () => {
+  it("redacts Bearer tokens, GitHub PAT-shaped tokens, and email addresses embedded in legacy sourceStats/warnings/errorMessage without leaking the originals, while safe operational text remains readable", () => {
+    const runId = startLicenseRun({ enterpriseSlug: "ent1", requestedPeriods: ["2026-01"] });
+    const secretToken = "ghp_abcdefghijklmnopqrstuvwxyz0123456789";
+    const bearerHeader = "Bearer abcdefghijklmnop.qrstuvwx-yz012345";
+    const leakedEmail = "someone@example.com";
+
+    recordLicenseRunDiagnostics({
+      runId,
+      finish: {
+        status: "warning",
+        sourceStats: {
+          apiRequests: 5,
+          debugAuthHeader: bearerHeader,
+          leakedNote: `token ${secretToken} for ${leakedEmail}`,
+        },
+        warnings: [`sync failed for ${leakedEmail}`, "org_billing_endpoint_unavailable"],
+        errorMessage: `auth failed using ${secretToken}`,
+      },
+      checks: [],
+    });
+
+    const run = getLicenseRun(runId)!;
+    const report = buildLicenseRunReport(run, [], []);
+    const serialized = serializeLicenseRunReport(report);
+    const rendered = renderLicenseRunReportText(report);
+
+    for (const surface of [serialized, rendered]) {
+      expect(surface).not.toContain(secretToken);
+      expect(surface).not.toContain(bearerHeader);
+      expect(surface).not.toContain(leakedEmail);
+    }
+
+    // Safe operational content remains readable in both surfaces.
+    expect(serialized).toContain("org_billing_endpoint_unavailable");
+    expect(rendered).toContain("org_billing_endpoint_unavailable");
+    expect(serialized).toContain('"apiRequests":5');
+  });
+
+  it("bounds sourceStats collection size to avoid log amplification", () => {
+    const runId = startLicenseRun({ enterpriseSlug: "ent1", requestedPeriods: ["2026-01"] });
+    const bigArray = Array.from({ length: 200 }, (_, i) => `item-${i}`);
+    recordLicenseRunDiagnostics({
+      runId,
+      finish: {
+        status: "warning",
+        sourceStats: { bigArray },
+      },
+      checks: [],
+    });
+    const run = getLicenseRun(runId)!;
+    const report = buildLicenseRunReport(run, [], []);
+    const stored = report.sourceStats.bigArray as unknown[];
+    // Bounded to a fixed max collection size plus a truncation marker —
+    // never the full 200-entry original.
+    expect(stored.length).toBeLessThanOrEqual(51);
+    expect(stored.length).toBeLessThan(bigArray.length);
+  });
+
+  it("does not affect the raw persisted run record — sanitization applies only to report content", () => {
+    const runId = startLicenseRun({ enterpriseSlug: "ent1", requestedPeriods: ["2026-01"] });
+    const secretToken = "ghp_abcdefghijklmnopqrstuvwxyz0123456789";
+    recordLicenseRunDiagnostics({
+      runId,
+      finish: { status: "warning", sourceStats: { note: `token ${secretToken}` } },
+      checks: [],
+    });
+    const run = getLicenseRun(runId)!;
+    expect(run.sourceStats).toEqual({ note: `token ${secretToken}` });
+  });
+});
+

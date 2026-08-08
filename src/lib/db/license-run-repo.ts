@@ -7,9 +7,15 @@
 // keys) via `stableStringify` so repeated writes of equivalent data produce
 // identical bytes, and are always returned to callers already parsed.
 
-import { randomUUID } from "node:crypto";
+import { randomUUID, createHash } from "node:crypto";
 import { getDb } from "./database";
 import { stableStringify, parseJsonArray, parseJsonObject } from "./license-history-repo";
+import { summarizeSourceStates } from "../licensing/reconciliation-checks";
+import type {
+  IdentityResolutionSummary,
+  HistoryCoverageSummaryEntry,
+  SourceStateSummary,
+} from "../licensing/reconciliation-checks";
 
 // ── Types ─────────────────────────────────────────────────────────────
 
@@ -482,33 +488,302 @@ export function recordLicenseRunDiagnostics(input: LicenseRunDiagnosticsInput): 
 
 // ── Run report (rendering/serialization) ────────────────────────────
 
-/** Allowlist of unresolved-identity fields that are safe to surface — see {@link sanitizeUnresolvedIdentity}. */
-const SAFE_UNRESOLVED_IDENTITY_KEYS = new Set(["holderKey", "githubUserId", "reason"]);
+/**
+ * Fixed, documented set of safe unresolved-identity `reason` codes. Any
+ * `reason` value outside this set — including free text that happens to
+ * embed an email, external id, or token — is never echoed verbatim; it is
+ * replaced with `"unknown"` (see {@link sanitizeUnresolvedReason}). Extend
+ * this set deliberately when a genuinely new, safe (non-PII) reason code is
+ * introduced upstream.
+ */
+const SAFE_UNRESOLVED_REASONS = new Set([
+  "no_login",
+  "ambiguous_match",
+  "missing_identity_map",
+  "unverified_external_identity",
+  "seat_only_no_evidence",
+  "audit_conflict",
+  "unknown",
+]);
+
+/** Bounded, stable-identifier shape a `holderKey` must match to be surfaced as-is — see {@link sanitizeUnresolvedHolderKey}. Mirrors a GitHub-login-like slug: alnum start/end, alnum/dot/underscore/hyphen body, bounded length. */
+const SAFE_HOLDER_KEY_RE = /^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,62}[A-Za-z0-9])?$/;
+const MAX_HOLDER_KEY_LENGTH = 64;
+
+/**
+ * Deterministically redact an unsafe value to a stable, non-reversible
+ * marker: the same unsafe input always redacts to the same marker (so
+ * repeated report builds/joins remain stable), while the marker itself
+ * never contains any substring of the original value.
+ */
+function deterministicRedactedMarker(value: unknown): string {
+  const basis = typeof value === "string" ? value : stableStringify(value ?? null);
+  const hash = createHash("sha256").update(basis).digest("hex").slice(0, 12);
+  return `redacted:${hash}`;
+}
+
+/**
+ * Accept a `holderKey` only when it is a bounded, stable-identifier-shaped
+ * string (see {@link SAFE_HOLDER_KEY_RE}); anything else (an email, raw
+ * external id, script/HTML content, or an oversized value) is replaced with
+ * a {@link deterministicRedactedMarker} rather than leaked verbatim.
+ */
+function sanitizeUnresolvedHolderKey(value: unknown): string {
+  if (
+    typeof value === "string" &&
+    value.length > 0 &&
+    value.length <= MAX_HOLDER_KEY_LENGTH &&
+    SAFE_HOLDER_KEY_RE.test(value)
+  ) {
+    return value;
+  }
+  return deterministicRedactedMarker(value);
+}
+
+/** Accept `githubUserId` only as a finite, non-negative integer — a string, negative, fractional, or non-finite value is omitted (never coerced/leaked). */
+function sanitizeUnresolvedGithubUserId(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value) && Number.isInteger(value) && value >= 0) {
+    return value;
+  }
+  return undefined;
+}
+
+/** Restrict `reason` to the {@link SAFE_UNRESOLVED_REASONS} fixed set; any unrecognized or free-text value (including one embedding an email/external id/token) becomes `"unknown"`. */
+function sanitizeUnresolvedReason(value: unknown): string {
+  return typeof value === "string" && SAFE_UNRESOLVED_REASONS.has(value) ? value : "unknown";
+}
 
 /**
  * Defensively strip an unresolved-identity entry down to only the allowlisted
- * safe fields (`holderKey`, `githubUserId`, `reason`), dropping any other
- * property — in particular this guarantees external identity values, emails,
- * SAML nameIds, SCIM externalId/userName, tokens, or raw payloads are never
- * surfaced in a report even if an upstream caller's `unresolvedIdentities`
- * payload happened to include them.
+ * safe fields (`holderKey`, `githubUserId`, `reason`) — dropping any other
+ * property outright — and additionally validate each field's *value*, not
+ * just its key: an unsafe `holderKey` is redacted (never leaked), an invalid
+ * `githubUserId` is omitted, and a `reason` outside the fixed safe set
+ * becomes `"unknown"`. Together this guarantees external identity values,
+ * emails, SAML nameIds, SCIM externalId/userName, tokens, or raw payloads
+ * can never be surfaced in a report even if an upstream caller's
+ * `unresolvedIdentities` payload happened to include them — whether as an
+ * unexpected key, or smuggled inside an expected key's value.
  */
 function sanitizeUnresolvedIdentity(entry: unknown): Record<string, unknown> {
   if (typeof entry !== "object" || entry === null) {
     return {};
   }
+  const record = entry as Record<string, unknown>;
   const safe: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(entry as Record<string, unknown>)) {
-    if (SAFE_UNRESOLVED_IDENTITY_KEYS.has(key)) {
-      safe[key] = value;
-    }
+
+  if ("holderKey" in record) {
+    safe.holderKey = sanitizeUnresolvedHolderKey(record.holderKey);
   }
+  const githubUserId = sanitizeUnresolvedGithubUserId(record.githubUserId);
+  if (githubUserId !== undefined) {
+    safe.githubUserId = githubUserId;
+  }
+  if ("reason" in record) {
+    safe.reason = sanitizeUnresolvedReason(record.reason);
+  }
+
   return safe;
 }
 
 /** Sort key for a sanitized unresolved-identity entry: its `holderKey` when present, else a stable fallback. */
 function unresolvedIdentitySortKey(entry: Record<string, unknown>): string {
   return typeof entry.holderKey === "string" ? entry.holderKey : stableStringify(entry);
+}
+
+// ── Defensive report-content sanitization (legacy sourceStats/warnings/errorMessage) ──
+//
+// `sourceStats`/`warnings`/`errorMessage` are legacy, caller-provided
+// free-form fields (see `FinishLicenseRunInput`) — unlike the new typed
+// diagnostics fields below, their *shape* cannot be tightened without
+// breaking existing persistence/callers (see this module's doc comment).
+// Instead, report *content* built from them is defensively redacted and
+// bounded so a secret/token/email/PII value a caller accidentally stuffed
+// into one of these fields can never leak through `serializeLicenseRunReport`
+// or `renderLicenseRunReportText`. This never mutates or affects the raw
+// persisted run row — only the report object built from it.
+
+const MAX_SANITIZE_DEPTH = 4;
+const MAX_COLLECTION_SIZE = 50;
+const MAX_STRING_LENGTH = 500;
+
+const BEARER_TOKEN_RE = /\bBearer\s+[A-Za-z0-9._-]{8,}/gi;
+/** GitHub PAT shapes: classic (`ghp_`/`gho_`/`ghu_`/`ghs_`/`ghr_`) and fine-grained (`github_pat_`). */
+const GITHUB_PAT_RE = /\b(?:ghp|gho|ghu|ghs|ghr|github_pat)_[A-Za-z0-9_]{20,}\b/gi;
+const EMAIL_RE = /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/gi;
+
+/** Bound a string's length, then redact bearer tokens, GitHub PAT-shaped tokens, and email addresses — never echoing the original secret/PII substring. */
+function redactSensitiveSubstrings(text: string): string {
+  const bounded = text.length > MAX_STRING_LENGTH ? `${text.slice(0, MAX_STRING_LENGTH)}…[truncated]` : text;
+  return bounded.replace(BEARER_TOKEN_RE, "[REDACTED_TOKEN]").replace(GITHUB_PAT_RE, "[REDACTED_TOKEN]").replace(EMAIL_RE, "[REDACTED_EMAIL]");
+}
+
+/**
+ * Recursively sanitize an arbitrary caller-provided value for inclusion in a
+ * report: strings are redacted/bounded (see {@link redactSensitiveSubstrings});
+ * non-finite numbers become `null`; arrays/objects are recursed into with a
+ * bounded depth and a bounded number of entries (excess entries are dropped
+ * and replaced with a single truncation marker) to avoid log amplification;
+ * anything else (functions, symbols, `undefined`) is dropped.
+ */
+function sanitizeReportValue(value: unknown, depth = 0): unknown {
+  if (depth > MAX_SANITIZE_DEPTH) return "[REDACTED_DEPTH_LIMIT]";
+  if (typeof value === "string") return redactSensitiveSubstrings(value);
+  if (typeof value === "number") return Number.isFinite(value) ? value : null;
+  if (typeof value === "boolean" || value === null) return value;
+  if (Array.isArray(value)) {
+    const bounded = value.slice(0, MAX_COLLECTION_SIZE).map((v) => sanitizeReportValue(v, depth + 1));
+    if (value.length > MAX_COLLECTION_SIZE) bounded.push("[REDACTED_TRUNCATED]");
+    return bounded;
+  }
+  if (typeof value === "object") {
+    const entries = Object.entries(value as Record<string, unknown>).slice(0, MAX_COLLECTION_SIZE);
+    const safe: Record<string, unknown> = {};
+    for (const [key, entryValue] of entries) {
+      safe[key] = sanitizeReportValue(entryValue, depth + 1);
+    }
+    return safe;
+  }
+  return undefined;
+}
+
+function sanitizeReportRecord(value: Record<string, unknown>): Record<string, unknown> {
+  return sanitizeReportValue(value, 0) as Record<string, unknown>;
+}
+
+function sanitizeReportStringArray(values: string[]): string[] {
+  return values.slice(0, MAX_COLLECTION_SIZE).map((v) => redactSensitiveSubstrings(v));
+}
+
+function sanitizeReportNullableString(value: string | null): string | null {
+  return value === null ? null : redactSensitiveSubstrings(value);
+}
+
+// ── Typed diagnostics (materialized rows, identity resolution, history coverage, source states, API requests) ──
+
+/** Total and (optional) per-source API request counts for a run. */
+export interface LicenseRunReportApiRequestCounts {
+  total: number;
+  bySource: Record<string, number>;
+}
+
+/**
+ * Concrete, always-present diagnostics content for a run report — see
+ * {@link buildLicenseRunReport}'s `diagnosticsInput` parameter for how a
+ * caller supplies this, and {@link LicenseRunReportDiagnosticsInput} for the
+ * optional-field input shape. Every field here has a deterministic empty
+ * default (0 / [] / {}) so a report can always be built even when a caller
+ * supplies no diagnostics input at all.
+ */
+export interface LicenseRunReportDiagnostics {
+  /** Count of Task 7 materialized (org, holder) rows for this run's period(s). */
+  materializedRowCount: number;
+  /** Count of materialized rows with an active/assigned seat. */
+  activeSeatRowCount: number;
+  /** Count of raw consumption records considered during materialization. */
+  consumptionRowCount: number;
+  /** Total AI-Credit consumption across those records. */
+  consumedCredits: number;
+  /** Total USD consumption across those records. */
+  consumedUsd: number;
+  /** Identity resolution counts by source, and unresolved holder keys — see `reconciliation-checks.ts`'s `summarizeIdentityResolution`. */
+  identityResolution: IdentityResolutionSummary;
+  /** Seat-ledger history coverage counts by confidence tier — see `reconciliation-checks.ts`'s `summarizeHistoryCoverage`. */
+  historyCoverage: HistoryCoverageSummaryEntry[];
+  /** Per-source sync state grouped by source, each with its per-period status — see `reconciliation-checks.ts`'s `summarizeSourceStates`. Computed automatically from this report's `sourceStates` input; never needs to be supplied separately. */
+  sourceStateSummary: SourceStateSummary[];
+  /** Total and (optional) per-source upstream API request counts for this run. */
+  apiRequestCounts: LicenseRunReportApiRequestCounts;
+}
+
+/**
+ * Optional, typed diagnostics a caller (a sync orchestrator with access to
+ * Task 6/7 outputs) may pass to {@link buildLicenseRunReport} to populate
+ * {@link LicenseRunReportDiagnostics}. Every field is optional and missing/
+ * invalid values fall back to a deterministic empty default — this contract
+ * never requires the legacy, opaque `sourceStats` bag to be populated to get
+ * core diagnostics content.
+ */
+export interface LicenseRunReportDiagnosticsInput {
+  materializedRowCount?: number;
+  activeSeatRowCount?: number;
+  consumptionRowCount?: number;
+  consumedCredits?: number;
+  consumedUsd?: number;
+  identityResolution?: IdentityResolutionSummary;
+  historyCoverage?: HistoryCoverageSummaryEntry[];
+  apiRequestCounts?: { total?: number; bySource?: Record<string, number> };
+}
+
+/** Coerce to a safe, finite, non-negative integer; anything else (undefined/NaN/Infinity/negative/fractional) falls back to 0. */
+function safeNonNegativeInt(value: number | undefined): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) return 0;
+  return Math.max(0, Math.trunc(value));
+}
+
+/** Coerce to a safe, finite, non-negative number (fractional values allowed, unlike {@link safeNonNegativeInt}); anything else falls back to 0. */
+function safeNonNegativeNumber(value: number | undefined): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) return 0;
+  return Math.max(0, value);
+}
+
+/**
+ * Build the always-present {@link LicenseRunReportDiagnostics} from a
+ * caller's optional {@link LicenseRunReportDiagnosticsInput} plus this
+ * report's already-fetched `sourceStates` (used to compute
+ * `sourceStateSummary` via `summarizeSourceStates`, reused rather than
+ * reimplemented). Every numeric/collection field is bounded/defaulted so an
+ * absent or malformed diagnostics input can never throw or leak an invalid
+ * value into the report.
+ */
+function buildDiagnostics(
+  sourceStates: LicenseSourceStateRecord[],
+  diagnosticsInput: LicenseRunReportDiagnosticsInput | undefined
+): LicenseRunReportDiagnostics {
+  const input = diagnosticsInput ?? {};
+
+  const identityResolution: IdentityResolutionSummary = input.identityResolution
+    ? {
+        bySource: [...input.identityResolution.bySource]
+          .map((entry) => ({ source: entry.source, count: safeNonNegativeInt(entry.count) }))
+          .sort((a, b) => a.source.localeCompare(b.source)),
+        unresolvedHolderKeys: [...input.identityResolution.unresolvedHolderKeys]
+          .map(sanitizeUnresolvedHolderKey)
+          .sort(),
+      }
+    : { bySource: [], unresolvedHolderKeys: [] };
+
+  const historyCoverage: HistoryCoverageSummaryEntry[] = input.historyCoverage
+    ? [...input.historyCoverage]
+        .map((entry) => ({ confidence: entry.confidence, count: safeNonNegativeInt(entry.count) }))
+        .sort((a, b) => a.confidence.localeCompare(b.confidence))
+    : [];
+
+  const sourceStateSummary = summarizeSourceStates(
+    sourceStates.map((s) => ({ source: s.source, billingPeriod: s.billingPeriod, status: s.status, lastSyncedAt: s.lastSyncedAt }))
+  );
+
+  const apiRequestCountsInput = input.apiRequestCounts ?? {};
+  const bySourceEntries = Object.entries(apiRequestCountsInput.bySource ?? {})
+    .slice(0, MAX_COLLECTION_SIZE)
+    .map(([key, count]) => [key.slice(0, MAX_STRING_LENGTH), safeNonNegativeInt(count)] as const)
+    .sort((a, b) => a[0].localeCompare(b[0]));
+  const apiRequestCounts: LicenseRunReportApiRequestCounts = {
+    total: safeNonNegativeInt(apiRequestCountsInput.total),
+    bySource: Object.fromEntries(bySourceEntries),
+  };
+
+  return {
+    materializedRowCount: safeNonNegativeInt(input.materializedRowCount),
+    activeSeatRowCount: safeNonNegativeInt(input.activeSeatRowCount),
+    consumptionRowCount: safeNonNegativeInt(input.consumptionRowCount),
+    consumedCredits: safeNonNegativeNumber(input.consumedCredits),
+    consumedUsd: safeNonNegativeNumber(input.consumedUsd),
+    identityResolution,
+    historyCoverage,
+    sourceStateSummary,
+    apiRequestCounts,
+  };
 }
 
 export interface LicenseRunReportSourceEntry {
@@ -553,25 +828,36 @@ export interface LicenseRunReportObject {
   unresolvedIdentities: Record<string, unknown>[];
   warnings: string[];
   errorMessage: string | null;
+  /** Explicitly typed diagnostics content — see {@link LicenseRunReportDiagnostics}. Always present with deterministic empty defaults, never dependent on the legacy `sourceStats` bag. */
+  diagnostics: LicenseRunReportDiagnostics;
 }
 
 /**
  * Build a deterministic, DB-free report object from an already-fetched run,
- * its checks, and its source sync state rows.
+ * its checks, and its source sync state rows, plus optional typed
+ * {@link LicenseRunReportDiagnosticsInput} diagnostics from a sync
+ * orchestrator with access to Task 6/7 outputs.
  *
  * All arrays are sorted into a stable, deterministic order (requested
  * periods and warnings lexicographically; sources by `source` then
  * `billingPeriod`; checks by `name` then `billingPeriod` then `orgLogin`,
  * matching {@link listLicenseChecks}'s SQL ordering; unresolved identities —
  * after sanitization — by `holderKey`), and unresolved-identity entries are
- * passed through {@link sanitizeUnresolvedIdentity} so no unsafe field can
- * leak into a rendered or serialized report regardless of what the stored
- * `unresolved_identities` JSON happens to contain.
+ * passed through {@link sanitizeUnresolvedIdentity} so no unsafe field —
+ * nor an unsafe *value* in an otherwise-allowed field — can leak into a
+ * rendered or serialized report regardless of what the stored
+ * `unresolved_identities` JSON happens to contain. The legacy `sourceStats`/
+ * `warnings`/`errorMessage` fields are likewise defensively redacted/bounded
+ * (see {@link sanitizeReportRecord}) so an accidental secret/token/email
+ * stuffed into one of those free-form fields can never leak through either.
+ * `diagnostics` (see {@link LicenseRunReportDiagnostics}) is always present
+ * with deterministic empty defaults, computed via {@link buildDiagnostics}.
  */
 export function buildLicenseRunReport(
   run: LicenseRunRecord,
   checks: LicenseCheckRecord[],
-  sourceStates: LicenseSourceStateRecord[]
+  sourceStates: LicenseSourceStateRecord[],
+  diagnosticsInput?: LicenseRunReportDiagnosticsInput
 ): LicenseRunReportObject {
   const elapsedMs =
     run.completedAt != null ? Date.parse(run.completedAt) - Date.parse(run.startedAt) : null;
@@ -584,7 +870,7 @@ export function buildLicenseRunReport(
       lastSyncedAt: s.lastSyncedAt,
       coverageStart: s.coverageStart,
       coverageEnd: s.coverageEnd,
-      errorMessage: s.errorMessage,
+      errorMessage: sanitizeReportNullableString(s.errorMessage),
     }))
     .sort((a, b) => a.source.localeCompare(b.source) || a.billingPeriod.localeCompare(b.billingPeriod));
 
@@ -617,6 +903,8 @@ export function buildLicenseRunReport(
     .map(sanitizeUnresolvedIdentity)
     .sort((a, b) => unresolvedIdentitySortKey(a).localeCompare(unresolvedIdentitySortKey(b)));
 
+  const diagnostics = buildDiagnostics(sourceStates, diagnosticsInput);
+
   return {
     id: run.id,
     enterpriseSlug: run.enterpriseSlug,
@@ -625,13 +913,14 @@ export function buildLicenseRunReport(
     completedAt: run.completedAt,
     elapsedMs,
     requestedPeriods: [...run.requestedPeriods].sort(),
-    sourceStats: run.sourceStats,
+    sourceStats: sanitizeReportRecord(run.sourceStats),
     sources,
     checks: reportChecks,
     checkCounts,
     unresolvedIdentities,
-    warnings: [...run.warnings].sort(),
-    errorMessage: run.errorMessage,
+    warnings: sanitizeReportStringArray([...run.warnings].sort()),
+    errorMessage: sanitizeReportNullableString(run.errorMessage),
+    diagnostics,
   };
 }
 
@@ -649,8 +938,12 @@ export function serializeLicenseRunReport(report: LicenseRunReportObject): strin
 /**
  * Render a run report as concise, human-readable text — run identity,
  * status, timestamps/elapsed time, requested periods, per-source sync
- * state, reconciliation checks (with pass/warning/fail counts), raw source
- * stats, unresolved-identity count, warnings, and any top-level error.
+ * state, reconciliation checks (with pass/warning/fail counts), typed
+ * diagnostics (materialized/active-seat/consumption row counts and consumed
+ * credits/USD, identity resolution counts by source, history coverage
+ * counts by confidence, source state summary, API request counts), raw
+ * source stats, unresolved-identity count, warnings, and any top-level
+ * error.
  *
  * This performs no filesystem writes; it only returns a string. Any file
  * emission is the caller's (orchestration/config layer's) responsibility.
@@ -684,6 +977,37 @@ export function renderLicenseRunReportText(report: LicenseRunReportObject): stri
       const scope = [c.billingPeriod, c.orgLogin].filter((part) => part !== "").join("/");
       lines.push(`  - [${c.status.toUpperCase()}] ${c.name}${scope ? ` (${scope})` : ""}: ${c.message}`);
     }
+  }
+
+  const d = report.diagnostics;
+  lines.push("Diagnostics:");
+  lines.push(`  Materialized rows: ${d.materializedRowCount}`);
+  lines.push(`  Active/seat rows: ${d.activeSeatRowCount}`);
+  lines.push(`  Consumption rows: ${d.consumptionRowCount} (credits: ${d.consumedCredits}, USD: $${d.consumedUsd})`);
+  lines.push(
+    `  Identity resolution by source: ${
+      d.identityResolution.bySource.length > 0
+        ? d.identityResolution.bySource.map((e) => `${e.source}=${e.count}`).join(", ")
+        : "(none)"
+    }`
+  );
+  lines.push(`  Unresolved identities (by holder): ${d.identityResolution.unresolvedHolderKeys.length}`);
+  lines.push(
+    `  History coverage by confidence: ${
+      d.historyCoverage.length > 0 ? d.historyCoverage.map((e) => `${e.confidence}=${e.count}`).join(", ") : "(none)"
+    }`
+  );
+  lines.push(
+    `  Source state summary: ${
+      d.sourceStateSummary.length > 0
+        ? d.sourceStateSummary.map((s) => `${s.source}(${s.periods.length})`).join(", ")
+        : "(none)"
+    }`
+  );
+  {
+    const bySourceEntries = Object.entries(d.apiRequestCounts.bySource);
+    const bySourceSuffix = bySourceEntries.length > 0 ? ` (${bySourceEntries.map(([k, v]) => `${k}=${v}`).join(", ")})` : "";
+    lines.push(`  API requests: total=${d.apiRequestCounts.total}${bySourceSuffix}`);
   }
 
   const sourceStatsKeys = Object.keys(report.sourceStats).sort();

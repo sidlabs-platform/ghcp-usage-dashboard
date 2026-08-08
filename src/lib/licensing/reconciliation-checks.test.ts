@@ -328,6 +328,34 @@ describe("checkAicGrossVsNet", () => {
       checkAicGrossVsNet({ comparisons: [{ billingPeriod: PERIOD, orgLogin: "org1", grossUsd: 100, netUsd: 100 }], tolerancePct: NaN })
     ).toThrow();
   });
+
+  it("rejects a tolerance override above 100, aligned with the config's 0..100 inclusive validation range", () => {
+    expect(() =>
+      checkAicGrossVsNet({ comparisons: [{ billingPeriod: PERIOD, orgLogin: "org1", grossUsd: 100, netUsd: 100 }], tolerancePct: 101 })
+    ).toThrow();
+    expect(() =>
+      checkAicGrossVsNet({ comparisons: [{ billingPeriod: PERIOD, orgLogin: "org1", grossUsd: 100, netUsd: 100 }], tolerancePct: Infinity })
+    ).toThrow();
+  });
+
+  it("accepts the inclusive 100 boundary as a valid tolerance override", () => {
+    const results = checkAicGrossVsNet({
+      comparisons: [{ billingPeriod: PERIOD, orgLogin: "org1", grossUsd: 100, netUsd: 1 }],
+      tolerancePct: 100,
+    });
+    expect(results[0].status).toBe("pass");
+    expect(results[0].details.toleranceUsedPct).toBe(100);
+  });
+
+  it("keeps the default 5% tolerance and pure-function semantics when no override is given", () => {
+    const before = { billingPeriod: PERIOD, orgLogin: "org1", grossUsd: 100, netUsd: 94.9 };
+    const results = checkAicGrossVsNet({ comparisons: [before] });
+    // Default tolerance is 5%: a 5.1% variance must warn, not pass.
+    expect(results[0].status).toBe("warning");
+    expect(results[0].details.toleranceUsedPct).toBe(5);
+    // Pure function: input object must be unchanged.
+    expect(before).toEqual({ billingPeriod: PERIOD, orgLogin: "org1", grossUsd: 100, netUsd: 94.9 });
+  });
 });
 
 describe("checkConsumptionAttribution", () => {

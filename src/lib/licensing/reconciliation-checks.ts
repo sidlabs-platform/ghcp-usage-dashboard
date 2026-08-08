@@ -542,13 +542,21 @@ const AIC_TOLERANCE_FAIL_MULTIPLIER = 2;
  * tolerance passes; up to {@link AIC_TOLERANCE_FAIL_MULTIPLIER}× tolerance
  * warns; beyond that fails. A missing net comparator always warns.
  *
- * @throws {Error} when `tolerancePct` is provided but is not a finite,
- * non-negative number — an invalid override must surface immediately
- * rather than silently falling back to the default.
+ * @throws {Error} when `tolerancePct` is provided but is not a finite number
+ * within the inclusive 0..100 range — an invalid override must surface
+ * immediately rather than silently falling back to the default. This
+ * mirrors `dashboard-config.ts`'s `licensing.validation.aicTolerancePct`
+ * validation range exactly, so a config-resolved tolerance is always a
+ * valid override here too.
  */
 export function checkAicGrossVsNet(input: AicGrossVsNetCheckInput): ReconciliationCheckResult[] {
-  if (input.tolerancePct !== undefined && (!Number.isFinite(input.tolerancePct) || input.tolerancePct < 0)) {
-    throw new Error(`checkAicGrossVsNet: tolerancePct override must be a finite number >= 0, got ${JSON.stringify(input.tolerancePct)}`);
+  if (
+    input.tolerancePct !== undefined &&
+    (!Number.isFinite(input.tolerancePct) || input.tolerancePct < 0 || input.tolerancePct > 100)
+  ) {
+    throw new Error(
+      `checkAicGrossVsNet: tolerancePct override must be a finite number between 0 and 100 (inclusive), got ${JSON.stringify(input.tolerancePct)}`
+    );
   }
   const tolerancePct = input.tolerancePct ?? DEFAULT_AIC_TOLERANCE_PCT;
 
