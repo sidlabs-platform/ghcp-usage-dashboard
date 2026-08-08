@@ -423,12 +423,18 @@ export interface CopilotAppAnalyticsResponse {
   languageBreakdown: CopilotAppBreakdown[];
 }
 
+/** Paginated Copilot App adopter roster response. Nests pagination metadata
+ * under `pagination` (rather than flattening `page`/`pageSize`/... at the top
+ * level) to match every other paginated API route in this codebase (e.g.
+ * `/api/teams`, `/api/billing/ai-credits/users`). */
 export interface CopilotAppAdoptersResponse {
   adopters: CopilotAppAdopter[];
-  page: number;
-  pageSize: number;
-  totalItems: number;
-  totalPages: number;
+  pagination: {
+    page: number;
+    pageSize: number;
+    totalItems: number;
+    totalPages: number;
+  };
 }
 
 /** One day of Copilot App activity from an enterprise/org aggregate

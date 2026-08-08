@@ -94,6 +94,34 @@ vi.mock("@/lib/db/aggregation-queries", () => ({
   getModelTrend: vi.fn(() => []),
 }));
 
+vi.mock("@/lib/db/copilot-app-queries", () => ({
+  estimateCopilotAppRowCount: vi.fn(() => ({ exceeds: false, count: 0 })),
+  getCopilotAppUserSummary: vi.fn(() => ({
+    periodActiveUsers: 0,
+    appActiveUsers: 0,
+    adoptionRate: 0,
+    sessions: 0,
+    requests: 0,
+    prompts: 0,
+    promptTokens: 0,
+    outputTokens: 0,
+    avgTokensPerRequest: 0,
+    codeGenerations: 0,
+    codeAcceptances: 0,
+    locAdded: 0,
+    locDeleted: 0,
+    locChanged: 0,
+    supportedRows: 0,
+  })),
+  getCopilotAppDailyUsage: vi.fn(() => []),
+  getCopilotAppDailyCodeImpact: vi.fn(() => []),
+  getCopilotAppModelBreakdown: vi.fn(() => []),
+  getCopilotAppLanguageBreakdown: vi.fn(() => []),
+  getEnterpriseCopilotAppDaily: vi.fn(() => []),
+  getOrganizationCopilotAppDaily: vi.fn(() => []),
+  getCopilotAppAdopters: vi.fn(() => ({ adopters: [], total: 0 })),
+}));
+
 const routeLoaders = [
   { name: "chat modes", load: () => import("./chat-modes/route") },
   { name: "CLI", load: () => import("./cli/route") },
@@ -103,6 +131,8 @@ const routeLoaders = [
   { name: "overview", load: () => import("./overview/route") },
   { name: "pull requests", load: () => import("./pull-requests/route") },
   { name: "adoption cohorts", load: () => import("./adoption-cohorts/route") },
+  { name: "Copilot App", load: () => import("./copilot-app/route") },
+  { name: "Copilot App adopters", load: () => import("./copilot-app/adopters/route") },
 ];
 
 afterEach(() => {
