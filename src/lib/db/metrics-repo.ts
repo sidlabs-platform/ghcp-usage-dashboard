@@ -372,7 +372,7 @@ export function getAllOrgMetrics(startDay: string, endDay: string, enterpriseSlu
     existing.monthly_active_chat_users += record.monthly_active_chat_users ?? 0;
     existing.daily_active_cli_users = (existing.daily_active_cli_users ?? 0) + (record.daily_active_cli_users ?? 0);
     existing.daily_active_copilot_app_users =
-      (existing.daily_active_copilot_app_users ?? 0) + (record.daily_active_copilot_app_users ?? 0);
+      sumNullable(existing.daily_active_copilot_app_users, record.daily_active_copilot_app_users);
     existing.code_generation_activity_count += record.code_generation_activity_count ?? 0;
     existing.code_acceptance_activity_count += record.code_acceptance_activity_count ?? 0;
     existing.user_initiated_interaction_count += record.user_initiated_interaction_count ?? 0;
@@ -452,7 +452,7 @@ export function getFilteredOrgMetrics(orgSlugs: string[], startDay: string, endD
     existing.monthly_active_chat_users += record.monthly_active_chat_users ?? 0;
     existing.daily_active_cli_users = (existing.daily_active_cli_users ?? 0) + (record.daily_active_cli_users ?? 0);
     existing.daily_active_copilot_app_users =
-      (existing.daily_active_copilot_app_users ?? 0) + (record.daily_active_copilot_app_users ?? 0);
+      sumNullable(existing.daily_active_copilot_app_users, record.daily_active_copilot_app_users);
     existing.code_generation_activity_count += record.code_generation_activity_count ?? 0;
     existing.code_acceptance_activity_count += record.code_acceptance_activity_count ?? 0;
     existing.user_initiated_interaction_count += record.user_initiated_interaction_count ?? 0;
@@ -493,6 +493,16 @@ function weightedMedian(
   if (b == null) return a ?? null;
   const total = weightA + weightB;
   return total > 0 ? (a * weightA + b * weightB) / total : (a + b) / 2;
+}
+
+/** Sum two nullable/undefined contributors, preserving the "unknown" contract:
+ *  if both contributors are null/undefined, the result stays null (unknown),
+ *  otherwise absent contributors are treated as 0 and the rest are summed. */
+function sumNullable(
+  a: number | null | undefined, b: number | null | undefined
+): number | null {
+  if (a == null && b == null) return null;
+  return (a ?? 0) + (b ?? 0);
 }
 
 // ── User metrics ──────────────────────────────────────────────────────
