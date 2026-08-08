@@ -133,7 +133,10 @@ CREATE INDEX IF NOT EXISTS idx_license_aic_consumption_holder
 CREATE TABLE IF NOT EXISTS license_period_rows (
   enterprise_slug TEXT NOT NULL,
   billing_period TEXT NOT NULL,
-  org_login TEXT NOT NULL DEFAULT '',
+  -- Canonical sentinel for "no attributed org" (see normalizeOrgLogin() in
+  -- license-history-repo.ts): never the empty string, so GROUP_CONCAT/COUNT
+  -- DISTINCT in the rollup query always agree on unattributed holders.
+  org_login TEXT NOT NULL DEFAULT '(unattributed)',
   holder_key TEXT NOT NULL,
   github_user_id INTEGER,
   user_login TEXT,
@@ -174,6 +177,11 @@ CREATE INDEX IF NOT EXISTS idx_license_period_rows_org
   ON license_period_rows(enterprise_slug, billing_period, org_login);
 CREATE INDEX IF NOT EXISTS idx_license_period_rows_confidence
   ON license_period_rows(enterprise_slug, history_confidence);
+-- Expression index matching the rollup query's exact GROUP BY key
+-- (COALESCE(NULLIF(resolved_user_login, ''), holder_key)) so the query
+-- planner can use it instead of a full scan+sort for the rollup view.
+CREATE INDEX IF NOT EXISTS idx_license_period_rows_rollup_group
+  ON license_period_rows(enterprise_slug, (COALESCE(NULLIF(resolved_user_login, ''), holder_key)));
 
 -- ============================================================================
 -- Reconciliation Runs (durable diagnostics for each sync/reconciliation pass)
@@ -212,7 +220,7 @@ CREATE TABLE IF NOT EXISTS license_reconciliation_checks (
   message TEXT NOT NULL,
   details TEXT NOT NULL DEFAULT '{}',
   PRIMARY KEY (run_id, check_name, billing_period, org_login),
-  FOREIGN KEY (run_id) REFERENCES license_reconciliation_runs(id)
+  FOREIGN KEY (run_id) REFERENCES license_reconciliation_runs(id) ON DELETE CASCADE
 );
 
 CREATE INDEX IF NOT EXISTS idx_license_reconciliation_checks_status

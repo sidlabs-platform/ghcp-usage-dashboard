@@ -17,9 +17,15 @@ import { buildOrderBy, buildLimitOffset, type PaginationParams } from "@/lib/api
  * logical payload always produces the same byte-for-byte string (array
  * order is preserved as-is). Used for `raw_json`/detail columns so repeated
  * upserts of equivalent data are stable and diff-friendly.
+ *
+ * Always returns a string: `JSON.stringify` itself returns the JS value
+ * `undefined` (not the string `"undefined"`) for inputs like `undefined`,
+ * functions, or symbols, which would violate SQLite's TEXT column
+ * contract and this function's own return type at runtime. Falling back to
+ * the literal string `"null"` keeps the contract honest.
  */
 export function stableStringify(value: unknown): string {
-  return JSON.stringify(sortKeysDeep(value));
+  return JSON.stringify(sortKeysDeep(value)) ?? "null";
 }
 
 function sortKeysDeep(value: unknown): unknown {
@@ -155,6 +161,24 @@ export interface LicensePeriodRowInput {
 
 // ── Read types (query side, camelCase) ───────────────────────────────
 
+/**
+ * Canonical sentinel used when a period row has no attributed organization
+ * (e.g. an enterprise-only seat/consumption record). Deliberately never the
+ * empty string: GROUP_CONCAT(DISTINCT ...)/COUNT(DISTINCT ...) in the
+ * rollup query, and `splitDistinct`'s length>0 filter, must agree on
+ * whether an "unattributed" org is present in a group — an empty string
+ * would be silently dropped by that filter while still being counted by
+ * COUNT(DISTINCT), producing a rollup row where `orgCount` and
+ * `orgLogins.length` disagree.
+ */
+export const UNATTRIBUTED_ORG = "(unattributed)";
+
+/** Normalize a possibly-missing org login to the canonical {@link UNATTRIBUTED_ORG} sentinel. */
+function normalizeOrgLogin(orgLogin: string | null | undefined): string {
+  const trimmed = (orgLogin ?? "").trim();
+  return trimmed.length > 0 ? trimmed : UNATTRIBUTED_ORG;
+}
+
 export interface LicensePeriodRowRecord {
   enterpriseSlug: string;
   billingPeriod: string;
@@ -191,9 +215,18 @@ export interface LicensePeriodRowRecord {
 export interface LicenseRollupRowRecord {
   enterpriseSlug: string;
   resolvedUserLogin: string;
+  /** Distinct "YYYY-MM" billing periods contributing to this rollup row. */
   periods: string[];
+  /** Distinct org logins (or {@link UNATTRIBUTED_ORG}) contributing to this rollup row. */
   orgLogins: string[];
   planTypes: string[];
+  /**
+   * Distinct (org_login, holder_key) seat pairs held across the selected
+   * periods — a seat held in the same org across multiple periods counts
+   * once, not once per period-row. Use {@link periodCount} for the number
+   * of distinct periods, and the underlying detail rows (view: "detail")
+   * for a full period-by-period breakdown.
+   */
   seatCount: number;
   orgCount: number;
   periodCount: number;
@@ -234,11 +267,27 @@ export interface LicensePeriodQuery {
   sortDir?: "asc" | "desc";
 }
 
-export interface PaginatedLicenseRows {
-  view: "detail" | "rollup";
-  rows: LicensePeriodRowRecord[] | LicenseRollupRowRecord[];
-  pagination: { page: number; pageSize: number; totalItems: number; totalPages: number };
+export interface LicenseRowsPagination {
+  page: number;
+  pageSize: number;
+  totalItems: number;
+  totalPages: number;
 }
+
+export interface PaginatedLicenseDetailRows {
+  view: "detail";
+  rows: LicensePeriodRowRecord[];
+  pagination: LicenseRowsPagination;
+}
+
+export interface PaginatedLicenseRollupRows {
+  view: "rollup";
+  rows: LicenseRollupRowRecord[];
+  pagination: LicenseRowsPagination;
+}
+
+/** Discriminated on `view`, so callers who pass a literal `view` narrow to the right `rows` element type without casts. */
+export type PaginatedLicenseRows = PaginatedLicenseDetailRows | PaginatedLicenseRollupRows;
 
 // ── Sort allowlists ───────────────────────────────────────────────────
 // Exported (read-only) so tests can iterate the exact allowlist rather than
@@ -365,7 +414,7 @@ function mapDetailRow(row: Record<string, unknown>): LicensePeriodRowRecord {
   return {
     enterpriseSlug: row.enterprise_slug as string,
     billingPeriod: row.billing_period as string,
-    orgLogin: row.org_login as string,
+    orgLogin: normalizeOrgLogin(row.org_login as string | null),
     holderKey: row.holder_key as string,
     githubUserId: (row.github_user_id as number | null) ?? null,
     userLogin: (row.user_login as string | null) ?? null,
@@ -424,24 +473,51 @@ function splitDistinct(value: string | null | undefined): string[] {
 }
 
 /**
+ * Resolve which column `buildOrderBy` will actually sort by: the requested
+ * `sortField` when it's in the allowlist, otherwise `defaultColumn`. Mirrors
+ * `buildOrderBy`'s own resolution logic (see `@/lib/api/pagination`) so tie
+ * breakers can be deduped against whichever column ends up primary.
+ */
+function resolvePrimarySortColumn(pagination: PaginationParams, allowedColumns: string[], defaultColumn: string): string {
+  return allowedColumns.includes(pagination.sortField) ? pagination.sortField : defaultColumn;
+}
+
+const DETAIL_TIE_BREAKER_COLUMNS = ["enterprise_slug", "billing_period", "org_login", "holder_key"];
+const ROLLUP_TIE_BREAKER_COLUMNS = ["enterprise_slug", "resolved_user_login"];
+
+/**
  * Build a detail-view ORDER BY clause with deterministic tie-breakers on the
  * full primary key (enterprise_slug, billing_period, org_login, holder_key),
  * so OFFSET-based pagination never reorders/duplicates/skips rows across
- * pages when the requested sort column has ties.
+ * pages when the requested sort column has ties. The primary sort column is
+ * excluded from its own tie-breaker list (it's already fully ordering by
+ * itself) so the clause never mentions the same column twice with
+ * potentially conflicting directions.
+ *
+ * Exported for direct unit testing of the generated clause; not intended as
+ * a general-purpose API for callers outside this module.
  */
-function buildDetailOrderBy(pagination: PaginationParams): string {
+export function buildDetailOrderBy(pagination: PaginationParams): string {
   const base = buildOrderBy(pagination, DETAIL_SORT_COLUMNS, "billing_period");
-  return `${base}, enterprise_slug ASC, billing_period ASC, org_login ASC, holder_key ASC`;
+  const primary = resolvePrimarySortColumn(pagination, DETAIL_SORT_COLUMNS, "billing_period");
+  const tieBreakers = DETAIL_TIE_BREAKER_COLUMNS.filter((column) => column !== primary);
+  return tieBreakers.length ? `${base}, ${tieBreakers.map((column) => `${column} ASC`).join(", ")}` : base;
 }
 
 /**
  * Build a rollup-view ORDER BY clause with deterministic tie-breakers on the
  * group key (enterprise_slug, resolved login), so OFFSET-based pagination
- * stays stable across pages when the requested sort column has ties.
+ * stays stable across pages when the requested sort column has ties. Same
+ * primary-column dedup as {@link buildDetailOrderBy}.
+ *
+ * Exported for direct unit testing of the generated clause; not intended as
+ * a general-purpose API for callers outside this module.
  */
-function buildRollupOrderBy(pagination: PaginationParams): string {
+export function buildRollupOrderBy(pagination: PaginationParams): string {
   const base = buildOrderBy(pagination, ROLLUP_SORT_COLUMNS, "resolved_user_login");
-  return `${base}, enterprise_slug ASC, resolved_user_login ASC`;
+  const primary = resolvePrimarySortColumn(pagination, ROLLUP_SORT_COLUMNS, "resolved_user_login");
+  const tieBreakers = ROLLUP_TIE_BREAKER_COLUMNS.filter((column) => column !== primary);
+  return tieBreakers.length ? `${base}, ${tieBreakers.map((column) => `${column} ASC`).join(", ")}` : base;
 }
 
 /**
@@ -449,7 +525,14 @@ function buildRollupOrderBy(pagination: PaginationParams): string {
  * grain or a per-login rollup aggregated in SQL. Filtering, sorting, and
  * pagination are all pushed into SQL; only the current page of rows is ever
  * materialized in JS.
+ *
+ * Overloaded so a literal `view: "rollup"` (or an omitted/`"detail"` view)
+ * narrows the return type's `rows` to the matching record type without a
+ * manual cast; callers with a dynamic (non-literal) `view` get the full
+ * {@link PaginatedLicenseRows} union and narrow at runtime via `result.view`.
  */
+export function queryLicensePeriodRows(query: LicensePeriodQuery & { view: "rollup" }): PaginatedLicenseRollupRows;
+export function queryLicensePeriodRows(query: LicensePeriodQuery & { view?: "detail" }): PaginatedLicenseDetailRows;
 export function queryLicensePeriodRows(query: LicensePeriodQuery): PaginatedLicenseRows {
   const db = getDb();
   const view = query.view === "rollup" ? "rollup" : "detail";
@@ -492,7 +575,7 @@ export function queryLicensePeriodRows(query: LicensePeriodQuery): PaginatedLice
       GROUP_CONCAT(DISTINCT billing_period) AS periods,
       GROUP_CONCAT(DISTINCT org_login) AS org_logins,
       GROUP_CONCAT(DISTINCT plan_type) AS plan_types,
-      COUNT(*) AS seat_count,
+      COUNT(DISTINCT org_login || char(1) || holder_key) AS seat_count,
       COUNT(DISTINCT org_login) AS org_count,
       COUNT(DISTINCT billing_period) AS period_count,
       COALESCE(SUM(license_cost), 0) AS license_cost,
@@ -600,17 +683,21 @@ export function replacePeriodSnapshots(
   snapshots: LicenseSeatSnapshotInput[]
 ): number {
   const db = getDb();
+  // Plain INSERT (not INSERT OR REPLACE): the preceding DELETE already
+  // clears this enterprise/period scope, so a duplicate (org_login,
+  // holder_key) key within the *same* input batch indicates a bug in the
+  // caller producing the snapshot batch. Silently last-write-wins would
+  // hide that bug; failing (and rolling back the whole batch, including
+  // the DELETE) surfaces it instead.
   const stmt = db.prepare(`
-    INSERT OR REPLACE INTO license_seat_snapshots (
+    INSERT INTO license_seat_snapshots (
       enterprise_slug, billing_period, org_login, holder_key, github_user_id, observed_login,
       plan_type, assigned_via, last_activity_at, pending_cancellation_date, snapshot_at, source, raw_json
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
+  const deleteStmt = db.prepare(`DELETE FROM license_seat_snapshots WHERE enterprise_slug = ? AND billing_period = ?`);
   const tx = db.transaction((items: LicenseSeatSnapshotInput[]) => {
-    db.prepare(`DELETE FROM license_seat_snapshots WHERE enterprise_slug = ? AND billing_period = ?`).run(
-      enterpriseSlug,
-      period
-    );
+    deleteStmt.run(enterpriseSlug, period);
     for (const snap of items) {
       stmt.run(
         enterpriseSlug,
@@ -728,8 +815,15 @@ export function replaceMaterializedPeriod(
   rows: LicensePeriodRowInput[]
 ): number {
   const db = getDb();
+  // Plain INSERT (not INSERT OR REPLACE): the preceding DELETE already
+  // clears this enterprise/period scope, so a duplicate (org_login,
+  // holder_key) key within the *same* materialization batch indicates a bug
+  // upstream (e.g. two source rows resolved to the same holder without being
+  // merged). Silently last-write-wins would hide that bug in the
+  // reconciliation output; failing (and rolling back the whole batch,
+  // including the DELETE) surfaces it instead.
   const stmt = db.prepare(`
-    INSERT OR REPLACE INTO license_period_rows (
+    INSERT INTO license_period_rows (
       enterprise_slug, billing_period, org_login, holder_key, github_user_id, user_login,
       resolved_user_login, external_identity, identity_resolution_source, account_state,
       license_assigned_date, user_revoked_date, plan_type, seat_status, assigned_via,
@@ -738,16 +832,14 @@ export function replaceMaterializedPeriod(
       consumption_source, history_confidence, data_quality_notes, as_of_utc, generated_at_utc
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
+  const deleteStmt = db.prepare(`DELETE FROM license_period_rows WHERE enterprise_slug = ? AND billing_period = ?`);
   const tx = db.transaction((items: LicensePeriodRowInput[]) => {
-    db.prepare(`DELETE FROM license_period_rows WHERE enterprise_slug = ? AND billing_period = ?`).run(
-      enterpriseSlug,
-      period
-    );
+    deleteStmt.run(enterpriseSlug, period);
     for (const row of items) {
       stmt.run(
         enterpriseSlug,
         period,
-        row.orgLogin ?? "",
+        normalizeOrgLogin(row.orgLogin),
         row.holderKey,
         row.githubUserId ?? null,
         row.userLogin ?? null,

@@ -14,6 +14,7 @@ import {
   finishLicenseRun,
   getLicenseRun,
   listLicenseRuns,
+  deleteLicenseRun,
   replaceLicenseChecks,
   listLicenseChecks,
   updateLicenseSourceState,
@@ -38,7 +39,10 @@ beforeAll(() => {
 });
 
 afterAll(() => {
-  db.close();
+  // Optional chaining: if beforeAll threw before `db` was assigned (e.g. the
+  // native binding is unavailable in this environment), this must not throw
+  // a second, unrelated error that masks the real failure.
+  db?.close();
 });
 
 beforeEach(() => {
@@ -122,6 +126,42 @@ describe("startLicenseRun / finishLicenseRun / getLicenseRun", () => {
 
   it("returns an empty array when no runs exist for an enterprise", () => {
     expect(listLicenseRuns("no-such-enterprise")).toEqual([]);
+  });
+
+  it("throws when finishing a run with an unknown id", () => {
+    expect(() => finishLicenseRun("does-not-exist", { status: "success" })).toThrow();
+  });
+});
+
+describe("deleteLicenseRun", () => {
+  it("cascades to delete a run's checks (ON DELETE CASCADE)", () => {
+    const runId = startLicenseRun({ enterpriseSlug: "ent1", requestedPeriods: ["2026-01"] });
+    replaceLicenseChecks(runId, [
+      { checkName: "seat_count", billingPeriod: "2026-01", orgLogin: "org1", status: "pass", message: "ok" },
+    ]);
+    expect(listLicenseChecks(runId)).toHaveLength(1);
+
+    deleteLicenseRun(runId);
+
+    expect(getLicenseRun(runId)).toBeNull();
+    expect(listLicenseChecks(runId)).toEqual([]);
+    // The check row itself must be gone from the table (not just unreachable
+    // via listLicenseChecks), proving the FK cascade actually fired rather
+    // than the row being merely orphaned.
+    const remaining = db.prepare(`SELECT * FROM license_reconciliation_checks WHERE run_id = ?`).all(runId);
+    expect(remaining).toEqual([]);
+  });
+
+  it("does not affect other runs' checks", () => {
+    const keepRunId = startLicenseRun({ enterpriseSlug: "ent1", requestedPeriods: ["2026-01"] });
+    const deleteRunId = startLicenseRun({ enterpriseSlug: "ent1", requestedPeriods: ["2026-01"] });
+    replaceLicenseChecks(keepRunId, [{ checkName: "seat_count", status: "pass", message: "ok" }]);
+    replaceLicenseChecks(deleteRunId, [{ checkName: "seat_count", status: "pass", message: "ok" }]);
+
+    deleteLicenseRun(deleteRunId);
+
+    expect(getLicenseRun(keepRunId)).not.toBeNull();
+    expect(listLicenseChecks(keepRunId)).toHaveLength(1);
   });
 });
 
@@ -219,6 +259,63 @@ describe("updateLicenseSourceState / listLicenseSourceState", () => {
     expect(states).toEqual([
       expect.objectContaining({ source: "identity_map", billingPeriod: "", status: "pending" }),
     ]);
+  });
+
+  it("performs a true partial upsert: omitted fields preserve their prior stored value", () => {
+    updateLicenseSourceState({
+      enterpriseSlug: "ent1",
+      source: "audit_log",
+      billingPeriod: "2026-03",
+      status: "syncing",
+      lastSyncedAt: "2026-03-01T00:00:00Z",
+      coverageStart: "2025-01-01",
+      coverageEnd: "2026-03-31",
+      errorMessage: "rate_limited",
+    });
+
+    // Partial update: only `status` is provided. lastSyncedAt/coverage/error
+    // must all survive untouched — this is NOT the same as re-supplying
+    // defaults, which would silently wipe them.
+    updateLicenseSourceState({ enterpriseSlug: "ent1", source: "audit_log", billingPeriod: "2026-03", status: "retrying" });
+
+    const state = listLicenseSourceState("ent1").find((s) => s.billingPeriod === "2026-03");
+    expect(state?.status).toBe("retrying");
+    expect(state?.lastSyncedAt).toBe("2026-03-01T00:00:00Z");
+    expect(state?.coverageStart).toBe("2025-01-01");
+    expect(state?.coverageEnd).toBe("2026-03-31");
+    // "retrying" isn't a success status, so the prior error must be preserved too.
+    expect(state?.errorMessage).toBe("rate_limited");
+  });
+
+  it("clears error_message automatically when status is explicitly set to a success value", () => {
+    updateLicenseSourceState({
+      enterpriseSlug: "ent1",
+      source: "audit_log",
+      billingPeriod: "2026-04",
+      status: "error",
+      errorMessage: "boom",
+    });
+    let state = listLicenseSourceState("ent1").find((s) => s.billingPeriod === "2026-04");
+    expect(state?.errorMessage).toBe("boom");
+
+    // Explicit success, errorMessage omitted: must clear the stale error.
+    updateLicenseSourceState({ enterpriseSlug: "ent1", source: "audit_log", billingPeriod: "2026-04", status: "ok" });
+    state = listLicenseSourceState("ent1").find((s) => s.billingPeriod === "2026-04");
+    expect(state?.status).toBe("ok");
+    expect(state?.errorMessage).toBeNull();
+  });
+
+  it("still lets an explicit errorMessage take precedence even alongside a success status", () => {
+    updateLicenseSourceState({
+      enterpriseSlug: "ent1",
+      source: "audit_log",
+      billingPeriod: "2026-05",
+      status: "ok",
+      errorMessage: "partial_success_warning",
+    });
+    const state = listLicenseSourceState("ent1").find((s) => s.billingPeriod === "2026-05");
+    expect(state?.status).toBe("ok");
+    expect(state?.errorMessage).toBe("partial_success_warning");
   });
 
   it("returns an empty array for missing/empty state", () => {

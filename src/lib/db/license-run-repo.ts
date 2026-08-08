@@ -159,11 +159,16 @@ export function startLicenseRun(input: StartLicenseRunInput): string {
 /**
  * Mark a run as completed (success/warning/failed), persisting its final
  * source stats, unresolved identities, and warnings.
+ *
+ * @throws {Error} when no run with the given `id` exists — a mismatched id
+ * here almost always indicates a caller bug (e.g. a typo'd id or finishing a
+ * run twice against a stale reference) that should surface immediately
+ * rather than silently no-op.
  */
 export function finishLicenseRun(id: string, result: FinishLicenseRunInput): void {
   const db = getDb();
   const completedAt = result.completedAt ?? new Date().toISOString();
-  db.prepare(`
+  const info = db.prepare(`
     UPDATE license_reconciliation_runs
     SET status = ?, completed_at = ?, source_stats = ?, unresolved_identities = ?, warnings = ?, error_message = ?
     WHERE id = ?
@@ -176,6 +181,9 @@ export function finishLicenseRun(id: string, result: FinishLicenseRunInput): voi
     result.errorMessage ?? null,
     id
   );
+  if (info.changes === 0) {
+    throw new Error(`finishLicenseRun: no license_reconciliation_runs row found for id "${id}"`);
+  }
 }
 
 /** Fetch a single run by id, or null when it does not exist. */
@@ -196,6 +204,17 @@ export function listLicenseRuns(enterpriseSlug: string, limit = 50): LicenseRunR
   return rows.map(mapRunRow);
 }
 
+/**
+ * Delete a run. Its associated checks are removed automatically by the
+ * `license_reconciliation_checks.run_id` foreign key's `ON DELETE CASCADE`
+ * (see licensing-schema.sql) — callers never need to clean up checks
+ * separately.
+ */
+export function deleteLicenseRun(id: string): void {
+  const db = getDb();
+  db.prepare(`DELETE FROM license_reconciliation_runs WHERE id = ?`).run(id);
+}
+
 // ── Checks ────────────────────────────────────────────────────────────
 
 /**
@@ -210,8 +229,9 @@ export function replaceLicenseChecks(runId: string, checks: LicenseCheckInput[])
       run_id, check_name, billing_period, org_login, status, expected_value, actual_value, message, details
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
+  const deleteStmt = db.prepare(`DELETE FROM license_reconciliation_checks WHERE run_id = ?`);
   const tx = db.transaction((items: LicenseCheckInput[]) => {
-    db.prepare(`DELETE FROM license_reconciliation_checks WHERE run_id = ?`).run(runId);
+    deleteStmt.run(runId);
     for (const check of items) {
       stmt.run(
         runId,
@@ -229,7 +249,7 @@ export function replaceLicenseChecks(runId: string, checks: LicenseCheckInput[])
   tx(checks);
 }
 
-/** List checks for a run, in insertion order (check_name, then scope). */
+/** List checks for a run, ordered by check name, then billing period, then org login (not insertion order). */
 export function listLicenseChecks(runId: string): LicenseCheckRecord[] {
   const db = getDb();
   const rows = db
@@ -241,26 +261,77 @@ export function listLicenseChecks(runId: string): LicenseCheckRecord[] {
 // ── Source sync state ────────────────────────────────────────────────
 
 /**
- * Upsert the sync state for a single (enterprise, source, billingPeriod)
- * tuple. `billingPeriod` defaults to "" for sources that are not
- * period-scoped (e.g. an identity-map import that covers all periods).
+ * Statuses that represent a successful sync. An explicit transition into one
+ * of these statuses clears any stale `error_message` from a prior failed
+ * attempt, even when the caller doesn't pass `errorMessage` — a caller
+ * reporting success shouldn't also have to remember to clear the old error.
+ */
+const SUCCESS_SOURCE_STATUSES = new Set(["ok", "success"]);
+
+/**
+ * Perform a true partial upsert of the sync state for a single (enterprise,
+ * source, billingPeriod) tuple. `billingPeriod` defaults to "" for sources
+ * that are not period-scoped (e.g. an identity-map import that covers all
+ * periods).
+ *
+ * Fields omitted from `state` (i.e. left `undefined`) preserve their prior
+ * stored value rather than being overwritten with a default/NULL — so, for
+ * example, calling this again with only an updated `status` never clobbers
+ * a previously-recorded `lastSyncedAt`/`coverageStart`/`coverageEnd`. The
+ * one exception: when `status` is explicitly set to a {@link
+ * SUCCESS_SOURCE_STATUSES success status} and `errorMessage` is omitted, the
+ * stored `error_message` is cleared (see {@link SUCCESS_SOURCE_STATUSES}).
  */
 export function updateLicenseSourceState(state: LicenseSourceStateInput): void {
   const db = getDb();
-  db.prepare(`
+  const billingPeriod = state.billingPeriod ?? "";
+  const selectStmt = db.prepare(
+    `SELECT * FROM license_source_sync_state WHERE enterprise_slug = ? AND source = ? AND billing_period = ?`
+  );
+  const upsertStmt = db.prepare(`
     INSERT OR REPLACE INTO license_source_sync_state (
       enterprise_slug, source, billing_period, last_synced_at, status, coverage_start, coverage_end, error_message
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(
-    state.enterpriseSlug,
-    state.source,
-    state.billingPeriod ?? "",
-    state.lastSyncedAt ?? null,
-    state.status ?? "pending",
-    state.coverageStart ?? null,
-    state.coverageEnd ?? null,
-    state.errorMessage ?? null
-  );
+  `);
+  const tx = db.transaction(() => {
+    const existing = selectStmt.get(state.enterpriseSlug, state.source, billingPeriod) as
+      | Record<string, unknown>
+      | undefined;
+
+    const nextStatus = state.status ?? (existing ? (existing.status as string) : "pending");
+    const explicitSuccess = state.status !== undefined && SUCCESS_SOURCE_STATUSES.has(state.status);
+
+    const nextLastSyncedAt =
+      state.lastSyncedAt !== undefined
+        ? state.lastSyncedAt
+        : ((existing?.last_synced_at as string | null | undefined) ?? null);
+    const nextCoverageStart =
+      state.coverageStart !== undefined
+        ? state.coverageStart
+        : ((existing?.coverage_start as string | null | undefined) ?? null);
+    const nextCoverageEnd =
+      state.coverageEnd !== undefined
+        ? state.coverageEnd
+        : ((existing?.coverage_end as string | null | undefined) ?? null);
+    const nextErrorMessage =
+      state.errorMessage !== undefined
+        ? state.errorMessage
+        : explicitSuccess
+          ? null
+          : ((existing?.error_message as string | null | undefined) ?? null);
+
+    upsertStmt.run(
+      state.enterpriseSlug,
+      state.source,
+      billingPeriod,
+      nextLastSyncedAt,
+      nextStatus,
+      nextCoverageStart,
+      nextCoverageEnd,
+      nextErrorMessage
+    );
+  });
+  tx();
 }
 
 /** List source sync state rows for an enterprise (all sources/periods). */

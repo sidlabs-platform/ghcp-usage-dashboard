@@ -22,6 +22,9 @@ import {
   parseJsonObject,
   DETAIL_SORT_COLUMNS,
   ROLLUP_SORT_COLUMNS,
+  UNATTRIBUTED_ORG,
+  buildDetailOrderBy,
+  buildRollupOrderBy,
   type LicensePeriodRowInput,
 } from "./license-history-repo";
 
@@ -99,7 +102,10 @@ beforeAll(() => {
 });
 
 afterAll(() => {
-  db.close();
+  // Optional chaining: if beforeAll threw before `db` was assigned (e.g. the
+  // native binding is unavailable in this environment), this must not throw
+  // a second, unrelated error that masks the real failure.
+  db?.close();
 });
 
 beforeEach(() => {
@@ -153,6 +159,16 @@ describe("stableStringify / parseJsonArray / parseJsonObject", () => {
     const b = stableStringify({ c: [3, 2, 1], a: 2, b: 1 });
     expect(a).toBe(b);
     expect(a).toBe('{"a":2,"b":1,"c":[3,2,1]}');
+  });
+
+  it("always returns a string, even for inputs where JSON.stringify itself returns undefined", () => {
+    // JSON.stringify(undefined) returns the JS value `undefined`, not a
+    // string — stableStringify must not propagate that footgun since its
+    // output is always written into a SQLite TEXT column.
+    expect(stableStringify(undefined)).toBe("null");
+    expect(typeof stableStringify(undefined)).toBe("string");
+    expect(stableStringify(() => {})).toBe("null");
+    expect(typeof stableStringify(() => {})).toBe("string");
   });
 
   it("parses JSON arrays/objects and degrades gracefully on invalid input", () => {
@@ -230,6 +246,21 @@ describe("replacePeriodSnapshots", () => {
     const febRows = db.prepare(`SELECT * FROM license_seat_snapshots WHERE billing_period = '2026-02'`).all();
     expect(janRows).toHaveLength(0);
     expect(febRows).toHaveLength(1);
+  });
+
+  it("fails and rolls back when the input batch contains a duplicate (org, holder) key (plain INSERT, not last-write-wins)", () => {
+    replacePeriodSnapshots("ent1", "2026-05", [
+      { holderKey: "user1", snapshotAt: "2026-05-31T00:00:00Z", source: "seat_api", orgLogin: "org1" },
+    ]);
+    expect(() =>
+      replacePeriodSnapshots("ent1", "2026-05", [
+        { holderKey: "dup", snapshotAt: "2026-05-31T00:00:00Z", source: "seat_api", orgLogin: "org1" },
+        { holderKey: "dup", snapshotAt: "2026-05-31T01:00:00Z", source: "seat_api", orgLogin: "org1" },
+      ])
+    ).toThrow();
+    // Rolled back entirely: the pre-existing row from before this call must survive.
+    const rows = db.prepare(`SELECT holder_key FROM license_seat_snapshots WHERE billing_period = '2026-05'`).all();
+    expect(rows).toEqual([{ holder_key: "user1" }]);
   });
 });
 
@@ -323,10 +354,20 @@ describe("replaceMaterializedPeriod + queryLicensePeriodRows", () => {
     expect(ent2.pagination.totalItems).toBe(1);
   });
 
-  it("supports period range filters", () => {
-    const result = queryLicensePeriodRows({ enterpriseSlug: "ent1", periodStart: "2026-02", periodEnd: "2026-02" });
-    expect(result.pagination.totalItems).toBe(1);
-    expect(result.rows.every((r) => (r as { billingPeriod: string }).billingPeriod === "2026-02")).toBe(true);
+  it("supports period range filters (both bounds, start-only, and end-only)", () => {
+    const bothBounds = queryLicensePeriodRows({ enterpriseSlug: "ent1", periodStart: "2026-02", periodEnd: "2026-02" });
+    expect(bothBounds.pagination.totalItems).toBe(1);
+    expect(bothBounds.rows.every((r) => r.billingPeriod === "2026-02")).toBe(true);
+
+    // periodStart only: everything from Feb onward (excludes Jan).
+    const startOnly = queryLicensePeriodRows({ enterpriseSlug: "ent1", periodStart: "2026-02" });
+    expect(startOnly.pagination.totalItems).toBe(1);
+    expect(startOnly.rows.every((r) => r.billingPeriod >= "2026-02")).toBe(true);
+
+    // periodEnd only: everything up to and including Jan (excludes Feb).
+    const endOnly = queryLicensePeriodRows({ enterpriseSlug: "ent1", periodEnd: "2026-01" });
+    expect(endOnly.pagination.totalItems).toBe(2);
+    expect(endOnly.rows.every((r) => r.billingPeriod <= "2026-01")).toBe(true);
   });
 
   it("supports org/login/plan/account/seat/confidence filters", () => {
@@ -347,6 +388,52 @@ describe("replaceMaterializedPeriod + queryLicensePeriodRows", () => {
 
     const byAccountState = queryLicensePeriodRows({ enterpriseSlug: "ent1", accountStates: ["active"] });
     expect(byAccountState.pagination.totalItems).toBe(3);
+  });
+
+  it("matches the `logins` filter through each of its three distinct column branches", () => {
+    replaceMaterializedPeriod("ent1", "2026-12", [
+      makePeriodRow({
+        orgLogin: "org1",
+        holderKey: "holder-only-key",
+        userLogin: null,
+        resolvedUserLogin: null,
+      }),
+      makePeriodRow({
+        orgLogin: "org1",
+        holderKey: "holder-2",
+        userLogin: "raw-login-only",
+        resolvedUserLogin: null,
+      }),
+      makePeriodRow({
+        orgLogin: "org1",
+        holderKey: "holder-3",
+        userLogin: null,
+        resolvedUserLogin: "resolved-login-only",
+      }),
+    ]);
+
+    // Branch 1: matches via holder_key (no user_login/resolved_user_login).
+    const byHolderKey = queryLicensePeriodRows({ enterpriseSlug: "ent1", periods: ["2026-12"], logins: ["holder-only-key"] });
+    expect(byHolderKey.rows.map((r) => r.holderKey)).toEqual(["holder-only-key"]);
+
+    // Branch 2: matches via user_login.
+    const byUserLogin = queryLicensePeriodRows({ enterpriseSlug: "ent1", periods: ["2026-12"], logins: ["raw-login-only"] });
+    expect(byUserLogin.rows.map((r) => r.holderKey)).toEqual(["holder-2"]);
+
+    // Branch 3: matches via resolved_user_login.
+    const byResolvedLogin = queryLicensePeriodRows({
+      enterpriseSlug: "ent1",
+      periods: ["2026-12"],
+      logins: ["resolved-login-only"],
+    });
+    expect(byResolvedLogin.rows.map((r) => r.holderKey)).toEqual(["holder-3"]);
+  });
+
+  it("supports enterpriseSlugs (plural) filtering across multiple enterprises at once", () => {
+    const result = queryLicensePeriodRows({ enterpriseSlugs: ["ent1", "ent2"] });
+    const slugs = new Set(result.rows.map((r) => r.enterpriseSlug));
+    expect(slugs).toEqual(new Set(["ent1", "ent2"]));
+    expect(result.pagination.totalItems).toBe(4); // 2 (ent1 Jan) + 1 (ent1 Feb) + 1 (ent2 Jan)
   });
 
   it("supports free-text search across login/org/external-identity columns", () => {
@@ -399,11 +486,12 @@ describe("replaceMaterializedPeriod + queryLicensePeriodRows", () => {
   it("aggregates rollup view in SQL (sums cost/consumption per resolved login across periods/orgs)", () => {
     const rollup = queryLicensePeriodRows({ enterpriseSlug: "ent1", view: "rollup" });
     expect(rollup.view).toBe("rollup");
-    const user1 = rollup.rows.find((r) => (r as { resolvedUserLogin: string }).resolvedUserLogin === "user1") as
-      | { seatCount: number; periodCount: number; licenseCost: number; periods: string[]; orgLogins: string[]; planTypes: string[] }
-      | undefined;
+    const user1 = rollup.rows.find((r) => r.resolvedUserLogin === "user1");
     expect(user1).toBeDefined();
-    expect(user1?.seatCount).toBe(2); // one row in Jan (org1) + one row in Feb
+    // user1 holds the *same* org1 seat across Jan and Feb — one continuously
+    // held seat, not two period-rows. seatCount is a distinct (org, holder)
+    // count, decoupled from periodCount (see LicenseRollupRowRecord.seatCount doc).
+    expect(user1?.seatCount).toBe(1);
     expect(user1?.periodCount).toBe(2);
     expect(user1?.licenseCost).toBeCloseTo(19 + 19, 5);
     // GROUP_CONCAT(DISTINCT ...) uses a comma separator (splitDistinct must
@@ -413,22 +501,122 @@ describe("replaceMaterializedPeriod + queryLicensePeriodRows", () => {
     expect(user1?.orgLogins.slice().sort()).toEqual(["org1"]);
     expect(user1?.planTypes.slice().sort()).toEqual(["business"]);
 
-    const user2 = rollup.rows.find((r) => (r as { resolvedUserLogin: string }).resolvedUserLogin === "user2") as
-      | { periods: string[]; orgLogins: string[]; planTypes: string[] }
-      | undefined;
+    const user2 = rollup.rows.find((r) => r.resolvedUserLogin === "user2");
     expect(user2?.periods).toEqual(["2026-01"]);
     expect(user2?.orgLogins).toEqual(["org2"]);
     expect(user2?.planTypes).toEqual(["enterprise"]);
   });
 
+  it("counts distinct (org, holder) seats, not period-rows: a holder with 2 different org seats in ONE period counts twice", () => {
+    replaceMaterializedPeriod("ent1", "2026-10", [
+      makePeriodRow({ orgLogin: "org1", holderKey: "multi-org-user", resolvedUserLogin: "multi-org-user" }),
+      makePeriodRow({ orgLogin: "org2", holderKey: "multi-org-user", resolvedUserLogin: "multi-org-user" }),
+    ]);
+    const rollup = queryLicensePeriodRows({ enterpriseSlug: "ent1", periods: ["2026-10"], view: "rollup" });
+    const row = rollup.rows.find((r) => r.resolvedUserLogin === "multi-org-user");
+    expect(row).toBeDefined();
+    expect(row?.seatCount).toBe(2); // two distinct orgs held in the same period
+    expect(row?.periodCount).toBe(1);
+  });
+
   it("projects utilization_pct in SQL consistent with aic_consumed/aic_assigned and honors the assigned-then-default fallback", () => {
     const rollup = queryLicensePeriodRows({ enterpriseSlug: "ent1", view: "rollup" });
-    const user2 = rollup.rows.find((r) => (r as { resolvedUserLogin: string }).resolvedUserLogin === "user2") as
-      | { utilizationPct: number }
-      | undefined;
+    const user2 = rollup.rows.find((r) => r.resolvedUserLogin === "user2");
     // user2 fixture (single row, Jan only): aicConsumedUsd 40, aicAssignedUsd 19.
     expect(user2).toBeDefined();
     expect(user2?.utilizationPct).toBeCloseTo((40 / 19) * 100, 5);
+  });
+
+  describe("utilization_pct branches (assigned budget, default-fallback, and zero)", () => {
+    it("uses the assigned budget when aic_assigned_usd > 0", () => {
+      replaceMaterializedPeriod("ent1", "2026-13", [
+        makePeriodRow({
+          orgLogin: "org1",
+          holderKey: "assigned-branch",
+          resolvedUserLogin: "assigned-branch",
+          aicAssignedUsd: 20,
+          defaultAicUsd: 19,
+          aicConsumedUsd: 10,
+        }),
+      ]);
+      const rollup = queryLicensePeriodRows({ enterpriseSlug: "ent1", periods: ["2026-13"], view: "rollup" });
+      const row = rollup.rows.find((r) => r.resolvedUserLogin === "assigned-branch");
+      expect(row?.utilizationPct).toBeCloseTo((10 / 20) * 100, 5);
+    });
+
+    it("falls back to the plan default when aic_assigned_usd is 0", () => {
+      replaceMaterializedPeriod("ent1", "2026-14", [
+        makePeriodRow({
+          orgLogin: "org1",
+          holderKey: "default-branch",
+          resolvedUserLogin: "default-branch",
+          aicAssignedUsd: 0,
+          defaultAicUsd: 19,
+          aicConsumedUsd: 5,
+        }),
+      ]);
+      const rollup = queryLicensePeriodRows({ enterpriseSlug: "ent1", periods: ["2026-14"], view: "rollup" });
+      const row = rollup.rows.find((r) => r.resolvedUserLogin === "default-branch");
+      expect(row?.utilizationPct).toBeCloseTo((5 / 19) * 100, 5);
+    });
+
+    it("returns 0 when both aic_assigned_usd and default_aic_usd are 0", () => {
+      replaceMaterializedPeriod("ent1", "2026-15", [
+        makePeriodRow({
+          orgLogin: "org1",
+          holderKey: "zero-branch",
+          resolvedUserLogin: "zero-branch",
+          aicAssignedUsd: 0,
+          defaultAicUsd: 0,
+          aicConsumedUsd: 5,
+        }),
+      ]);
+      const rollup = queryLicensePeriodRows({ enterpriseSlug: "ent1", periods: ["2026-15"], view: "rollup" });
+      const row = rollup.rows.find((r) => r.resolvedUserLogin === "zero-branch");
+      expect(row?.utilizationPct).toBe(0);
+    });
+  });
+
+  it("actually orders rows by utilization_pct and by license_cost, not just accepting the sort field", () => {
+    replaceMaterializedPeriod("ent1", "2026-16", [
+      makePeriodRow({ orgLogin: "org1", holderKey: "low-util", resolvedUserLogin: "low-util", aicAssignedUsd: 100, aicConsumedUsd: 10, licenseCost: 5 }),
+      makePeriodRow({ orgLogin: "org1", holderKey: "high-util", resolvedUserLogin: "high-util", aicAssignedUsd: 100, aicConsumedUsd: 90, licenseCost: 25 }),
+      makePeriodRow({ orgLogin: "org1", holderKey: "mid-util", resolvedUserLogin: "mid-util", aicAssignedUsd: 100, aicConsumedUsd: 50, licenseCost: 15 }),
+    ]);
+
+    const byUtilAsc = queryLicensePeriodRows({
+      enterpriseSlug: "ent1",
+      periods: ["2026-16"],
+      view: "rollup",
+      sortField: "utilization_pct",
+      sortDir: "asc",
+    });
+    expect(byUtilAsc.rows.map((r) => r.resolvedUserLogin)).toEqual(["low-util", "mid-util", "high-util"]);
+
+    const byUtilDesc = queryLicensePeriodRows({
+      enterpriseSlug: "ent1",
+      periods: ["2026-16"],
+      view: "rollup",
+      sortField: "utilization_pct",
+      sortDir: "desc",
+    });
+    expect(byUtilDesc.rows.map((r) => r.resolvedUserLogin)).toEqual(["high-util", "mid-util", "low-util"]);
+
+    const byCostAsc = queryLicensePeriodRows({
+      enterpriseSlug: "ent1",
+      periods: ["2026-16"],
+      sortField: "license_cost",
+      sortDir: "asc",
+    });
+    expect(byCostAsc.rows.map((r) => r.holderKey)).toEqual(["low-util", "mid-util", "high-util"]);
+
+    const byCostDesc = queryLicensePeriodRows({
+      enterpriseSlug: "ent1",
+      periods: ["2026-16"],
+      sortField: "license_cost",
+      sortDir: "desc",
+    });
+    expect(byCostDesc.rows.map((r) => r.holderKey)).toEqual(["high-util", "mid-util", "low-util"]);
   });
 
   describe("sort allowlist coverage", () => {
@@ -471,11 +659,44 @@ describe("replaceMaterializedPeriod + queryLicensePeriodRows", () => {
         pageSize: 1,
       });
       expect(result.rows).toHaveLength(1);
-      const holderKey = (result.rows[0] as { holderKey: string }).holderKey;
+      const holderKey = result.rows[0].holderKey;
       expect(seen.has(holderKey)).toBe(false); // no duplicates across pages
       seen.add(holderKey);
     }
     expect(seen).toEqual(new Set(["user-a", "user-b", "user-c"]));
+  });
+
+  describe("ORDER BY tie-breakers have no duplicate/conflicting column mentions", () => {
+    it("detail: omits the primary sort column from its own tie-breaker list", () => {
+      const clause = buildDetailOrderBy({ page: 1, pageSize: 10, sortField: "billing_period", sortDir: "desc", search: undefined });
+      const mentions = clause.match(/\bbilling_period\b/g) ?? [];
+      expect(mentions).toHaveLength(1);
+      // org_login/holder_key/enterprise_slug tie-breakers must still be present.
+      expect(clause).toMatch(/\borg_login\b/);
+      expect(clause).toMatch(/\bholder_key\b/);
+      expect(clause).toMatch(/\benterprise_slug\b/);
+    });
+
+    it("detail: falls back to full PK tie-breakers when sorting by a non-PK column", () => {
+      const clause = buildDetailOrderBy({ page: 1, pageSize: 10, sortField: "license_cost", sortDir: "asc", search: undefined });
+      expect(clause.match(/\bbilling_period\b/g)).toHaveLength(1);
+      expect(clause.match(/\borg_login\b/g)).toHaveLength(1);
+      expect(clause.match(/\bholder_key\b/g)).toHaveLength(1);
+      expect(clause.match(/\benterprise_slug\b/g)).toHaveLength(1);
+    });
+
+    it("rollup: omits the primary sort column from its own tie-breaker list", () => {
+      const clause = buildRollupOrderBy({ page: 1, pageSize: 10, sortField: "resolved_user_login", sortDir: "asc", search: undefined });
+      const mentions = clause.match(/\bresolved_user_login\b/g) ?? [];
+      expect(mentions).toHaveLength(1);
+      expect(clause).toMatch(/\benterprise_slug\b/);
+    });
+
+    it("rollup: keeps both tie-breakers when sorting by a non-group-key column", () => {
+      const clause = buildRollupOrderBy({ page: 1, pageSize: 10, sortField: "seat_count", sortDir: "desc", search: undefined });
+      expect(clause.match(/\benterprise_slug\b/g)).toHaveLength(1);
+      expect(clause.match(/\bresolved_user_login\b/g)).toHaveLength(1);
+    });
   });
 
   it("escapes LIKE wildcards in search so % and _ match literally, not as wildcards", () => {
@@ -488,15 +709,11 @@ describe("replaceMaterializedPeriod + queryLicensePeriodRows", () => {
 
     // A literal underscore must not act as a "match any single character" wildcard.
     const underscoreSearch = queryLicensePeriodRows({ enterpriseSlug: "ent1", periods: ["2026-07"], search: "user_a" });
-    expect(
-      underscoreSearch.rows.map((r) => (r as { resolvedUserLogin: string }).resolvedUserLogin)
-    ).toEqual(["user_a"]);
+    expect(underscoreSearch.rows.map((r) => r.resolvedUserLogin)).toEqual(["user_a"]);
 
     // A literal percent must not act as a "match anything" wildcard.
     const percentSearch = queryLicensePeriodRows({ enterpriseSlug: "ent1", periods: ["2026-07"], search: "100%dev" });
-    expect(
-      percentSearch.rows.map((r) => (r as { resolvedUserLogin: string }).resolvedUserLogin)
-    ).toEqual(["100%dev"]);
+    expect(percentSearch.rows.map((r) => r.resolvedUserLogin)).toEqual(["100%dev"]);
   });
 
   it("rolls back the entire batch when a later row violates a NOT NULL constraint (transaction atomicity)", () => {
@@ -521,7 +738,59 @@ describe("replaceMaterializedPeriod + queryLicensePeriodRows", () => {
     // in as a partial write.
     const after = queryLicensePeriodRows({ enterpriseSlug: "ent1", periods: ["2026-04"] });
     expect(after.pagination.totalItems).toBe(1);
-    expect((after.rows[0] as { holderKey: string }).holderKey).toBe("user1");
+    expect(after.rows[0].holderKey).toBe("user1");
+  });
+
+  it("fails and rolls back when the input batch contains duplicate (org, holder) keys (plain INSERT, not last-write-wins)", () => {
+    replaceMaterializedPeriod("ent1", "2026-11", [
+      makePeriodRow({ orgLogin: "org1", holderKey: "user1", resolvedUserLogin: "user1" }),
+    ]);
+    expect(() =>
+      replaceMaterializedPeriod("ent1", "2026-11", [
+        makePeriodRow({ orgLogin: "org1", holderKey: "dup", resolvedUserLogin: "dup" }),
+        makePeriodRow({ orgLogin: "org1", holderKey: "dup", resolvedUserLogin: "dup" }), // duplicate PK within the same batch
+      ])
+    ).toThrow();
+    // Rolled back entirely: the pre-existing row from before this call must survive.
+    const result = queryLicensePeriodRows({ enterpriseSlug: "ent1", periods: ["2026-11"] });
+    expect(result.pagination.totalItems).toBe(1);
+    expect(result.rows[0].holderKey).toBe("user1");
+  });
+
+  describe("canonical unattributed org representation", () => {
+    it("normalizes a missing/empty org_login to the '(unattributed)' sentinel on write and read", () => {
+      replaceMaterializedPeriod("ent1", "2026-08", [
+        makePeriodRow({ orgLogin: "", holderKey: "user-unattributed", resolvedUserLogin: "user-unattributed" }),
+        makePeriodRow({ orgLogin: undefined, holderKey: "user-unattributed-2", resolvedUserLogin: "user-unattributed-2" }),
+      ]);
+      const result = queryLicensePeriodRows({ enterpriseSlug: "ent1", periods: ["2026-08"] });
+      expect(result.rows.every((r) => r.orgLogin === UNATTRIBUTED_ORG)).toBe(true);
+      // The stored column value itself must be the sentinel, not "".
+      const stored = db
+        .prepare(`SELECT org_login FROM license_period_rows WHERE billing_period = '2026-08' AND holder_key = 'user-unattributed'`)
+        .get() as { org_login: string };
+      expect(stored.org_login).toBe(UNATTRIBUTED_ORG);
+    });
+
+    it("keeps rollup orgLogins and orgCount in agreement for unattributed-only holders", () => {
+      replaceMaterializedPeriod("ent1", "2026-09", [
+        makePeriodRow({ orgLogin: "", holderKey: "user-unattributed-3", resolvedUserLogin: "user-unattributed-3" }),
+      ]);
+      const rollup = queryLicensePeriodRows({ enterpriseSlug: "ent1", periods: ["2026-09"], view: "rollup" });
+      const row = rollup.rows.find((r) => r.resolvedUserLogin === "user-unattributed-3");
+      expect(row).toBeDefined();
+      expect(row?.orgCount).toBe(1);
+      expect(row?.orgLogins).toEqual([UNATTRIBUTED_ORG]);
+    });
+  });
+
+  it("has an expression index matching the rollup GROUP BY key", () => {
+    const index = db
+      .prepare(`SELECT sql FROM sqlite_master WHERE type = 'index' AND name = 'idx_license_period_rows_rollup_group'`)
+      .get() as { sql: string } | undefined;
+    expect(index).toBeDefined();
+    expect(index?.sql).toContain("resolved_user_login");
+    expect(index?.sql).toContain("holder_key");
   });
 });
 
