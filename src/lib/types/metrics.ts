@@ -74,6 +74,19 @@ export interface TotalsByCLI {
   };
 }
 
+export interface CopilotAppTokenUsage {
+  output_tokens_sum: number;
+  prompt_tokens_sum: number;
+  avg_tokens_per_request: number | null;
+}
+
+export interface TotalsByCopilotApp {
+  session_count: number;
+  request_count: number;
+  prompt_count: number;
+  token_usage: CopilotAppTokenUsage;
+}
+
 export interface PullRequestMetrics {
   total_created: number;
   total_reviewed: number;
@@ -139,6 +152,7 @@ export interface DayTotal {
   monthly_active_agent_users: number;
   monthly_active_chat_users: number;
   daily_active_cli_users?: number;
+  daily_active_copilot_app_users?: number | null;
 
   // Code activity
   code_generation_activity_count: number;
@@ -158,6 +172,7 @@ export interface DayTotal {
   totals_by_model_feature: TotalsByModelFeature[];
   totals_by_language_model: TotalsByLanguageModel[];
   totals_by_cli?: TotalsByCLI;
+  totals_by_copilot_app?: TotalsByCopilotApp | null;
 
   // AI adoption cohorts
   totals_by_ai_adoption_phase?: TotalsByAIAdoptionPhase[];
@@ -222,6 +237,7 @@ export interface UserDayRecord {
   used_copilot_code_review_active?: boolean;
   used_copilot_code_review_passive?: boolean;
   used_copilot_coding_agent?: boolean;
+  used_copilot_app?: boolean | null;
 
   // Breakdowns
   totals_by_ide: TotalsByIDE[];
@@ -230,6 +246,7 @@ export interface UserDayRecord {
   totals_by_model_feature: TotalsByModelFeature[];
   totals_by_language_model: TotalsByLanguageModel[];
   totals_by_cli?: TotalsByCLI;
+  totals_by_copilot_app?: TotalsByCopilotApp;
 
   // Agent edit
   agent_edit?: AgentEdit;

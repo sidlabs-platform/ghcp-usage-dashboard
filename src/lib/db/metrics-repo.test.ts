@@ -1374,3 +1374,179 @@ describe("ai_credits_used", () => {
     });
   });
 });
+
+describe("Copilot App usage metrics", () => {
+  const SAMPLE_TOTALS_BY_COPILOT_APP = {
+    session_count: 2,
+    request_count: 6,
+    prompt_count: 3,
+    token_usage: {
+      output_tokens_sum: 6200,
+      prompt_tokens_sum: 8600,
+      avg_tokens_per_request: 2466.67,
+    },
+  };
+
+  beforeEach(() => {
+    db.exec("DELETE FROM enterprise_daily_metrics");
+    db.exec("DELETE FROM org_daily_metrics");
+    db.exec("DELETE FROM user_daily_metrics");
+    invalidateEnterpriseCountCache();
+  });
+
+  it("stores and retrieves daily_active_copilot_app_users and totals_by_copilot_app on enterprise metrics", () => {
+    upsertEnterpriseDayMetrics("ent1", {
+      day: "2026-08-01", enterprise_id: "ent-123",
+      daily_active_users: 40, weekly_active_users: 100, monthly_active_users: 150,
+      monthly_active_agent_users: 5, monthly_active_chat_users: 30,
+      code_generation_activity_count: 200, code_acceptance_activity_count: 150,
+      user_initiated_interaction_count: 500,
+      loc_suggested_to_add_sum: 1000, loc_suggested_to_delete_sum: 50,
+      loc_added_sum: 800, loc_deleted_sum: 40,
+      totals_by_ide: [], totals_by_feature: [], totals_by_language_feature: [],
+      totals_by_model_feature: [], totals_by_language_model: [],
+      daily_active_copilot_app_users: 4,
+      totals_by_copilot_app: SAMPLE_TOTALS_BY_COPILOT_APP,
+    });
+
+    const results = getEnterpriseMetrics("2026-08-01", "2026-08-01");
+    expect(results).toHaveLength(1);
+    expect(results[0].daily_active_copilot_app_users).toBe(4);
+    expect(results[0].totals_by_copilot_app).toEqual(SAMPLE_TOTALS_BY_COPILOT_APP);
+  });
+
+  it("stores NULL daily_active_copilot_app_users and undefined totals_by_copilot_app when omitted on enterprise metrics", () => {
+    upsertEnterpriseDayMetrics("ent1", {
+      day: "2026-08-02", enterprise_id: "ent-123",
+      daily_active_users: 1, weekly_active_users: 1, monthly_active_users: 1,
+      monthly_active_agent_users: 0, monthly_active_chat_users: 0,
+      code_generation_activity_count: 0, code_acceptance_activity_count: 0,
+      user_initiated_interaction_count: 0,
+      loc_suggested_to_add_sum: 0, loc_suggested_to_delete_sum: 0,
+      loc_added_sum: 0, loc_deleted_sum: 0,
+      totals_by_ide: [], totals_by_feature: [], totals_by_language_feature: [],
+      totals_by_model_feature: [], totals_by_language_model: [],
+    });
+
+    const results = getEnterpriseMetrics("2026-08-02", "2026-08-02");
+    expect(results).toHaveLength(1);
+    expect(results[0].daily_active_copilot_app_users).toBeNull();
+    expect(results[0].totals_by_copilot_app).toBeUndefined();
+  });
+
+  it("stores and retrieves daily_active_copilot_app_users and totals_by_copilot_app on organization metrics", () => {
+    upsertOrgDayMetrics("ent1", "my-org", {
+      day: "2026-08-03", enterprise_id: "ent-123",
+      daily_active_users: 10, weekly_active_users: 30, monthly_active_users: 50,
+      monthly_active_agent_users: 5, monthly_active_chat_users: 8,
+      code_generation_activity_count: 100, code_acceptance_activity_count: 80,
+      user_initiated_interaction_count: 200, loc_suggested_to_add_sum: 500,
+      loc_suggested_to_delete_sum: 50, loc_added_sum: 400, loc_deleted_sum: 80,
+      totals_by_ide: [], totals_by_feature: [], totals_by_language_feature: [],
+      totals_by_model_feature: [], totals_by_language_model: [],
+      daily_active_copilot_app_users: 2,
+      totals_by_copilot_app: SAMPLE_TOTALS_BY_COPILOT_APP,
+    });
+
+    const results = getOrgMetrics("my-org", "2026-08-03", "2026-08-03");
+    expect(results).toHaveLength(1);
+    expect(results[0].daily_active_copilot_app_users).toBe(2);
+    expect(results[0].totals_by_copilot_app).toEqual(SAMPLE_TOTALS_BY_COPILOT_APP);
+  });
+
+  it("stores NULL daily_active_copilot_app_users and undefined totals_by_copilot_app when omitted on organization metrics", () => {
+    upsertOrgDayMetrics("ent1", "minimal-app-org", {
+      day: "2026-08-04", enterprise_id: "ent-123",
+      daily_active_users: 1, weekly_active_users: 1, monthly_active_users: 1,
+      monthly_active_agent_users: 0, monthly_active_chat_users: 0,
+      code_generation_activity_count: 0, code_acceptance_activity_count: 0,
+      user_initiated_interaction_count: 0, loc_suggested_to_add_sum: 0,
+      loc_suggested_to_delete_sum: 0, loc_added_sum: 0, loc_deleted_sum: 0,
+      totals_by_ide: [], totals_by_feature: [], totals_by_language_feature: [],
+      totals_by_model_feature: [], totals_by_language_model: [],
+    });
+
+    const results = getOrgMetrics("minimal-app-org", "2026-08-04", "2026-08-04");
+    expect(results).toHaveLength(1);
+    expect(results[0].daily_active_copilot_app_users).toBeNull();
+    expect(results[0].totals_by_copilot_app).toBeUndefined();
+  });
+
+  it("upserts and retrieves used_copilot_app=true and totals_by_copilot_app for a single user", () => {
+    upsertUserDayMetrics("ent1", {
+      day: "2026-08-05", enterprise_id: "ent-123", user_id: 500, user_login: "app-user",
+      code_generation_activity_count: 1, code_acceptance_activity_count: 1,
+      user_initiated_interaction_count: 1, loc_suggested_to_add_sum: 5,
+      loc_suggested_to_delete_sum: 1, loc_added_sum: 4, loc_deleted_sum: 0,
+      used_agent: false, used_chat: false, used_cli: false,
+      totals_by_ide: [], totals_by_feature: [], totals_by_language_feature: [],
+      totals_by_model_feature: [], totals_by_language_model: [],
+      used_copilot_app: true,
+      totals_by_copilot_app: SAMPLE_TOTALS_BY_COPILOT_APP,
+    });
+
+    const results = getUserMetricsByLogin("app-user", "2026-08-05", "2026-08-05");
+    expect(results).toHaveLength(1);
+    expect(results[0].used_copilot_app).toBe(true);
+    expect(results[0].totals_by_copilot_app).toEqual(SAMPLE_TOTALS_BY_COPILOT_APP);
+  });
+
+  it("upserts and retrieves used_copilot_app=false distinctly from an unset (null) value", () => {
+    upsertUserDayMetrics("ent1", {
+      day: "2026-08-06", enterprise_id: "ent-123", user_id: 501, user_login: "app-user-false",
+      code_generation_activity_count: 0, code_acceptance_activity_count: 0,
+      user_initiated_interaction_count: 0, loc_suggested_to_add_sum: 0,
+      loc_suggested_to_delete_sum: 0, loc_added_sum: 0, loc_deleted_sum: 0,
+      used_agent: false, used_chat: false, used_cli: false,
+      totals_by_ide: [], totals_by_feature: [], totals_by_language_feature: [],
+      totals_by_model_feature: [], totals_by_language_model: [],
+      used_copilot_app: false,
+    });
+    upsertUserDayMetrics("ent1", {
+      day: "2026-08-06", enterprise_id: "ent-123", user_id: 502, user_login: "app-user-unset",
+      code_generation_activity_count: 0, code_acceptance_activity_count: 0,
+      user_initiated_interaction_count: 0, loc_suggested_to_add_sum: 0,
+      loc_suggested_to_delete_sum: 0, loc_added_sum: 0, loc_deleted_sum: 0,
+      used_agent: false, used_chat: false, used_cli: false,
+      totals_by_ide: [], totals_by_feature: [], totals_by_language_feature: [],
+      totals_by_model_feature: [], totals_by_language_model: [],
+    });
+
+    const falseResult = getUserMetricsByLogin("app-user-false", "2026-08-06", "2026-08-06");
+    const unsetResult = getUserMetricsByLogin("app-user-unset", "2026-08-06", "2026-08-06");
+    expect(falseResult[0].used_copilot_app).toBe(false);
+    expect(unsetResult[0].used_copilot_app).toBeNull();
+  });
+
+  it("batch-upserts and retrieves used_copilot_app and totals_by_copilot_app for multiple users", () => {
+    batchUpsertUserDayMetrics("ent1", [
+      {
+        day: "2026-08-07", enterprise_id: "ent-123", user_id: 510, user_login: "batch-app-true",
+        code_generation_activity_count: 0, code_acceptance_activity_count: 0,
+        user_initiated_interaction_count: 0, loc_suggested_to_add_sum: 0,
+        loc_suggested_to_delete_sum: 0, loc_added_sum: 0, loc_deleted_sum: 0,
+        used_agent: false, used_chat: false, used_cli: false,
+        totals_by_ide: [], totals_by_feature: [], totals_by_language_feature: [],
+        totals_by_model_feature: [], totals_by_language_model: [],
+        used_copilot_app: true,
+        totals_by_copilot_app: SAMPLE_TOTALS_BY_COPILOT_APP,
+      },
+      {
+        day: "2026-08-07", enterprise_id: "ent-123", user_id: 511, user_login: "batch-app-unset",
+        code_generation_activity_count: 0, code_acceptance_activity_count: 0,
+        user_initiated_interaction_count: 0, loc_suggested_to_add_sum: 0,
+        loc_suggested_to_delete_sum: 0, loc_added_sum: 0, loc_deleted_sum: 0,
+        used_agent: false, used_chat: false, used_cli: false,
+        totals_by_ide: [], totals_by_feature: [], totals_by_language_feature: [],
+        totals_by_model_feature: [], totals_by_language_model: [],
+      },
+    ]);
+
+    const trueResult = getUserMetricsByLogin("batch-app-true", "2026-08-07", "2026-08-07");
+    const unsetResult = getUserMetricsByLogin("batch-app-unset", "2026-08-07", "2026-08-07");
+    expect(trueResult[0].used_copilot_app).toBe(true);
+    expect(trueResult[0].totals_by_copilot_app).toEqual(SAMPLE_TOTALS_BY_COPILOT_APP);
+    expect(unsetResult[0].used_copilot_app).toBeNull();
+    expect(unsetResult[0].totals_by_copilot_app).toBeUndefined();
+  });
+});

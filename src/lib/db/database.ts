@@ -3,6 +3,7 @@
 import Database from "better-sqlite3";
 import path from "path";
 import fs from "fs";
+import { migrateCopilotAppMetrics } from "./copilot-app-migration";
 
 const DB_PATH = path.join(process.cwd(), "data", "copilot-metrics.db");
 const SCHEMA_PATH = path.join(process.cwd(), "src", "lib", "db", "schema.sql");
@@ -86,6 +87,13 @@ export function getDb(): Database.Database {
   _db.exec(ghasSchema);
   _db.exec(summarySchema);
   _db.exec(billingSchema);
+
+  // Additive, idempotent Copilot App usage metrics migration (adds columns +
+  // backfills from raw_json on already-synced tables). Kept separate from the
+  // broad try/catch migrations list above since it has its own internal
+  // idempotency and column-existence checks.
+  migrateCopilotAppMetrics(_db);
+
   const userMetricColumns = _db.prepare("PRAGMA table_info(user_daily_metrics)").all() as { name: string }[];
   const hasAiCreditsColumn = userMetricColumns.some((col) => col.name === "ai_credits_used");
   const hasRawJsonColumn = userMetricColumns.some((col) => col.name === "raw_json");
