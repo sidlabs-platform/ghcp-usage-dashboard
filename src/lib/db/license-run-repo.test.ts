@@ -42,8 +42,12 @@ afterAll(() => {
 });
 
 beforeEach(() => {
-  db.exec("DELETE FROM license_reconciliation_runs");
+  // Delete children before parents: license_reconciliation_checks has an FK
+  // to license_reconciliation_runs(id) and foreign_keys=ON is set above, so
+  // deleting runs first would fail with a FOREIGN KEY constraint violation
+  // whenever a prior test left checks rows behind.
   db.exec("DELETE FROM license_reconciliation_checks");
+  db.exec("DELETE FROM license_reconciliation_runs");
   db.exec("DELETE FROM license_source_sync_state");
 });
 

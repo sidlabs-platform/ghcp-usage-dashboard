@@ -1,7 +1,8 @@
 -- Historical licensing / AI-Credit reconciliation schema.
 -- Uses SQLite via better-sqlite3.
 --
--- Backward compatibility rules (see plan.md section 2 "Backward compatibility"):
+-- Backward compatibility rules (see the "Backward Compatibility (Hard Rule)"
+-- section of the project's Copilot instructions):
 --   * Every table uses CREATE TABLE IF NOT EXISTS.
 --   * No table here is ever dropped, renamed, or recreated by application code.
 --   * These tables are purely additive: they never require dropping or

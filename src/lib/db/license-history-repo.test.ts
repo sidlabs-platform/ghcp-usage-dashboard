@@ -20,6 +20,8 @@ import {
   stableStringify,
   parseJsonArray,
   parseJsonObject,
+  DETAIL_SORT_COLUMNS,
+  ROLLUP_SORT_COLUMNS,
   type LicensePeriodRowInput,
 } from "./license-history-repo";
 
@@ -398,12 +400,128 @@ describe("replaceMaterializedPeriod + queryLicensePeriodRows", () => {
     const rollup = queryLicensePeriodRows({ enterpriseSlug: "ent1", view: "rollup" });
     expect(rollup.view).toBe("rollup");
     const user1 = rollup.rows.find((r) => (r as { resolvedUserLogin: string }).resolvedUserLogin === "user1") as
-      | { seatCount: number; periodCount: number; licenseCost: number }
+      | { seatCount: number; periodCount: number; licenseCost: number; periods: string[]; orgLogins: string[]; planTypes: string[] }
       | undefined;
     expect(user1).toBeDefined();
     expect(user1?.seatCount).toBe(2); // one row in Jan (org1) + one row in Feb
     expect(user1?.periodCount).toBe(2);
     expect(user1?.licenseCost).toBeCloseTo(19 + 19, 5);
+    // GROUP_CONCAT(DISTINCT ...) uses a comma separator (splitDistinct must
+    // parse on ",", not "\u0001") — assert the grouped arrays themselves,
+    // not just their counts.
+    expect(user1?.periods.slice().sort()).toEqual(["2026-01", "2026-02"]);
+    expect(user1?.orgLogins.slice().sort()).toEqual(["org1"]);
+    expect(user1?.planTypes.slice().sort()).toEqual(["business"]);
+
+    const user2 = rollup.rows.find((r) => (r as { resolvedUserLogin: string }).resolvedUserLogin === "user2") as
+      | { periods: string[]; orgLogins: string[]; planTypes: string[] }
+      | undefined;
+    expect(user2?.periods).toEqual(["2026-01"]);
+    expect(user2?.orgLogins).toEqual(["org2"]);
+    expect(user2?.planTypes).toEqual(["enterprise"]);
+  });
+
+  it("projects utilization_pct in SQL consistent with aic_consumed/aic_assigned and honors the assigned-then-default fallback", () => {
+    const rollup = queryLicensePeriodRows({ enterpriseSlug: "ent1", view: "rollup" });
+    const user2 = rollup.rows.find((r) => (r as { resolvedUserLogin: string }).resolvedUserLogin === "user2") as
+      | { utilizationPct: number }
+      | undefined;
+    // user2 fixture (single row, Jan only): aicConsumedUsd 40, aicAssignedUsd 19.
+    expect(user2).toBeDefined();
+    expect(user2?.utilizationPct).toBeCloseTo((40 / 19) * 100, 5);
+  });
+
+  describe("sort allowlist coverage", () => {
+    it("accepts every detail sort column without error", () => {
+      for (const field of DETAIL_SORT_COLUMNS) {
+        const result = queryLicensePeriodRows({ enterpriseSlug: "ent1", sortField: field, sortDir: "asc" });
+        expect(result.view).toBe("detail");
+        expect(Array.isArray(result.rows)).toBe(true);
+      }
+    });
+
+    it("accepts every rollup sort column without error, including utilization_pct", () => {
+      for (const field of ROLLUP_SORT_COLUMNS) {
+        const result = queryLicensePeriodRows({
+          enterpriseSlug: "ent1",
+          view: "rollup",
+          sortField: field,
+          sortDir: "desc",
+        });
+        expect(result.view).toBe("rollup");
+        expect(Array.isArray(result.rows)).toBe(true);
+      }
+    });
+  });
+
+  it("keeps OFFSET pagination stable when the sort column has ties (deterministic tie-breakers)", () => {
+    replaceMaterializedPeriod("ent1", "2026-06", [
+      makePeriodRow({ orgLogin: "org1", holderKey: "user-a", resolvedUserLogin: "user-a", licenseCost: 19 }),
+      makePeriodRow({ orgLogin: "org1", holderKey: "user-b", resolvedUserLogin: "user-b", licenseCost: 19 }),
+      makePeriodRow({ orgLogin: "org1", holderKey: "user-c", resolvedUserLogin: "user-c", licenseCost: 19 }),
+    ]);
+    const seen = new Set<string>();
+    for (let page = 1; page <= 3; page++) {
+      const result = queryLicensePeriodRows({
+        enterpriseSlug: "ent1",
+        periods: ["2026-06"],
+        sortField: "license_cost",
+        sortDir: "asc",
+        page,
+        pageSize: 1,
+      });
+      expect(result.rows).toHaveLength(1);
+      const holderKey = (result.rows[0] as { holderKey: string }).holderKey;
+      expect(seen.has(holderKey)).toBe(false); // no duplicates across pages
+      seen.add(holderKey);
+    }
+    expect(seen).toEqual(new Set(["user-a", "user-b", "user-c"]));
+  });
+
+  it("escapes LIKE wildcards in search so % and _ match literally, not as wildcards", () => {
+    replaceMaterializedPeriod("ent1", "2026-07", [
+      makePeriodRow({ orgLogin: "org1", holderKey: "user_a", resolvedUserLogin: "user_a" }),
+      makePeriodRow({ orgLogin: "org1", holderKey: "userXa", resolvedUserLogin: "userXa" }),
+      makePeriodRow({ orgLogin: "org1", holderKey: "100%dev", resolvedUserLogin: "100%dev" }),
+      makePeriodRow({ orgLogin: "org1", holderKey: "100Xdev", resolvedUserLogin: "100Xdev" }),
+    ]);
+
+    // A literal underscore must not act as a "match any single character" wildcard.
+    const underscoreSearch = queryLicensePeriodRows({ enterpriseSlug: "ent1", periods: ["2026-07"], search: "user_a" });
+    expect(
+      underscoreSearch.rows.map((r) => (r as { resolvedUserLogin: string }).resolvedUserLogin)
+    ).toEqual(["user_a"]);
+
+    // A literal percent must not act as a "match anything" wildcard.
+    const percentSearch = queryLicensePeriodRows({ enterpriseSlug: "ent1", periods: ["2026-07"], search: "100%dev" });
+    expect(
+      percentSearch.rows.map((r) => (r as { resolvedUserLogin: string }).resolvedUserLogin)
+    ).toEqual(["100%dev"]);
+  });
+
+  it("rolls back the entire batch when a later row violates a NOT NULL constraint (transaction atomicity)", () => {
+    // Seed a known-good baseline for the period.
+    replaceMaterializedPeriod("ent1", "2026-04", [
+      makePeriodRow({ orgLogin: "org1", holderKey: "user1", resolvedUserLogin: "user1" }),
+    ]);
+    const before = queryLicensePeriodRows({ enterpriseSlug: "ent1", periods: ["2026-04"] });
+    expect(before.pagination.totalItems).toBe(1);
+
+    const goodRow = makePeriodRow({ orgLogin: "org1", holderKey: "user3", resolvedUserLogin: "user3" });
+    const badRow = makePeriodRow({ orgLogin: "org1", holderKey: "user2", resolvedUserLogin: "user2" });
+    // Force a NOT NULL constraint violation on the second statement of the batch
+    // (aic_assigned_rule is NOT NULL with no default).
+    (badRow as unknown as { aicAssignedRule: string | null }).aicAssignedRule = null;
+
+    expect(() => replaceMaterializedPeriod("ent1", "2026-04", [goodRow, badRow])).toThrow();
+
+    // The whole transaction (DELETE + both INSERTs) must have rolled back:
+    // the pre-existing "user1" row must survive, and "user3" — whose INSERT
+    // ran successfully before the failing statement — must not have leaked
+    // in as a partial write.
+    const after = queryLicensePeriodRows({ enterpriseSlug: "ent1", periods: ["2026-04"] });
+    expect(after.pagination.totalItems).toBe(1);
+    expect((after.rows[0] as { holderKey: string }).holderKey).toBe("user1");
   });
 });
 

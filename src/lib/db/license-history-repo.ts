@@ -241,8 +241,10 @@ export interface PaginatedLicenseRows {
 }
 
 // ── Sort allowlists ───────────────────────────────────────────────────
+// Exported (read-only) so tests can iterate the exact allowlist rather than
+// duplicating it, guaranteeing every allowed sort column is exercised.
 
-const DETAIL_SORT_COLUMNS = [
+export const DETAIL_SORT_COLUMNS: string[] = [
   "billing_period",
   "org_login",
   "user_login",
@@ -261,7 +263,7 @@ const DETAIL_SORT_COLUMNS = [
   "as_of_utc",
 ];
 
-const ROLLUP_SORT_COLUMNS = [
+export const ROLLUP_SORT_COLUMNS: string[] = [
   "resolved_user_login",
   "seat_count",
   "org_count",
@@ -336,12 +338,23 @@ function appendPeriodFilters(clauses: string[], params: unknown[], query: Licens
     params.push(...query.historyConfidence);
   }
   if (query.search) {
-    const like = `%${query.search}%`;
+    const like = `%${escapeLikePattern(query.search)}%`;
     clauses.push(
-      `(user_login LIKE ? OR resolved_user_login LIKE ? OR org_login LIKE ? OR external_identity LIKE ?)`
+      `(user_login LIKE ? ESCAPE '\\' OR resolved_user_login LIKE ? ESCAPE '\\' OR org_login LIKE ? ESCAPE '\\' OR external_identity LIKE ? ESCAPE '\\')`
     );
     params.push(like, like, like, like);
   }
+}
+
+/**
+ * Escape SQLite LIKE metacharacters (`%`, `_`) and the escape character
+ * itself (`\`) in free-text search input, so a literal `%`/`_` typed by a
+ * user (e.g. searching for a login containing an underscore) matches only
+ * that literal character rather than being interpreted as a wildcard. Must
+ * be paired with `LIKE ? ESCAPE '\'` at each call site.
+ */
+function escapeLikePattern(input: string): string {
+  return input.replace(/\\/g, "\\\\").replace(/%/g, "\\%").replace(/_/g, "\\_");
 }
 
 function buildWhereClause(clauses: string[]): string {
@@ -386,9 +399,49 @@ function mapDetailRow(row: Record<string, unknown>): LicensePeriodRowRecord {
 const CONFIDENCE_RANK_SQL = `CASE history_confidence WHEN 'high' THEN 3 WHEN 'medium' THEN 2 WHEN 'low' THEN 1 ELSE 0 END`;
 const RANK_TO_CONFIDENCE: Record<number, string> = { 3: "high", 2: "medium", 1: "low", 0: "unknown" };
 
+// Same "assigned budget, falling back to the plan default" semantics as the
+// rollup's JS mapping (`aicAssignedUsd || defaultAicUsd`): SQLite doesn't
+// allow referencing a SELECT-list alias from another expression in the same
+// SELECT, so the SUM(...) aggregates are repeated inline here rather than
+// reused via alias. Kept as a single source of truth so the value used for
+// ORDER BY and the value returned to callers can never drift apart.
+const UTILIZATION_PCT_SQL = `
+  CASE
+    WHEN COALESCE(SUM(aic_assigned_usd), 0) > 0
+      THEN (COALESCE(SUM(aic_consumed_usd), 0) / COALESCE(SUM(aic_assigned_usd), 0)) * 100
+    WHEN COALESCE(SUM(default_aic_usd), 0) > 0
+      THEN (COALESCE(SUM(aic_consumed_usd), 0) / COALESCE(SUM(default_aic_usd), 0)) * 100
+    ELSE 0
+  END
+`;
+
 function splitDistinct(value: string | null | undefined): string[] {
   if (!value) return [];
-  return value.split("\u0001").filter((v) => v.length > 0);
+  // GROUP_CONCAT(DISTINCT ...) joins with a comma by default. Values stored
+  // in these columns (billing_period, org_login, plan_type) are structural
+  // identifiers that never contain commas, so a plain split is safe.
+  return value.split(",").filter((v) => v.length > 0);
+}
+
+/**
+ * Build a detail-view ORDER BY clause with deterministic tie-breakers on the
+ * full primary key (enterprise_slug, billing_period, org_login, holder_key),
+ * so OFFSET-based pagination never reorders/duplicates/skips rows across
+ * pages when the requested sort column has ties.
+ */
+function buildDetailOrderBy(pagination: PaginationParams): string {
+  const base = buildOrderBy(pagination, DETAIL_SORT_COLUMNS, "billing_period");
+  return `${base}, enterprise_slug ASC, billing_period ASC, org_login ASC, holder_key ASC`;
+}
+
+/**
+ * Build a rollup-view ORDER BY clause with deterministic tie-breakers on the
+ * group key (enterprise_slug, resolved login), so OFFSET-based pagination
+ * stays stable across pages when the requested sort column has ties.
+ */
+function buildRollupOrderBy(pagination: PaginationParams): string {
+  const base = buildOrderBy(pagination, ROLLUP_SORT_COLUMNS, "resolved_user_login");
+  return `${base}, enterprise_slug ASC, resolved_user_login ASC`;
 }
 
 /**
@@ -408,7 +461,7 @@ export function queryLicensePeriodRows(query: LicensePeriodQuery): PaginatedLice
   const { clause: limitClause, values: limitValues } = buildLimitOffset(pagination);
 
   if (view === "detail") {
-    const orderBy = buildOrderBy(pagination, DETAIL_SORT_COLUMNS, "billing_period");
+    const orderBy = buildDetailOrderBy(pagination);
     const countRow = db
       .prepare(`SELECT COUNT(*) as total FROM license_period_rows${where}`)
       .get(...params) as { total: number };
@@ -430,7 +483,7 @@ export function queryLicensePeriodRows(query: LicensePeriodQuery): PaginatedLice
   // Rollup: group by resolved login (falling back to holder_key when unresolved)
   // across the periods/orgs matched by the shared filters. All aggregation
   // happens in SQL — only the current page's grouped rows are materialized.
-  const orderBy = buildOrderBy(pagination, ROLLUP_SORT_COLUMNS, "resolved_user_login");
+  const orderBy = buildRollupOrderBy(pagination);
   const groupKey = `COALESCE(NULLIF(resolved_user_login, ''), holder_key)`;
   const rollupSelect = `
     SELECT
@@ -449,7 +502,8 @@ export function queryLicensePeriodRows(query: LicensePeriodQuery): PaginatedLice
       COALESCE(SUM(aic_consumed_credits), 0) AS aic_consumed_credits,
       COALESCE(SUM(aic_consumed_usd), 0) AS aic_consumed_usd,
       MAX(currency) AS currency,
-      MIN(${CONFIDENCE_RANK_SQL}) AS confidence_rank
+      MIN(${CONFIDENCE_RANK_SQL}) AS confidence_rank,
+      ${UTILIZATION_PCT_SQL} AS utilization_pct
     FROM license_period_rows${where}
     GROUP BY enterprise_slug, ${groupKey}
   `;
@@ -463,11 +517,6 @@ export function queryLicensePeriodRows(query: LicensePeriodQuery): PaginatedLice
     .all(...params, ...limitValues) as Record<string, unknown>[];
 
   const mapped: LicenseRollupRowRecord[] = rows.map((row) => {
-    const licenseCost = (row.license_cost as number) ?? 0;
-    const defaultAicUsd = (row.default_aic_usd as number) ?? 0;
-    const aicAssignedUsd = (row.aic_assigned_usd as number) ?? 0;
-    const aicConsumedUsd = (row.aic_consumed_usd as number) ?? 0;
-    const budget = aicAssignedUsd || defaultAicUsd;
     return {
       enterpriseSlug: row.enterprise_slug as string,
       resolvedUserLogin: row.resolved_user_login as string,
@@ -477,13 +526,16 @@ export function queryLicensePeriodRows(query: LicensePeriodQuery): PaginatedLice
       seatCount: (row.seat_count as number) ?? 0,
       orgCount: (row.org_count as number) ?? 0,
       periodCount: (row.period_count as number) ?? 0,
-      licenseCost,
+      licenseCost: (row.license_cost as number) ?? 0,
       defaultAicCredits: (row.default_aic_credits as number) ?? 0,
-      defaultAicUsd,
-      aicAssignedUsd,
+      defaultAicUsd: (row.default_aic_usd as number) ?? 0,
+      aicAssignedUsd: (row.aic_assigned_usd as number) ?? 0,
       aicConsumedCredits: (row.aic_consumed_credits as number) ?? 0,
-      aicConsumedUsd,
-      utilizationPct: budget > 0 ? (aicConsumedUsd / budget) * 100 : 0,
+      aicConsumedUsd: (row.aic_consumed_usd as number) ?? 0,
+      // Read directly from SQL (UTILIZATION_PCT_SQL) rather than recomputed
+      // in JS, so the value used for ORDER BY and the value returned here
+      // can never disagree.
+      utilizationPct: (row.utilization_pct as number) ?? 0,
       currency: (row.currency as string) || "USD",
       historyConfidence: RANK_TO_CONFIDENCE[(row.confidence_rank as number) ?? 0] ?? "unknown",
     };
