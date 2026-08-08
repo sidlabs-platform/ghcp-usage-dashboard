@@ -10,6 +10,15 @@ const MONTH_RE = /^(\d{4})-(\d{2})$/;
 const RANGE_RE = /^(\d{4}-\d{2})\.\.(\d{4}-\d{2})$/;
 const LAST_N_RE = /^last_(\d+)_months$/;
 
+/**
+ * Upper bound on how many months a single `reportMonths` token (an inclusive
+ * "start..end" range or "last_N_months") may expand to. Enforced *before*
+ * allocating/looping so a mistyped/malicious config value (e.g. a decades-long
+ * range or "last_999999_months") can't force an unbounded array allocation or
+ * loop.
+ */
+export const MAX_REPORT_MONTHS = 120;
+
 /** Parsed {year, month} where month is 1-12. */
 interface YearMonth {
   year: number;
@@ -60,6 +69,12 @@ function expandRange(startToken: string, endToken: string): string[] {
   if (endIdx < startIdx) {
     throw new Error(`Invalid report month range "${startToken}..${endToken}": end is before start`);
   }
+  const span = endIdx - startIdx + 1;
+  if (span > MAX_REPORT_MONTHS) {
+    throw new Error(
+      `Invalid report month range "${startToken}..${endToken}": spans ${span} months, exceeding the maximum of ${MAX_REPORT_MONTHS}`
+    );
+  }
   const months: string[] = [];
   for (let idx = startIdx; idx <= endIdx; idx++) {
     months.push(formatYearMonth(yearMonthFromIndex(idx)));
@@ -76,6 +91,9 @@ function expandLastNMonths(token: string, now: Date): string[] {
   const n = Number(match[1]);
   if (!Number.isInteger(n) || n < 1) {
     throw new Error(`Invalid report month token "${token}": N must be a positive integer`);
+  }
+  if (n > MAX_REPORT_MONTHS) {
+    throw new Error(`Invalid report month token "${token}": N must not exceed ${MAX_REPORT_MONTHS}`);
   }
   const currentIdx = monthIndex({ year: now.getUTCFullYear(), month: now.getUTCMonth() + 1 });
   const months: string[] = [];
@@ -122,10 +140,10 @@ export function parseReportMonths(input: string | string[] | undefined, now: Dat
       continue;
     }
     if (token.includes("..")) {
-      // Looks like a range but didn't match RANGE_RE (malformed on one/both sides).
-      const [startToken, endToken] = token.split("..");
-      for (const m of expandRange(startToken, endToken)) months.add(m);
-      continue;
+      // Looks like it's attempting a range but doesn't exactly match a single
+      // "YYYY-MM..YYYY-MM" range (e.g. three+ segments, a trailing/leading
+      // separator, or a malformed side) — reject rather than guessing intent.
+      throw new Error(`Invalid report month range "${token}": expected exactly one "YYYY-MM..YYYY-MM" range`);
     }
     months.add(formatYearMonth(parseMonthToken(token)));
   }

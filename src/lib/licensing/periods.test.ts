@@ -4,6 +4,7 @@ import {
   cycleBoundsUtc,
   intervalOverlapsPeriod,
   earliestRecoverablePeriod,
+  MAX_REPORT_MONTHS,
 } from "./periods";
 
 describe("parseReportMonths", () => {
@@ -73,10 +74,47 @@ describe("parseReportMonths", () => {
     expect(() => parseReportMonths("2026-01..bad")).toThrow();
   });
 
+  it("throws on a range token with three segments instead of exactly one range", () => {
+    expect(() => parseReportMonths("2026-01..2026-02..2026-03")).toThrow();
+  });
+
+  it("throws on a range token with a trailing separator and no end month", () => {
+    expect(() => parseReportMonths("2026-01..")).toThrow();
+  });
+
+  it("throws on a range token with a leading separator and no start month", () => {
+    expect(() => parseReportMonths("..2026-01")).toThrow();
+  });
+
   it("throws on malformed last_N_months syntax", () => {
     expect(() => parseReportMonths("last_0_months")).toThrow();
     expect(() => parseReportMonths("last_months")).toThrow();
     expect(() => parseReportMonths("last_-1_months")).toThrow();
+  });
+
+  it("allows last_N_months exactly at MAX_REPORT_MONTHS", () => {
+    const months = parseReportMonths(
+      `last_${MAX_REPORT_MONTHS}_months`,
+      new Date("2026-08-07T00:00:00Z")
+    );
+    expect(months).toHaveLength(MAX_REPORT_MONTHS);
+  });
+
+  it("throws on last_N_months exceeding MAX_REPORT_MONTHS", () => {
+    expect(() =>
+      parseReportMonths(`last_${MAX_REPORT_MONTHS + 1}_months`, new Date("2026-08-07T00:00:00Z"))
+    ).toThrow();
+  });
+
+  it("allows an inclusive range exactly at MAX_REPORT_MONTHS", () => {
+    // 2016-02..2026-01 inclusive spans exactly 120 months.
+    const months = parseReportMonths("2016-02..2026-01");
+    expect(months).toHaveLength(MAX_REPORT_MONTHS);
+  });
+
+  it("throws on an inclusive range exceeding MAX_REPORT_MONTHS", () => {
+    // 2016-01..2026-01 inclusive spans 121 months, one over the bound.
+    expect(() => parseReportMonths("2016-01..2026-01")).toThrow();
   });
 });
 

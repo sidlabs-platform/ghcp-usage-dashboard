@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { isBillingSubEnabledForAnyEnterprise } from "@/lib/config/enterprise-config";
 import { getDateRange, parseAndClampDays } from "@/lib/utils";
-import { getLicensingConfig } from "@/lib/config/dashboard-config";
+import { getLicensingConfig, LicensingConfigError } from "@/lib/config/dashboard-config";
 import { parseScopeFilter } from "@/lib/api/scope-filter";
 import {
   getLicenseReconciliationRows,
@@ -109,6 +109,16 @@ async function handler(request: NextRequest) {
       { headers: { "Cache-Control": "private, max-age=300, stale-while-revalidate=60" } },
     );
   } catch (err) {
+    if (err instanceof LicensingConfigError) {
+      // Misconfigured licensing settings are an operator/config problem, not
+      // a server fault — surface a stable, typed 422 with the specific
+      // validation details (never the raw error/stack) so operators can fix
+      // dashboard-config.json without any sensitive info leaking.
+      return NextResponse.json(
+        { error: "invalid_licensing_config", details: err.details },
+        { status: 422 },
+      );
+    }
     console.error("License reconciliation error:", err);
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });
   }

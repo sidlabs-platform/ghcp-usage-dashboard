@@ -453,6 +453,38 @@ function isValidDateString(value: string): boolean {
 }
 
 /**
+ * Validate an explicitly-configured boolean field. `undefined`/`null` are
+ * treated as "not configured" (documented default-absence semantics) and
+ * pass through without error; any other non-boolean value is a type error
+ * appended to `errors`. Returns `undefined` when unconfigured or invalid so
+ * the caller can fall back to its own default in both cases.
+ */
+function validateOptionalBoolean(value: unknown, fieldPath: string, errors: string[]): boolean | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== "boolean") {
+    errors.push(`licensing.${fieldPath} must be a boolean (got ${JSON.stringify(value)})`);
+    return undefined;
+  }
+  return value;
+}
+
+/**
+ * Validate an explicitly-configured non-empty string field. `undefined`/`null`
+ * are treated as "not configured" and pass through without error; any other
+ * non-string or empty/whitespace-only string is a validation error appended
+ * to `errors`. Returns `undefined` when unconfigured or invalid so the caller
+ * can fall back to its own default in both cases.
+ */
+function validateOptionalNonEmptyString(value: unknown, fieldPath: string, errors: string[]): string | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== "string" || value.trim() === "") {
+    errors.push(`licensing.${fieldPath} must be a non-empty string (got ${JSON.stringify(value)})`);
+    return undefined;
+  }
+  return value;
+}
+
+/**
  * Validate a plan-keyed credits map. Every configured key must be a known
  * {@link LicensePlanKey} and every value must be a non-negative finite
  * number; violations are appended to `errors` (collected and thrown together
@@ -495,26 +527,36 @@ function validateDatedAllowances(raw: DatedAllowance[] | undefined, errors: stri
   if (!raw || raw.length === 0) return [];
 
   const parsed: DatedAllowance[] = [];
-  for (const entry of raw) {
+  raw.forEach((entry, index) => {
+    const contextLabel = `datedAllowances[${index}]`;
     if (!entry || typeof entry.start !== "string" || !isValidDateString(entry.start)) {
-      errors.push(`licensing.datedAllowances entry has a malformed start date: ${JSON.stringify(entry)}`);
-      continue;
+      errors.push(`licensing.${contextLabel} has a malformed start date: ${JSON.stringify(entry)}`);
+      return;
     }
     if (entry.end !== undefined && (typeof entry.end !== "string" || !isValidDateString(entry.end))) {
-      errors.push(`licensing.datedAllowances entry has a malformed end date: ${JSON.stringify(entry)}`);
-      continue;
+      errors.push(`licensing.${contextLabel} has a malformed end date: ${JSON.stringify(entry)}`);
+      return;
     }
     if (entry.end !== undefined && entry.end < entry.start) {
-      errors.push(`licensing.datedAllowances entry has end (${entry.end}) before start (${entry.start})`);
-      continue;
+      errors.push(`licensing.${contextLabel} has end (${entry.end}) before start (${entry.start})`);
+      return;
     }
-    const credits = validateCreditsMap(entry.credits, "datedAllowances", errors);
+    // Distinguish "no credits configured at all" from "credits were
+    // configured but every one of them was individually invalid" — the
+    // latter case already has a specific per-value error from
+    // validateCreditsMap, so pushing a second blanket "no valid credit
+    // values" error would just be a confusing duplicate.
+    const hasConfiguredCredits =
+      entry.credits != null && typeof entry.credits === "object" && Object.keys(entry.credits).length > 0;
+    const credits = validateCreditsMap(entry.credits, contextLabel, errors);
     if (Object.keys(credits).length === 0) {
-      errors.push(`licensing.datedAllowances entry has no valid credit values: ${JSON.stringify(entry)}`);
-      continue;
+      if (!hasConfiguredCredits) {
+        errors.push(`licensing.${contextLabel} has no valid credit values: ${JSON.stringify(entry)}`);
+      }
+      return;
     }
     parsed.push({ start: entry.start, end: entry.end, credits });
-  }
+  });
 
   // Sort ascending by start date so overlap detection is deterministic.
   const sorted = [...parsed].sort((a, b) => (a.start < b.start ? -1 : a.start > b.start ? 1 : 0));
@@ -537,9 +579,15 @@ function validateDatedAllowances(raw: DatedAllowance[] | undefined, errors: stri
     }
     for (const plan of plansInEntry) {
       const lastEnd = lastEndByPlan.get(plan);
+      // An open-ended window is sticky: once a plan has an unbounded window,
+      // no later (necessarily bounded) entry can shrink its recorded end —
+      // doing so would let a subsequent window that starts after the
+      // shrunk-to date wrongly pass the overlap check even though the
+      // original open-ended window still covers it.
+      if (lastEnd === null) continue;
       const newEnd = entry.end ?? null;
       // Keep whichever end reaches furthest, so later overlap checks stay accurate.
-      if (lastEnd === undefined || lastEnd === null || newEnd === null || newEnd > lastEnd) {
+      if (lastEnd === undefined || newEnd === null || newEnd > lastEnd) {
         lastEndByPlan.set(plan, newEnd);
       }
     }
@@ -585,23 +633,34 @@ function resolveHistoryConfig(raw: LicensingHistoryConfig | undefined, errors: s
   }
 
   return {
-    enabled: raw?.enabled ?? defaults.enabled,
+    enabled: validateOptionalBoolean(raw?.enabled, "history.enabled", errors) ?? defaults.enabled,
     reportMonths,
     auditRetentionDays,
-    emitSnapshots: raw?.emitSnapshots ?? defaults.emitSnapshots,
-    snapshotDirectory: raw?.snapshotDirectory || defaults.snapshotDirectory,
-    auditArchivePath: raw?.auditArchivePath || defaults.auditArchivePath,
-    identityMapPath: raw?.identityMapPath || defaults.identityMapPath,
+    emitSnapshots: validateOptionalBoolean(raw?.emitSnapshots, "history.emitSnapshots", errors) ?? defaults.emitSnapshots,
+    snapshotDirectory:
+      validateOptionalNonEmptyString(raw?.snapshotDirectory, "history.snapshotDirectory", errors) ??
+      defaults.snapshotDirectory,
+    auditArchivePath:
+      validateOptionalNonEmptyString(raw?.auditArchivePath, "history.auditArchivePath", errors) ??
+      defaults.auditArchivePath,
+    identityMapPath:
+      validateOptionalNonEmptyString(raw?.identityMapPath, "history.identityMapPath", errors) ??
+      defaults.identityMapPath,
   };
 }
 
 /** Resolve `identity` settings with field-level defaults applied. */
-function resolveIdentityConfig(raw: LicensingIdentityConfig | undefined): ResolvedLicensingIdentityConfig {
+function resolveIdentityConfig(raw: LicensingIdentityConfig | undefined, errors: string[]): ResolvedLicensingIdentityConfig {
   const defaults = DEFAULT_LICENSING.identity;
   return {
-    fetchMembership: raw?.fetchMembership ?? defaults.fetchMembership,
-    fetchEnterpriseIdentities: raw?.fetchEnterpriseIdentities ?? defaults.fetchEnterpriseIdentities,
-    fetchOrgIdentities: raw?.fetchOrgIdentities ?? defaults.fetchOrgIdentities,
+    fetchMembership:
+      validateOptionalBoolean(raw?.fetchMembership, "identity.fetchMembership", errors) ?? defaults.fetchMembership,
+    fetchEnterpriseIdentities:
+      validateOptionalBoolean(raw?.fetchEnterpriseIdentities, "identity.fetchEnterpriseIdentities", errors) ??
+      defaults.fetchEnterpriseIdentities,
+    fetchOrgIdentities:
+      validateOptionalBoolean(raw?.fetchOrgIdentities, "identity.fetchOrgIdentities", errors) ??
+      defaults.fetchOrgIdentities,
   };
 }
 
@@ -639,7 +698,9 @@ function resolveAicConsumptionConfig(
     }
   }
 
-  return { mode, csvPath: raw?.csvPath, concurrency };
+  const csvPath = validateOptionalNonEmptyString(raw?.csvPath, "aicConsumption.csvPath", errors);
+
+  return { mode, csvPath, concurrency };
 }
 
 /** Resolve `validation` settings with field-level defaults and bounds applied. */
@@ -663,7 +724,7 @@ function resolveValidationConfig(raw: LicensingValidationConfig | undefined, err
   }
 
   return {
-    enabled: raw?.enabled ?? defaults.enabled,
+    enabled: validateOptionalBoolean(raw?.enabled, "validation.enabled", errors) ?? defaults.enabled,
     aicTolerancePct,
   };
 }
@@ -706,9 +767,10 @@ export function getLicensingConfig(): ResolvedLicensingConfig {
   const aicAllowance = validateCreditsMap(configured.aicAllowance, "aicAllowance", errors);
   const datedAllowances = validateDatedAllowances(configured.datedAllowances, errors);
   const history = resolveHistoryConfig(configured.history, errors);
-  const identity = resolveIdentityConfig(configured.identity);
+  const identity = resolveIdentityConfig(configured.identity, errors);
   const aicConsumption = resolveAicConsumptionConfig(configured.aicConsumption, errors);
   const validation = resolveValidationConfig(configured.validation, errors);
+  const currency = validateOptionalNonEmptyString(configured.currency, "currency", errors) ?? DEFAULT_LICENSING.currency;
 
   if (errors.length > 0) {
     throw new LicensingConfigError(errors);
@@ -716,7 +778,7 @@ export function getLicensingConfig(): ResolvedLicensingConfig {
 
   return {
     creditToUsd,
-    currency: configured.currency || DEFAULT_LICENSING.currency,
+    currency,
     licenseCost: { ...DEFAULT_LICENSING.licenseCost, ...licenseCost },
     aicAllowance: { ...DEFAULT_LICENSING.aicAllowance, ...aicAllowance },
     perUserBudgetUsd,
