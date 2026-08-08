@@ -7,7 +7,7 @@
 // keys) via `stableStringify` so repeated writes of equivalent data produce
 // identical bytes, and are always returned to callers already parsed.
 
-import { randomUUID, createHash } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { getDb } from "./database";
 import { stableStringify, parseJsonArray, parseJsonObject } from "./license-history-repo";
 import { summarizeSourceStates } from "../licensing/reconciliation-checks";
@@ -511,22 +511,10 @@ const SAFE_HOLDER_KEY_RE = /^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,62}[A-Za-z0-9])?$/;
 const MAX_HOLDER_KEY_LENGTH = 64;
 
 /**
- * Deterministically redact an unsafe value to a stable, non-reversible
- * marker: the same unsafe input always redacts to the same marker (so
- * repeated report builds/joins remain stable), while the marker itself
- * never contains any substring of the original value.
- */
-function deterministicRedactedMarker(value: unknown): string {
-  const basis = typeof value === "string" ? value : stableStringify(value ?? null);
-  const hash = createHash("sha256").update(basis).digest("hex").slice(0, 12);
-  return `redacted:${hash}`;
-}
-
-/**
  * Accept a `holderKey` only when it is a bounded, stable-identifier-shaped
  * string (see {@link SAFE_HOLDER_KEY_RE}); anything else (an email, raw
  * external id, script/HTML content, or an oversized value) is replaced with
- * a {@link deterministicRedactedMarker} rather than leaked verbatim.
+ * one constant marker so reports cannot be used to correlate candidate values.
  */
 function sanitizeUnresolvedHolderKey(value: unknown): string {
   if (
@@ -537,7 +525,7 @@ function sanitizeUnresolvedHolderKey(value: unknown): string {
   ) {
     return value;
   }
-  return deterministicRedactedMarker(value);
+  return "[redacted]";
 }
 
 /** Accept `githubUserId` only as a finite, non-negative integer — a string, negative, fractional, or non-finite value is omitted (never coerced/leaked). */

@@ -582,30 +582,36 @@ describe("buildLicenseRunReport / serializeLicenseRunReport / renderLicenseRunRe
     expect(rendered).not.toMatch(/leaked/);
   });
 
-  it("redacts an unsafe holderKey deterministically instead of leaking it, while a safe holderKey passes through unchanged", () => {
+  it("redacts unsafe holder keys with one non-correlatable marker while safe keys pass through unchanged", () => {
     const runId = startLicenseRun({ enterpriseSlug: "ent1", requestedPeriods: ["2026-01"] });
     const maliciousHolderKey = "attacker@evil.com <script>alert(1)</script>";
+    const differentUnsafeHolderKey = "different@example.com <external-id>";
     recordLicenseRunDiagnostics({
       runId,
       finish: {
         status: "warning",
-        unresolvedIdentities: [{ holderKey: maliciousHolderKey, reason: "no_login" }],
+        unresolvedIdentities: [
+          { holderKey: maliciousHolderKey, reason: "no_login" },
+          { holderKey: differentUnsafeHolderKey, reason: "no_login" },
+        ],
       },
       checks: [],
     });
     const run = getLicenseRun(runId)!;
     const report = buildLicenseRunReport(run, [], []);
 
-    expect(report.unresolvedIdentities).toHaveLength(1);
+    expect(report.unresolvedIdentities).toHaveLength(2);
     const sanitizedHolderKey = (report.unresolvedIdentities[0] as { holderKey: string }).holderKey;
     expect(sanitizedHolderKey).not.toBe(maliciousHolderKey);
     expect(sanitizedHolderKey).not.toContain("attacker");
     expect(sanitizedHolderKey).not.toContain("evil.com");
     expect(sanitizedHolderKey).not.toContain("<script>");
-    expect(sanitizedHolderKey).toMatch(/^redacted:[a-f0-9]{12}$/);
+    expect(sanitizedHolderKey).toBe("[redacted]");
+    expect(
+      report.unresolvedIdentities.map((entry) => (entry as { holderKey: string }).holderKey)
+    ).toEqual(["[redacted]", "[redacted]"]);
 
-    // Deterministic: re-building the report from the same stored value
-    // produces the exact same redacted marker every time.
+    // Deterministic without becoming a candidate-correlation oracle.
     const report2 = buildLicenseRunReport(run, [], []);
     expect((report2.unresolvedIdentities[0] as { holderKey: string }).holderKey).toBe(sanitizedHolderKey);
 
@@ -1004,4 +1010,3 @@ describe("report content sanitization (legacy sourceStats/warnings/errorMessage)
     expect(run.sourceStats).toEqual({ note: `token ${secretToken}` });
   });
 });
-
