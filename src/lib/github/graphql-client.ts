@@ -2,6 +2,16 @@
 // fetch primitive that adds typed variables, cursor pagination, null-node
 // skipping, partial-data/error preservation, and rate-limit integration.
 // API docs: https://docs.github.com/en/graphql
+//
+// Query-only, by design: this client retries automatically (default 3
+// attempts with jittered backoff), which is only safe for idempotent
+// operations. All current and planned callers in this codebase issue
+// read-only GraphQL queries, so `githubGraphQL`/`githubGraphQLPaginated`
+// validate that the operation is not a mutation (or subscription) and
+// reject immediately if it is — retrying a non-idempotent mutation could
+// duplicate side effects. If a mutation is ever genuinely required, add an
+// explicit, separate low-level helper that hardcodes `retries: 1` rather
+// than relaxing this check.
 
 import { githubFetchWithMeta, type AuthMode } from "./api-base";
 
@@ -20,7 +30,7 @@ interface GraphQLHttpResponse<T> {
 }
 
 export interface GraphQLRequestOptions {
-  /** Typed GraphQL variables sent alongside the query/mutation. */
+  /** Typed GraphQL variables sent alongside the query. */
   variables?: Record<string, unknown>;
   /** Max retry attempts for the underlying HTTP request. Defaults to 3. */
   retries?: number;
@@ -72,18 +82,41 @@ function warningsFromErrors(errors: GraphQLError[] | undefined): string[] {
   });
 }
 
+// ── Query-only validation ───────────────────────────────────────────────
+
+/**
+ * Reject anything that isn't a query. Detects an explicit leading
+ * `mutation`/`subscription` operation keyword (GraphQL's shorthand query
+ * syntax — a bare `{ ... }` or an explicit leading `query` keyword — is
+ * always allowed). This is a best-effort, practical guard: it does not
+ * parse the full GraphQL document, but it does catch the overwhelmingly
+ * common way a mutation would be written.
+ */
+function assertIsReadOnlyQuery(operation: string): void {
+  const match = /^\s*(mutation|subscription)\b/i.exec(operation);
+  if (match) {
+    const kind = match[1].toLowerCase();
+    throw new Error(
+      `githubGraphQL only supports read-only queries — refusing to execute a "${kind}" operation. ` +
+      "Automatic retries are not safe for non-idempotent operations; this client intentionally has no mutation support.",
+    );
+  }
+}
+
 // ── Single request ─────────────────────────────────────────────────────
 
 /**
- * Execute a single GraphQL query/mutation against /graphql.
- * Returns whatever data GitHub provided (even if partial) plus sanitized
- * warnings derived from any `errors` entries — callers get partial data
- * instead of a hard failure, matching GraphQL's error model.
+ * Execute a single, read-only GraphQL query against /graphql. Mutations and
+ * subscriptions are rejected — see the query-only note at the top of this
+ * file. Returns whatever data GitHub provided (even if partial) plus
+ * sanitized warnings derived from any `errors` entries — callers get
+ * partial data instead of a hard failure, matching GraphQL's error model.
  */
 export async function githubGraphQL<T>(
   query: string,
   options: GraphQLRequestOptions = {},
 ): Promise<GraphQLResult<T>> {
+  assertIsReadOnlyQuery(query);
   const { variables, retries = 3, enterpriseSlug, forceEnterprisePAT } = options;
   const authMode: AuthMode | undefined = forceEnterprisePAT ? "pat" : undefined;
 
@@ -115,7 +148,7 @@ export interface GraphQLConnection<TNode> {
 }
 
 export interface GraphQLPaginationOptions extends GraphQLRequestOptions {
-  /** Safety cap on the number of pages fetched. Defaults to 50. */
+  /** Safety cap on the number of pages fetched. Defaults to 50. Must be >= 1. */
   maxPages?: number;
 }
 
@@ -128,13 +161,16 @@ export interface GraphQLPaginatedResult<TNode> {
  * Page through a GraphQL connection using the `after` cursor convention.
  * The caller's query must accept an `$after: String` variable and expose a
  * `pageInfo { hasNextPage endCursor }` selection reachable via
- * `extractConnection`. Null/missing nodes and a null/missing `pageInfo` are
- * tolerated (treated as "no more items"/"no next page" respectively) rather
- * than throwing, partial per-page errors are preserved as warnings
- * (pagination continues), and iteration is bounded by `maxPages` to guard
- * against a misbehaving or looping API — if the guard trips while the API
- * still reports more pages available, a warning is added so callers know
- * the result set is incomplete.
+ * `extractConnection`. Null/missing nodes, a null/missing `pageInfo`, and an
+ * `extractConnection` that throws because an intermediate/parent field came
+ * back null (e.g. reading `data.organization.members` when `organization`
+ * itself is null on a partial-error response) are all tolerated — pagination
+ * stops gracefully and a sanitized warning is recorded — rather than
+ * throwing. Partial per-page errors are preserved as warnings (pagination
+ * continues), and iteration is bounded by `maxPages` (which must be >= 1) to
+ * guard against a misbehaving or looping API — if the guard trips while the
+ * API still reports more pages available, a warning is added so callers
+ * know the result set is incomplete.
  */
 export async function githubGraphQLPaginated<TNode, TData>(
   query: string,
@@ -142,6 +178,10 @@ export async function githubGraphQLPaginated<TNode, TData>(
   options: GraphQLPaginationOptions = {},
 ): Promise<GraphQLPaginatedResult<TNode>> {
   const { maxPages = 50, variables, ...rest } = options;
+  if (!Number.isInteger(maxPages) || maxPages < 1) {
+    throw new Error(`githubGraphQLPaginated: maxPages must be an integer >= 1 (received ${maxPages}).`);
+  }
+
   const nodes: TNode[] = [];
   const warnings: string[] = [];
   let after: string | null = null;
@@ -155,7 +195,18 @@ export async function githubGraphQLPaginated<TNode, TData>(
 
     if (!result.data) break;
 
-    const connection = extractConnection(result.data);
+    let connection: GraphQLConnection<TNode> | null | undefined;
+    try {
+      connection = extractConnection(result.data);
+    } catch (err) {
+      // A parent/intermediate field (e.g. `organization`) came back null on
+      // a partial-error response, so reading through to the connection
+      // threw. Treat this the same as "no connection" rather than crashing
+      // the whole pagination — but record why, sanitized.
+      const reason = err instanceof Error ? sanitizeMessage(err.message) : "unknown error";
+      warnings.push(`Could not read pagination results from the response (a parent field was likely null): ${reason}`);
+      break;
+    }
     if (!connection) break;
 
     for (const node of connection.nodes ?? []) {

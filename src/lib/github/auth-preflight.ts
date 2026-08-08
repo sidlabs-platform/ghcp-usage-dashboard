@@ -51,13 +51,18 @@ const CAPABILITY_LABELS: Record<PreflightCapability, string> = {
 };
 
 // Classic PAT scope alternatives — any one of these scopes grants the
-// capability. Order does not matter; presence of any is sufficient.
+// capability. Order does not matter; presence of any is sufficient. Every
+// probed capability here targets an *enterprise*-level endpoint
+// (`/enterprises/{slug}/...`), so only enterprise-valid scopes belong in
+// these lists — an org-scoped classic PAT scope like `read:org`/`admin:org`
+// does not grant access to enterprise endpoints and including it here would
+// be a false positive (reporting a capability supported when it isn't).
 const CAPABILITY_ALT_SCOPES: Record<PreflightCapability, readonly string[]> = {
-  copilot_seats: ["manage_billing:copilot", "read:org", "admin:org", "manage_billing:enterprise"],
+  copilot_seats: ["manage_billing:copilot", "read:enterprise", "admin:enterprise", "manage_billing:enterprise"],
   billing_usage: ["manage_billing:enterprise", "read:enterprise", "manage_billing:copilot"],
   aic_consumption: ["manage_billing:enterprise", "read:enterprise", "manage_billing:copilot"],
-  audit_log: ["read:audit_log", "admin:org", "admin:enterprise"],
-  membership: ["read:org", "read:enterprise", "admin:org"],
+  audit_log: ["read:audit_log", "admin:enterprise"],
+  membership: ["read:enterprise", "admin:enterprise"],
   identity: ["read:user", "user"],
 };
 
@@ -130,10 +135,15 @@ function toResult(capability: PreflightCapability, status: CapabilityStatus): Ca
 /**
  * Probe a minimal read endpoint to determine capability support when scope
  * headers are unavailable. Only narrowly-typed GitHubApiError is inspected:
- * 401 (credential invalid) is rethrown to fail fast; 403/404 (no access to
- * this specific capability) is a legitimate "unsupported" signal; any other
- * GitHubApiError status is reported as "unknown" rather than guessed at.
- * Non-GitHubApiError failures (network errors, etc.) are never swallowed.
+ * 401 (credential invalid) is rethrown to fail fast; a rate-limited failure
+ * (`retryable: true` — primary/secondary rate limiting, or a transport-level
+ * failure) is reported as "unknown" rather than misread as a permission
+ * denial; 403/404 that is *not* rate-limit-related is a legitimate
+ * "unsupported" signal; any other GitHubApiError status is reported as
+ * "unknown" rather than guessed at. Non-GitHubApiError failures (a genuine
+ * programmer/caller bug, not a network condition — githubFetchWithMeta
+ * always converts real network failures into a typed GitHubApiError with
+ * the `0` transport sentinel status) are never swallowed.
  */
 async function probeCapability(capability: PreflightCapability, enterpriseSlug: string): Promise<CapabilityStatus> {
   const path = PROBE_ENDPOINTS[capability](enterpriseSlug);
@@ -143,6 +153,7 @@ async function probeCapability(capability: PreflightCapability, enterpriseSlug: 
   } catch (err) {
     if (err instanceof GitHubApiError) {
       if (err.status === 401) throw err;
+      if (err.retryable) return "unknown";
       if (err.status === 403 || err.status === 404) return "unsupported";
       return "unknown";
     }

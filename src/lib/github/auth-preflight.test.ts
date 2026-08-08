@@ -3,10 +3,12 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 vi.mock("./api-base", () => {
   class GitHubApiError extends Error {
     status: number;
-    constructor(status: number, path: string, body: string) {
+    retryable: boolean;
+    constructor(status: number, path: string, body: string, retryable = false) {
       super(`GitHub API error ${status} on ${path}: ${body}`);
       this.name = "GitHubApiError";
       this.status = status;
+      this.retryable = retryable;
     }
   }
   return {
@@ -54,7 +56,7 @@ describe("preflightEnterpriseAuth — classic PAT scopes", () => {
     mockFetchWithMeta.mockResolvedValue({
       data: {},
       status: 200,
-      headers: { "x-oauth-scopes": "read:org, manage_billing:copilot, read:audit_log" },
+      headers: { "x-oauth-scopes": "read:enterprise, manage_billing:copilot, read:audit_log" },
     });
 
     const result = await preflightEnterpriseAuth("acme-corp");
@@ -62,7 +64,7 @@ describe("preflightEnterpriseAuth — classic PAT scopes", () => {
     expect(statusOf(result, "copilot_seats")?.status).toBe("supported");
     expect(statusOf(result, "billing_usage")?.status).toBe("supported"); // via manage_billing:copilot alt
     expect(statusOf(result, "audit_log")?.status).toBe("supported");
-    expect(statusOf(result, "membership")?.status).toBe("supported"); // via read:org
+    expect(statusOf(result, "membership")?.status).toBe("supported"); // via read:enterprise
     expect(result.ok).toBe(true);
   });
 
@@ -95,6 +97,83 @@ describe("preflightEnterpriseAuth — classic PAT scopes", () => {
     expect(auditLog?.required).toBe(false);
     // Required capability (copilot_seats) is still satisfied via manage_billing:copilot.
     expect(result.ok).toBe(true);
+  });
+
+  describe("enterprise-valid scope mapping (no org-only false positives)", () => {
+    it.each([
+      ["manage_billing:copilot"],
+      ["read:enterprise"],
+      ["admin:enterprise"],
+      ["manage_billing:enterprise"],
+    ])("copilot_seats is supported with the enterprise scope %s", async (scope) => {
+      mockFetchWithMeta.mockResolvedValue({
+        data: {},
+        status: 200,
+        headers: { "x-oauth-scopes": scope },
+      });
+      const result = await preflightEnterpriseAuth("acme-corp");
+      expect(statusOf(result, "copilot_seats")?.status).toBe("supported");
+    });
+
+    it.each([
+      ["read:org"],
+      ["admin:org"],
+      ["repo"],
+    ])("copilot_seats is NOT supported by the org-only/unrelated scope %s (false-positive guard)", async (scope) => {
+      mockFetchWithMeta.mockResolvedValue({
+        data: {},
+        status: 200,
+        headers: { "x-oauth-scopes": scope },
+      });
+      const result = await preflightEnterpriseAuth("acme-corp");
+      expect(statusOf(result, "copilot_seats")?.status).toBe("unsupported");
+    });
+
+    it.each([
+      ["read:enterprise"],
+      ["admin:enterprise"],
+    ])("membership is supported with the enterprise scope %s", async (scope) => {
+      mockFetchWithMeta.mockResolvedValue({
+        data: {},
+        status: 200,
+        headers: { "x-oauth-scopes": scope },
+      });
+      const result = await preflightEnterpriseAuth("acme-corp");
+      expect(statusOf(result, "membership")?.status).toBe("supported");
+    });
+
+    it.each([
+      ["read:org"],
+      ["admin:org"],
+    ])("membership is NOT supported by the org-only scope %s (false-positive guard)", async (scope) => {
+      mockFetchWithMeta.mockResolvedValue({
+        data: {},
+        status: 200,
+        headers: { "x-oauth-scopes": scope },
+      });
+      const result = await preflightEnterpriseAuth("acme-corp");
+      expect(statusOf(result, "membership")?.status).toBe("unsupported");
+    });
+
+    it("audit_log is NOT supported by the org-only admin:org scope (false-positive guard)", async () => {
+      mockFetchWithMeta.mockResolvedValue({
+        data: {},
+        status: 200,
+        headers: { "x-oauth-scopes": "admin:org" },
+      });
+      const result = await preflightEnterpriseAuth("acme-corp");
+      expect(statusOf(result, "audit_log")?.status).toBe("unsupported");
+    });
+
+    it("audit_log is supported by the enterprise admin:enterprise scope", async () => {
+      mockFetchWithMeta.mockResolvedValue({
+        data: {},
+        status: 200,
+        headers: { "x-oauth-scopes": "admin:enterprise" },
+      });
+      const result = await preflightEnterpriseAuth("acme-corp");
+      expect(statusOf(result, "audit_log")?.status).toBe("supported");
+    });
   });
 });
 
@@ -166,6 +245,33 @@ describe("preflightEnterpriseAuth — fine-grained/App token probing", () => {
     expect(auditLog?.status).toBe("unknown");
     // Unknown optional capabilities do not fail the overall result.
     expect(result.ok).toBe(true);
+  });
+
+  it("reports unknown (not unsupported) when a probe hits a rate-limited 403, distinguishing it from a real permission denial", async () => {
+    mockFetchWithMeta.mockImplementation(async (path: string) => {
+      if (path === "/rate_limit") return { data: {}, status: 200, headers: {} };
+      // A rate-limited 403 is marked `retryable: true` by the real
+      // githubFetchWithMeta primitive — the preflight must not misread
+      // throttling as "you don't have this capability".
+      throw new GitHubApiError(403, path, "API rate limit exceeded for installation ID 123.", true);
+    });
+
+    const result = await preflightEnterpriseAuth("acme-corp");
+
+    expect(statusOf(result, "copilot_seats")?.status).toBe("unknown");
+    expect(statusOf(result, "billing_usage")?.status).toBe("unknown");
+  });
+
+  it("still reports unsupported for a genuine (non-rate-limited) permission-denied 403", async () => {
+    mockFetchWithMeta.mockImplementation(async (path: string) => {
+      if (path === "/rate_limit") return { data: {}, status: 200, headers: {} };
+      // retryable: false — a real permission denial, not throttling.
+      throw new GitHubApiError(403, path, "Resource not accessible by integration", false);
+    });
+
+    const result = await preflightEnterpriseAuth("acme-corp");
+
+    expect(statusOf(result, "copilot_seats")?.status).toBe("unsupported");
   });
 
   it("rethrows a 401 from an individual capability probe instead of reporting it as unsupported", async () => {
@@ -248,13 +354,34 @@ describe("preflightEnterpriseAuth — fail-fast auth errors", () => {
     await expect(preflightEnterpriseAuth("acme-corp")).rejects.toThrow(GitHubApiError);
   });
 
-  it("does not swallow unexpected non-GitHubApiError failures during probing", async () => {
+  it("does not swallow a genuinely unexpected non-GitHubApiError failure (e.g. a programmer/caller bug)", async () => {
+    // Real network/transport failures are always converted into a typed
+    // GitHubApiError(0, ...) by githubFetchWithMeta (see the test below) —
+    // they never surface as a bare Error. A bare Error thrown here instead
+    // represents a genuine unexpected failure (a bug in calling code, an
+    // unrelated exception, etc.) and must never be misclassified or
+    // swallowed as if it were a capability signal.
     mockFetchWithMeta.mockImplementation(async (path: string) => {
       if (path === "/rate_limit") return { data: {}, status: 200, headers: {} };
-      throw new Error("network is unreachable");
+      throw new Error("unexpected internal error (not a GitHubApiError)");
     });
 
-    await expect(preflightEnterpriseAuth("acme-corp")).rejects.toThrow("network is unreachable");
+    await expect(preflightEnterpriseAuth("acme-corp")).rejects.toThrow("unexpected internal error (not a GitHubApiError)");
+  });
+
+  it("reports unknown (not a thrown error) when a probe hits a transport-level failure represented as a typed GitHubApiError(0)", async () => {
+    mockFetchWithMeta.mockImplementation(async (path: string) => {
+      if (path === "/rate_limit") return { data: {}, status: 200, headers: {} };
+      // githubFetchWithMeta represents an exhausted transport-level failure
+      // (connection refused, DNS failure, etc.) as a typed GitHubApiError
+      // using the `0` sentinel status with `retryable: true` — never as a
+      // bare network Error.
+      throw new GitHubApiError(0, path, "fetch failed: ECONNREFUSED", true);
+    });
+
+    const result = await preflightEnterpriseAuth("acme-corp");
+
+    expect(statusOf(result, "copilot_seats")?.status).toBe("unknown");
   });
 });
 

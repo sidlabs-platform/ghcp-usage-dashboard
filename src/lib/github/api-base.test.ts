@@ -91,11 +91,12 @@ describe("githubFetch", () => {
     expect(result.data).toBe("hello");
   });
 
-  it("returns null on 204", async () => {
+  it("returns null on a real 204 response (ok:true, per the Fetch spec)", async () => {
     const mockFetch = fetch as unknown as ReturnType<typeof vi.fn>;
     mockFetch.mockResolvedValue({
-      ok: false,
+      ok: true,
       status: 204,
+      json: () => Promise.reject(new Error("should not be called for 204")),
       headers: new Map(),
     });
     const result = await githubFetch("/orgs/my-org/info");
@@ -492,6 +493,36 @@ describe("adaptiveRateDelay", () => {
     warnSpy.mockRestore();
     vi.useRealTimers();
   });
+
+  it("caps the 'wait until reset' delay at 120000ms even when reset is nearly an hour away", async () => {
+    vi.useFakeTimers();
+    const { adaptiveRateDelay } = await import("./api-base");
+    const mockFetch = fetch as unknown as ReturnType<typeof vi.fn>;
+    // Reset is ~50 minutes away — uncapped this would stall for ~50 minutes.
+    const farResetAt = Math.floor(Date.now() / 1000) + 50 * 60;
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({}),
+      headers: new Map([["x-ratelimit-remaining", "10"], ["x-ratelimit-reset", String(farResetAt)]]),
+    });
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const fetchP = githubFetch("/orgs/capped/info", 1, "pat");
+    await vi.advanceTimersByTimeAsync(1000);
+    await fetchP;
+
+    let resolved = false;
+    const p = adaptiveRateDelay("pat").then(() => { resolved = true; });
+    // Just under the 120s cap must NOT be enough.
+    await vi.advanceTimersByTimeAsync(119_999);
+    expect(resolved).toBe(false);
+    // The remaining 1ms (reaching exactly the 120000ms cap) must resolve it —
+    // proving the wait was capped, not the full ~50-minute reset window.
+    await vi.advanceTimersByTimeAsync(1);
+    await p;
+    expect(resolved).toBe(true);
+    warnSpy.mockRestore();
+    vi.useRealTimers();
+  });
 });
 
 describe("ensureAuthReady (app mode)", () => {
@@ -615,7 +646,7 @@ describe("githubFetchWithMeta", () => {
       ]),
     });
     const result = await githubFetchWithMeta<{ hello: string }>("/rate_limit");
-    expect(result.data.hello).toBe("world");
+    expect(result.data!.hello).toBe("world");
     expect(result.status).toBe(200);
     expect(result.headers["x-oauth-scopes"]).toBe("read:org, repo");
     expect(result.headers["x-ratelimit-remaining"]).toBe("4999");
@@ -650,9 +681,14 @@ describe("githubFetchWithMeta", () => {
     expect(JSON.parse(init.body)).toEqual({ query: "{ viewer { login } }" });
   });
 
-  it("returns null data and selected headers on 204", async () => {
+  it("returns null data and selected headers on a real 204 response (ok:true, per the Fetch spec)", async () => {
     const mockFetch = fetch as unknown as ReturnType<typeof vi.fn>;
-    mockFetch.mockResolvedValue({ ok: false, status: 204, headers: new Map([["x-ratelimit-remaining", "10"]]) });
+    mockFetch.mockResolvedValue({
+      ok: true,
+      status: 204,
+      json: () => Promise.reject(new Error("should not be called for 204")),
+      headers: new Map([["x-ratelimit-remaining", "10"]]),
+    });
     const result = await githubFetchWithMeta("/orgs/my-org/info");
     expect(result.data).toBeNull();
     expect(result.status).toBe(204);
@@ -678,7 +714,7 @@ describe("githubFetchWithMeta", () => {
       })
       .mockResolvedValueOnce({ ok: true, status: 200, json: () => Promise.resolve({ ok: true }), headers: new Map() });
     const result = await githubFetchWithMeta<{ ok: boolean }>("/orgs/my-org/info");
-    expect(result.data.ok).toBe(true);
+    expect(result.data!.ok).toBe(true);
     expect(mockFetch).toHaveBeenCalledTimes(2);
     warnSpy.mockRestore();
   });
@@ -695,9 +731,58 @@ describe("githubFetchWithMeta", () => {
       })
       .mockResolvedValueOnce({ ok: true, status: 200, json: () => Promise.resolve({ ok: true }), headers: new Map() });
     const result = await githubFetchWithMeta<{ ok: boolean }>("/orgs/my-org/info");
-    expect(result.data.ok).toBe(true);
+    expect(result.data!.ok).toBe(true);
     expect(mockFetch).toHaveBeenCalledTimes(2);
     warnSpy.mockRestore();
+  });
+
+  it("retries a 403 primary rate limit detected from the 'API rate limit exceeded' phrase", async () => {
+    const mockFetch = fetch as unknown as ReturnType<typeof vi.fn>;
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    mockFetch
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 403,
+        headers: new Map(),
+        text: () => Promise.resolve("API rate limit exceeded for 1.2.3.4. (But here's the good news...)"),
+      })
+      .mockResolvedValueOnce({ ok: true, status: 200, json: () => Promise.resolve({ ok: true }), headers: new Map() });
+    const result = await githubFetchWithMeta<{ ok: boolean }>("/orgs/my-org/info");
+    expect(result.data!.ok).toBe(true);
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+    warnSpy.mockRestore();
+  });
+
+  it("marks an exhausted rate-limited 403 as retryable: true on the thrown GitHubApiError", async () => {
+    const mockFetch = fetch as unknown as ReturnType<typeof vi.fn>;
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    mockFetch.mockResolvedValue({
+      ok: false,
+      status: 403,
+      headers: new Map(),
+      text: () => Promise.resolve("API rate limit exceeded for your app."),
+    });
+    try {
+      await githubFetchWithMeta("/orgs/my-org/info", { retries: 2 });
+      throw new Error("expected rejection");
+    } catch (err) {
+      expect(err).toBeInstanceOf(GitHubApiError);
+      expect((err as GitHubApiError).status).toBe(403);
+      expect((err as GitHubApiError).retryable).toBe(true);
+    }
+    warnSpy.mockRestore();
+  });
+
+  it("marks a genuine (non-rate-limited) permission-denied 403 as retryable: false", async () => {
+    const mockFetch = fetch as unknown as ReturnType<typeof vi.fn>;
+    mockFetch.mockResolvedValue({ ok: false, status: 403, headers: new Map(), text: () => Promise.resolve("Resource not accessible by integration") });
+    try {
+      await githubFetchWithMeta("/orgs/my-org/info");
+      throw new Error("expected rejection");
+    } catch (err) {
+      expect(err).toBeInstanceOf(GitHubApiError);
+      expect((err as GitHubApiError).retryable).toBe(false);
+    }
   });
 
   it("honors Retry-After header for 429 backoff timing", async () => {
@@ -710,7 +795,7 @@ describe("githubFetchWithMeta", () => {
     const promise = githubFetchWithMeta<{ ok: boolean }>("/orgs/my-org/info");
     await vi.advanceTimersByTimeAsync(5000);
     const result = await promise;
-    expect(result.data.ok).toBe(true);
+    expect(result.data!.ok).toBe(true);
     expect(mockFetch).toHaveBeenCalledTimes(2);
     warnSpy.mockRestore();
     vi.useRealTimers();
@@ -727,7 +812,7 @@ describe("githubFetchWithMeta", () => {
     const promise = githubFetchWithMeta<{ ok: boolean }>("/orgs/my-org/info");
     await vi.advanceTimersByTimeAsync(4000);
     const result = await promise;
-    expect(result.data.ok).toBe(true);
+    expect(result.data!.ok).toBe(true);
     expect(mockFetch).toHaveBeenCalledTimes(2);
     warnSpy.mockRestore();
     vi.useRealTimers();
@@ -745,7 +830,7 @@ describe("githubFetchWithMeta", () => {
     // Cap is bounded (30s); advancing well past the cap must be enough regardless of jitter.
     await vi.advanceTimersByTimeAsync(31000);
     const result = await promise;
-    expect(result.data.ok).toBe(true);
+    expect(result.data!.ok).toBe(true);
     randSpy.mockRestore();
     warnSpy.mockRestore();
     vi.useRealTimers();
@@ -791,7 +876,7 @@ describe("githubFetchWithMeta", () => {
       .mockRejectedValueOnce(new TypeError("fetch failed"))
       .mockResolvedValueOnce({ ok: true, status: 200, json: () => Promise.resolve({ ok: true }), headers: new Map() });
     const result = await githubFetchWithMeta<{ ok: boolean }>("/orgs/my-org/info", { retries: 2 });
-    expect(result.data.ok).toBe(true);
+    expect(result.data!.ok).toBe(true);
     expect(mockFetch).toHaveBeenCalledTimes(2);
     warnSpy.mockRestore();
   });
@@ -842,36 +927,8 @@ describe("githubFetchWithMeta", () => {
     const mockFetch = fetch as unknown as ReturnType<typeof vi.fn>;
     mockFetch.mockResolvedValue({ ok: true, status: 200, json: () => Promise.resolve({ ok: true }), headers: new Map() });
     const result = await githubFetchWithMeta<{ ok: boolean }>("/orgs/my-org/info", { enterpriseSlug: "ent1" });
-    expect(result.data.ok).toBe(true);
+    expect(result.data!.ok).toBe(true);
     expect(getInstallationTokenForEnterprise).toHaveBeenCalledWith("ent1");
-  });
-
-  it("treats a real ok:true, status:204 response as null data (matching real fetch semantics)", async () => {
-    const mockFetch = fetch as unknown as ReturnType<typeof vi.fn>;
-    mockFetch.mockResolvedValue({
-      ok: true,
-      status: 204,
-      json: () => Promise.reject(new Error("should not be called for 204")),
-      headers: new Map([["x-ratelimit-remaining", "42"]]),
-    });
-    const result = await githubFetchWithMeta("/orgs/my-org/info");
-    expect(result.data).toBeNull();
-    expect(result.status).toBe(204);
-    expect(result.headers["x-ratelimit-remaining"]).toBe("42");
-  });
-});
-
-describe("githubFetch — 204 behavior (regression)", () => {
-  it("returns null on a real ok:true, status:204 response", async () => {
-    const mockFetch = fetch as unknown as ReturnType<typeof vi.fn>;
-    mockFetch.mockResolvedValue({
-      ok: true,
-      status: 204,
-      json: () => Promise.reject(new Error("should not be called for 204")),
-      headers: new Map(),
-    });
-    const result = await githubFetch("/orgs/my-org/info");
-    expect(result).toBeNull();
   });
 });
 
@@ -928,7 +985,7 @@ describe("retry backoff computation (deterministic, via githubFetchWithMeta)", (
     const promise = githubFetchWithMeta<{ ok: boolean }>("/orgs/my-org/info");
     await vi.advanceTimersByTimeAsync(0);
     const result = await promise;
-    expect(result.data.ok).toBe(true);
+    expect(result.data!.ok).toBe(true);
     randSpy.mockRestore();
     warnSpy.mockRestore();
     vi.useRealTimers();
@@ -949,7 +1006,7 @@ describe("retry backoff computation (deterministic, via githubFetchWithMeta)", (
     // Sum of capped delays for attempts 0..5: 1000+2000+4000+8000+16000+30000 = 61000ms.
     await vi.advanceTimersByTimeAsync(61000);
     const result = await promise;
-    expect(result.data.ok).toBe(true);
+    expect(result.data!.ok).toBe(true);
     expect(mockFetch).toHaveBeenCalledTimes(7);
     randSpy.mockRestore();
     warnSpy.mockRestore();
@@ -967,7 +1024,7 @@ describe("retry backoff computation (deterministic, via githubFetchWithMeta)", (
     // Advancing exactly to the 120s cap must be enough — anything short of it must not be.
     await vi.advanceTimersByTimeAsync(120_000);
     const result = await promise;
-    expect(result.data.ok).toBe(true);
+    expect(result.data!.ok).toBe(true);
     warnSpy.mockRestore();
     vi.useRealTimers();
   });

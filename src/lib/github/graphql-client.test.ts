@@ -420,4 +420,135 @@ describe("githubGraphQLPaginated", () => {
     expect(result.warnings).toHaveLength(1);
     expect(mockFetchWithMeta).toHaveBeenCalledTimes(1);
   });
+
+  it("tolerates extractConnection throwing when a parent field is null on a partial response", async () => {
+    mockFetchWithMeta.mockResolvedValueOnce({
+      // `organization` itself is null — a realistic partial-error shape
+      // (e.g. the org was deleted/inaccessible mid-query).
+      data: { data: { organization: null }, errors: [{ message: "Could not resolve to an Organization" }] },
+      status: 200,
+      headers: {},
+    });
+
+    interface NullableOrgData {
+      organization: ConnectionData["organization"] | null;
+    }
+    // A realistic extractor written against the (non-null) GraphQL schema
+    // type — it doesn't defensively guard `organization`, matching how
+    // callers actually write these against generated/expected types.
+    const extractFromPossiblyNullOrg = (data: NullableOrgData) => data.organization!.members;
+
+    const result = await githubGraphQLPaginated<Node, NullableOrgData>(
+      "query { organization { members(first: 1) { nodes { id name } pageInfo { hasNextPage endCursor } } } }",
+      extractFromPossiblyNullOrg,
+    );
+
+    expect(result.nodes).toEqual([]);
+    // Both the top-level GraphQL error and the extraction failure are
+    // preserved as warnings — pagination stops gracefully either way.
+    expect(result.warnings.length).toBeGreaterThanOrEqual(1);
+    expect(mockFetchWithMeta).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects a maxPages of 0", async () => {
+    await expect(
+      githubGraphQLPaginated<Node, ConnectionData>(
+        "query { organization { members(first: 1) { nodes { id name } pageInfo { hasNextPage endCursor } } } }",
+        extractMembers,
+        { maxPages: 0 },
+      ),
+    ).rejects.toThrow(/maxPages must be an integer >= 1/);
+    expect(mockFetchWithMeta).not.toHaveBeenCalled();
+  });
+
+  it("rejects a negative maxPages", async () => {
+    await expect(
+      githubGraphQLPaginated<Node, ConnectionData>(
+        "query { organization { members(first: 1) { nodes { id name } pageInfo { hasNextPage endCursor } } } }",
+        extractMembers,
+        { maxPages: -5 },
+      ),
+    ).rejects.toThrow(/maxPages must be an integer >= 1/);
+  });
+
+  it("rejects a non-integer maxPages", async () => {
+    await expect(
+      githubGraphQLPaginated<Node, ConnectionData>(
+        "query { organization { members(first: 1) { nodes { id name } pageInfo { hasNextPage endCursor } } } }",
+        extractMembers,
+        { maxPages: 1.5 },
+      ),
+    ).rejects.toThrow(/maxPages must be an integer >= 1/);
+  });
+
+  it("accepts a maxPages of exactly 1", async () => {
+    mockFetchWithMeta.mockResolvedValueOnce({
+      data: {
+        data: {
+          organization: {
+            members: {
+              nodes: [{ id: "1", name: "Alice" }],
+              pageInfo: { hasNextPage: true, endCursor: "cursor-1" },
+            },
+          },
+        },
+      },
+      status: 200,
+      headers: {},
+    });
+
+    const result = await githubGraphQLPaginated<Node, ConnectionData>(
+      "query { organization { members(first: 1) { nodes { id name } pageInfo { hasNextPage endCursor } } } }",
+      extractMembers,
+      { maxPages: 1 },
+    );
+
+    expect(result.nodes).toHaveLength(1);
+    expect(mockFetchWithMeta).toHaveBeenCalledTimes(1);
+    expect(result.warnings.some((w) => /truncat/i.test(w))).toBe(true);
+  });
+});
+
+describe("githubGraphQL — query-only enforcement", () => {
+  it("rejects a mutation operation without ever calling the fetch primitive", async () => {
+    await expect(
+      githubGraphQL("mutation { addComment(input: {}) { clientMutationId } }"),
+    ).rejects.toThrow(/only supports read-only queries/i);
+    expect(mockFetchWithMeta).not.toHaveBeenCalled();
+  });
+
+  it("rejects a subscription operation", async () => {
+    await expect(
+      githubGraphQL("subscription { somethingChanged { id } }"),
+    ).rejects.toThrow(/only supports read-only queries/i);
+    expect(mockFetchWithMeta).not.toHaveBeenCalled();
+  });
+
+  it("rejects a mutation even with leading whitespace/newlines", async () => {
+    await expect(
+      githubGraphQL("\n\n  mutation Foo { addComment(input: {}) { clientMutationId } }"),
+    ).rejects.toThrow(/only supports read-only queries/i);
+  });
+
+  it("allows an explicit query operation", async () => {
+    mockFetchWithMeta.mockResolvedValue({ data: { data: { viewer: { login: "octocat" } } }, status: 200, headers: {} });
+    const result = await githubGraphQL<{ viewer: { login: string } }>("query { viewer { login } }");
+    expect(result.data?.viewer.login).toBe("octocat");
+  });
+
+  it("allows shorthand query syntax with no explicit 'query' keyword", async () => {
+    mockFetchWithMeta.mockResolvedValue({ data: { data: { viewer: { login: "octocat" } } }, status: 200, headers: {} });
+    const result = await githubGraphQL<{ viewer: { login: string } }>("{ viewer { login } }");
+    expect(result.data?.viewer.login).toBe("octocat");
+  });
+
+  it("rejects a mutation via githubGraphQLPaginated too", async () => {
+    await expect(
+      githubGraphQLPaginated<Node, ConnectionData>(
+        "mutation { addComment(input: {}) { clientMutationId } }",
+        extractMembers,
+      ),
+    ).rejects.toThrow(/only supports read-only queries/i);
+    expect(mockFetchWithMeta).not.toHaveBeenCalled();
+  });
 });

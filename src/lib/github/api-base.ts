@@ -304,11 +304,16 @@ function updateRateLimit(resp: Response, mode: AuthMode, enterpriseSlug?: string
   }
 }
 
+// Cap the proactive "wait until reset" delay so a single low-quota check
+// can never stall a request for close to an hour — mirrors the cap applied
+// to explicit server-provided retry hints further below (Retry-After/reset).
+const ADAPTIVE_DELAY_CAP_MS = 120_000;
+
 /**
  * Adaptive delay based on remaining rate limit quota for a specific auth context.
  * - > 1000 remaining: no delay
  * - 100–1000 remaining: 200ms delay
- * - < 100 remaining: wait until reset
+ * - < 100 remaining: wait until reset, capped at `ADAPTIVE_DELAY_CAP_MS`
  */
 async function adaptiveRateDelay(mode: AuthMode, enterpriseSlug?: string): Promise<void> {
   if (mode === "none") return; // No rate limits for pre-signed URLs
@@ -318,18 +323,33 @@ async function adaptiveRateDelay(mode: AuthMode, enterpriseSlug?: string): Promi
     await sleep(200);
     return;
   }
-  // Low quota: wait until reset
-  const waitMs = Math.max(0, state.resetAt - Date.now() + 1000);
-  if (waitMs > 0 && waitMs < 3600_000) {
+  // Low quota: wait until reset, but never more than the cap — a stale or
+  // bogus far-future reset timestamp must not stall the request for close
+  // to an hour.
+  const waitMs = Math.min(Math.max(0, state.resetAt - Date.now() + 1000), ADAPTIVE_DELAY_CAP_MS);
+  if (waitMs > 0) {
     const label = enterpriseSlug ? `${enterpriseSlug.replace(/\n|\r/g, "")}:${mode}` : mode;
     console.warn("[Rate Limit] (%s) Only %d requests remaining, waiting %ds until reset", label, state.remaining, Math.round(waitMs / 1000));
     await sleep(waitMs);
   }
 }
 
-/** Typed error carrying the HTTP status code from a failed GitHub API call. */
+/**
+ * Typed error carrying the HTTP status code from a failed GitHub API call.
+ * `retryable` marks failures that were classified as transient/rate-limited
+ * at the time they were thrown (429, 5xx, secondary/primary rate-limited
+ * 403s, or a transport-level failure using the `0` sentinel status) — even
+ * when retries were exhausted or skipped (e.g. a single-attempt probe).
+ * Callers like the auth preflight use this to distinguish "throttled, try
+ * again later" from a genuine permission denial.
+ */
 export class GitHubApiError extends Error {
-  constructor(public readonly status: number, path: string, body: string) {
+  constructor(
+    public readonly status: number,
+    path: string,
+    body: string,
+    public readonly retryable: boolean = false,
+  ) {
     super(`GitHub API error ${status} on ${path}: ${body}`);
     this.name = "GitHubApiError";
   }
@@ -338,7 +358,10 @@ export class GitHubApiError extends Error {
 // ── Selected response header exposure (never Authorization) ──────────
 
 // Explicit allowlist — Authorization must never appear here even if a
-// misbehaving upstream (or test double) echoes it back.
+// misbehaving upstream (or test double) echoes it back. Because we only
+// ever iterate this fixed allowlist (which never contains "authorization")
+// to populate the result, there is no code path that could set it — no
+// defensive `delete` is needed or possible to exercise.
 const SELECTED_RESPONSE_HEADERS = [
   "x-oauth-scopes",
   "x-accepted-oauth-scopes",
@@ -357,8 +380,6 @@ function selectResponseHeaders(resp: Response): Record<string, string> {
     const value = resp.headers.get(key);
     if (value != null) selected[key] = value;
   }
-  // Defensive: guarantee Authorization can never leak through this path.
-  delete (selected as Record<string, string>).authorization;
   return selected;
 }
 
@@ -374,12 +395,15 @@ const SERVER_HINT_CAP_MS = 120_000;
 // valid HTTP status code, so it's unambiguous as a "transport failure" marker.
 const TRANSPORT_FAILURE_STATUS = 0;
 
-function isSecondaryRateLimitBody(bodyText: string): boolean {
+function isRateLimitedResponseBody(bodyText: string): boolean {
   const lower = bodyText.toLowerCase();
   return (
     lower.includes("secondary rate limit") ||
     lower.includes("secondary-rate-limit") ||
-    lower.includes("abuse detection")
+    lower.includes("abuse detection") ||
+    // Primary rate limiting — GitHub returns this exact phrase (historically
+    // as 403, occasionally as 429) when the request quota is exhausted.
+    lower.includes("api rate limit exceeded")
   );
 }
 
@@ -396,18 +420,21 @@ async function safeResponseText(resp: Response): Promise<string> {
 /**
  * Determine whether a failed response should be retried:
  * - 429 and 5xx are always retryable.
- * - 403 is retryable only when it carries secondary/abuse rate-limit signals
- *   (a Retry-After header, or a recognizable phrase in the body). Plain 403s
- *   (missing scope, disabled feature, etc.) still fail fast.
+ * - 403 is retryable only when it carries primary/secondary/abuse rate-limit
+ *   signals (a Retry-After header, or a recognizable phrase in the body).
+ *   Plain 403s (missing scope, disabled feature, etc.) still fail fast.
  * This is the single source of truth for retry classification — every
  * failure branch below routes through it so there's no duplicated (and
- * potentially drifting) logic.
+ * potentially drifting) logic. It also doubles as the "is this failure
+ * rate-limit-related?" signal carried on GitHubApiError.retryable, so
+ * callers (e.g. the auth preflight) can tell throttling apart from a
+ * genuine permission denial even on a single-attempt request.
  */
 function isRetryableFailure(status: number, resp: Response, bodyText: string): boolean {
   if (status === 429 || status >= 500) return true;
   if (status === 403) {
     if (resp.headers.get("retry-after") != null) return true;
-    return isSecondaryRateLimitBody(bodyText);
+    return isRateLimitedResponseBody(bodyText);
   }
   return false;
 }
@@ -471,7 +498,12 @@ export interface GithubFetchMetaOptions {
 }
 
 export interface GithubFetchMetaResult<T> {
-  data: T;
+  /**
+   * The parsed response body, or `null` for a 204 No Content response.
+   * Honestly typed as nullable — see `githubFetch` for the historical
+   * non-null public contract preserved on top of this primitive.
+   */
+  data: T | null;
   status: number;
   /** Selected response headers only — never includes Authorization. */
   headers: Record<string, string>;
@@ -516,8 +548,11 @@ function buildRequestHeaders(
  * Retry exhaustion (for retryable 429/5xx/secondary-403 failures, or
  * repeated transport-level failures such as a refused connection) throws a
  * typed GitHubApiError carrying the last observed status/body — transport
- * failures use a `0` sentinel status — so callers like the auth preflight
- * can classify "unknown" outcomes instead of only ever seeing a generic error.
+ * failures use a `0` sentinel status — with `retryable: true`, so callers
+ * like the auth preflight can classify these as "unknown" outcomes rather
+ * than a genuine permission denial, instead of only ever seeing a generic
+ * error. Non-retryable failures (a real permission-denied 403, a plain
+ * 404, etc.) throw immediately with `retryable: false`.
  */
 export async function githubFetchWithMeta<T>(
   path: string,
@@ -562,13 +597,12 @@ export async function githubFetchWithMeta<T>(
 
     updateRateLimit(resp, ctx.mode, ctx.enterpriseSlug);
 
+    // Per the Fetch spec, a 204 response always has `ok === true` — there is
+    // no real-world case where a 204 arrives with `ok === false`, so only
+    // this branch (nested under `resp.ok`) is ever reachable for it.
     if (resp.ok) {
-      const data = resp.status === 204 ? (null as T) : ((await resp.json()) as T);
+      const data: T | null = resp.status === 204 ? null : ((await resp.json()) as T);
       return { data, status: resp.status, headers: selectResponseHeaders(resp) };
-    }
-
-    if (resp.status === 204) {
-      return { data: null as T, status: 204, headers: selectResponseHeaders(resp) };
     }
 
     const bodyText = await safeResponseText(resp);
@@ -588,23 +622,34 @@ export async function githubFetchWithMeta<T>(
       break;
     }
 
-    throw new GitHubApiError(resp.status, path, bodyText);
+    throw new GitHubApiError(resp.status, path, bodyText, false);
   }
 
   // Exhausted all retry attempts on a retryable failure — preserve the last
   // observed status/body as a typed GitHubApiError instead of a generic
   // Error, so callers (e.g. the auth preflight) can classify the outcome
-  // (e.g. "unknown") rather than only ever seeing an opaque failure.
+  // (e.g. "unknown") rather than only ever seeing an opaque failure. We only
+  // ever reach here via a retryable (or transport) path — a non-retryable
+  // failure always throws immediately above — so `retryable` is always true.
   throw new GitHubApiError(
     lastStatus,
     path,
     lastBody || `Exhausted ${retries} retries with no response body.`,
+    true,
   );
 }
 
+/**
+ * Public, backward-compatible entry point. `githubFetch` has always
+ * resolved to `null` (cast to the caller's expected `T`) for 204 responses;
+ * `githubFetchWithMeta` now honestly types that as `T | null`, so this
+ * explicit cast preserves githubFetch's original runtime behavior and
+ * public type signature without forcing every existing caller to add a
+ * null-check for a case they've never had to handle.
+ */
 export async function githubFetch<T>(path: string, retries = 3, authMode?: AuthMode, enterpriseSlug?: string): Promise<T> {
   const result = await githubFetchWithMeta<T>(path, { retries, authMode, enterpriseSlug });
-  return result.data;
+  return result.data as T;
 }
 
 export async function githubFetchPaginated<T>(path: string, perPage = 100, authMode?: AuthMode, enterpriseSlug?: string): Promise<T[]> {
