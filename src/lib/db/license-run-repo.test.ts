@@ -1,9 +1,58 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from "vitest";
-import Database from "better-sqlite3";
+import { DatabaseSync } from "node:sqlite";
 import path from "path";
 import fs from "fs";
 
-let db: Database.Database;
+/**
+ * Minimal better-sqlite3-compatible facade backed by Node's built-in
+ * `node:sqlite` (`DatabaseSync`). Used here — instead of `better-sqlite3`
+ * directly — because that package's native binding cannot be located/loaded
+ * under this environment's Node version, which otherwise makes every test in
+ * this file skip before any assertion runs. This is a real, in-process
+ * SQLite engine exercising the production repo's real SQL/params/transaction
+ * logic, not a mock of query results: `license-run-repo.ts` is never
+ * modified to accommodate this facade, and this facade only translates the
+ * handful of better-sqlite3 API shapes (`pragma`, `.transaction`, positional
+ * `?` binding) that `node:sqlite` spells slightly differently. Mirrors the
+ * identical facade in `license-history-repo.test.ts` (Task 7).
+ */
+class TestDb {
+  private readonly raw: DatabaseSync;
+  constructor(location: string) {
+    this.raw = new DatabaseSync(location);
+  }
+  pragma(clause: string): void {
+    this.raw.exec(`PRAGMA ${clause};`);
+  }
+  exec(sql: string): void {
+    this.raw.exec(sql);
+  }
+  prepare(sql: string) {
+    const stmt = this.raw.prepare(sql);
+    return {
+      run: (...params: unknown[]) => stmt.run(...(params as never[])),
+      get: (...params: unknown[]) => stmt.get(...(params as never[])),
+      all: (...params: unknown[]) => stmt.all(...(params as never[])),
+    };
+  }
+  transaction<Args extends unknown[]>(fn: (...args: Args) => void): (...args: Args) => void {
+    return (...args: Args) => {
+      this.raw.exec("BEGIN");
+      try {
+        fn(...args);
+        this.raw.exec("COMMIT");
+      } catch (err) {
+        this.raw.exec("ROLLBACK");
+        throw err;
+      }
+    };
+  }
+  close(): void {
+    this.raw.close();
+  }
+}
+
+let db: TestDb;
 
 vi.mock("./database", () => ({
   getDb: () => db,
@@ -19,16 +68,20 @@ import {
   listLicenseChecks,
   updateLicenseSourceState,
   listLicenseSourceState,
+  recordLicenseRunDiagnostics,
+  buildLicenseRunReport,
+  serializeLicenseRunReport,
+  renderLicenseRunReportText,
 } from "./license-run-repo";
 
 const SCHEMA_DIR = path.join(process.cwd(), "src", "lib", "db");
 
-function execSchema(database: Database.Database, file: string): void {
+function execSchema(database: TestDb, file: string): void {
   database.exec(fs.readFileSync(path.join(SCHEMA_DIR, file), "utf-8"));
 }
 
 beforeAll(() => {
-  db = new Database(":memory:");
+  db = new TestDb(":memory:");
   db.pragma("journal_mode = WAL");
   db.pragma("foreign_keys = ON");
   execSchema(db, "schema.sql");
@@ -320,5 +373,305 @@ describe("updateLicenseSourceState / listLicenseSourceState", () => {
 
   it("returns an empty array for missing/empty state", () => {
     expect(listLicenseSourceState("no-such-enterprise")).toEqual([]);
+  });
+});
+
+describe("recordLicenseRunDiagnostics", () => {
+  it("atomically finishes the run, replaces its checks, and upserts source states in one transaction", () => {
+    const runId = startLicenseRun({ enterpriseSlug: "ent1", requestedPeriods: ["2026-01"] });
+
+    recordLicenseRunDiagnostics({
+      runId,
+      finish: { status: "warning", sourceStats: { auditEvents: 3 }, warnings: ["partial_sync"] },
+      checks: [
+        { checkName: "seat_count", billingPeriod: "2026-01", orgLogin: "org1", status: "pass", message: "ok" },
+        { checkName: "real_login_coverage", billingPeriod: "2026-01", orgLogin: "org1", status: "warning", message: "1 unresolved" },
+      ],
+      sourceStates: [
+        { enterpriseSlug: "ent1", source: "audit_log", billingPeriod: "2026-01", status: "ok", lastSyncedAt: "2026-02-01T00:00:00Z" },
+      ],
+    });
+
+    const run = getLicenseRun(runId);
+    expect(run?.status).toBe("warning");
+    expect(run?.sourceStats).toEqual({ auditEvents: 3 });
+    expect(run?.warnings).toEqual(["partial_sync"]);
+
+    const checks = listLicenseChecks(runId);
+    expect(checks).toHaveLength(2);
+
+    const states = listLicenseSourceState("ent1");
+    expect(states).toHaveLength(1);
+    expect(states[0]).toMatchObject({ source: "audit_log", status: "ok", lastSyncedAt: "2026-02-01T00:00:00Z" });
+  });
+
+  it("replaces (does not append to) a run's prior checks", () => {
+    const runId = startLicenseRun({ enterpriseSlug: "ent1", requestedPeriods: ["2026-01"] });
+    replaceLicenseChecks(runId, [{ checkName: "seat_count", billingPeriod: "2026-01", orgLogin: "org1", status: "fail", message: "stale" }]);
+
+    recordLicenseRunDiagnostics({
+      runId,
+      finish: { status: "success" },
+      checks: [{ checkName: "seat_count", billingPeriod: "2026-01", orgLogin: "org1", status: "pass", message: "fresh" }],
+    });
+
+    const checks = listLicenseChecks(runId);
+    expect(checks).toHaveLength(1);
+    expect(checks[0].message).toBe("fresh");
+  });
+
+  it("performs a true partial upsert of source state, same as updateLicenseSourceState", () => {
+    const runId = startLicenseRun({ enterpriseSlug: "ent1", requestedPeriods: ["2026-01"] });
+    updateLicenseSourceState({
+      enterpriseSlug: "ent1",
+      source: "audit_log",
+      billingPeriod: "2026-01",
+      status: "syncing",
+      coverageStart: "2025-01-01",
+      coverageEnd: "2026-01-31",
+    });
+
+    recordLicenseRunDiagnostics({
+      runId,
+      finish: { status: "success" },
+      checks: [],
+      sourceStates: [{ enterpriseSlug: "ent1", source: "audit_log", billingPeriod: "2026-01", status: "ok" }],
+    });
+
+    const state = listLicenseSourceState("ent1").find((s) => s.billingPeriod === "2026-01");
+    expect(state?.status).toBe("ok");
+    expect(state?.coverageStart).toBe("2025-01-01");
+    expect(state?.coverageEnd).toBe("2026-01-31");
+  });
+
+  it("rolls back the entire write (run finish + checks + source state) when finishing an unknown run id", () => {
+    updateLicenseSourceState({ enterpriseSlug: "ent1", source: "audit_log", billingPeriod: "2026-01", status: "pending" });
+
+    expect(() =>
+      recordLicenseRunDiagnostics({
+        runId: "does-not-exist",
+        finish: { status: "success" },
+        checks: [{ checkName: "seat_count", billingPeriod: "2026-01", orgLogin: "org1", status: "pass", message: "ok" }],
+        sourceStates: [{ enterpriseSlug: "ent1", source: "audit_log", billingPeriod: "2026-01", status: "ok" }],
+      })
+    ).toThrow();
+
+    // Nothing must have been written: no checks for the non-existent run, and
+    // the pre-existing source state must be untouched (still "pending").
+    expect(listLicenseChecks("does-not-exist")).toEqual([]);
+    const state = listLicenseSourceState("ent1").find((s) => s.billingPeriod === "2026-01");
+    expect(state?.status).toBe("pending");
+  });
+
+  it("rolls back the entire write on a duplicate (checkName, billingPeriod, orgLogin) triple in the same batch", () => {
+    const runId = startLicenseRun({ enterpriseSlug: "ent1", requestedPeriods: ["2026-01"] });
+    // Seed a pre-existing check so we can prove it survives the rollback untouched.
+    replaceLicenseChecks(runId, [{ checkName: "seat_count", billingPeriod: "2026-01", orgLogin: "org1", status: "pass", message: "pre-existing" }]);
+
+    expect(() =>
+      recordLicenseRunDiagnostics({
+        runId,
+        finish: { status: "success" },
+        checks: [
+          { checkName: "real_login_coverage", billingPeriod: "2026-01", orgLogin: "org1", status: "pass", message: "first" },
+          { checkName: "real_login_coverage", billingPeriod: "2026-01", orgLogin: "org1", status: "fail", message: "duplicate" },
+        ],
+      })
+    ).toThrow();
+
+    // The run must still be "running" (finish never committed) and the
+    // pre-existing check must be untouched — not deleted, not replaced.
+    const run = getLicenseRun(runId);
+    expect(run?.status).toBe("running");
+    const checks = listLicenseChecks(runId);
+    expect(checks).toHaveLength(1);
+    expect(checks[0].message).toBe("pre-existing");
+  });
+
+  it("does not touch other runs' checks or source state", () => {
+    const runA = startLicenseRun({ enterpriseSlug: "ent1", requestedPeriods: ["2026-01"] });
+    const runB = startLicenseRun({ enterpriseSlug: "ent1", requestedPeriods: ["2026-01"] });
+    replaceLicenseChecks(runA, [{ checkName: "seat_count", status: "pass", message: "run A" }]);
+
+    recordLicenseRunDiagnostics({
+      runId: runB,
+      finish: { status: "success" },
+      checks: [{ checkName: "seat_count", status: "warning", message: "run B" }],
+    });
+
+    expect(listLicenseChecks(runA)).toHaveLength(1);
+    expect(listLicenseChecks(runA)[0].message).toBe("run A");
+    expect(listLicenseChecks(runB)).toHaveLength(1);
+    expect(listLicenseChecks(runB)[0].message).toBe("run B");
+  });
+});
+
+describe("buildLicenseRunReport / serializeLicenseRunReport / renderLicenseRunReportText", () => {
+  it("builds a deterministic report object with sorted requested periods, sources, and checks", () => {
+    const runId = startLicenseRun({
+      enterpriseSlug: "ent1",
+      requestedPeriods: ["2026-02", "2026-01"],
+      startedAt: "2026-02-01T00:00:00.000Z",
+    });
+    recordLicenseRunDiagnostics({
+      runId,
+      finish: {
+        status: "warning",
+        completedAt: "2026-02-01T00:00:05.000Z",
+        sourceStats: { seatSnapshots: 10, apiRequests: 42 },
+        unresolvedIdentities: [
+          { holderKey: "zeta-holder", reason: "no_login" },
+          { holderKey: "alpha-holder", reason: "no_login", externalIdentity: "should-be-dropped@example.com" },
+        ],
+        warnings: ["zeta_warning", "alpha_warning"],
+      },
+      checks: [
+        { checkName: "real_login_coverage", billingPeriod: "2026-01", orgLogin: "org1", status: "warning", message: "partial" },
+        { checkName: "seat_count", billingPeriod: "2026-01", orgLogin: "org1", status: "pass", message: "ok" },
+      ],
+      sourceStates: [
+        { enterpriseSlug: "ent1", source: "seat_snapshot", billingPeriod: "2026-01", status: "ok" },
+        { enterpriseSlug: "ent1", source: "audit_log", billingPeriod: "2026-01", status: "ok" },
+      ],
+    });
+
+    const run = getLicenseRun(runId)!;
+    const checks = listLicenseChecks(runId);
+    const sourceStates = listLicenseSourceState("ent1");
+    const report = buildLicenseRunReport(run, checks, sourceStates);
+
+    expect(report.id).toBe(runId);
+    expect(report.status).toBe("warning");
+    expect(report.requestedPeriods).toEqual(["2026-01", "2026-02"]);
+    expect(report.elapsedMs).toBe(5000);
+    expect(report.sources.map((s) => s.source)).toEqual(["audit_log", "seat_snapshot"]);
+    expect(report.checks.map((c) => c.name)).toEqual(["real_login_coverage", "seat_count"]);
+    expect(report.checkCounts).toEqual({ pass: 1, warning: 1, fail: 0 });
+    expect(report.warnings).toEqual(["alpha_warning", "zeta_warning"]);
+  });
+
+  it("sanitizes unresolved identities to only safe identifiers (holderKey/githubUserId/reason), dropping anything else", () => {
+    const runId = startLicenseRun({ enterpriseSlug: "ent1", requestedPeriods: ["2026-01"] });
+    recordLicenseRunDiagnostics({
+      runId,
+      finish: {
+        status: "warning",
+        unresolvedIdentities: [
+          {
+            holderKey: "holder1",
+            githubUserId: 42,
+            reason: "no_login",
+            externalIdentity: "leaked@example.com",
+            samlNameId: "leaked-saml",
+            token: "leaked-token",
+          },
+        ],
+      },
+      checks: [],
+    });
+
+    const run = getLicenseRun(runId)!;
+    const report = buildLicenseRunReport(run, [], []);
+
+    expect(report.unresolvedIdentities).toEqual([{ holderKey: "holder1", githubUserId: 42, reason: "no_login" }]);
+    const serialized = serializeLicenseRunReport(report);
+    expect(serialized).not.toMatch(/leaked/);
+    const rendered = renderLicenseRunReportText(report);
+    expect(rendered).not.toMatch(/leaked/);
+  });
+
+  it("sorts unresolved identities deterministically by holderKey", () => {
+    const runId = startLicenseRun({ enterpriseSlug: "ent1", requestedPeriods: ["2026-01"] });
+    recordLicenseRunDiagnostics({
+      runId,
+      finish: {
+        status: "warning",
+        unresolvedIdentities: [
+          { holderKey: "zeta", reason: "no_login" },
+          { holderKey: "alpha", reason: "no_login" },
+        ],
+      },
+      checks: [],
+    });
+    const run = getLicenseRun(runId)!;
+    const report = buildLicenseRunReport(run, [], []);
+    expect(report.unresolvedIdentities.map((u) => (u as { holderKey: string }).holderKey)).toEqual(["alpha", "zeta"]);
+  });
+
+  it("produces identical serialized JSON regardless of input key/array order for equivalent data", () => {
+    const runA = startLicenseRun({ enterpriseSlug: "ent1", requestedPeriods: ["2026-01", "2026-02"] });
+    recordLicenseRunDiagnostics({
+      runId: runA,
+      finish: { status: "success", sourceStats: { b: 1, a: 2 } },
+      checks: [
+        { checkName: "seat_count", billingPeriod: "2026-01", orgLogin: "org1", status: "pass", message: "ok" },
+        { checkName: "real_login_coverage", billingPeriod: "2026-01", orgLogin: "org1", status: "pass", message: "ok" },
+      ],
+    });
+    const runB = startLicenseRun({ enterpriseSlug: "ent1", requestedPeriods: ["2026-02", "2026-01"] });
+    recordLicenseRunDiagnostics({
+      runId: runB,
+      finish: { status: "success", sourceStats: { a: 2, b: 1 } },
+      checks: [
+        { checkName: "real_login_coverage", billingPeriod: "2026-01", orgLogin: "org1", status: "pass", message: "ok" },
+        { checkName: "seat_count", billingPeriod: "2026-01", orgLogin: "org1", status: "pass", message: "ok" },
+      ],
+    });
+
+    const reportA = buildLicenseRunReport(getLicenseRun(runA)!, listLicenseChecks(runA), []);
+    const reportB = buildLicenseRunReport(getLicenseRun(runB)!, listLicenseChecks(runB), []);
+    // Normalize the only intentionally-distinct field (id) before comparing.
+    const serializedA = serializeLicenseRunReport({ ...reportA, id: "same", startedAt: "t", completedAt: "t", elapsedMs: 0 });
+    const serializedB = serializeLicenseRunReport({ ...reportB, id: "same", startedAt: "t", completedAt: "t", elapsedMs: 0 });
+    expect(serializedA).toBe(serializedB);
+  });
+
+  it("renders null elapsed and '(in progress)' completed for a still-running run", () => {
+    const runId = startLicenseRun({ enterpriseSlug: "ent1", requestedPeriods: ["2026-01"] });
+    const run = getLicenseRun(runId)!;
+    const report = buildLicenseRunReport(run, [], []);
+    expect(report.elapsedMs).toBeNull();
+    expect(report.completedAt).toBeNull();
+    const rendered = renderLicenseRunReportText(report);
+    expect(rendered).toMatch(/in progress/i);
+  });
+
+  it("renders a concise human-readable report containing all required sections", () => {
+    const runId = startLicenseRun({ enterpriseSlug: "ent1", requestedPeriods: ["2026-01"] });
+    recordLicenseRunDiagnostics({
+      runId,
+      finish: { status: "warning", sourceStats: { apiRequests: 7 }, warnings: ["org_billing_endpoint_unavailable"] },
+      checks: [{ checkName: "seat_count", billingPeriod: "2026-01", orgLogin: "org1", status: "warning", message: "small variance" }],
+      sourceStates: [{ enterpriseSlug: "ent1", source: "audit_log", billingPeriod: "2026-01", status: "ok" }],
+    });
+    const run = getLicenseRun(runId)!;
+    const checks = listLicenseChecks(runId);
+    const sourceStates = listLicenseSourceState("ent1");
+    const report = buildLicenseRunReport(run, checks, sourceStates);
+    const rendered = renderLicenseRunReportText(report);
+
+    expect(rendered).toContain(runId);
+    expect(rendered).toContain("WARNING");
+    expect(rendered).toContain("2026-01");
+    expect(rendered).toContain("audit_log");
+    expect(rendered).toContain("seat_count");
+    expect(rendered).toContain("small variance");
+    expect(rendered).toContain("org_billing_endpoint_unavailable");
+    expect(rendered).toContain("apiRequests");
+    expect(rendered).toContain("7");
+  });
+
+  it("handles empty checks/sources/warnings/unresolved-identities gracefully", () => {
+    const runId = startLicenseRun({ enterpriseSlug: "ent1", requestedPeriods: [] });
+    const run = getLicenseRun(runId)!;
+    const report = buildLicenseRunReport(run, [], []);
+    expect(report.checks).toEqual([]);
+    expect(report.sources).toEqual([]);
+    expect(report.warnings).toEqual([]);
+    expect(report.unresolvedIdentities).toEqual([]);
+    expect(report.checkCounts).toEqual({ pass: 0, warning: 0, fail: 0 });
+    const rendered = renderLicenseRunReportText(report);
+    expect(typeof rendered).toBe("string");
+    expect(rendered.length).toBeGreaterThan(0);
   });
 });
