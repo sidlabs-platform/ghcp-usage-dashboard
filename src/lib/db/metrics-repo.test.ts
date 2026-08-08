@@ -1550,3 +1550,104 @@ describe("Copilot App usage metrics", () => {
     expect(unsetResult[0].totals_by_copilot_app).toBeUndefined();
   });
 });
+
+describe("getAllOrgMetrics / getFilteredOrgMetrics sum daily_active_copilot_app_users across orgs", () => {
+  it("getAllOrgMetrics sums daily_active_copilot_app_users across multiple org rows for the same day", () => {
+    upsertOrgDayMetrics("ent1", "app-org1", {
+      day: "2026-08-08", enterprise_id: "e1",
+      daily_active_users: 1, weekly_active_users: 1, monthly_active_users: 1,
+      monthly_active_agent_users: 0, monthly_active_chat_users: 0,
+      code_generation_activity_count: 0, code_acceptance_activity_count: 0,
+      user_initiated_interaction_count: 0, loc_suggested_to_add_sum: 0,
+      loc_suggested_to_delete_sum: 0, loc_added_sum: 0, loc_deleted_sum: 0,
+      totals_by_ide: [], totals_by_feature: [], totals_by_language_feature: [],
+      totals_by_model_feature: [], totals_by_language_model: [],
+      daily_active_copilot_app_users: 3,
+    } as any);
+    upsertOrgDayMetrics("ent1", "app-org2", {
+      day: "2026-08-08", enterprise_id: "e1",
+      daily_active_users: 1, weekly_active_users: 1, monthly_active_users: 1,
+      monthly_active_agent_users: 0, monthly_active_chat_users: 0,
+      code_generation_activity_count: 0, code_acceptance_activity_count: 0,
+      user_initiated_interaction_count: 0, loc_suggested_to_add_sum: 0,
+      loc_suggested_to_delete_sum: 0, loc_added_sum: 0, loc_deleted_sum: 0,
+      totals_by_ide: [], totals_by_feature: [], totals_by_language_feature: [],
+      totals_by_model_feature: [], totals_by_language_model: [],
+      daily_active_copilot_app_users: 5,
+    } as any);
+
+    const results = getAllOrgMetrics("2026-08-08", "2026-08-08");
+    expect(results).toHaveLength(1);
+    expect(results[0].daily_active_copilot_app_users).toBe(8);
+  });
+
+  it("getFilteredOrgMetrics sums daily_active_copilot_app_users across multiple filtered org rows for the same day", () => {
+    upsertOrgDayMetrics("ent1", "filt-app-org1", {
+      day: "2026-08-09", enterprise_id: "e1",
+      daily_active_users: 1, weekly_active_users: 1, monthly_active_users: 1,
+      monthly_active_agent_users: 0, monthly_active_chat_users: 0,
+      code_generation_activity_count: 0, code_acceptance_activity_count: 0,
+      user_initiated_interaction_count: 0, loc_suggested_to_add_sum: 0,
+      loc_suggested_to_delete_sum: 0, loc_added_sum: 0, loc_deleted_sum: 0,
+      totals_by_ide: [], totals_by_feature: [], totals_by_language_feature: [],
+      totals_by_model_feature: [], totals_by_language_model: [],
+      daily_active_copilot_app_users: 2,
+    } as any);
+    upsertOrgDayMetrics("ent1", "filt-app-org2", {
+      day: "2026-08-09", enterprise_id: "e1",
+      daily_active_users: 1, weekly_active_users: 1, monthly_active_users: 1,
+      monthly_active_agent_users: 0, monthly_active_chat_users: 0,
+      code_generation_activity_count: 0, code_acceptance_activity_count: 0,
+      user_initiated_interaction_count: 0, loc_suggested_to_add_sum: 0,
+      loc_suggested_to_delete_sum: 0, loc_added_sum: 0, loc_deleted_sum: 0,
+      totals_by_ide: [], totals_by_feature: [], totals_by_language_feature: [],
+      totals_by_model_feature: [], totals_by_language_model: [],
+      daily_active_copilot_app_users: 7,
+    } as any);
+    // An unrelated org on the same day must not be included once filtered.
+    upsertOrgDayMetrics("ent1", "filt-app-org3-excluded", {
+      day: "2026-08-09", enterprise_id: "e1",
+      daily_active_users: 1, weekly_active_users: 1, monthly_active_users: 1,
+      monthly_active_agent_users: 0, monthly_active_chat_users: 0,
+      code_generation_activity_count: 0, code_acceptance_activity_count: 0,
+      user_initiated_interaction_count: 0, loc_suggested_to_add_sum: 0,
+      loc_suggested_to_delete_sum: 0, loc_added_sum: 0, loc_deleted_sum: 0,
+      totals_by_ide: [], totals_by_feature: [], totals_by_language_feature: [],
+      totals_by_model_feature: [], totals_by_language_model: [],
+      daily_active_copilot_app_users: 100,
+    } as any);
+
+    const results = getFilteredOrgMetrics(["filt-app-org1", "filt-app-org2"], "2026-08-09", "2026-08-09");
+    expect(results).toHaveLength(1);
+    expect(results[0].daily_active_copilot_app_users).toBe(9);
+  });
+
+  it("getAllOrgMetrics treats a NULL daily_active_copilot_app_users on one org row as 0 when summing", () => {
+    upsertOrgDayMetrics("ent1", "app-org-null1", {
+      day: "2026-08-10", enterprise_id: "e1",
+      daily_active_users: 1, weekly_active_users: 1, monthly_active_users: 1,
+      monthly_active_agent_users: 0, monthly_active_chat_users: 0,
+      code_generation_activity_count: 0, code_acceptance_activity_count: 0,
+      user_initiated_interaction_count: 0, loc_suggested_to_add_sum: 0,
+      loc_suggested_to_delete_sum: 0, loc_added_sum: 0, loc_deleted_sum: 0,
+      totals_by_ide: [], totals_by_feature: [], totals_by_language_feature: [],
+      totals_by_model_feature: [], totals_by_language_model: [],
+      // daily_active_copilot_app_users omitted -> stored as NULL
+    } as any);
+    upsertOrgDayMetrics("ent1", "app-org-null2", {
+      day: "2026-08-10", enterprise_id: "e1",
+      daily_active_users: 1, weekly_active_users: 1, monthly_active_users: 1,
+      monthly_active_agent_users: 0, monthly_active_chat_users: 0,
+      code_generation_activity_count: 0, code_acceptance_activity_count: 0,
+      user_initiated_interaction_count: 0, loc_suggested_to_add_sum: 0,
+      loc_suggested_to_delete_sum: 0, loc_added_sum: 0, loc_deleted_sum: 0,
+      totals_by_ide: [], totals_by_feature: [], totals_by_language_feature: [],
+      totals_by_model_feature: [], totals_by_language_model: [],
+      daily_active_copilot_app_users: 6,
+    } as any);
+
+    const results = getAllOrgMetrics("2026-08-10", "2026-08-10");
+    expect(results).toHaveLength(1);
+    expect(results[0].daily_active_copilot_app_users).toBe(6);
+  });
+});

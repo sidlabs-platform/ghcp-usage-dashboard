@@ -15,43 +15,57 @@ type TargetTable = (typeof TARGET_TABLES)[number];
 interface ColumnMigration {
   readonly table: TargetTable;
   readonly column: string;
-  readonly addColumnSql: string;
+  /** Column type + default, e.g. "INTEGER DEFAULT NULL". Never includes the
+   *  table or column name — those are derived from `table`/`column` above so
+   *  each identifier is declared exactly once. */
+  readonly columnDef: string;
 }
 
-// Fixed allowlist of columns to add. Every table/column/DDL fragment here is a
-// hard-coded literal — no part of this list is ever built from user input.
+// Fixed allowlist of columns to add. Every table/column/type fragment here is
+// a hard-coded literal — no part of this list is ever built from user input.
+// The ALTER TABLE statement itself is derived from `table` + `column` +
+// `columnDef` (see addColumnSqlFor below) rather than duplicated per entry.
 const COLUMN_MIGRATIONS: readonly ColumnMigration[] = [
   {
     table: "enterprise_daily_metrics",
     column: "daily_active_copilot_app_users",
-    addColumnSql: "ALTER TABLE enterprise_daily_metrics ADD COLUMN daily_active_copilot_app_users INTEGER DEFAULT NULL",
+    columnDef: "INTEGER DEFAULT NULL",
   },
   {
     table: "enterprise_daily_metrics",
     column: "totals_by_copilot_app",
-    addColumnSql: "ALTER TABLE enterprise_daily_metrics ADD COLUMN totals_by_copilot_app TEXT DEFAULT NULL",
+    columnDef: "TEXT DEFAULT NULL",
   },
   {
     table: "org_daily_metrics",
     column: "daily_active_copilot_app_users",
-    addColumnSql: "ALTER TABLE org_daily_metrics ADD COLUMN daily_active_copilot_app_users INTEGER DEFAULT NULL",
+    columnDef: "INTEGER DEFAULT NULL",
   },
   {
     table: "org_daily_metrics",
     column: "totals_by_copilot_app",
-    addColumnSql: "ALTER TABLE org_daily_metrics ADD COLUMN totals_by_copilot_app TEXT DEFAULT NULL",
+    columnDef: "TEXT DEFAULT NULL",
   },
   {
     table: "user_daily_metrics",
     column: "used_copilot_app",
-    addColumnSql: "ALTER TABLE user_daily_metrics ADD COLUMN used_copilot_app INTEGER DEFAULT NULL",
+    columnDef: "INTEGER DEFAULT NULL",
   },
   {
     table: "user_daily_metrics",
     column: "totals_by_copilot_app",
-    addColumnSql: "ALTER TABLE user_daily_metrics ADD COLUMN totals_by_copilot_app TEXT DEFAULT NULL",
+    columnDef: "TEXT DEFAULT NULL",
   },
 ];
+
+/**
+ * Build the `ALTER TABLE ... ADD COLUMN ...` DDL for a migration entry.
+ * `table` and `column` are always fixed literals from the allowlist above
+ * (never user input), so string interpolation here is safe.
+ */
+function addColumnSqlFor(migration: ColumnMigration): string {
+  return `ALTER TABLE ${migration.table} ADD COLUMN ${migration.column} ${migration.columnDef}`;
+}
 
 type BackfillValueKind = "integer" | "raw";
 
@@ -134,7 +148,7 @@ export function migrateCopilotAppMetrics(db: Database.Database): void {
   for (const migration of COLUMN_MIGRATIONS) {
     if (!existingTables.get(migration.table)) continue;
     if (columnExists(db, migration.table, migration.column)) continue;
-    db.exec(migration.addColumnSql);
+    db.exec(addColumnSqlFor(migration));
   }
 
   for (const backfill of BACKFILL_MIGRATIONS) {

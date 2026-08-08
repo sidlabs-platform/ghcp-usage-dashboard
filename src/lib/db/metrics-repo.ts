@@ -371,6 +371,8 @@ export function getAllOrgMetrics(startDay: string, endDay: string, enterpriseSlu
     existing.monthly_active_agent_users += record.monthly_active_agent_users ?? 0;
     existing.monthly_active_chat_users += record.monthly_active_chat_users ?? 0;
     existing.daily_active_cli_users = (existing.daily_active_cli_users ?? 0) + (record.daily_active_cli_users ?? 0);
+    existing.daily_active_copilot_app_users =
+      (existing.daily_active_copilot_app_users ?? 0) + (record.daily_active_copilot_app_users ?? 0);
     existing.code_generation_activity_count += record.code_generation_activity_count ?? 0;
     existing.code_acceptance_activity_count += record.code_acceptance_activity_count ?? 0;
     existing.user_initiated_interaction_count += record.user_initiated_interaction_count ?? 0;
@@ -449,6 +451,8 @@ export function getFilteredOrgMetrics(orgSlugs: string[], startDay: string, endD
     existing.monthly_active_agent_users += record.monthly_active_agent_users ?? 0;
     existing.monthly_active_chat_users += record.monthly_active_chat_users ?? 0;
     existing.daily_active_cli_users = (existing.daily_active_cli_users ?? 0) + (record.daily_active_cli_users ?? 0);
+    existing.daily_active_copilot_app_users =
+      (existing.daily_active_copilot_app_users ?? 0) + (record.daily_active_copilot_app_users ?? 0);
     existing.code_generation_activity_count += record.code_generation_activity_count ?? 0;
     existing.code_acceptance_activity_count += record.code_acceptance_activity_count ?? 0;
     existing.user_initiated_interaction_count += record.user_initiated_interaction_count ?? 0;

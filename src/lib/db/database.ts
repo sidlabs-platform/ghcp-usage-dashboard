@@ -92,7 +92,23 @@ export function getDb(): Database.Database {
   // backfills from raw_json on already-synced tables). Kept separate from the
   // broad try/catch migrations list above since it has its own internal
   // idempotency and column-existence checks.
-  migrateCopilotAppMetrics(_db);
+  //
+  // If this throws, `_db` must NOT be left cached: a later getDb() call would
+  // otherwise hand back a handle whose schema migration never completed. Close
+  // the handle, reset the module-level cache, and rethrow the original error
+  // so callers see the real failure instead of silently continuing with a
+  // partially-migrated database.
+  try {
+    migrateCopilotAppMetrics(_db);
+  } catch (err) {
+    try {
+      _db.close();
+    } catch {
+      /* best-effort close; the original migration error is what matters */
+    }
+    _db = null;
+    throw err;
+  }
 
   const userMetricColumns = _db.prepare("PRAGMA table_info(user_daily_metrics)").all() as { name: string }[];
   const hasAiCreditsColumn = userMetricColumns.some((col) => col.name === "ai_credits_used");
