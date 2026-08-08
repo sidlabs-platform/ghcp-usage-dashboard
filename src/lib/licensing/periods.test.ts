@@ -62,6 +62,22 @@ describe("parseReportMonths", () => {
     ]);
   });
 
+  it("defaults to the current month when input is null (unconfigured, consistent with other optional fields)", () => {
+    expect(parseReportMonths(null, new Date("2026-08-07T00:00:00Z"))).toEqual([
+      "2026-08",
+    ]);
+  });
+
+  it("rejects a non-string, non-array, non-nullish input (e.g. a number or plain object) with a descriptive error", () => {
+    expect(() => parseReportMonths(42)).toThrow(/expected a string/);
+    expect(() => parseReportMonths({ not: "valid" })).toThrow(/expected a string/);
+  });
+
+  it("rejects a non-string entry within a reportMonths array (e.g. a numeric token) before attempting to trim it", () => {
+    expect(() => parseReportMonths(["2026-01", 2026 as unknown as string])).toThrow(/expected a string/);
+    expect(() => parseReportMonths([null as unknown as string, "2026-01"])).toThrow(/expected a string/);
+  });
+
   it("throws on malformed month syntax", () => {
     expect(() => parseReportMonths("2026-1")).toThrow();
     expect(() => parseReportMonths("not-a-month")).toThrow();

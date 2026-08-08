@@ -45,9 +45,10 @@ export interface LicensingHistoryConfig {
   /**
    * Report months to reconcile. A single "YYYY-MM", an inclusive range
    * "YYYY-MM..YYYY-MM", "last_N_months", or an array mixing any of these.
-   * Default: the current month.
+   * `null` is treated the same as an absent value (unconfigured), consistent
+   * with the other optional fields in this config. Default: the current month.
    */
-  reportMonths?: string | string[];
+  reportMonths?: string | string[] | null;
   /** How many days of seat assignment/revocation audit events to retain. Default: 400. */
   auditRetentionDays?: number;
   /** Emit a point-in-time snapshot file after each sync. Default: false. */
@@ -522,23 +523,37 @@ function validateCreditsMap(
  * data for any *other* plan the same entry also covers. Returns entries
  * sorted by start date; the return value is only meaningful when `errors`
  * remains empty (the caller throws before using it otherwise).
+ *
+ * `raw` is typed `unknown` (rather than `DatedAllowance[] | undefined`)
+ * because it is ultimately sourced from an unchecked `JSON.parse` of
+ * `dashboard-config.json` — a config file can set `datedAllowances` to any
+ * JSON value (e.g. a plain object or a string), and this is the runtime
+ * boundary that must reject those with a clear `LicensingConfigError`
+ * detail rather than let a raw `TypeError` (e.g. `raw.forEach is not a
+ * function`) leak out of `getLicensingConfig`.
  */
-function validateDatedAllowances(raw: DatedAllowance[] | undefined, errors: string[]): DatedAllowance[] {
-  if (!raw || raw.length === 0) return [];
+function validateDatedAllowances(raw: unknown, errors: string[]): DatedAllowance[] {
+  if (raw === undefined || raw === null) return [];
+  if (!Array.isArray(raw)) {
+    errors.push(`licensing.datedAllowances must be an array (got ${typeof raw}: ${JSON.stringify(raw)})`);
+    return [];
+  }
+  if (raw.length === 0) return [];
 
   const parsed: DatedAllowance[] = [];
-  raw.forEach((entry, index) => {
+  raw.forEach((entry: unknown, index) => {
     const contextLabel = `datedAllowances[${index}]`;
-    if (!entry || typeof entry.start !== "string" || !isValidDateString(entry.start)) {
+    if (!entry || typeof entry !== "object" || typeof (entry as DatedAllowance).start !== "string" || !isValidDateString((entry as DatedAllowance).start)) {
       errors.push(`licensing.${contextLabel} has a malformed start date: ${JSON.stringify(entry)}`);
       return;
     }
-    if (entry.end !== undefined && (typeof entry.end !== "string" || !isValidDateString(entry.end))) {
+    const typedEntry = entry as DatedAllowance;
+    if (typedEntry.end !== undefined && (typeof typedEntry.end !== "string" || !isValidDateString(typedEntry.end))) {
       errors.push(`licensing.${contextLabel} has a malformed end date: ${JSON.stringify(entry)}`);
       return;
     }
-    if (entry.end !== undefined && entry.end < entry.start) {
-      errors.push(`licensing.${contextLabel} has end (${entry.end}) before start (${entry.start})`);
+    if (typedEntry.end !== undefined && typedEntry.end < typedEntry.start) {
+      errors.push(`licensing.${contextLabel} has end (${typedEntry.end}) before start (${typedEntry.start})`);
       return;
     }
     // Distinguish "no credits configured at all" from "credits were
@@ -547,15 +562,15 @@ function validateDatedAllowances(raw: DatedAllowance[] | undefined, errors: stri
     // validateCreditsMap, so pushing a second blanket "no valid credit
     // values" error would just be a confusing duplicate.
     const hasConfiguredCredits =
-      entry.credits != null && typeof entry.credits === "object" && Object.keys(entry.credits).length > 0;
-    const credits = validateCreditsMap(entry.credits, contextLabel, errors);
+      typedEntry.credits != null && typeof typedEntry.credits === "object" && Object.keys(typedEntry.credits).length > 0;
+    const credits = validateCreditsMap(typedEntry.credits, contextLabel, errors);
     if (Object.keys(credits).length === 0) {
       if (!hasConfiguredCredits) {
         errors.push(`licensing.${contextLabel} has no valid credit values: ${JSON.stringify(entry)}`);
       }
       return;
     }
-    parsed.push({ start: entry.start, end: entry.end, credits });
+    parsed.push({ start: typedEntry.start, end: typedEntry.end, credits });
   });
 
   // Sort ascending by start date so overlap detection is deterministic.
@@ -600,20 +615,20 @@ function validateDatedAllowances(raw: DatedAllowance[] | undefined, errors: stri
 function resolveHistoryConfig(raw: LicensingHistoryConfig | undefined, errors: string[]): ResolvedLicensingHistoryConfig {
   const defaults = DEFAULT_LICENSING.history;
 
+  // `parseReportMonths` treats both `undefined` and `null` as "unconfigured"
+  // (resolving to the current month), consistent with how the other
+  // optional licensing fields treat a `null` config value the same as an
+  // absent one — so there's no need to special-case either here.
   let reportMonths: string[];
-  if (raw?.reportMonths === undefined) {
-    reportMonths = parseReportMonths(undefined);
-  } else {
-    try {
-      reportMonths = parseReportMonths(raw.reportMonths);
-    } catch (err) {
-      errors.push(
-        `licensing.history.reportMonths (${JSON.stringify(raw.reportMonths)}) is invalid: ${
-          err instanceof Error ? err.message : String(err)
-        }`
-      );
-      reportMonths = []; // unused: caller throws before this value is read
-    }
+  try {
+    reportMonths = parseReportMonths(raw?.reportMonths);
+  } catch (err) {
+    errors.push(
+      `licensing.history.reportMonths (${JSON.stringify(raw?.reportMonths)}) is invalid: ${
+        err instanceof Error ? err.message : String(err)
+      }`
+    );
+    reportMonths = []; // unused: caller throws before this value is read
   }
 
   let auditRetentionDays = defaults.auditRetentionDays;

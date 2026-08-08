@@ -112,23 +112,46 @@ function expandLastNMonths(token: string, now: Date): string[] {
  *  - An inclusive range: "2026-01..2026-03"
  *  - "last_N_months" (inclusive of the current month, relative to `now`)
  *  - An array mixing any of the above
- *  - `undefined`, which resolves to just the current month
+ *  - `undefined` or `null`, which both resolve to just the current month
+ *    (unconfigured/default), consistent with how other optional licensing
+ *    fields treat a `null` config value the same as an absent one.
  *
- * Throws a descriptive `Error` on malformed syntax so callers (config
- * validation) can catch it and fall back to safe defaults.
+ * `input` is typed `unknown` (rather than `string | string[] | undefined`)
+ * because it is ultimately sourced from an unchecked `JSON.parse` of
+ * `dashboard-config.json` — a config file can contain any JSON value here
+ * (e.g. a number, object, or an array containing non-string entries), and
+ * this function is the runtime boundary that must reject those cases with a
+ * clear error rather than let a raw `TypeError` (e.g. from calling
+ * `.trim()` on a non-string) leak out. Well-typed callers are unaffected:
+ * the return type remains a strongly-typed `string[]`.
+ *
+ * Throws a descriptive `Error` on malformed syntax, a non-string array
+ * entry, or an input that is neither nullish, a string, nor an array, so
+ * callers (config validation) can catch it and fall back to safe defaults.
  */
-export function parseReportMonths(input: string | string[] | undefined, now: Date = new Date()): string[] {
-  if (input === undefined) {
+export function parseReportMonths(input: unknown, now: Date = new Date()): string[] {
+  if (input === undefined || input === null) {
     return [formatYearMonth({ year: now.getUTCFullYear(), month: now.getUTCMonth() + 1 })];
   }
 
-  const tokens = Array.isArray(input) ? input : [input];
+  if (typeof input !== "string" && !Array.isArray(input)) {
+    throw new Error(
+      `Invalid report months value: expected a string, an array of strings, or null/undefined, got ${typeof input} (${JSON.stringify(input)})`
+    );
+  }
+
+  const tokens: unknown[] = Array.isArray(input) ? input : [input];
   if (tokens.length === 0) {
     return [formatYearMonth({ year: now.getUTCFullYear(), month: now.getUTCMonth() + 1 })];
   }
 
   const months = new Set<string>();
   for (const rawToken of tokens) {
+    if (typeof rawToken !== "string") {
+      throw new Error(
+        `Invalid report month token: expected a string, got ${typeof rawToken} (${JSON.stringify(rawToken)})`
+      );
+    }
     const token = rawToken.trim();
     if (LAST_N_RE.test(token)) {
       for (const m of expandLastNMonths(token, now)) months.add(m);

@@ -1109,4 +1109,70 @@ describe("dashboard-config (with config file)", () => {
     expect(config.aicConsumption.csvPath).toBe("consumption.csv");
     expect(config.validation.enabled).toBe(false);
   });
+
+  it("getLicensingConfig throws a LicensingConfigError (not a TypeError) when datedAllowances is a plain object instead of an array", () => {
+    mockReadFileSync.mockReturnValue(JSON.stringify({
+      metrics: { billing: { licensing: { datedAllowances: { business: 1000 } } } },
+    }));
+    vi.setSystemTime(Date.now() + 570 * 60 * 1000);
+    try {
+      getLicensingConfig();
+      expect.unreachable("expected getLicensingConfig to throw");
+    } catch (err) {
+      expect(err).toBeInstanceOf(LicensingConfigError);
+      expect(err).not.toBeInstanceOf(TypeError);
+      const details = (err as LicensingConfigError).details;
+      expect(details.some((d) => d.includes("datedAllowances") && d.includes("must be an array"))).toBe(true);
+    }
+  });
+
+  it("getLicensingConfig throws a LicensingConfigError (not a TypeError) when datedAllowances is a string instead of an array", () => {
+    mockReadFileSync.mockReturnValue(JSON.stringify({
+      metrics: { billing: { licensing: { datedAllowances: "not-an-array" } } },
+    }));
+    vi.setSystemTime(Date.now() + 580 * 60 * 1000);
+    try {
+      getLicensingConfig();
+      expect.unreachable("expected getLicensingConfig to throw");
+    } catch (err) {
+      expect(err).toBeInstanceOf(LicensingConfigError);
+      expect(err).not.toBeInstanceOf(TypeError);
+      const details = (err as LicensingConfigError).details;
+      expect(details.some((d) => d.includes("datedAllowances") && d.includes("must be an array"))).toBe(true);
+    }
+  });
+
+  it("getLicensingConfig treats datedAllowances: null the same as unconfigured (empty array, no error)", () => {
+    mockReadFileSync.mockReturnValue(JSON.stringify({
+      metrics: { billing: { licensing: { datedAllowances: null } } },
+    }));
+    vi.setSystemTime(Date.now() + 590 * 60 * 1000);
+    expect(getLicensingConfig().datedAllowances).toEqual([]);
+  });
+
+  it("getLicensingConfig treats history.reportMonths: null the same as unconfigured, resolving to the current month", () => {
+    mockReadFileSync.mockReturnValue(JSON.stringify({
+      metrics: { billing: { licensing: { history: { reportMonths: null } } } },
+    }));
+    vi.setSystemTime(Date.now() + 600 * 60 * 1000);
+    const config = getLicensingConfig();
+    const now = new Date();
+    const currentMonth = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}`;
+    expect(config.history.reportMonths).toEqual([currentMonth]);
+  });
+
+  it("getLicensingConfig throws LicensingConfigError when history.reportMonths contains a non-string array entry", () => {
+    mockReadFileSync.mockReturnValue(JSON.stringify({
+      metrics: { billing: { licensing: { history: { reportMonths: ["2026-01", 2026] } } } },
+    }));
+    vi.setSystemTime(Date.now() + 610 * 60 * 1000);
+    try {
+      getLicensingConfig();
+      expect.unreachable("expected getLicensingConfig to throw");
+    } catch (err) {
+      expect(err).toBeInstanceOf(LicensingConfigError);
+      const details = (err as LicensingConfigError).details;
+      expect(details.some((d) => d.includes("reportMonths") && d.includes("expected a string"))).toBe(true);
+    }
+  });
 });

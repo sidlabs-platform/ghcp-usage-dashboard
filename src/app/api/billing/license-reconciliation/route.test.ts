@@ -112,6 +112,10 @@ describe("license reconciliation route", () => {
   });
 
   it("does not use the licensing 422 shape for unrelated errors, and does not leak their message", async () => {
+    // The secret sentinel below ("hunter2") deliberately matches what the
+    // assertion checks for, so this test actually proves the route redacts
+    // the thrown error's message rather than passing vacuously regardless of
+    // route behavior.
     repoState.getLicenseReconciliationRows.mockImplementation(() => {
       throw new Error("db connection exploded: password=hunter2");
     });
