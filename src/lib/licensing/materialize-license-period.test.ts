@@ -1,6 +1,7 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import {
   materializeLicensePeriodRows,
+  persistMaterializedLicensePeriod,
   normalizePlanKey,
   licensePeriodCanonicalKey,
   CONSUMPTION_SOURCE_PRECEDENCE,
@@ -11,6 +12,14 @@ import {
 import type { SeatLedgerRow } from "./seat-ledger";
 import type { ResolvedIdentity } from "./identity-resolver";
 import type { ResolvedLicensingConfig } from "@/lib/config/dashboard-config";
+
+const { replaceMaterializedPeriodMock } = vi.hoisted(() => ({
+  replaceMaterializedPeriodMock: vi.fn(() => 1),
+}));
+
+vi.mock("@/lib/db/license-history-repo", () => ({
+  replaceMaterializedPeriod: replaceMaterializedPeriodMock,
+}));
 
 // ── Fixtures ────────────────────────────────────────────────────────────
 
@@ -579,5 +588,16 @@ describe("materializeLicensePeriodRows: validation", () => {
 
   it("throws on a missing/empty enterpriseSlug", () => {
     expect(() => materializeLicensePeriodRows(baseInput({ enterpriseSlug: "  " }))).toThrow();
+  });
+});
+
+describe("persistMaterializedLicensePeriod", () => {
+  it("persists the same normalized enterprise slug returned on materialized rows", async () => {
+    replaceMaterializedPeriodMock.mockClear();
+
+    const result = await persistMaterializedLicensePeriod(baseInput({ enterpriseSlug: "  acme-corp  " }));
+
+    expect(result.rows[0].enterpriseSlug).toBe(ENT);
+    expect(replaceMaterializedPeriodMock).toHaveBeenCalledWith(ENT, PERIOD, expect.any(Array));
   });
 });

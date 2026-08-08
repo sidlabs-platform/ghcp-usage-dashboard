@@ -593,11 +593,11 @@ export interface PersistMaterializedLicensePeriodResult {
 export async function persistMaterializedLicensePeriod(
   input: MaterializeLicensePeriodInput
 ): Promise<PersistMaterializedLicensePeriodResult> {
+  const enterpriseSlug = normalizeEnterpriseSlug(input.enterpriseSlug);
   const result = materializeLicensePeriodRows(input);
   const { replaceMaterializedPeriod } = await import("@/lib/db/license-history-repo");
   const mapped = result.rows.map(toLicensePeriodRowInput);
-  const written = replaceMaterializedPeriod(input.enterpriseSlug, input.billingPeriod, mapped);
+  const written = replaceMaterializedPeriod(enterpriseSlug, input.billingPeriod, mapped);
   return { ...result, written };
 }
-
 
