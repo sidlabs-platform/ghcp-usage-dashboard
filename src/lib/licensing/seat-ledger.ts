@@ -163,9 +163,8 @@ export interface SeatLedgerResult {
    * distinct (org, holderKey) conflict, deduplicated and sorted
    * deterministically, regardless of how many periods/rows the conflicted
    * interval spans — the same conflict is also mirrored onto every
-   * affected `SeatLedgerCoverage.warnings` entry. Never empty by
-   * construction when no such conflict occurred; contains no numeric IDs,
-   * logins, or other PII.
+   * affected `SeatLedgerCoverage.warnings` entry. Stays empty when no such
+   * conflict occurred; contains no numeric IDs, logins, or other PII.
    */
   warnings: string[];
 }
@@ -394,13 +393,17 @@ function toIsoInstant(value: string): string {
  * a stale, already-revoked interval that merely happened to be reconstructed
  * first. `multipleOverlap` is reported back so the caller can surface a
  * deterministic, non-fatal coverage warning when this disambiguation
- * actually mattered.
+ * actually mattered. `anyConflict` reports whether *any* candidate interval
+ * overlapping this period (not just the one selected) observed a
+ * conflicting non-null `githubUserId` (see `ReconstructedInterval.hasConflict`)
+ * — a superseded, non-selected interval's conflict must never be silently
+ * dropped just because a later interval won the disambiguation.
  */
 function selectOverlappingInterval(
   intervals: ReconstructedInterval[],
   period: string,
   currentPeriod: string,
-): { interval: ReconstructedInterval; multipleOverlap: boolean } | null {
+): { interval: ReconstructedInterval; multipleOverlap: boolean; anyConflict: boolean } | null {
   const candidates = intervals.filter((interval) => {
     if (interval.revokedAt === null && period > currentPeriod) return false;
     return intervalOverlapsPeriod(interval.assignedAt, interval.revokedAt, period);
@@ -422,7 +425,11 @@ function selectOverlappingInterval(
     return bEnd - aEnd;
   });
 
-  return { interval: sorted[0], multipleOverlap: candidates.length > 1 };
+  return {
+    interval: sorted[0],
+    multipleOverlap: candidates.length > 1,
+    anyConflict: candidates.some((candidate) => candidate.hasConflict),
+  };
 }
 
 // ── Grouping helpers ──────────────────────────────────────────────────
@@ -587,7 +594,7 @@ export function buildSeatLedger(options: BuildSeatLedgerOptions): SeatLedgerResu
       const reconstructed = intervalsByGroup.get(groupKeyStr);
       const selection = reconstructed ? selectOverlappingInterval(reconstructed.intervals, period, currentPeriod) : null;
       if (selection) {
-        const { interval: overlapping, multipleOverlap } = selection;
+        const { interval: overlapping, multipleOverlap, anyConflict } = selection;
         rows.push({
           enterpriseSlug,
           billingPeriod: period,
@@ -606,7 +613,7 @@ export function buildSeatLedger(options: BuildSeatLedgerOptions): SeatLedgerResu
             `Multiple audit-reconstructed assignment intervals overlap period ${period} for holder "${holderKey}" in org "${org}"; deterministically selected the interval reflecting the holder's final state for the month (assignedAt ${toIsoInstant(overlapping.assignedAt)}).`,
           );
         }
-        if (overlapping.hasConflict) {
+        if (anyConflict) {
           const conflictWarning = `Conflicting non-null GitHub user IDs observed for holder "${holderKey}" in org "${org}" while a single audit-reconstructed assignment interval remained active (period ${period}); retained the interval's originally attributed GitHub user ID rather than silently overwriting it.`;
           tierWarnings.push(conflictWarning);
           ledgerWarnings.add(

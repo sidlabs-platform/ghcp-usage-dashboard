@@ -587,6 +587,45 @@ describe("buildSeatLedger — per-interval GitHub identity attribution (Task 6 r
     // Deterministic across repeated calls with identical input.
     expect(first).toEqual(second);
   });
+
+  it("surfaces a conflict warning for an earlier, non-selected within-month interval even when a later interval wins latest-interval selection", () => {
+    const build = () =>
+      buildSeatLedger({ enterpriseSlug: "acme-corp",
+        auditEvents: [
+          auditEvent({ eventId: "e1", holderKey: "login:superseded", githubUserId: 100, action: "assign", occurredAt: "2026-01-01T00:00:00Z" }),
+          auditEvent({ eventId: "e2", holderKey: "login:superseded", githubUserId: 200, action: "refresh", occurredAt: "2026-01-05T00:00:00Z" }),
+          auditEvent({ eventId: "e3", holderKey: "login:superseded", githubUserId: 100, action: "cancel", occurredAt: "2026-01-10T00:00:00Z" }),
+          auditEvent({ eventId: "e4", holderKey: "login:superseded", githubUserId: 300, action: "assign", occurredAt: "2026-01-15T00:00:00Z" }),
+        ],
+        periods: ["2026-01"],
+        currentPeriod: "2026-02",
+      });
+    const first = build();
+    const second = build();
+
+    const row = first.rows.find((r) => r.holderKey === "login:superseded" && r.billingPeriod === "2026-01");
+    // The selected row still reflects the holder's final state for the month, unchanged.
+    expect(row?.githubUserId).toBe(300);
+    expect(row?.assignedAt).toBe("2026-01-15T00:00:00.000Z");
+
+    const coverage = first.coverage.find((c) => c.billingPeriod === "2026-01" && c.orgLogin === "acme");
+    // The multiple-overlap warning remains.
+    expect(coverage?.warnings.some((w) => w.toLowerCase().includes("multiple"))).toBe(true);
+    // The conflict warning from the superseded (non-selected) interval must not be lost.
+    expect(coverage?.warnings.some((w) => w.toLowerCase().includes("conflict"))).toBe(true);
+    expect(first.warnings.some((w) => w.toLowerCase().includes("conflict"))).toBe(true);
+
+    // No raw numeric IDs/logins leaked into any warning text.
+    const allWarnings = [...(coverage?.warnings ?? []), ...first.warnings];
+    for (const w of allWarnings) {
+      expect(w.includes("100")).toBe(false);
+      expect(w.includes("200")).toBe(false);
+      expect(w.includes("300")).toBe(false);
+    }
+
+    // Deterministic across repeated calls with identical input.
+    expect(first).toEqual(second);
+  });
 });
 
 describe("buildSeatLedger — confidence classification", () => {
