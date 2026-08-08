@@ -50,6 +50,15 @@ export interface AicConsumptionError {
   userLogin: string;
   /** Sanitized, safe-to-display message — never includes headers or tokens. */
   message: string;
+  /**
+   * Non-user-specific detail carried alongside the classification (e.g. the
+   * HTTP status for "unavailable", or the parse/shape issue for
+   * "malformed"), so a per-user message can be regenerated for *every* user
+   * in a batch — without ever reusing another user's fully-rendered message
+   * verbatim — when a single capability-level failure is copied across the
+   * whole batch (see `buildErrorMessage`/`toBatchFailureResult` below).
+   */
+  detail?: string;
 }
 
 export type AicConsumptionUserResult = AicConsumptionOk | AicConsumptionError;
@@ -133,41 +142,92 @@ function normalizeAicUsageResponse(
 
 // ── Error classification ─────────────────────────────────────────────────
 
+/**
+ * Build a per-user, sanitized display message for a given error kind. Used
+ * both for a single freshly-classified error and to *regenerate* a distinct,
+ * correctly-user-named message for every user when a single capability-level
+ * failure (from the preflight probe) is copied across an entire batch — so
+ * no user ever sees another user's login embedded in their message.
+ */
+function buildErrorMessage(kind: AicConsumptionErrorKind, userLogin: string, detail?: string): string {
+  switch (kind) {
+    case "not_found":
+      return `No AI credit usage found for user "${userLogin}"`;
+    case "forbidden":
+      return `Access to the AI credit usage endpoint is forbidden for user "${userLogin}"`;
+    case "transport_error":
+      return `Transport error fetching AI credit usage for user "${userLogin}"`;
+    case "unavailable":
+      return `AI credit usage endpoint returned HTTP ${detail ?? "?"} for user "${userLogin}"`;
+    case "malformed":
+      return detail
+        ? `${detail} (user "${userLogin}")`
+        : `Malformed AI credit usage response for user "${userLogin}"`;
+  }
+}
+
 function classifyError(err: unknown, userLogin: string): AicConsumptionError {
   if (err instanceof GitHubApiError) {
     if (err.status === 404) {
-      return { status: "not_found", userLogin, message: `No AI credit usage found for user "${userLogin}"` };
+      return { status: "not_found", userLogin, message: buildErrorMessage("not_found", userLogin) };
     }
     if (err.status === 403) {
-      return {
-        status: "forbidden",
-        userLogin,
-        message: `Access to the AI credit usage endpoint is forbidden for user "${userLogin}"`,
-      };
+      return { status: "forbidden", userLogin, message: buildErrorMessage("forbidden", userLogin) };
     }
     if (err.status === 0) {
-      return {
-        status: "transport_error",
-        userLogin,
-        message: `Transport error fetching AI credit usage for user "${userLogin}"`,
-      };
+      return { status: "transport_error", userLogin, message: buildErrorMessage("transport_error", userLogin) };
     }
-    return {
-      status: "unavailable",
-      userLogin,
-      message: `AI credit usage endpoint returned HTTP ${err.status} for user "${userLogin}"`,
-    };
+    const detail = String(err.status);
+    return { status: "unavailable", userLogin, message: buildErrorMessage("unavailable", userLogin, detail), detail };
   }
   if (err instanceof MalformedAicResponseError) {
-    return { status: "malformed", userLogin, message: err.message };
+    return { status: "malformed", userLogin, message: buildErrorMessage("malformed", userLogin, err.message), detail: err.message };
   }
   // Any other unexpected failure (e.g. a JSON parse error surfaced as a
   // SyntaxError) is treated as malformed rather than aborting the batch.
+  const detail = err instanceof Error ? err.message : String(err);
+  return { status: "malformed", userLogin, message: buildErrorMessage("malformed", userLogin, detail), detail };
+}
+
+/**
+ * Re-classify an already-classified capability-level failure for a
+ * *different* user, without re-issuing any request or performing a broad
+ * catch — this is used when a single preflight failure (forbidden,
+ * unavailable, malformed, or transport_error) is applied across an entire
+ * batch because no org fallback destination is configured. Each user gets
+ * its own correctly-named message built from the same non-user-specific
+ * `detail`, so the failure is never a verbatim copy of the preflight user's
+ * result.
+ */
+function toBatchFailureResult(failure: AicConsumptionError, userLogin: string): AicConsumptionError {
   return {
-    status: "malformed",
+    status: failure.status,
     userLogin,
-    message: err instanceof Error ? err.message : String(err),
+    message: buildErrorMessage(failure.status, userLogin, failure.detail),
+    detail: failure.detail,
   };
+}
+
+// ── Deduplication ─────────────────────────────────────────────────────────
+
+/**
+ * Dedupe a list of user logins case-insensitively — GitHub logins are
+ * case-insensitive, so "Alice"/"alice"/"ALICE" all identify the same
+ * holder. Preserves the first-seen literal casing and first-seen order for
+ * each distinct holder, so exactly one call (preflight or otherwise) is
+ * ever issued per distinct holder, regardless of how many differently-cased
+ * duplicates were requested.
+ */
+function dedupeUsersCaseInsensitive(users: string[]): string[] {
+  const seen = new Set<string>();
+  const distinct: string[] = [];
+  for (const user of users) {
+    const key = user.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    distinct.push(user);
+  }
+  return distinct;
 }
 
 // ── Endpoint path builders ───────────────────────────────────────────────
@@ -222,6 +282,16 @@ async function fetchOneUser(
  *  - Once the enterprise endpoint is confirmed usable, every other user's
  *    404 is an isolated per-user result — it never triggers a fallback and
  *    processing of the remaining users continues normally.
+ *  - `not_found` (404) is the *only* isolated, per-user classification.
+ *    `forbidden`, `unavailable`, `malformed`, and `transport_error` are all
+ *    treated identically as capability/run-level signals when observed on
+ *    the preflight probe — each remains individually distinguishable in the
+ *    returned results (statuses are never collapsed into one another), but
+ *    all four equally trigger the org fallback (when configured).
+ *  - `users` is deduped case-insensitively before any request is made
+ *    (GitHub logins are case-insensitive), preserving first-seen casing and
+ *    order, so exactly **one call is issued per distinct holder** — never
+ *    once per literal, possibly differently-cased, input entry.
  */
 export async function fetchAicConsumptionForUsers(
   options: FetchAicConsumptionOptions,
@@ -231,7 +301,6 @@ export async function fetchAicConsumptionForUsers(
     orgLogin,
     year,
     month,
-    users,
     concurrency = DEFAULT_AIC_CONCURRENCY,
     creditToUsd = DEFAULT_CREDIT_TO_USD,
   } = options;
@@ -239,6 +308,11 @@ export async function fetchAicConsumptionForUsers(
   if (!enterpriseSlug && !orgLogin) {
     throw new Error("fetchAicConsumptionForUsers requires either enterpriseSlug or orgLogin to be configured");
   }
+
+  // One call per distinct holder: dedupe case-insensitively up front, before
+  // the preflight probe, any concurrent fetch, or any org fallback — every
+  // later step operates purely on this deduped list.
+  const users = dedupeUsersCaseInsensitive(options.users);
 
   const billingPeriod = `${year}-${String(month).padStart(2, "0")}`;
   const limit = pLimit(Math.max(1, concurrency));
@@ -275,10 +349,12 @@ export async function fetchAicConsumptionForUsers(
 
   if (isCapabilityLevelFailure) {
     if (!orgLogin) {
-      // No fallback destination configured — every user fails the same way
-      // the preflight probe did, without issuing further requests.
+      // No fallback destination configured — every user fails with the same
+      // *classification* the preflight probe hit, but each gets its own
+      // freshly-built, correctly-user-named message (never the preflight
+      // user's message copied verbatim) — see `toBatchFailureResult`.
       const failure = preflightResult as AicConsumptionError;
-      const results: AicConsumptionUserResult[] = users.map((user) => ({ ...failure, userLogin: user }));
+      const results: AicConsumptionUserResult[] = users.map((user) => toBatchFailureResult(failure, user));
       return { results, source: "enterprise_api", fellBackToOrg: false };
     }
     // Capability/run-level failure with a fallback destination — retry the

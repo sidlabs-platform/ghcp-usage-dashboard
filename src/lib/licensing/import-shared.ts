@@ -58,9 +58,12 @@ export function computeFingerprint(content: string, metadata: FingerprintMetadat
 
 // ── Safe local file reading ─────────────────────────────────────────────
 
+/** Distinguishes *why* {@link readImportFile} rejected a configured path — used by import adapters to decide which failures are safe to degrade gracefully (a missing optional source) versus which must remain hard, explicit failures. */
+export type ImportFileErrorReason = "not_found" | "is_directory" | "not_a_file" | "too_large" | "invalid_utf8" | "io_error";
+
 /** Thrown for any problem validating or reading a configured import file path. */
 export class ImportFileError extends Error {
-  constructor(message: string) {
+  constructor(message: string, public readonly reason: ImportFileErrorReason) {
     super(message);
     this.name = "ImportFileError";
   }
@@ -97,6 +100,14 @@ function isValidUtf8(buffer: Buffer): boolean {
  * within `maxBytes`, and its content is valid UTF-8. Returns the decoded
  * content plus a fingerprint derived from the content and file metadata
  * (size, mtime, basename) — never logs raw content.
+ *
+ * Every failure is a typed {@link ImportFileError} whose `reason` lets
+ * callers distinguish a missing optional source (`"not_found"`, and for the
+ * audit archive path specifically `"is_directory"` — see
+ * `audit-archive-import.ts`) — which is safe to degrade to an empty result —
+ * from every other failure (`"too_large"`, `"invalid_utf8"`, `"io_error"`,
+ * or a non-directory `"not_a_file"`), which must remain an explicit,
+ * surfaced failure rather than being silently swallowed.
  */
 export function readImportFile(configuredPath: string, options: ReadImportFileOptions = {}): ReadImportFileResult {
   const maxBytes = options.maxBytes ?? DEFAULT_MAX_IMPORT_BYTES;
@@ -105,24 +116,41 @@ export function readImportFile(configuredPath: string, options: ReadImportFileOp
   let stat: fs.Stats;
   try {
     stat = fs.statSync(configuredPath);
-  } catch {
-    throw new ImportFileError(`Import file not found or inaccessible: ${displayName}`);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException)?.code;
+    if (code === "ENOENT") {
+      throw new ImportFileError(`Import file not found: ${displayName}`, "not_found");
+    }
+    throw new ImportFileError(`Import file is not accessible: ${displayName}`, "io_error");
   }
 
   if (!stat.isFile()) {
-    throw new ImportFileError(`Import path is not a regular file: ${displayName}`);
+    if (stat.isDirectory()) {
+      throw new ImportFileError(`Import path is a directory, not a file: ${displayName}`, "is_directory");
+    }
+    throw new ImportFileError(`Import path is not a regular file: ${displayName}`, "not_a_file");
   }
 
   if (stat.size > maxBytes) {
     throw new ImportFileError(
-      `Import file exceeds maximum allowed size of ${maxBytes} bytes (actual: ${stat.size} bytes): ${displayName}`
+      `Import file exceeds maximum allowed size of ${maxBytes} bytes (actual: ${stat.size} bytes): ${displayName}`,
+      "too_large",
     );
   }
 
-  const buffer = fs.readFileSync(configuredPath);
+  let buffer: Buffer;
+  try {
+    buffer = fs.readFileSync(configuredPath);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException)?.code;
+    if (code === "ENOENT") {
+      throw new ImportFileError(`Import file not found: ${displayName}`, "not_found");
+    }
+    throw new ImportFileError(`Import file could not be read: ${displayName}`, "io_error");
+  }
 
   if (!isValidUtf8(buffer)) {
-    throw new ImportFileError(`Import file is not valid UTF-8: ${displayName}`);
+    throw new ImportFileError(`Import file is not valid UTF-8: ${displayName}`, "invalid_utf8");
   }
 
   const content = buffer.toString("utf-8");
@@ -133,6 +161,41 @@ export function readImportFile(configuredPath: string, options: ReadImportFileOp
   });
 
   return { content, fingerprint };
+}
+
+// ── Optional-source graceful degradation ─────────────────────────────────
+
+/**
+ * Build the empty {@link ImportResult} an import adapter should return when
+ * its configured source path is optional and simply not present yet (e.g. a
+ * fresh setup before any archive/CSV/identity-map file has been written).
+ * Never used for any other failure — file-size, invalid-UTF-8,
+ * permission/I/O, and malformed-content failures all remain explicit typed
+ * errors/warnings surfaced by the adapter itself.
+ *
+ * `reason` distinguishes a genuinely missing path (`"not_found"`, the
+ * default) from a configured path that resolves to a directory
+ * (`"is_directory"`) — used by the audit-archive importer, whose
+ * `history.auditArchivePath` config is documented as a directory-or-path
+ * and therefore legitimately has no single archive file yet on a fresh
+ * setup. The message and fingerprint both reflect which case occurred.
+ */
+export function emptyImportResult<T>(
+  configuredPath: string,
+  kind: string,
+  reason: "not_found" | "is_directory" = "not_found",
+): ImportResult<T> {
+  const displayName = path.basename(configuredPath);
+  const warning =
+    reason === "is_directory"
+      ? `Optional import source path is a directory (no archive file present yet) — skipping: ${displayName}`
+      : `Optional import source not found — skipping: ${displayName}`;
+  return {
+    records: [],
+    warnings: [warning],
+    skippedRows: 0,
+    sourceFingerprint: computeFingerprint("", { kind, path: displayName, missing: true, reason }),
+  };
 }
 
 // ── Deterministic stable JSON stringify ──────────────────────────────────

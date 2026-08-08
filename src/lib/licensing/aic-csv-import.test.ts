@@ -109,8 +109,33 @@ describe("importAicConsumptionCsv — quoting, duplicates, missing values", () =
     expect(result.skippedRows).toBe(1);
   });
 
-  it("throws ImportFileError for a nonexistent path", () => {
-    expect(() => importAicConsumptionCsv(path.join(FIXTURE_DIR, "missing.csv"))).toThrow(ImportFileError);
+  it("returns a valid empty ImportResult with a structured warning when the configured CSV path does not exist (optional source)", () => {
+    const missingPath = path.join(FIXTURE_DIR, "missing.csv");
+    const result = importAicConsumptionCsv(missingPath);
+    expect(result.records).toEqual([]);
+    expect(result.skippedRows).toBe(0);
+    expect(result.warnings).toHaveLength(1);
+    expect(result.warnings[0]).toMatch(/not found/i);
+    expect(result.warnings[0]).toMatch(/missing\.csv/);
+    expect(result.sourceFingerprint).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it("produces a stable fingerprint across repeated calls when the configured CSV path is missing", () => {
+    const missingPath = path.join(FIXTURE_DIR, "missing-repeat.csv");
+    const r1 = importAicConsumptionCsv(missingPath);
+    const r2 = importAicConsumptionCsv(missingPath);
+    expect(r1.sourceFingerprint).toBe(r2.sourceFingerprint);
+  });
+
+  it("still throws ImportFileError for an oversized configured CSV file (not degraded to empty)", () => {
+    const p = writeFixture("too-big.csv", "period,org,user,credits\n" + "2026-01,acme,alice,1\n".repeat(200));
+    expect(() => importAicConsumptionCsv(p, { maxBytes: 50 })).toThrow(ImportFileError);
+  });
+
+  it("still throws ImportFileError when the configured CSV path is a directory (not degraded to empty — CSV config is single-file only)", () => {
+    const dirPath = path.join(FIXTURE_DIR, "csv-as-directory");
+    fs.mkdirSync(dirPath, { recursive: true });
+    expect(() => importAicConsumptionCsv(dirPath)).toThrow(ImportFileError);
   });
 });
 

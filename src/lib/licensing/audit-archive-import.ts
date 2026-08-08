@@ -16,6 +16,8 @@ import {
   readImportFile,
   computeFingerprint,
   stableStringify,
+  emptyImportResult,
+  ImportFileError,
   type ImportResult,
 } from "./import-shared";
 
@@ -195,12 +197,33 @@ function extractEntries(content: string): { mode: "parsed" | "ndjson-lines"; ite
  * unrelated audit actions (reported once as an aggregate warning), and
  * reports malformed entries/lines as warnings + `skippedRows` rather than
  * broadly swallowing them.
+ *
+ * `history.auditArchivePath` is an *optional* configured source, and its
+ * config documentation describes it as a "Directory/path to write archived
+ * audit-log exports to" — so on a fresh setup it may legitimately not exist
+ * yet, *or* resolve to a directory with no single archive file inside it
+ * yet. Both cases degrade to a valid empty {@link ImportResult} carrying a
+ * structured warning, rather than throwing. Every other failure (the file
+ * exceeds the byte cap, isn't valid UTF-8, a permission/I/O error, or
+ * malformed JSON/NDJSON content) remains an explicit, thrown error.
  */
 export function importAuditArchive(
   configuredPath: string,
   options: ImportAuditArchiveOptions = {},
 ): ImportResult<NormalizedAuditEvent> {
-  const { content, fingerprint } = readImportFile(configuredPath, { maxBytes: options.maxBytes });
+  let fileResult;
+  try {
+    fileResult = readImportFile(configuredPath, { maxBytes: options.maxBytes });
+  } catch (err) {
+    if (err instanceof ImportFileError && err.reason === "not_found") {
+      return emptyImportResult(configuredPath, "audit_archive_import", "not_found");
+    }
+    if (err instanceof ImportFileError && err.reason === "is_directory") {
+      return emptyImportResult(configuredPath, "audit_archive_import", "is_directory");
+    }
+    throw err;
+  }
+  const { content, fingerprint } = fileResult;
   const { mode, items } = extractEntries(content);
 
   const records: NormalizedAuditEvent[] = [];

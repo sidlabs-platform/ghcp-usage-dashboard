@@ -205,7 +205,89 @@ describe("fetchAicConsumptionForUsers — endpoint-wide fallback", () => {
     expect(result.source).toBe("org_api");
   });
 
-  it("reports every user with the same failure classification when no org fallback destination is configured", async () => {
+  it("falls back to the org endpoint for the whole batch when the enterprise preflight response is malformed", async () => {
+    mockFetchWithMeta.mockImplementation((p: string) => {
+      if (p.includes("/enterprises/")) {
+        // A 2xx response whose body doesn't match the expected shape —
+        // classified "malformed", which (like forbidden/unavailable) is a
+        // capability/run-level signal, distinct from an isolated 404.
+        return Promise.resolve(okResponse("not-an-object"));
+      }
+      return Promise.resolve(okResponse({ credits: 11 }));
+    });
+
+    const result = await fetchAicConsumptionForUsers({
+      enterpriseSlug: "acme",
+      orgLogin: "my-org",
+      year: 2026,
+      month: 1,
+      users: ["alice", "bob"],
+    });
+
+    expect(result.fellBackToOrg).toBe(true);
+    expect(result.source).toBe("org_api");
+    expect(result.results).toHaveLength(2);
+    for (const r of result.results) {
+      expect(r.status).toBe("ok");
+    }
+    const calledPaths = mockFetchWithMeta.mock.calls.map((c) => c[0] as string);
+    expect(calledPaths.filter((p) => p.includes("/organizations/my-org/"))).toHaveLength(2);
+  });
+
+  it("falls back to the org endpoint for the whole batch when the enterprise preflight fails with a transport error", async () => {
+    mockFetchWithMeta.mockImplementation((p: string) => {
+      if (p.includes("/enterprises/")) {
+        return Promise.reject(new GitHubApiError(0, p, "ECONNRESET", true));
+      }
+      return Promise.resolve(okResponse({ credits: 3 }));
+    });
+
+    const result = await fetchAicConsumptionForUsers({
+      enterpriseSlug: "acme",
+      orgLogin: "my-org",
+      year: 2026,
+      month: 1,
+      users: ["alice"],
+    });
+
+    expect(result.fellBackToOrg).toBe(true);
+    expect(result.source).toBe("org_api");
+    expect(result.results[0].status).toBe("ok");
+  });
+
+  it("keeps not_found and malformed statuses distinct rather than collapsing them: a single user's 404 never falls back, but a malformed preflight always does", async () => {
+    // Case A: isolated 404 on the (only) preflight user — no fallback.
+    mockFetchWithMeta.mockReset();
+    mockFetchWithMeta.mockRejectedValue(new GitHubApiError(404, "/x", "Not Found", false));
+    const notFoundResult = await fetchAicConsumptionForUsers({
+      enterpriseSlug: "acme",
+      orgLogin: "my-org",
+      year: 2026,
+      month: 1,
+      users: ["alice"],
+    });
+    expect(notFoundResult.fellBackToOrg).toBe(false);
+    expect(notFoundResult.source).toBe("enterprise_api");
+    expect(notFoundResult.results[0].status).toBe("not_found");
+
+    // Case B: malformed preflight — always falls back when orgLogin is configured.
+    mockFetchWithMeta.mockReset();
+    mockFetchWithMeta.mockImplementation((p: string) => {
+      if (p.includes("/enterprises/")) return Promise.resolve(okResponse("garbage"));
+      return Promise.resolve(okResponse({ credits: 1 }));
+    });
+    const malformedResult = await fetchAicConsumptionForUsers({
+      enterpriseSlug: "acme",
+      orgLogin: "my-org",
+      year: 2026,
+      month: 1,
+      users: ["alice"],
+    });
+    expect(malformedResult.fellBackToOrg).toBe(true);
+    expect(malformedResult.source).toBe("org_api");
+  });
+
+  it("reports every user with the same failure classification when no org fallback destination is configured, using a per-user message (not the preflight user's)", async () => {
     mockFetchWithMeta.mockRejectedValue(new GitHubApiError(403, "/x", "Forbidden", false));
 
     const result = await fetchAicConsumptionForUsers({
@@ -220,6 +302,37 @@ describe("fetchAicConsumptionForUsers — endpoint-wide fallback", () => {
     for (const r of result.results) {
       expect(r.status).toBe("forbidden");
     }
+
+    // Regression: every user's safe display message must name *that* user,
+    // not the preflight probe user (alice) copied verbatim onto everyone.
+    const alice = result.results.find((r) => r.userLogin === "alice");
+    const bob = result.results.find((r) => r.userLogin === "bob");
+    expect(alice?.status).toBe("forbidden");
+    expect(bob?.status).toBe("forbidden");
+    if (alice && "message" in alice) expect(alice.message).toContain("alice");
+    if (bob && "message" in bob) expect(bob.message).toContain("bob");
+    if (bob && "message" in bob) expect(bob.message).not.toContain("alice");
+    if (alice && "message" in alice) expect(alice.message).not.toContain("bob");
+    expect((alice as { message?: string })?.message).not.toBe((bob as { message?: string })?.message);
+  });
+
+  it("reports every user with its own per-user message when the capability failure is 'unavailable' (non-403/404/malformed HTTP status)", async () => {
+    mockFetchWithMeta.mockRejectedValue(new GitHubApiError(501, "/x", "Not Implemented", false));
+
+    const result = await fetchAicConsumptionForUsers({
+      enterpriseSlug: "acme",
+      year: 2026,
+      month: 1,
+      users: ["alice", "bob", "carol"],
+    });
+
+    expect(result.results).toHaveLength(3);
+    for (const r of result.results) {
+      expect(r.status).toBe("unavailable");
+      if ("message" in r) expect(r.message).toContain(r.userLogin);
+    }
+    const messages = result.results.map((r) => ("message" in r ? r.message : ""));
+    expect(new Set(messages).size).toBe(3); // all distinct — none copied verbatim from another user
   });
 });
 
@@ -332,5 +445,68 @@ describe("fetchAicConsumptionForUsers — bounded concurrency", () => {
     const result = await promise;
     expect(result.results).toHaveLength(8);
     expect(maxInFlight).toBeLessThanOrEqual(3);
+  });
+});
+
+describe("fetchAicConsumptionForUsers — one call per distinct holder (case-insensitive dedupe)", () => {
+  it("issues exactly one enterprise-endpoint call per distinct login, case-insensitively, preserving first-seen casing and order", async () => {
+    mockFetchWithMeta.mockResolvedValue(okResponse({ credits: 1 }));
+
+    const result = await fetchAicConsumptionForUsers({
+      enterpriseSlug: "acme",
+      year: 2026,
+      month: 1,
+      users: ["Alice", "alice", "ALICE", "Bob", "bob", "Alice"],
+    });
+
+    // Only two distinct holders — exactly one call each, not six.
+    expect(mockFetchWithMeta).toHaveBeenCalledTimes(2);
+    expect(result.results).toHaveLength(2);
+    // First-seen casing/order preserved: "Alice" before "Bob".
+    expect(result.results.map((r) => r.userLogin)).toEqual(["Alice", "Bob"]);
+
+    const calledPaths = mockFetchWithMeta.mock.calls.map((c) => c[0] as string);
+    expect(calledPaths.some((p) => p.includes("user=Alice"))).toBe(true);
+    expect(calledPaths.some((p) => p.includes("user=Bob"))).toBe(true);
+    // Only the first-seen casing was ever requested — no separate calls for
+    // the "alice"/"ALICE"/"bob" duplicate-casing variants.
+    expect(calledPaths.some((p) => p.includes("user=alice"))).toBe(false);
+    expect(calledPaths.some((p) => p.includes("user=ALICE"))).toBe(false);
+    expect(calledPaths.some((p) => p.includes("user=bob"))).toBe(false);
+  });
+
+  it("dedupes case-insensitively in org-only mode (no enterpriseSlug) before issuing any calls", async () => {
+    mockFetchWithMeta.mockResolvedValue(okResponse({ credits: 1 }));
+
+    const result = await fetchAicConsumptionForUsers({
+      orgLogin: "my-org",
+      year: 2026,
+      month: 1,
+      users: ["Carol", "carol", "CAROL"],
+    });
+
+    expect(mockFetchWithMeta).toHaveBeenCalledTimes(1);
+    expect(result.results).toHaveLength(1);
+    expect(result.results[0].userLogin).toBe("Carol");
+  });
+
+  it("dedupes before falling back to the org endpoint, so the fallback batch also issues one call per distinct holder", async () => {
+    mockFetchWithMeta.mockImplementation((p: string) => {
+      if (p.includes("/enterprises/")) return Promise.reject(new GitHubApiError(403, p, "Forbidden", false));
+      return Promise.resolve(okResponse({ credits: 1 }));
+    });
+
+    const result = await fetchAicConsumptionForUsers({
+      enterpriseSlug: "acme",
+      orgLogin: "my-org",
+      year: 2026,
+      month: 1,
+      users: ["Dave", "dave", "DAVE"],
+    });
+
+    expect(result.fellBackToOrg).toBe(true);
+    expect(result.results).toHaveLength(1);
+    // One preflight call (enterprise, 403) + one org-endpoint call for the single distinct holder.
+    expect(mockFetchWithMeta).toHaveBeenCalledTimes(2);
   });
 });

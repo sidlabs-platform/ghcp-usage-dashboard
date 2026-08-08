@@ -10,7 +10,7 @@
 // No DB writes happen here — repository persistence is a later
 // orchestration concern.
 
-import { readImportFile, computeFingerprint, type ImportResult } from "./import-shared";
+import { readImportFile, computeFingerprint, emptyImportResult, ImportFileError, type ImportResult } from "./import-shared";
 
 // ── Types ────────────────────────────────────────────────────────────────
 
@@ -192,12 +192,30 @@ function detectConflicts(records: NormalizedIdentityRecord[]): string[] {
  * rather than silently resolving to the external identity value. Detects
  * and warns about external identities that map to conflicting resolved
  * logins (case-insensitively).
+ *
+ * `history.identityMapPath` is an *optional* configured source: when the
+ * configured path simply doesn't exist, this degrades to a valid empty
+ * {@link ImportResult} carrying a structured warning, rather than throwing.
+ * Every other failure (the path is a directory, exceeds the byte cap, isn't
+ * valid UTF-8, a permission/I/O error, or malformed JSON content) remains an
+ * explicit, thrown error — the identity map config is documented as a
+ * single file, so a directory there is a genuine misconfiguration, not an
+ * "optional source not yet present" case.
  */
 export function importIdentityMap(
   configuredPath: string,
   options: ImportIdentityMapOptions = {},
 ): ImportResult<NormalizedIdentityRecord> {
-  const { content, fingerprint } = readImportFile(configuredPath, { maxBytes: options.maxBytes });
+  let fileResult;
+  try {
+    fileResult = readImportFile(configuredPath, { maxBytes: options.maxBytes });
+  } catch (err) {
+    if (err instanceof ImportFileError && err.reason === "not_found") {
+      return emptyImportResult(configuredPath, "identity_map_import");
+    }
+    throw err;
+  }
+  const { content, fingerprint } = fileResult;
   const trimmed = content.trim();
 
   let parsed: unknown = {};

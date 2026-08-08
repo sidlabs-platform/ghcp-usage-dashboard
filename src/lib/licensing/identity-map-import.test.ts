@@ -147,7 +147,7 @@ describe("importIdentityMap — malformed entries and file errors", () => {
     expect(result.warnings.some((w) => /externalIdentity/i.test(w))).toBe(true);
   });
 
-  it("throws for a top-level JSON array/object of the wrong shape (e.g. array of primitives)", () => {
+  it("gracefully skips every entry (reporting them as malformed) for a top-level array of primitives, rather than throwing", () => {
     const p = writeFixture("wrong-shape.json", JSON.stringify([1, 2, 3]));
     const result = importIdentityMap(p);
     // Every entry is malformed (not an object) — reported, not crashed.
@@ -160,8 +160,28 @@ describe("importIdentityMap — malformed entries and file errors", () => {
     expect(() => importIdentityMap(p)).toThrow();
   });
 
-  it("throws ImportFileError for a nonexistent file", () => {
-    expect(() => importIdentityMap(path.join(FIXTURE_DIR, "nope.json"))).toThrow(ImportFileError);
+  it("returns a valid empty ImportResult with a structured warning when the configured identity map path does not exist (optional source)", () => {
+    const missingPath = path.join(FIXTURE_DIR, "nope.json");
+    const result = importIdentityMap(missingPath);
+    expect(result.records).toEqual([]);
+    expect(result.skippedRows).toBe(0);
+    expect(result.warnings).toHaveLength(1);
+    expect(result.warnings[0]).toMatch(/not found/i);
+    expect(result.sourceFingerprint).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it("still throws ImportFileError when the configured identity map path is a directory (not degraded to empty — identity map config is single-file only)", () => {
+    const dirPath = path.join(FIXTURE_DIR, "identity-map-as-directory");
+    fs.mkdirSync(dirPath, { recursive: true });
+    expect(() => importIdentityMap(dirPath)).toThrow(ImportFileError);
+  });
+
+  it("still throws ImportFileError for an oversized configured identity map file (not degraded to empty)", () => {
+    const p = writeFixture(
+      "too-big.json",
+      JSON.stringify(Object.fromEntries(Array.from({ length: 50 }, (_, i) => [`ext-${i}`, `user${i}`]))),
+    );
+    expect(() => importIdentityMap(p, { maxBytes: 50 })).toThrow(ImportFileError);
   });
 });
 

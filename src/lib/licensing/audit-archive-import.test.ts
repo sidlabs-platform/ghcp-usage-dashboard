@@ -160,8 +160,38 @@ describe("importAuditArchive — malformed rows and file errors", () => {
     expect(() => importAuditArchive(p)).toThrow();
   });
 
-  it("throws ImportFileError for a nonexistent file", () => {
-    expect(() => importAuditArchive(path.join(FIXTURE_DIR, "nope.json"))).toThrow(ImportFileError);
+  it("returns a valid empty ImportResult with a structured warning when the configured archive path does not exist (optional source)", () => {
+    const missingPath = path.join(FIXTURE_DIR, "nope.json");
+    const result = importAuditArchive(missingPath);
+    expect(result.records).toEqual([]);
+    expect(result.skippedRows).toBe(0);
+    expect(result.warnings).toHaveLength(1);
+    expect(result.warnings[0]).toMatch(/not found/i);
+    expect(result.sourceFingerprint).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it("returns a valid empty ImportResult (not a hard error) when the configured archive path is a directory — auditArchivePath is documented as directory-or-path", () => {
+    const dirPath = path.join(FIXTURE_DIR, "archive-as-directory");
+    fs.mkdirSync(dirPath, { recursive: true });
+    const result = importAuditArchive(dirPath);
+    expect(result.records).toEqual([]);
+    expect(result.skippedRows).toBe(0);
+    expect(result.warnings.some((w) => /directory|not found/i.test(w))).toBe(true);
+  });
+
+  it("still throws ImportFileError for an oversized configured archive file (not degraded to empty)", () => {
+    const p = writeFixture(
+      "too-big.json",
+      JSON.stringify(
+        Array.from({ length: 50 }, (_, i) => ({
+          action: "copilot.seat_assignment_created",
+          user: `user${i}`,
+          org: "acme",
+          created_at: "2026-01-01T00:00:00Z",
+        })),
+      ),
+    );
+    expect(() => importAuditArchive(p, { maxBytes: 50 })).toThrow(ImportFileError);
   });
 });
 

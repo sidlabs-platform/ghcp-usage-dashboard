@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
 import fs from "fs";
 import path from "path";
 
@@ -7,6 +7,7 @@ import {
   readImportFile,
   parseDelimitedText,
   stableStringify,
+  emptyImportResult,
   ImportFileError,
   DEFAULT_MAX_IMPORT_BYTES,
 } from "./import-shared";
@@ -132,6 +133,116 @@ describe("readImportFile", () => {
     const r1 = readImportFile(p);
     const r2 = readImportFile(p);
     expect(r1.fingerprint).toBe(r2.fingerprint);
+  });
+});
+
+describe("readImportFile — typed error reason classification", () => {
+  it("classifies a missing file as reason 'not_found'", () => {
+    const p = path.join(FIXTURE_DIR, "reason-missing.txt");
+    try {
+      readImportFile(p);
+      expect.unreachable("expected readImportFile to throw");
+    } catch (err) {
+      expect(err).toBeInstanceOf(ImportFileError);
+      expect((err as ImportFileError).reason).toBe("not_found");
+    }
+  });
+
+  it("classifies a directory path as reason 'is_directory'", () => {
+    const dirPath = path.join(FIXTURE_DIR, "reason-directory");
+    fs.mkdirSync(dirPath, { recursive: true });
+    try {
+      readImportFile(dirPath);
+      expect.unreachable("expected readImportFile to throw");
+    } catch (err) {
+      expect(err).toBeInstanceOf(ImportFileError);
+      expect((err as ImportFileError).reason).toBe("is_directory");
+    }
+  });
+
+  it("classifies an oversized file as reason 'too_large'", () => {
+    const p = writeFixture("reason-too-big.txt", "a".repeat(1000));
+    try {
+      readImportFile(p, { maxBytes: 100 });
+      expect.unreachable("expected readImportFile to throw");
+    } catch (err) {
+      expect(err).toBeInstanceOf(ImportFileError);
+      expect((err as ImportFileError).reason).toBe("too_large");
+    }
+  });
+
+  it("classifies invalid UTF-8 content as reason 'invalid_utf8'", () => {
+    const p = writeFixture("reason-invalid-utf8.bin", Buffer.from([0xff, 0xfe, 0x00, 0x41]));
+    try {
+      readImportFile(p);
+      expect.unreachable("expected readImportFile to throw");
+    } catch (err) {
+      expect(err).toBeInstanceOf(ImportFileError);
+      expect((err as ImportFileError).reason).toBe("invalid_utf8");
+    }
+  });
+
+  it("classifies a non-ENOENT stat failure (e.g. permission denied) as reason 'io_error', distinct from 'not_found'", () => {
+    const p = writeFixture("reason-io-error.txt", "content");
+    const statSpy = vi.spyOn(fs, "statSync").mockImplementation(() => {
+      const err = new Error("EACCES: permission denied") as NodeJS.ErrnoException;
+      err.code = "EACCES";
+      throw err;
+    });
+    try {
+      readImportFile(p);
+      expect.unreachable("expected readImportFile to throw");
+    } catch (err) {
+      expect(err).toBeInstanceOf(ImportFileError);
+      expect((err as ImportFileError).reason).toBe("io_error");
+    } finally {
+      statSpy.mockRestore();
+    }
+  });
+
+  it("classifies a non-ENOENT readFileSync failure as reason 'io_error'", () => {
+    const p = writeFixture("reason-read-io-error.txt", "content");
+    const readSpy = vi.spyOn(fs, "readFileSync").mockImplementation(() => {
+      const err = new Error("EACCES: permission denied") as NodeJS.ErrnoException;
+      err.code = "EACCES";
+      throw err;
+    });
+    try {
+      readImportFile(p);
+      expect.unreachable("expected readImportFile to throw");
+    } catch (err) {
+      expect(err).toBeInstanceOf(ImportFileError);
+      expect((err as ImportFileError).reason).toBe("io_error");
+    } finally {
+      readSpy.mockRestore();
+    }
+  });
+});
+
+describe("emptyImportResult", () => {
+  it("returns an empty result with a structured warning naming the missing file", () => {
+    const p = path.join(FIXTURE_DIR, "missing-optional.csv");
+    const result = emptyImportResult(p, "test_kind");
+    expect(result.records).toEqual([]);
+    expect(result.skippedRows).toBe(0);
+    expect(result.warnings).toHaveLength(1);
+    expect(result.warnings[0]).toMatch(/missing-optional\.csv/);
+    expect(result.warnings[0]).toMatch(/not found/i);
+  });
+
+  it("produces a stable fingerprint across repeated calls for the same missing path", () => {
+    const p = path.join(FIXTURE_DIR, "missing-stable.csv");
+    const r1 = emptyImportResult(p, "test_kind");
+    const r2 = emptyImportResult(p, "test_kind");
+    expect(r1.sourceFingerprint).toBe(r2.sourceFingerprint);
+  });
+
+  it("produces a different fingerprint for a different missing path or kind", () => {
+    const base = emptyImportResult(path.join(FIXTURE_DIR, "missing-a.csv"), "test_kind");
+    const otherPath = emptyImportResult(path.join(FIXTURE_DIR, "missing-b.csv"), "test_kind");
+    const otherKind = emptyImportResult(path.join(FIXTURE_DIR, "missing-a.csv"), "other_kind");
+    expect(base.sourceFingerprint).not.toBe(otherPath.sourceFingerprint);
+    expect(base.sourceFingerprint).not.toBe(otherKind.sourceFingerprint);
   });
 });
 

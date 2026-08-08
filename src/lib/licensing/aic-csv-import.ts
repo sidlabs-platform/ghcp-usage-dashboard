@@ -14,6 +14,8 @@ import {
   parseDelimitedText,
   readImportFile,
   computeFingerprint,
+  emptyImportResult,
+  ImportFileError,
   type ImportResult,
 } from "./import-shared";
 
@@ -132,13 +134,32 @@ const DEFAULT_CREDIT_TO_USD = 0.01;
  * quoted/multiline/comma-containing fields, reports (rather than silently
  * drops) malformed and unparseable rows, and never deduplicates rows —
  * duplicate detection/merging is a later orchestration concern.
+ *
+ * `aicConsumption.csvPath` is an *optional* configured source (a run may
+ * have no CSV backfill at all): when the configured path simply doesn't
+ * exist, this degrades to a valid empty {@link ImportResult} carrying a
+ * structured warning, rather than throwing — callers can proceed with
+ * other consumption sources undisturbed. Every other failure (the file
+ * exists but is a directory, exceeds the byte cap, isn't valid UTF-8, or a
+ * permission/I/O error) remains an explicit, thrown `ImportFileError` — a
+ * *misconfigured* source must still surface loudly.
  */
 export function importAicConsumptionCsv(
   configuredPath: string,
   options: ImportAicConsumptionCsvOptions = {},
 ): ImportResult<AicCsvConsumptionRecord> {
   const creditToUsd = options.creditToUsd ?? DEFAULT_CREDIT_TO_USD;
-  const { content, fingerprint } = readImportFile(configuredPath, { maxBytes: options.maxBytes });
+
+  let fileResult;
+  try {
+    fileResult = readImportFile(configuredPath, { maxBytes: options.maxBytes });
+  } catch (err) {
+    if (err instanceof ImportFileError && err.reason === "not_found") {
+      return emptyImportResult(configuredPath, "aic_csv_import");
+    }
+    throw err;
+  }
+  const { content, fingerprint } = fileResult;
 
   const parsed = parseDelimitedText(content);
   const warnings: string[] = [];
