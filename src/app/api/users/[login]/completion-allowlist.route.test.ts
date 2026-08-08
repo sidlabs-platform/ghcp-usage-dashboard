@@ -55,7 +55,7 @@ async function getHandler() {
 }
 
 describe("user detail route — completion allowlist", { timeout: 10000 }, () => {
-  it("excludes copilot_app and chat_inline/unknown from completion LoC/acceptance while including inline_chat/chat_panel_*", async () => {
+  it("excludes copilot_app and chat_inline/unknown from completion LoC/acceptance (summary), while topLanguages uses the NOT_AGENT_OR_APP_SQL exclusion (matches getLanguageBreakdown)", async () => {
     const totalsByFeature = JSON.stringify([
       { feature: "code_completion", loc_suggested_to_add_sum: 100, loc_added_sum: 80, loc_deleted_sum: 0, code_generation_activity_count: 50, code_acceptance_activity_count: 40 },
       { feature: "inline_chat", loc_suggested_to_add_sum: 30, loc_added_sum: 25, loc_deleted_sum: 0, code_generation_activity_count: 6, code_acceptance_activity_count: 4 },
@@ -104,11 +104,15 @@ describe("user detail route — completion allowlist", { timeout: 10000 }, () =>
     // rate = 46/59*100 = 77.9661... -> rounded to 1 decimal = 78
     expect(json.summary.completionAcceptanceRate).toBe(78);
 
-    // Top languages: only code_completion (TypeScript) and inline_chat (Python)
-    // count — copilot_app and chat_inline rows (much larger counts) excluded.
+    // Top languages use NOT_AGENT_OR_APP_SQL (exclusion), NOT the strict
+    // IS_COMPLETION_SQL allowlist — matching getLanguageBreakdown/
+    // getLanguageByFeatureBreakdown in aggregation-queries.ts. Only copilot_app
+    // (agent_edit/copilot_app) is excluded; chat_inline is NOT a recognized
+    // completion feature but is also not agent_edit/copilot_app, so (unlike the
+    // strict summary.completionLocAccepted above) it IS included here.
     const ts = json.topLanguages.find((l: { language: string }) => l.language === "TypeScript");
     const py = json.topLanguages.find((l: { language: string }) => l.language === "Python");
-    expect(ts).toEqual({ language: "TypeScript", suggestions: 10, acceptances: 8 });
+    expect(ts).toEqual({ language: "TypeScript", suggestions: 910, acceptances: 908 }); // code_completion(10/8) + chat_inline(900/900); copilot_app(500/500) excluded
     expect(py).toEqual({ language: "Python", suggestions: 5, acceptances: 3 });
 
     // Broad feature view (featureUsage) is unfiltered and may still show

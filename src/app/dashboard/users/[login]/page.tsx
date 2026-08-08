@@ -34,6 +34,13 @@ interface DailyActivity {
   aiCreditsUsed: number;
   agentLocAdded: number;
   agentLocDeleted: number;
+  // Strict completion-only LoC (server-computed via the IS_COMPLETION_SQL
+  // allowlist) — the same basis as summary.completionLocAccepted/
+  // completionLocDeleted, so the daily chart and the summary card agree.
+  completionLocAccepted: number;
+  completionLocDeleted: number;
+  appLocAdded: number;
+  appLocDeleted: number;
 }
 
 interface UserSummary {
@@ -151,15 +158,13 @@ function LoadingSkeleton() {
 // ── Chart Components ──────────────────────────────────────────────────
 
 function LocTrendChart({ data }: { data: DailyActivity[] }) {
-  // Approximate completion-only LOC by subtracting per-day agent contributions.
-  // The summary cards use precise json_each(totals_by_feature) decomposition.
   const chartData = useMemo(() => data.map((d) => ({
     day: d.day,
     locSuggested: d.locSuggested,
-    completionLocAccepted: Math.max(0, d.locAccepted - d.agentLocAdded),
+    completionLocAccepted: d.completionLocAccepted,
     agentLocAdded: d.agentLocAdded,
     locSuggestedDelete: d.locSuggestedDelete,
-    completionLocDeleted: Math.max(0, d.locDeleted - d.agentLocDeleted),
+    completionLocDeleted: d.completionLocDeleted,
   })), [data]);
 
   return (
@@ -181,6 +186,9 @@ function LocTrendChart({ data }: { data: DailyActivity[] }) {
                 stroke={CHART_COLORS.locSuggested} fill={CHART_COLORS.locSuggested}
                 fillOpacity={0.15} strokeWidth={2}
               />
+              {/* completionLocAccepted/completionLocDeleted are server-computed via the
+                  strict IS_COMPLETION_SQL allowlist — the same fields the summary
+                  cards use — so this chart and the cards never disagree. */}
               <Area
                 type="monotone" dataKey="completionLocAccepted" name="LoC Accepted (Completions)"
                 stroke={CHART_COLORS.locAccepted} fill={CHART_COLORS.locAccepted}

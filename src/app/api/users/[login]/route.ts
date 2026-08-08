@@ -10,7 +10,7 @@ import { CACHE_TTL } from "@/lib/cache/memory-cache";
 // sites. Never re-declare a local copy or fall back to a bare
 // `!= 'agent_edit'` exclusion, since that would silently misclassify
 // `copilot_app`, `chat_inline`, or any future unknown feature as completion.
-import { IS_COMPLETION_SQL } from "@/lib/db/aggregation-queries";
+import { IS_COMPLETION_SQL, NOT_AGENT_OR_APP_SQL, getCompletionDailyTrend } from "@/lib/db/aggregation-queries";
 
 interface DailyActivity {
   day: string;
@@ -24,6 +24,16 @@ interface DailyActivity {
   aiCreditsUsed: number;
   agentLocAdded: number;
   agentLocDeleted: number;
+  // Strict completion-only LoC (IS_COMPLETION_SQL allowlist) — the same value
+  // the summary card's completionLocAccepted/completionLocDeleted are built
+  // from, so the daily chart and the card never disagree. Unlike locAccepted
+  // (top-level loc_added_sum, which also includes agent_edit and copilot_app
+  // writes), this excludes both.
+  completionLocAccepted: number;
+  completionLocDeleted: number;
+  // Copilot App LoC, broken out for future use — never folded into completion.
+  appLocAdded: number;
+  appLocDeleted: number;
 }
 
 interface UserSummary {
@@ -131,7 +141,8 @@ async function handler(request: NextRequest) {
 
     // Daily activity (with per-day agent LOC extracted from agent_edit JSON)
     // Use CASE WHEN json_valid() to guard against empty/malformed agent_edit values
-    const dailyActivity = db.prepare(`
+    type DailyActivityRow = Omit<DailyActivity, "completionLocAccepted" | "completionLocDeleted" | "appLocAdded" | "appLocDeleted">;
+    const dailyActivityRows = db.prepare(`
       SELECT day,
         COALESCE(code_generation_activity_count, 0) AS codeGen,
         COALESCE(code_acceptance_activity_count, 0) AS codeAccept,
@@ -146,7 +157,40 @@ async function handler(request: NextRequest) {
       FROM user_daily_metrics
       WHERE user_login = ? AND day BETWEEN ? AND ?${efClause}
       ORDER BY day ASC
-    `).all(decodedLogin, start, end, ...efParams) as DailyActivity[];
+    `).all(decodedLogin, start, end, ...efParams) as DailyActivityRow[];
+
+    // Per-day strict completion/app LoC — via json_each(totals_by_feature)
+    // GROUP BY day, reusing the same shared aggregation query the org-level
+    // code-generation route uses (getCompletionDailyTrend), scoped to this
+    // single user. This is a separate query merged in JS by day, NOT a join
+    // against the query above, so it can never multiply dailyActivity rows.
+    const completionTrendByDay = new Map(
+      getCompletionDailyTrend(start, end, [decodedLogin], scope.enterpriseSlugs).map((r) => [r.day, r]),
+    );
+
+    // getCompletionDailyTrend does not track completion loc_deleted_sum, so
+    // compute it separately with the same strict IS_COMPLETION_SQL allowlist,
+    // GROUP BY day (no row multiplication — one row per day, merged by day key).
+    const completionLocDeletedRows = db.prepare(`
+      SELECT u.day,
+        COALESCE(SUM(CASE WHEN ${IS_COMPLETION_SQL} THEN json_extract(j.value, '$.loc_deleted_sum') ELSE 0 END), 0) AS completionLocDeleted
+      FROM user_daily_metrics u, json_each(u.totals_by_feature) j
+      WHERE u.user_login = ? AND u.day BETWEEN ? AND ?
+        AND u.totals_by_feature IS NOT NULL AND u.totals_by_feature != '[]'${efClause}
+      GROUP BY u.day
+    `).all(decodedLogin, start, end, ...efParams) as { day: string; completionLocDeleted: number }[];
+    const completionLocDeletedByDay = new Map(completionLocDeletedRows.map((r) => [r.day, r.completionLocDeleted]));
+
+    const dailyActivity: DailyActivity[] = dailyActivityRows.map((row) => {
+      const trend = completionTrendByDay.get(row.day);
+      return {
+        ...row,
+        completionLocAccepted: trend?.completionAccepted ?? 0,
+        completionLocDeleted: completionLocDeletedByDay.get(row.day) ?? 0,
+        appLocAdded: trend?.appAdded ?? 0,
+        appLocDeleted: trend?.appDeleted ?? 0,
+      };
+    });
 
     // Summary — top-level aggregation (includes all features)
     const summaryRow = db.prepare(`
@@ -272,10 +316,13 @@ async function handler(request: NextRequest) {
       };
     }
 
-    // Top languages — completion-only view via the explicit completion
-    // allowlist (excludes agent_edit, copilot_app, chat_inline, and any
-    // unknown feature; a bare `!= 'agent_edit'` exclusion would let those
-    // leak into "completion-only" language metrics).
+    // Top languages — mirrors getLanguageBreakdown/getLanguageByFeatureBreakdown
+    // in aggregation-queries.ts: uses NOT_AGENT_OR_APP_SQL (exclusion), not the
+    // strict IS_COMPLETION_SQL allowlist, so legacy rows synced before the
+    // `feature` key existed (COALESCE(feature, '') = '') remain included, while
+    // agent_edit and copilot_app are still excluded from this "completion-ish"
+    // language view. This intentionally differs from summary.completionLocAccepted
+    // above, which uses the strict allowlist.
     const topLanguages = db.prepare(`
       SELECT
         j.value->>'language' AS language,
@@ -283,7 +330,7 @@ async function handler(request: NextRequest) {
         SUM(CAST(COALESCE(j.value->>'code_acceptance_activity_count', '0') AS INTEGER)) AS acceptances
       FROM user_daily_metrics u, json_each(u.totals_by_language_feature) j
       WHERE u.user_login = ? AND u.day BETWEEN ? AND ?
-        AND ${IS_COMPLETION_SQL}${efClause}
+        AND ${NOT_AGENT_OR_APP_SQL}${efClause}
       GROUP BY language
       ORDER BY suggestions DESC
       LIMIT 10

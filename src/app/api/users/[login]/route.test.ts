@@ -51,6 +51,22 @@ beforeEach(() => {
     enterpriseSlugs: ["ent-a"],
   };
   mockState.prepare.mockImplementation((sql: string) => {
+    if (sql.includes("as completionAccepted")) {
+      return {
+        all: vi.fn(() => [
+          { day: "2024-01-01", completionSuggested: 55, completionAccepted: 65, agentAdded: 20, agentDeleted: 2, compGenCount: 9, compAcceptCount: 3, appAdded: 3, appDeleted: 1, appGenCount: 1, appAcceptCount: 1 },
+          { day: "2024-01-02", completionSuggested: 58, completionAccepted: 75, agentAdded: 20, agentDeleted: 3, compGenCount: 9, compAcceptCount: 3, appAdded: 2, appDeleted: 0, appGenCount: 0, appAcceptCount: 0 },
+        ]),
+      };
+    }
+    if (sql.includes("AS completionLocDeleted")) {
+      return {
+        all: vi.fn(() => [
+          { day: "2024-01-01", completionLocDeleted: 3 },
+          { day: "2024-01-02", completionLocDeleted: 4 },
+        ]),
+      };
+    }
     if (sql.includes("SELECT day,")) {
       return {
         all: vi.fn(() => [
@@ -207,6 +223,10 @@ describe("user detail route", { timeout: 10000 }, () => {
           aiCreditsUsed: 1,
           agentLocAdded: 20,
           agentLocDeleted: 2,
+          completionLocAccepted: 65,
+          completionLocDeleted: 3,
+          appLocAdded: 3,
+          appLocDeleted: 1,
         },
         {
           day: "2024-01-02",
@@ -220,6 +240,10 @@ describe("user detail route", { timeout: 10000 }, () => {
           aiCreditsUsed: 0.5,
           agentLocAdded: 20,
           agentLocDeleted: 3,
+          completionLocAccepted: 75,
+          completionLocDeleted: 4,
+          appLocAdded: 2,
+          appLocDeleted: 0,
         },
       ],
       summary: {

@@ -142,11 +142,11 @@ describe("SQL json_each aggregation queries", () => {
     const rows = db.prepare(`
       SELECT
         u.day,
-        COALESCE(SUM(CASE WHEN json_extract(j.value, '$.feature') != 'agent_edit'
+        COALESCE(SUM(CASE WHEN ${IS_COMPLETION_SQL}
           THEN json_extract(j.value, '$.loc_suggested_to_add_sum') ELSE 0 END), 0) as completionSuggested,
-        COALESCE(SUM(CASE WHEN json_extract(j.value, '$.feature') != 'agent_edit'
+        COALESCE(SUM(CASE WHEN ${IS_COMPLETION_SQL}
           THEN json_extract(j.value, '$.loc_added_sum') ELSE 0 END), 0) as completionAccepted,
-        COALESCE(SUM(CASE WHEN json_extract(j.value, '$.feature') = 'agent_edit'
+        COALESCE(SUM(CASE WHEN ${IS_AGENT_SQL}
           THEN json_extract(j.value, '$.loc_added_sum') ELSE 0 END), 0) as agentAdded
       FROM user_daily_metrics u, json_each(u.totals_by_feature) j
       WHERE u.day >= '2025-04-01' AND u.day <= '2025-04-02'
@@ -511,9 +511,9 @@ describe("multi-enterprise SQL deduplication", () => {
     const rows = db.prepare(`
       SELECT
         u.day,
-        COALESCE(SUM(CASE WHEN json_extract(j.value, '$.feature') != 'agent_edit'
+        COALESCE(SUM(CASE WHEN ${IS_COMPLETION_SQL}
           THEN json_extract(j.value, '$.code_generation_activity_count') ELSE 0 END), 0) as compGenCount,
-        COALESCE(SUM(CASE WHEN json_extract(j.value, '$.feature') = 'agent_edit'
+        COALESCE(SUM(CASE WHEN ${IS_AGENT_SQL}
           THEN json_extract(j.value, '$.loc_added_sum') ELSE 0 END), 0) as agentAdded
       FROM user_daily_metrics u, json_each(u.totals_by_feature) j
       WHERE u.day = '2025-05-10'
