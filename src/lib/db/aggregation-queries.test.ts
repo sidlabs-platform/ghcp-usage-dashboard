@@ -2,6 +2,10 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import Database from "better-sqlite3";
 import path from "path";
 import fs from "fs";
+// Import the real, single-source-of-truth SQL predicate constants instead of
+// re-declaring local copies — this way these tests exercise (and would break
+// on any regression to) the exact fragment every production query uses.
+import { IS_COMPLETION_SQL, IS_AGENT_SQL, IS_COPILOT_APP_SQL, NOT_AGENT_OR_APP_SQL } from "./aggregation-queries";
 
 // We test the SQL queries directly against a temporary in-memory DB
 // to verify json_each aggregation logic
@@ -549,11 +553,6 @@ describe("multi-enterprise SQL deduplication", () => {
 // ═══════════════════════════════════════════════════════════════════════
 
 describe("copilot_app SQL classification", () => {
-  const FEATURE_SQL = "json_extract(j.value, '$.feature')";
-  const IS_COMPLETION_SQL = `(${FEATURE_SQL} IN ('code_completion', 'inline_chat', 'chat_panel') OR ${FEATURE_SQL} LIKE 'chat\\_panel\\_%' ESCAPE '\\')`;
-  const IS_AGENT_SQL = `${FEATURE_SQL} = 'agent_edit'`;
-  const IS_COPILOT_APP_SQL = `${FEATURE_SQL} = 'copilot_app'`;
-
   let appDb: Database.Database;
 
   beforeAll(() => {
@@ -639,5 +638,54 @@ describe("copilot_app SQL classification", () => {
 
     // Only the chat_panel_agent_mode row (15) counts, copilot_app (99) excluded
     expect(row.completionAccepted).toBe(15);
+  });
+
+  it("excludes chat_inline and unknown/future feature names from the completion allowlist", () => {
+    // `chat_inline` (a legacy/alternate name, distinct from `inline_chat`) and any
+    // unrecognized feature must NOT be silently folded into completion — per the
+    // authoritative semantics, only code_completion/inline_chat/chat_panel(_*) count.
+    const mixedFeatures = JSON.stringify([
+      { feature: "inline_chat", loc_added_sum: 25, code_generation_activity_count: 6, code_acceptance_activity_count: 4 },
+      { feature: "chat_inline", loc_added_sum: 1000, code_generation_activity_count: 1000, code_acceptance_activity_count: 1000 },
+      { feature: "some_future_unknown_feature", loc_added_sum: 2000, code_generation_activity_count: 2000, code_acceptance_activity_count: 2000 },
+    ]);
+    appDb.prepare(`INSERT INTO user_daily_metrics (day, enterprise_id, enterprise_slug, user_id, user_login, totals_by_feature)
+      VALUES ('2025-06-03', 'ent1', 'ent1', 3, 'user3', ?)`).run(mixedFeatures);
+
+    const row = appDb.prepare(`
+      SELECT
+        COALESCE(SUM(CASE WHEN ${IS_COMPLETION_SQL} THEN json_extract(j.value, '$.loc_added_sum') ELSE 0 END), 0) as completionAccepted,
+        COALESCE(SUM(CASE WHEN ${IS_COMPLETION_SQL} THEN json_extract(j.value, '$.code_generation_activity_count') ELSE 0 END), 0) as compGenCount,
+        COALESCE(SUM(CASE WHEN ${IS_COMPLETION_SQL} THEN json_extract(j.value, '$.code_acceptance_activity_count') ELSE 0 END), 0) as compAcceptCount
+      FROM user_daily_metrics u, json_each(u.totals_by_feature) j
+      WHERE u.day = '2025-06-03'
+    `).get() as { completionAccepted: number; compGenCount: number; compAcceptCount: number };
+
+    // Only inline_chat (25/6/4) counts — chat_inline and the unknown feature must be excluded entirely
+    expect(row.completionAccepted).toBe(25);
+    expect(row.compGenCount).toBe(6);
+    expect(row.compAcceptCount).toBe(4);
+  });
+
+  it("NOT_AGENT_OR_APP_SQL keeps legacy rows with no feature key in broad (non-completion-rate) views", () => {
+    // Older synced data may have language rows with no `feature` key at all.
+    // The broad/backward-compatible exclusion (NOT_AGENT_OR_APP_SQL) must still
+    // include these — only agent_edit/copilot_app are excluded, unlike the
+    // stricter completion allowlist used for the completion rate itself.
+    const legacyLangFeature = JSON.stringify([
+      { language: "Rust", loc_added_sum: 40, loc_suggested_to_add_sum: 50, code_generation_activity_count: 4, code_acceptance_activity_count: 3 },
+    ]);
+    appDb.prepare(`INSERT INTO user_daily_metrics (day, enterprise_id, enterprise_slug, user_id, user_login, totals_by_language_feature)
+      VALUES ('2025-06-04', 'ent1', 'ent1', 4, 'user4', ?)`).run(legacyLangFeature);
+
+    const row = appDb.prepare(`
+      SELECT
+        COALESCE(SUM(json_extract(j.value, '$.loc_added_sum')), 0) as locAdded
+      FROM user_daily_metrics u, json_each(u.totals_by_language_feature) j
+      WHERE u.day = '2025-06-04'
+        AND ${NOT_AGENT_OR_APP_SQL}
+    `).get() as { locAdded: number };
+
+    expect(row.locAdded).toBe(40);
   });
 });

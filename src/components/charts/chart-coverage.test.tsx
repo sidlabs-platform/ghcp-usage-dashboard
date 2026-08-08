@@ -37,6 +37,7 @@ import { PremiumQuotaChart } from "@/components/charts/PremiumQuotaChart";
 import { SecurityTrendChart } from "@/components/charts/SecurityTrendChart";
 import { SeverityBreakdownChart } from "@/components/charts/SeverityBreakdownChart";
 import { Sparkline } from "@/components/charts/Sparkline";
+import { CHART_COLORS } from "@/lib/constants";
 
 interface MockChartProps {
   children?: ReactNode;
@@ -65,8 +66,8 @@ vi.mock("recharts", () => ({
   Pie: makeMock("Pie"),
   XAxis: () => null,
   YAxis: () => null,
-  Area: ({ dataKey, name }: { dataKey?: string; name?: string }) => (
-    <span data-testid={`Area-${dataKey}`} data-name={name} />
+  Area: ({ dataKey, name, stroke, strokeDasharray }: { dataKey?: string; name?: string; stroke?: string; strokeDasharray?: string }) => (
+    <span data-testid={`Area-${dataKey}`} data-name={name} data-stroke={stroke} data-stroke-dasharray={strokeDasharray} />
   ),
   Line: () => null,
   Bar: () => null,
@@ -143,6 +144,14 @@ describe("chart component coverage", () => {
     const appDeletedSeries = screen.getByTestId("Area-appDeleted");
     expect(appAddedSeries.getAttribute("data-name")).toBe("App Added");
     expect(appDeletedSeries.getAttribute("data-name")).toBe("App Deleted");
+
+    // App Deleted uses a distinct, accessible/differentiable named color
+    // (CHART_COLORS.copilotAppDeleted, not a diluted tint of copilotApp),
+    // plus a dashed stroke so it never reads as the same series as App Added.
+    expect(appAddedSeries.getAttribute("data-stroke")).toBe(CHART_COLORS.copilotApp);
+    expect(appDeletedSeries.getAttribute("data-stroke")).toBe(CHART_COLORS.copilotAppDeleted);
+    expect(appDeletedSeries.getAttribute("data-stroke")).not.toBe(appAddedSeries.getAttribute("data-stroke"));
+    expect(appDeletedSeries.getAttribute("data-stroke-dasharray")).toBeTruthy();
 
     const chart = screen.getByTestId("AreaChart");
     expect(chart.getAttribute("data-json")).toContain("\"appAdded\":30");

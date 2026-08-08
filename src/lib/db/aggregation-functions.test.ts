@@ -242,6 +242,26 @@ describe("getCompletionTotals", () => {
     expect(totals.appGenCount).toBe(7);
     expect(totals.appAcceptCount).toBe(5);
   });
+
+  it("excludes chat_inline and unrecognized/unknown feature names from completion sums", () => {
+    // Authoritative semantics: completion features are exactly code_completion,
+    // inline_chat, chat_panel, and chat_panel_*. `chat_inline` (a distinct legacy
+    // name from `inline_chat`) and any unknown feature must NOT be folded in,
+    // even though they may still appear in broad/unfiltered feature views.
+    const features = JSON.stringify([
+      { feature: "inline_chat", loc_suggested_to_add_sum: 30, loc_added_sum: 25, code_generation_activity_count: 6, code_acceptance_activity_count: 4 },
+      { feature: "chat_inline", loc_suggested_to_add_sum: 1000, loc_added_sum: 1000, code_generation_activity_count: 1000, code_acceptance_activity_count: 1000 },
+      { feature: "some_future_unknown_feature", loc_suggested_to_add_sum: 2000, loc_added_sum: 2000, code_generation_activity_count: 2000, code_acceptance_activity_count: 2000 },
+    ]);
+    db.prepare(`INSERT INTO user_daily_metrics (day, enterprise_id, enterprise_slug, user_id, user_login, totals_by_feature)
+      VALUES ('2024-01-11', 'ent1', 'ent1', 1, 'user1', ?)`).run(features);
+    const totals = getCompletionTotals("2024-01-01", "2024-01-31");
+    // Only inline_chat counts; chat_inline and the unknown feature must be excluded
+    expect(totals.completionSuggested).toBe(30);
+    expect(totals.completionAccepted).toBe(25);
+    expect(totals.compGenCount).toBe(6);
+    expect(totals.compAcceptCount).toBe(4);
+  });
 });
 
 describe("getUserSummariesPaginated", () => {

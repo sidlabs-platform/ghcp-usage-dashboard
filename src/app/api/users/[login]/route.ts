@@ -5,6 +5,12 @@ import { parseScopeFilter } from "@/lib/api/scope-filter";
 import { withCache } from "@/lib/cache/with-cache";
 import { withTimeout } from "@/lib/api/timeout";
 import { CACHE_TTL } from "@/lib/cache/memory-cache";
+// Shared completion-feature allowlist SQL fragment — the single source of
+// truth for "is this feature a completion feature" across all raw SQL call
+// sites. Never re-declare a local copy or fall back to a bare
+// `!= 'agent_edit'` exclusion, since that would silently misclassify
+// `copilot_app`, `chat_inline`, or any future unknown feature as completion.
+import { IS_COMPLETION_SQL } from "@/lib/db/aggregation-queries";
 
 interface DailyActivity {
   day: string;
@@ -191,7 +197,11 @@ async function handler(request: NextRequest) {
         AND agent_edit IS NOT NULL AND agent_edit != ''${efClause}
     `).get(decodedLogin, start, end, ...efParams) as { agentLocAdded: number; agentLocDeleted: number } | undefined;
 
-    // Completion-only LOC and acceptance from totals_by_feature (excludes agent_edit)
+    // Completion-only LOC and acceptance from totals_by_feature.
+    // Uses the explicit completion allowlist (code_completion, inline_chat,
+    // chat_panel, chat_panel_*) — NOT a bare `!= 'agent_edit'` exclusion —
+    // so `copilot_app`, `chat_inline`, and any unknown feature never leak
+    // into completion LoC or the completion acceptance rate.
     const completionLocRow = db.prepare(`
       SELECT
         COALESCE(SUM(json_extract(j.value, '$.loc_suggested_to_add_sum')), 0) AS compLocSuggested,
@@ -202,7 +212,7 @@ async function handler(request: NextRequest) {
       FROM user_daily_metrics u, json_each(u.totals_by_feature) j
       WHERE u.user_login = ? AND u.day BETWEEN ? AND ?
         AND u.totals_by_feature IS NOT NULL AND u.totals_by_feature != '[]'
-        AND COALESCE(json_extract(j.value, '$.feature'), '') != 'agent_edit'${efClause}
+        AND ${IS_COMPLETION_SQL}${efClause}
     `).get(decodedLogin, start, end, ...efParams) as {
       compLocSuggested: number;
       compLocAccepted: number;
@@ -262,7 +272,10 @@ async function handler(request: NextRequest) {
       };
     }
 
-    // Top languages (excludes agent_edit to show completion-only language metrics)
+    // Top languages — completion-only view via the explicit completion
+    // allowlist (excludes agent_edit, copilot_app, chat_inline, and any
+    // unknown feature; a bare `!= 'agent_edit'` exclusion would let those
+    // leak into "completion-only" language metrics).
     const topLanguages = db.prepare(`
       SELECT
         j.value->>'language' AS language,
@@ -270,7 +283,7 @@ async function handler(request: NextRequest) {
         SUM(CAST(COALESCE(j.value->>'code_acceptance_activity_count', '0') AS INTEGER)) AS acceptances
       FROM user_daily_metrics u, json_each(u.totals_by_language_feature) j
       WHERE u.user_login = ? AND u.day BETWEEN ? AND ?
-        AND COALESCE(j.value->>'feature', '') != 'agent_edit'${efClause}
+        AND ${IS_COMPLETION_SQL}${efClause}
       GROUP BY language
       ORDER BY suggestions DESC
       LIMIT 10

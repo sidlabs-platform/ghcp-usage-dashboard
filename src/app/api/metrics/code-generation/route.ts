@@ -121,8 +121,11 @@ export async function GET(request: NextRequest) {
         completionLocAccepted: totals.completionAccepted,
         agentLocAdded: totals.agentAdded,
         agentLocDeleted: totals.agentDeleted,
-        agentLocShare: (totals.completionAccepted + totals.agentAdded) > 0
-          ? (totals.agentAdded / (totals.completionAccepted + totals.agentAdded)) * 100 : 0,
+        // Share of "added" LoC across all writing surfaces (completion, agent, Copilot App).
+        // Copilot App added LoC must be counted in the denominator alongside completion and
+        // agent so App activity doesn't silently inflate the agent's apparent share.
+        agentLocShare: (totals.completionAccepted + totals.agentAdded + totals.appAdded) > 0
+          ? (totals.agentAdded / (totals.completionAccepted + totals.agentAdded + totals.appAdded)) * 100 : 0,
         totalCodeGenerations: totals.compGenCount,
         appLocAdded: totals.appAdded,
         appLocDeleted: totals.appDeleted,

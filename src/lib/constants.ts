@@ -42,6 +42,10 @@ export const CHART_COLORS = {
 
   // Copilot App surface (distinct from completion/agent, per code-generation classification)
   copilotApp: "#f97316",  // orange-500
+  // App "Deleted" series — a distinct, accessible/differentiable named color
+  // (not a lightened tint of copilotApp) so it doesn't read as a washed-out
+  // duplicate of the "added" series; paired with a dashed stroke in charts.
+  copilotAppDeleted: "#c2410c", // orange-800
 } as const;
 
 export const FEATURE_LABELS: Record<string, string> = {

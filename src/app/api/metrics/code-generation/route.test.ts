@@ -181,6 +181,47 @@ describe("GET /api/metrics/code-generation", () => {
     expect(json.kpis.appCodeGenerations).toBe(9);
   });
 
+  it("computes agentLocShare with completionAccepted + agentAdded + appAdded as the denominator", async () => {
+    state.totals = {
+      day: "",
+      completionSuggested: 200,
+      completionAccepted: 150,
+      agentAdded: 500,
+      agentDeleted: 100,
+      compGenCount: 20,
+      compAcceptCount: 15,
+      appAdded: 350,
+      appDeleted: 8,
+      appGenCount: 9,
+      appAcceptCount: 7,
+    };
+    const GET = await getHandler();
+    const res = await GET(new NextRequest("http://localhost/api/metrics/code-generation?days=7"));
+    const json = await res.json();
+    // 500 / (150 + 500 + 350) * 100 = 500 / 1000 * 100 = 50
+    expect(json.kpis.agentLocShare).toBe(50);
+  });
+
+  it("guards agentLocShare against a zero denominator", async () => {
+    state.totals = {
+      day: "",
+      completionSuggested: 0,
+      completionAccepted: 0,
+      agentAdded: 0,
+      agentDeleted: 0,
+      compGenCount: 0,
+      compAcceptCount: 0,
+      appAdded: 0,
+      appDeleted: 0,
+      appGenCount: 0,
+      appAcceptCount: 0,
+    };
+    const GET = await getHandler();
+    const res = await GET(new NextRequest("http://localhost/api/metrics/code-generation?days=7"));
+    const json = await res.json();
+    expect(json.kpis.agentLocShare).toBe(0);
+  });
+
   it("includes Cache-Control headers", async () => {
     const GET = await getHandler();
     const res = await GET(new NextRequest("http://localhost/api/metrics/code-generation?days=7"));
