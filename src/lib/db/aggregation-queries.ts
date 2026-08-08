@@ -156,16 +156,38 @@ export interface CliUserRow {
   days: number;
 }
 
-function buildLoginFilter(allowedLogins: string[]): { clause: string; params: string[] } {
-  if (allowedLogins.length === 0) return { clause: "", params: [] };
+/**
+ * Build a parameterized `AND <column> IN (...)` login filter clause.
+ *
+ * `column` is always an internal SQL column/table-qualified expression
+ * (e.g. `"user_login"` or `"p.login"`) supplied by trusted call sites —
+ * never derived from request input — while the login values themselves
+ * are always bound as parameters.
+ *
+ * By default an empty `allowedLogins` array means "no filter" (existing
+ * behavior for current callers). Pass `emptyMeansNoRows = true` to instead
+ * render a clause that matches zero rows (`AND 1 = 0`) when the caller has
+ * explicitly scoped the request down to no allowed logins.
+ */
+export function buildLoginFilter(
+  allowedLogins: string[],
+  column: string = "user_login",
+  emptyMeansNoRows: boolean = false,
+): { clause: string; params: string[] } {
+  if (allowedLogins.length === 0) {
+    return emptyMeansNoRows ? { clause: "AND 1 = 0", params: [] } : { clause: "", params: [] };
+  }
   const placeholders = allowedLogins.map(() => "?").join(",");
-  return { clause: `AND user_login IN (${placeholders})`, params: allowedLogins };
+  return { clause: `AND ${column} IN (${placeholders})`, params: allowedLogins };
 }
 
-function buildEnterpriseFilter(slugs?: string[]): { clause: string; params: string[] } {
+export function buildEnterpriseFilter(
+  slugs?: string[],
+  column: string = "enterprise_slug",
+): { clause: string; params: string[] } {
   if (!slugs || slugs.length === 0) return { clause: "", params: [] };
   const placeholders = slugs.map(() => "?").join(",");
-  return { clause: ` AND enterprise_slug IN (${placeholders})`, params: slugs };
+  return { clause: ` AND ${column} IN (${placeholders})`, params: slugs };
 }
 
 export function getChatModeSums(

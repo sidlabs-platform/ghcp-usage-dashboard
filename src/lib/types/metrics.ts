@@ -307,3 +307,109 @@ export interface OverviewData {
   daysLoaded: number;
   filtered?: boolean;
 }
+
+// ── Copilot App analytics ─────────────────────────────────────────────
+
+/** Period-level Copilot App KPI summary. */
+export interface CopilotAppKpis {
+  periodActiveUsers: number;
+  appActiveUsers: number;
+  adoptionRate: number;
+  sessions: number;
+  requests: number;
+  prompts: number;
+  promptTokens: number;
+  outputTokens: number;
+  avgTokensPerRequest: number;
+  codeGenerations: number;
+  codeAcceptances: number;
+  locAdded: number;
+  locDeleted: number;
+  locChanged: number;
+}
+
+/** One day of Copilot App adoption/usage trend. */
+export interface CopilotAppAdoptionTrendPoint {
+  day: string;
+  activeUsers: number;
+  sessions: number;
+  requests: number;
+  prompts: number;
+}
+
+/** One day of Copilot App code-impact trend. */
+export interface CopilotAppCodeImpactPoint {
+  day: string;
+  generations: number;
+  acceptances: number;
+  locAdded: number;
+  locDeleted: number;
+}
+
+/** A single model/language breakdown row for Copilot App usage. */
+export interface CopilotAppBreakdown {
+  name: string;
+  interactions: number;
+  locAdded?: number;
+  locDeleted?: number;
+}
+
+/** A per-user Copilot App adopter row. */
+export interface CopilotAppAdopter {
+  login: string;
+  activeDays: number;
+  sessions: number;
+  requests: number;
+  prompts: number;
+  promptTokens: number;
+  outputTokens: number;
+  locAdded: number;
+  locDeleted: number;
+}
+
+/** Which underlying data source served a Copilot App analytics response. */
+export type CopilotAppDataSource = "users" | "enterprise" | "organization" | "none";
+
+/** Feature capabilities available for the resolved Copilot App data source. */
+export interface CopilotAppCapabilities {
+  adopters: boolean;
+  scopedFiltering: boolean;
+  modelBreakdown: boolean;
+  languageBreakdown: boolean;
+}
+
+export interface CopilotAppAnalyticsResponse {
+  hasCopilotAppData: boolean;
+  dataSource: CopilotAppDataSource;
+  capabilities: CopilotAppCapabilities;
+  kpis: CopilotAppKpis;
+  adoptionTrend: CopilotAppAdoptionTrendPoint[];
+  codeImpactTrend: CopilotAppCodeImpactPoint[];
+  modelBreakdown: CopilotAppBreakdown[];
+  languageBreakdown: CopilotAppBreakdown[];
+}
+
+export interface CopilotAppAdoptersResponse {
+  adopters: CopilotAppAdopter[];
+  page: number;
+  pageSize: number;
+  totalItems: number;
+  totalPages: number;
+}
+
+/** One day of Copilot App activity from an enterprise/org aggregate fallback. */
+export interface CopilotAppAggregateDay {
+  day: string;
+  sourceActiveUsers: number;
+  activeUsers: number;
+  sessions: number;
+  requests: number;
+  prompts: number;
+  promptTokens: number;
+  outputTokens: number;
+  generations: number;
+  acceptances: number;
+  locAdded: number;
+  locDeleted: number;
+  isSupported: boolean;
+}
