@@ -74,9 +74,31 @@ describe("CopilotIdentityClient", () => {
       expect(result.warnings).toEqual(["Could not resolve to an ExternalIdentity (at enterprise.ownerInfo)"]);
     });
 
-    it("tolerates null nodes (extractConnection callback deals with GraphQL null-node skipping upstream)", async () => {
-      // githubGraphQLPaginated itself is responsible for skipping null nodes;
-      // this client must not choke if given an empty result because of that.
+    it("tolerates a present node whose GraphQL sub-fields (user/samlIdentity/scimIdentity) are null — the actual nullable-field contract, not just an upstream-filtered empty array", async () => {
+      // githubGraphQLPaginated only strips fully null/undefined *entries* from
+      // the connection's `nodes` array (see its `GraphQLConnection.nodes?:
+      // (TNode | null | undefined)[]` contract) — it does NOT null-check the
+      // fields *inside* a node that is itself present. GitHub's GraphQL
+      // schema legitimately allows `user`, `samlIdentity`, and `scimIdentity`
+      // to each independently be null on an ExternalIdentity node (e.g. an
+      // unlinked SCIM-only identity with no matching GitHub user yet), so
+      // this client must tolerate exactly that shape without throwing.
+      mockPaginated.mockResolvedValueOnce({
+        nodes: [{ guid: "g1", user: null, samlIdentity: null, scimIdentity: null }],
+        warnings: [],
+      });
+      const result = await client.getEnterpriseIdentities("my-ent");
+      expect(result.identities).toHaveLength(1);
+      expect(result.identities[0]).toMatchObject({
+        identityKey: "guid:g1",
+        githubUserId: null,
+        resolvedLogin: null,
+        externalIdentity: null,
+        source: "enterprise_identity",
+      });
+    });
+
+    it("tolerates an upstream-filtered empty result (githubGraphQLPaginated already stripped every null node) plus its accompanying warning", async () => {
       mockPaginated.mockResolvedValueOnce({ nodes: [], warnings: ["a parent field was null"] });
       const result = await client.getEnterpriseIdentities("my-ent");
       expect(result.identities).toEqual([]);

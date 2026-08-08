@@ -1,14 +1,24 @@
 // Types for the Copilot User Management (Seats) API
 
+/**
+ * GitHub's Copilot seat `assignee` is documented as always carrying `login`
+ * and `id`, but seats held by an identity GitHub hasn't fully materialized
+ * (e.g. very recently provisioned, or already-deleted) have been observed
+ * omitting either or both — hence both are optional here. Any code reading
+ * them must not assume presence; `seats-repo.ts` already guards on
+ * `seat.assignee?.login` before persisting to the current-snapshot table,
+ * and `seats-client.ts`'s historical-ledger normalization is built
+ * specifically to handle their absence via a stable `holderKey` fallback.
+ */
 export interface CopilotSeatAssignee {
-  login: string;
-  id: number;
-  node_id: string;
-  avatar_url: string;
-  url: string;
-  html_url: string;
-  type: string;
-  site_admin: boolean;
+  login?: string;
+  id?: number;
+  node_id?: string;
+  avatar_url?: string;
+  url?: string;
+  html_url?: string;
+  type?: string;
+  site_admin?: boolean;
 }
 
 export interface CopilotAssigningTeam {

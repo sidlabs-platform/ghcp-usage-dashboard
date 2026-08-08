@@ -5,13 +5,20 @@
 // GitHub's audit log carries seat lifecycle events under several action
 // names that have changed over time (a "modern" Copilot-for-Business name
 // plus a couple of legacy aliases seen in older enterprises). This client
-// fetches the raw, largely free-form audit log payload, filters it down to
-// only the seat assign/cancel actions this pipeline cares about, and
-// normalizes those into a small, stable shape — preserving the GitHub user
-// id/login, external identity (SCIM/SAML nameid, when the entry carries
-// one), org, team, and the original raw JSON for auditability.
+// requests only Copilot-related entries (`phrase=action:copilot`, GitHub's
+// audit-log search syntax for filtering by action category), filters the
+// result down to only the seat assign/cancel actions this pipeline cares
+// about, and normalizes those into a small, stable shape — preserving the
+// GitHub user id/login, external identity (SCIM/SAML nameid, when the entry
+// carries one), org, team, and the original raw JSON for auditability.
+//
+// The audit log is an optional source (an org/enterprise may not have audit
+// log access enabled, or the caller's credential may lack `read:audit_log`),
+// so every fetch returns a discriminated `AuditFetchResult` rather than
+// throwing or silently returning an empty (success-shaped) array — see the
+// "Result contract" section below.
 
-import { githubFetchWithMeta } from "./api-base";
+import { githubFetchWithMeta, GitHubApiError } from "./api-base";
 import { createHash } from "node:crypto";
 
 // ── Raw audit log event (partial — the real payload varies significantly
@@ -158,52 +165,121 @@ function extractNextLink(linkHeader: string | undefined): string | null {
   return match ? match[1] : null;
 }
 
+// ── Result contract ───────────────────────────────────────────────────
+//
+// The audit log is an optional source, so a fetch never throws for a
+// missing/forbidden source and never returns an empty array to mean both
+// "genuinely no events" and "we couldn't check" — those are always
+// distinguishable via `status`. `ok.truncated`/`ok.warnings` additionally
+// surface when the `maxPages` safety cap was hit while more pages were
+// still available, so a capped result is never mistaken for a complete one.
+
+export interface AuditFetchOk {
+  status: "ok";
+  events: NormalizedCopilotAuditEvent[];
+  /** True when the `maxPages` cap was hit while more pages were still available — `events` is a partial result. */
+  truncated: boolean;
+  warnings: string[];
+}
+
+export interface AuditFetchUnavailable {
+  status: "unavailable";
+  reason: "not_found" | "forbidden";
+  /** The org login or enterprise slug this fetch targeted. */
+  target: string;
+}
+
+export interface AuditFetchUnknown {
+  status: "unknown";
+  target: string;
+  message: string;
+}
+
+export type AuditFetchResult = AuditFetchOk | AuditFetchUnavailable | AuditFetchUnknown;
+
 async function fetchAuditEvents(
   basePath: string,
   orgLoginFallback: string,
+  target: string,
   options: CopilotAuditFetchOptions,
-): Promise<NormalizedCopilotAuditEvent[]> {
+): Promise<AuditFetchResult> {
   const { cutoffMs = null, untilMs = null, maxPages = 200, perPage = 100, enterpriseSlug } = options;
   if (!Number.isInteger(maxPages) || maxPages < 1) {
     throw new Error(`copilotAuditClient: maxPages must be an integer >= 1 (received ${maxPages}).`);
   }
 
   const separator = basePath.includes("?") ? "&" : "?";
-  let url: string | null = `${basePath}${separator}per_page=${perPage}`;
+  // `phrase=action:copilot` is GitHub's audit-log search syntax for
+  // filtering to the Copilot action category server-side, rather than
+  // relying solely on the client-side assign/cancel action allowlist below.
+  let url: string | null = `${basePath}${separator}per_page=${perPage}&phrase=${encodeURIComponent("action:copilot")}`;
   const seenEventIds = new Set<string>();
   const results: NormalizedCopilotAuditEvent[] = [];
+  const warnings: string[] = [];
+  let truncated = false;
 
-  for (let page = 0; page < maxPages && url; page++) {
-    const result = await githubFetchWithMeta<RawCopilotAuditEvent[]>(url, { enterpriseSlug });
-    const events = Array.isArray(result.data) ? result.data : [];
-    if (events.length === 0) break;
-
-    // GitHub's audit log is returned newest-first by default, so once we
-    // encounter an event older than the cutoff, every later page is
-    // guaranteed to be older still — safe to stop paginating there.
-    let sawOlderThanCutoff = false;
-
-    for (const raw of events) {
-      const ts = eventTimestampMs(raw);
-      if (cutoffMs !== null && ts !== null && ts < cutoffMs) {
-        sawOlderThanCutoff = true;
-        continue;
+  try {
+    for (let page = 0; page < maxPages && url; page++) {
+      const result = await githubFetchWithMeta<RawCopilotAuditEvent[]>(url, { enterpriseSlug });
+      const events = Array.isArray(result.data) ? result.data : [];
+      if (events.length === 0) {
+        url = null;
+        break;
       }
-      if (untilMs !== null && ts !== null && ts > untilMs) continue;
 
-      const normalized = normalizeEvent(raw, orgLoginFallback);
-      if (!normalized) continue;
-      if (seenEventIds.has(normalized.eventId)) continue;
-      seenEventIds.add(normalized.eventId);
-      results.push(normalized);
+      // GitHub's audit log is returned newest-first by default, so once we
+      // encounter an event older than the cutoff, every later page is
+      // guaranteed to be older still — safe to stop paginating there.
+      let sawOlderThanCutoff = false;
+
+      for (const raw of events) {
+        const ts = eventTimestampMs(raw);
+        if (cutoffMs !== null && ts !== null && ts < cutoffMs) {
+          sawOlderThanCutoff = true;
+          continue;
+        }
+        if (untilMs !== null && ts !== null && ts > untilMs) continue;
+
+        const normalized = normalizeEvent(raw, orgLoginFallback);
+        if (!normalized) continue;
+        if (seenEventIds.has(normalized.eventId)) continue;
+        seenEventIds.add(normalized.eventId);
+        results.push(normalized);
+      }
+
+      const nextUrl = extractNextLink(result.headers.link);
+
+      if (cutoffMs !== null && sawOlderThanCutoff) {
+        url = null;
+        break;
+      }
+
+      if (page === maxPages - 1 && nextUrl) {
+        // The safety cap was reached but the API reports more pages are
+        // still available — surface that explicitly rather than silently
+        // returning a partial result that looks complete.
+        truncated = true;
+        warnings.push(
+          `Copilot audit log pagination truncated after reaching the ${maxPages}-page limit while more results were still available.`,
+        );
+        url = null;
+        break;
+      }
+
+      url = nextUrl;
     }
-
-    if (cutoffMs !== null && sawOlderThanCutoff) break;
-
-    url = extractNextLink(result.headers.link);
+  } catch (err) {
+    if (err instanceof GitHubApiError) {
+      if (err.status === 404) return { status: "unavailable", reason: "not_found", target };
+      if (err.status === 403) return { status: "unavailable", reason: "forbidden", target };
+      return { status: "unknown", target, message: `GitHub API error ${err.status} fetching Copilot audit log events.` };
+    }
+    // Never broad-catch a programmer/unexpected error — only a typed
+    // GitHubApiError is a legitimate "optional source unavailable" signal.
+    throw err;
   }
 
-  return results;
+  return { status: "ok", events: results, truncated, warnings };
 }
 
 // ── Exported client ───────────────────────────────────────────────────
@@ -213,16 +289,16 @@ export class CopilotAuditClient {
   async getEnterpriseAuditEvents(
     enterprise: string,
     options: CopilotAuditFetchOptions = {},
-  ): Promise<NormalizedCopilotAuditEvent[]> {
-    return fetchAuditEvents(`/enterprises/${encodeURIComponent(enterprise)}/audit-log`, "", options);
+  ): Promise<AuditFetchResult> {
+    return fetchAuditEvents(`/enterprises/${encodeURIComponent(enterprise)}/audit-log`, "", enterprise, options);
   }
 
   /** Fetch Copilot seat assign/cancel audit events for a single organization. */
   async getOrgAuditEvents(
     org: string,
     options: CopilotAuditFetchOptions = {},
-  ): Promise<NormalizedCopilotAuditEvent[]> {
-    return fetchAuditEvents(`/orgs/${encodeURIComponent(org)}/audit-log`, org, options);
+  ): Promise<AuditFetchResult> {
+    return fetchAuditEvents(`/orgs/${encodeURIComponent(org)}/audit-log`, org, org, options);
   }
 }
 

@@ -23,7 +23,7 @@
 // address or IdP-internal id) that must never leak into a GitHub login
 // field.
 
-import { githubFetchWithMeta, githubFetchPaginated } from "./api-base";
+import { githubFetchWithMeta, GitHubApiError } from "./api-base";
 
 // ── Raw SCIM shapes (partial) ────────────────────────────────────────────
 
@@ -127,10 +127,35 @@ export interface ScimFetchOptions {
   enterpriseSlug?: string;
 }
 
+// SCIM is an optional source — an enterprise may not use SCIM/EMU
+// provisioning at all, or the caller's credential may lack `scim:enterprise`/
+// `admin:enterprise`. A fetch never throws for that; it returns a
+// discriminated result so "no data because unavailable" is never confused
+// with "genuinely zero users" (an empty `ok.records` array).
+
+export interface ScimFetchOk {
+  status: "ok";
+  records: NormalizedMembershipRecord[];
+}
+
+export interface ScimFetchUnavailable {
+  status: "unavailable";
+  reason: "not_found" | "forbidden";
+  enterprise: string;
+}
+
+export interface ScimFetchUnknown {
+  status: "unknown";
+  enterprise: string;
+  message: string;
+}
+
+export type ScimFetchResult = ScimFetchOk | ScimFetchUnavailable | ScimFetchUnknown;
+
 async function fetchEnterpriseScimUsers(
   enterprise: string,
   options: ScimFetchOptions = {},
-): Promise<NormalizedMembershipRecord[]> {
+): Promise<ScimFetchResult> {
   const { count = 100, maxPages = 200, enterpriseSlug } = options;
   if (!Number.isInteger(maxPages) || maxPages < 1) {
     throw new Error(`copilotMembershipClient: maxPages must be an integer >= 1 (received ${maxPages}).`);
@@ -140,42 +165,86 @@ async function fetchEnterpriseScimUsers(
   const records: NormalizedMembershipRecord[] = [];
   let startIndex = 1;
 
-  for (let page = 0; page < maxPages; page++) {
-    const path = `/scim/v2/enterprises/${encodeURIComponent(enterprise)}/Users?startIndex=${startIndex}&count=${count}`;
-    const result = await githubFetchWithMeta<ScimUsersResponse>(path, { authMode: "pat", enterpriseSlug });
-    const body = result.data;
-    const resources = body?.Resources ?? [];
-    if (resources.length === 0) break;
+  try {
+    for (let page = 0; page < maxPages; page++) {
+      const path = `/scim/v2/enterprises/${encodeURIComponent(enterprise)}/Users?startIndex=${startIndex}&count=${count}`;
+      const result = await githubFetchWithMeta<ScimUsersResponse>(path, { authMode: "pat", enterpriseSlug });
+      const body = result.data;
+      const resources = body?.Resources ?? [];
+      if (resources.length === 0) break;
 
-    for (const resource of resources) {
-      records.push(normalizeScimUser(resource, now));
+      for (const resource of resources) {
+        records.push(normalizeScimUser(resource, now));
+      }
+
+      const totalResults = body?.totalResults ?? resources.length;
+      startIndex += resources.length;
+      if (startIndex > totalResults) break;
+    }
+  } catch (err) {
+    if (err instanceof GitHubApiError) {
+      if (err.status === 404) return { status: "unavailable", reason: "not_found", enterprise };
+      if (err.status === 403) return { status: "unavailable", reason: "forbidden", enterprise };
+      return { status: "unknown", enterprise, message: `GitHub API error ${err.status} fetching enterprise SCIM users.` };
+    }
+    // Never broad-catch a programmer/unexpected error — only a typed
+    // GitHubApiError is a legitimate "optional source unavailable" signal.
+    throw err;
+  }
+
+  return { status: "ok", records };
+}
+
+async function fetchOrgMembers(org: string, options: OrgMembersFetchOptions = {}): Promise<NormalizedMembershipRecord[]> {
+  const { perPage = 100, maxPages = 200, enterpriseSlug } = options;
+  if (!Number.isInteger(maxPages) || maxPages < 1) {
+    throw new Error(`copilotMembershipClient: maxPages must be an integer >= 1 (received ${maxPages}).`);
+  }
+
+  const now = new Date().toISOString();
+  const records: NormalizedMembershipRecord[] = [];
+
+  // Deliberately a local, bounded page/per_page loop rather than the shared
+  // `githubFetchPaginated` helper (which has no page cap) — see fix rationale
+  // in the module doc: an org with a misbehaving/looping API response must
+  // not paginate unboundedly.
+  for (let page = 1; page <= maxPages; page++) {
+    const path = `/orgs/${encodeURIComponent(org)}/members?per_page=${perPage}&page=${page}`;
+    const result = await githubFetchWithMeta<RawOrgMember[]>(path, { enterpriseSlug });
+    const members = Array.isArray(result.data) ? result.data : [];
+    if (members.length === 0) break;
+
+    for (const member of members) {
+      records.push(normalizeOrgMember(member, now));
     }
 
-    const totalResults = body?.totalResults ?? resources.length;
-    startIndex += resources.length;
-    if (startIndex > totalResults) break;
+    if (members.length < perPage) break;
   }
 
   return records;
 }
 
-async function fetchOrgMembers(org: string, enterpriseSlug?: string): Promise<NormalizedMembershipRecord[]> {
-  const now = new Date().toISOString();
-  const members = await githubFetchPaginated<RawOrgMember>(`/orgs/${encodeURIComponent(org)}/members`, 100, undefined, enterpriseSlug);
-  return members.map((member) => normalizeOrgMember(member, now));
+// ── Org members pagination (bounded page/per_page loop) ─────────────────
+
+export interface OrgMembersFetchOptions {
+  /** Page size. Default 100 (GitHub's max). */
+  perPage?: number;
+  /** Safety cap on the number of pages fetched. Must be >= 1. Default 200. */
+  maxPages?: number;
+  enterpriseSlug?: string;
 }
 
 // ── Exported client ───────────────────────────────────────────────────
 
 export class CopilotMembershipClient {
-  /** Enterprise-managed-user SCIM identities — member/suspended/deprovisioned/unknown account state. */
-  async getEnterpriseScimUsers(enterprise: string, options: ScimFetchOptions = {}): Promise<NormalizedMembershipRecord[]> {
+  /** Enterprise-managed-user SCIM identities — member/suspended/deprovisioned/unknown account state. Optional source: see `ScimFetchResult`. */
+  async getEnterpriseScimUsers(enterprise: string, options: ScimFetchOptions = {}): Promise<ScimFetchResult> {
     return fetchEnterpriseScimUsers(enterprise, options);
   }
 
   /** Current org members. Every returned record's accountState is "member" — see module doc. */
-  async getOrgMembers(org: string, enterpriseSlug?: string): Promise<NormalizedMembershipRecord[]> {
-    return fetchOrgMembers(org, enterpriseSlug);
+  async getOrgMembers(org: string, options: OrgMembersFetchOptions = {}): Promise<NormalizedMembershipRecord[]> {
+    return fetchOrgMembers(org, options);
   }
 }
 

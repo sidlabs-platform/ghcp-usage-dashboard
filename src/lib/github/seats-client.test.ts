@@ -127,7 +127,6 @@ describe("SeatsClient", () => {
       const seat = makeSeat({
         assignee: {
           login: "Renamed-User",
-          id: undefined as unknown as number,
           node_id: "abc",
           avatar_url: "",
           url: "",
@@ -142,11 +141,28 @@ describe("SeatsClient", () => {
       expect(normalized.unresolved).toBe(false);
     });
 
+    it("prefers the numeric user id as holderKey when login is absent (deleted/renamed user with a still-resolvable id)", () => {
+      const seat = makeSeat({
+        assignee: {
+          id: 42,
+          node_id: "MDQ6VXNlcjQy",
+          avatar_url: "https://avatars.example/octocat.png",
+          url: "https://api.github.com/users/octocat",
+          html_url: "https://github.com/octocat",
+          type: "User",
+          site_admin: false,
+        },
+      });
+      const normalized = normalizeSeat(seat, "my-org");
+      expect(normalized.holderKey).toBe("id:42");
+      expect(normalized.githubUserId).toBe(42);
+      expect(normalized.observedLogin).toBeNull();
+      expect(normalized.unresolved).toBe(false);
+    });
+
     it("preserves an unresolved seat (no id, no login) via a deterministic internal holderKey", () => {
       const seat = makeSeat({
         assignee: {
-          login: "" as unknown as string,
-          id: undefined as unknown as number,
           node_id: "node-xyz",
           avatar_url: "https://avatars.example/deleted.png",
           url: "https://api.github.com/users/deleted",
@@ -168,8 +184,6 @@ describe("SeatsClient", () => {
     it("produces different internal holderKeys for different orgs given identical unresolved identifiers", () => {
       const seat = makeSeat({
         assignee: {
-          login: "" as unknown as string,
-          id: undefined as unknown as number,
           node_id: "node-xyz",
           avatar_url: "",
           url: "",
@@ -201,8 +215,6 @@ describe("SeatsClient", () => {
       const resolved = makeSeat();
       const unresolved = makeSeat({
         assignee: {
-          login: "" as unknown as string,
-          id: undefined as unknown as number,
           node_id: "node-missing",
           avatar_url: "",
           url: "",
@@ -226,8 +238,6 @@ describe("SeatsClient", () => {
           makeSeat(),
           makeSeat({
             assignee: {
-              login: "" as unknown as string,
-              id: undefined as unknown as number,
               node_id: "node-2",
               avatar_url: "",
               url: "",
