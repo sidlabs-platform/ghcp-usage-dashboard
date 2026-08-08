@@ -4,6 +4,7 @@ import Database from "better-sqlite3";
 import path from "path";
 import fs from "fs";
 import { migrateCopilotAppMetrics } from "./copilot-app-migration";
+import { migrateSummaryCacheClassification } from "./summary-cache-migration";
 
 const DB_PATH = path.join(process.cwd(), "data", "copilot-metrics.db");
 const SCHEMA_PATH = path.join(process.cwd(), "src", "lib", "db", "schema.sql");
@@ -100,6 +101,27 @@ export function getDb(): Database.Database {
   // partially-migrated database.
   try {
     migrateCopilotAppMetrics(_db);
+  } catch (err) {
+    try {
+      _db.close();
+    } catch {
+      /* best-effort close; the original migration error is what matters */
+    }
+    _db = null;
+    throw err;
+  }
+
+  // One-time, idempotent recompute of classification-dependent summary/cache
+  // columns (user_period_summary.acceptance_rate, daily_aggregate_cache's
+  // completion_loc_suggested/completion_loc_accepted, and
+  // team_summary_cache.overall_acceptance_rate) that may have been persisted
+  // under the old, looser completion-allowlist semantics. Runs transactionally
+  // and records its own ledger entry in summary_cache_migrations — see
+  // summary-cache-migration.ts. Uses the exact same fail-closed handling as
+  // migrateCopilotAppMetrics above: on error, do not leave a cached `_db`
+  // whose migration never completed.
+  try {
+    migrateSummaryCacheClassification(_db);
   } catch (err) {
     try {
       _db.close();

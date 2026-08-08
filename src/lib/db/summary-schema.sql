@@ -74,6 +74,16 @@ CREATE TABLE IF NOT EXISTS team_summary_cache (
 
 CREATE INDEX IF NOT EXISTS idx_team_summary_period ON team_summary_cache(period_start, period_end);
 
+-- One-time migration ledger for summary/cache migrations (e.g. the
+-- classification-dependent recompute in summary-cache-migration.ts). Each row
+-- records that a named migration has been applied so it never re-runs.
+-- Intentionally NOT tied to any specific cache table's data so it stays valid
+-- even if those tables are empty.
+CREATE TABLE IF NOT EXISTS summary_cache_migrations (
+  name TEXT PRIMARY KEY,
+  applied_at TEXT NOT NULL
+);
+
 -- Indexes for enterprise_slug filtering
 CREATE INDEX IF NOT EXISTS idx_user_summary_slug ON user_period_summary(enterprise_slug, user_login);
 CREATE INDEX IF NOT EXISTS idx_daily_agg_cache_slug ON daily_aggregate_cache(enterprise_slug, day);

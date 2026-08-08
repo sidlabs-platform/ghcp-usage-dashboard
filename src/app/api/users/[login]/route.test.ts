@@ -54,8 +54,8 @@ beforeEach(() => {
     if (sql.includes("as completionAccepted")) {
       return {
         all: vi.fn(() => [
-          { day: "2024-01-01", completionSuggested: 55, completionAccepted: 65, completionDeleted: 3, agentAdded: 20, agentDeleted: 2, compGenCount: 9, compAcceptCount: 3, appAdded: 3, appDeleted: 1, appGenCount: 1, appAcceptCount: 1 },
-          { day: "2024-01-02", completionSuggested: 58, completionAccepted: 75, completionDeleted: 4, agentAdded: 20, agentDeleted: 3, compGenCount: 9, compAcceptCount: 3, appAdded: 2, appDeleted: 0, appGenCount: 0, appAcceptCount: 0 },
+          { day: "2024-01-01", completionSuggested: 55, completionAccepted: 65, completionDeleted: 3, completionSuggestedDelete: 2, agentAdded: 20, agentDeleted: 2, compGenCount: 9, compAcceptCount: 3, appAdded: 3, appDeleted: 1, appGenCount: 1, appAcceptCount: 1 },
+          { day: "2024-01-02", completionSuggested: 58, completionAccepted: 75, completionDeleted: 4, completionSuggestedDelete: 3, agentAdded: 20, agentDeleted: 3, compGenCount: 9, compAcceptCount: 3, appAdded: 2, appDeleted: 0, appGenCount: 0, appAcceptCount: 0 },
         ]),
       };
     }
@@ -226,6 +226,7 @@ describe("user detail route", { timeout: 10000 }, () => {
           completionLocSuggested: 55,
           completionLocAccepted: 65,
           completionLocDeleted: 3,
+          completionLocSuggestedDelete: 2,
           appLocAdded: 3,
           appLocDeleted: 1,
         },
@@ -244,6 +245,7 @@ describe("user detail route", { timeout: 10000 }, () => {
           completionLocSuggested: 58,
           completionLocAccepted: 75,
           completionLocDeleted: 4,
+          completionLocSuggestedDelete: 3,
           appLocAdded: 2,
           appLocDeleted: 0,
         },

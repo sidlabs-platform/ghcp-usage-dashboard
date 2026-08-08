@@ -9,6 +9,7 @@ const state = vi.hoisted(() => ({
     day: string;
     completionSuggested: number;
     completionAccepted: number;
+    completionSuggestedDelete: number;
     agentAdded: number;
     agentDeleted: number;
     compGenCount: number;
@@ -25,6 +26,7 @@ const state = vi.hoisted(() => ({
     day: "",
     completionSuggested: 0,
     completionAccepted: 0,
+    completionSuggestedDelete: 0,
     agentAdded: 0,
     agentDeleted: 0,
     compGenCount: 0,
@@ -65,6 +67,7 @@ beforeEach(() => {
     day: "",
     completionSuggested: 0,
     completionAccepted: 0,
+    completionSuggestedDelete: 0,
     agentAdded: 0,
     agentDeleted: 0,
     compGenCount: 0,
@@ -114,6 +117,7 @@ describe("GET /api/metrics/code-generation", () => {
         day: end,
         completionSuggested: 100,
         completionAccepted: 80,
+        completionSuggestedDelete: 5,
         agentAdded: 50,
         agentDeleted: 10,
         compGenCount: 20,
@@ -142,6 +146,7 @@ describe("GET /api/metrics/code-generation", () => {
       day: "",
       completionSuggested: 200,
       completionAccepted: 150,
+      completionSuggestedDelete: 0,
       agentAdded: 500,
       agentDeleted: 100,
       compGenCount: 20,
@@ -162,6 +167,7 @@ describe("GET /api/metrics/code-generation", () => {
       day: "",
       completionSuggested: 200,
       completionAccepted: 150,
+      completionSuggestedDelete: 0,
       agentAdded: 500,
       agentDeleted: 100,
       compGenCount: 20,
@@ -186,6 +192,7 @@ describe("GET /api/metrics/code-generation", () => {
       day: "",
       completionSuggested: 200,
       completionAccepted: 150,
+      completionSuggestedDelete: 0,
       agentAdded: 500,
       agentDeleted: 100,
       compGenCount: 20,
@@ -207,6 +214,7 @@ describe("GET /api/metrics/code-generation", () => {
       day: "",
       completionSuggested: 0,
       completionAccepted: 0,
+      completionSuggestedDelete: 0,
       agentAdded: 0,
       agentDeleted: 0,
       compGenCount: 0,

@@ -102,6 +102,11 @@ const apiResponse = {
       completionLocSuggested: 400,
       completionLocAccepted: 300,
       completionLocDeleted: 15,
+      // Top-level locSuggestedDelete (10) includes copilot_app/chat_inline/
+      // unknown/agent_edit suggested-deletion activity too; the strict
+      // completion-only value is smaller (6), so the chart must plot this
+      // field, not locSuggestedDelete.
+      completionLocSuggestedDelete: 6,
       appLocAdded: 150,
       appLocDeleted: 25,
     },
@@ -172,6 +177,12 @@ describe("user detail page — LoC chart/card consistency", () => {
     expect(chartState.areaDataByKey.completionLocSuggested).toEqual([400]);
     expect(chartState.areaDataByKey.completionLocAccepted).toEqual([300]);
     expect(chartState.areaDataByKey.completionLocDeleted).toEqual([15]);
+
+    // The chart must plot the strict completion-only suggested-delete value
+    // (6), not the top-level locSuggestedDelete (10) which includes
+    // copilot_app/chat_inline/unknown/agent_edit suggested-deletion activity.
+    expect(chartState.areaDataByKey.completionLocSuggestedDelete).toEqual([6]);
+    expect(chartState.areaDataByKey.locSuggestedDelete).toBeUndefined();
 
     // The chart must never key off the raw top-level locSuggested field.
     expect(chartState.areaDataByKey.locSuggested).toBeUndefined();

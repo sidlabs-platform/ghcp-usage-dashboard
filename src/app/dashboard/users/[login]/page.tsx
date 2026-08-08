@@ -41,6 +41,11 @@ interface DailyActivity {
   completionLocSuggested: number;
   completionLocAccepted: number;
   completionLocDeleted: number;
+  // Strict completion-only counterpart to locSuggestedDelete (top-level
+  // loc_suggested_to_delete_sum). Used by the chart instead of
+  // locSuggestedDelete so the "Suggested (Delete)" series never includes
+  // copilot_app/chat_inline/unknown/agent_edit suggested-deletion activity.
+  completionLocSuggestedDelete: number;
   appLocAdded: number;
   appLocDeleted: number;
 }
@@ -165,7 +170,7 @@ function LocTrendChart({ data }: { data: DailyActivity[] }) {
     completionLocSuggested: d.completionLocSuggested,
     completionLocAccepted: d.completionLocAccepted,
     agentLocAdded: d.agentLocAdded,
-    locSuggestedDelete: d.locSuggestedDelete,
+    completionLocSuggestedDelete: d.completionLocSuggestedDelete,
     completionLocDeleted: d.completionLocDeleted,
   })), [data]);
 
@@ -183,11 +188,11 @@ function LocTrendChart({ data }: { data: DailyActivity[] }) {
               <YAxis tick={{ fontSize: 12 }} stroke="hsl(var(--muted-foreground))" />
               <Tooltip contentStyle={tooltipStyle} />
               <Legend />
-              {/* completionLocSuggested/completionLocAccepted/completionLocDeleted are
-                  server-computed via the strict IS_COMPLETION_SQL allowlist — the same
-                  fields the summary cards use — so this chart and the cards never
-                  disagree, and copilot_app/chat_inline/unknown/agent_edit activity
-                  never inflates these series. */}
+              {/* completionLocSuggested/completionLocAccepted/completionLocDeleted/
+                  completionLocSuggestedDelete are all server-computed via the strict
+                  IS_COMPLETION_SQL allowlist — the same fields the summary cards use —
+                  so this chart and the cards never disagree, and copilot_app/chat_inline/
+                  unknown/agent_edit activity never inflates these series. */}
               <Area
                 type="monotone" dataKey="completionLocSuggested" name="LoC Suggested"
                 stroke={CHART_COLORS.locSuggested} fill={CHART_COLORS.locSuggested}
@@ -204,7 +209,7 @@ function LocTrendChart({ data }: { data: DailyActivity[] }) {
                 fillOpacity={0.10} strokeWidth={1.5} strokeDasharray="4 2"
               />
               <Area
-                type="monotone" dataKey="locSuggestedDelete" name="LoC Suggested (Delete)"
+                type="monotone" dataKey="completionLocSuggestedDelete" name="LoC Suggested (Delete)"
                 stroke={CHART_COLORS.danger} fill={CHART_COLORS.danger}
                 fillOpacity={0.08} strokeWidth={1.5} strokeDasharray="4 2"
               />

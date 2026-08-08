@@ -70,6 +70,8 @@ vi.mock("@/lib/db/aggregation-queries", () => ({
     day: "",
     completionSuggested: 0,
     completionAccepted: 0,
+    completionDeleted: 0,
+    completionSuggestedDelete: 0,
     agentAdded: 0,
     agentDeleted: 0,
     compGenCount: 0,

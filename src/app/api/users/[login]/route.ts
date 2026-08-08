@@ -33,6 +33,12 @@ interface DailyActivity {
   completionLocSuggested: number;
   completionLocAccepted: number;
   completionLocDeleted: number;
+  // Strict completion-only loc_suggested_to_delete_sum (IS_COMPLETION_SQL
+  // allowlist) — the "suggested deletion" counterpart to completionLocDeleted
+  // above, from the same getCompletionDailyTrend query. Unlike the top-level
+  // locSuggestedDelete (loc_suggested_to_delete_sum across ALL features), this
+  // excludes copilot_app/chat_inline/unknown and agent_edit activity.
+  completionLocSuggestedDelete: number;
   // Copilot App LoC, broken out for future use — never folded into completion.
   appLocAdded: number;
   appLocDeleted: number;
@@ -143,7 +149,7 @@ async function handler(request: NextRequest) {
 
     // Daily activity (with per-day agent LOC extracted from agent_edit JSON)
     // Use CASE WHEN json_valid() to guard against empty/malformed agent_edit values
-    type DailyActivityRow = Omit<DailyActivity, "completionLocSuggested" | "completionLocAccepted" | "completionLocDeleted" | "appLocAdded" | "appLocDeleted">;
+    type DailyActivityRow = Omit<DailyActivity, "completionLocSuggested" | "completionLocAccepted" | "completionLocDeleted" | "completionLocSuggestedDelete" | "appLocAdded" | "appLocDeleted">;
     const dailyActivityRows = db.prepare(`
       SELECT day,
         COALESCE(code_generation_activity_count, 0) AS codeGen,
@@ -181,6 +187,7 @@ async function handler(request: NextRequest) {
         completionLocSuggested: trend?.completionSuggested ?? 0,
         completionLocAccepted: trend?.completionAccepted ?? 0,
         completionLocDeleted: trend?.completionDeleted ?? 0,
+        completionLocSuggestedDelete: trend?.completionSuggestedDelete ?? 0,
         appLocAdded: trend?.appAdded ?? 0,
         appLocDeleted: trend?.appDeleted ?? 0,
       };

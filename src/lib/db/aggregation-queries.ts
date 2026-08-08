@@ -1,4 +1,15 @@
 import { getDb } from "./database";
+// Explicit feature-classification SQL fragments — never rely on a bare
+// `!= 'agent_edit'` exclusion, since that would silently misclassify any
+// new/unknown feature (e.g. `copilot_app`, `chat_inline`) as a completion
+// feature. Defined in the pure feature-classification.ts module (no database
+// import, to avoid a circular import with the startup summary cache migration
+// — see that file's header comment) and re-exported here so every existing
+// call site (in this module and elsewhere, e.g. src/app/api/users/[login]/route.ts
+// and src/app/api/teams/[slug]/route.ts) keeps importing from
+// "@/lib/db/aggregation-queries" without any change.
+export { FEATURE_SQL, IS_COMPLETION_SQL, IS_AGENT_SQL, IS_COPILOT_APP_SQL, NOT_AGENT_OR_APP_SQL } from "./feature-classification";
+import { IS_COMPLETION_SQL, IS_AGENT_SQL, IS_COPILOT_APP_SQL, NOT_AGENT_OR_APP_SQL } from "./feature-classification";
 
 export interface ChatModeSums {
   ask: number;
@@ -135,6 +146,11 @@ export interface CompletionDailyRow {
   // same basis as completionSuggested/completionAccepted, so callers never
   // need a separate per-day query to get a consistent "completion deleted" figure.
   completionDeleted: number;
+  // Strict completion-only loc_suggested_to_delete_sum (IS_COMPLETION_SQL
+  // allowlist) — the "suggested deletion" counterpart to completionDeleted,
+  // so daily charts can show suggested-vs-actual deletions consistently
+  // without copilot_app/chat_inline/unknown/agent_edit activity leaking in.
+  completionSuggestedDelete: number;
   agentAdded: number;
   agentDeleted: number;
   compGenCount: number;
@@ -777,27 +793,6 @@ export function getModelByLanguageBreakdown(
 
 // ── Language breakdown (SQL via json_each) ────────────────────────────
 
-// Explicit feature-classification SQL fragments — never rely on a bare
-// `!= 'agent_edit'` exclusion, since that would silently misclassify any
-// new/unknown feature (e.g. `copilot_app`, `chat_inline`) as a completion
-// feature. Exported so every call site (in this module and elsewhere, e.g.
-// src/app/api/users/[login]/route.ts and src/app/api/teams/[slug]/route.ts)
-// reuses the exact same allowlist instead of re-declaring/copying the
-// fragment — one definition of "completion" for the whole codebase.
-export const FEATURE_SQL = "json_extract(j.value, '$.feature')";
-// Mirrors isCompletionFeature() in src/lib/aggregation/separate-metrics.ts:
-// code_completion, inline_chat, chat_panel, and chat_panel_* user-level modes.
-// `chat_inline` and any unrecognized/unknown feature name are intentionally
-// EXCLUDED — they must never be silently folded into completion metrics.
-export const IS_COMPLETION_SQL = `(${FEATURE_SQL} IN ('code_completion', 'inline_chat', 'chat_panel') OR ${FEATURE_SQL} LIKE 'chat\\_panel\\_%' ESCAPE '\\')`;
-export const IS_AGENT_SQL = `${FEATURE_SQL} = 'agent_edit'`;
-// The standalone Copilot App surface — distinct from completion and agent_edit.
-export const IS_COPILOT_APP_SQL = `${FEATURE_SQL} = 'copilot_app'`;
-// Rows to exclude from "completion" language/LOC surfaces. Uses exclusion
-// (rather than the IS_COMPLETION_SQL allowlist) so language rows without a
-// `feature` key (older synced data) remain backward compatible.
-export const NOT_AGENT_OR_APP_SQL = `COALESCE(${FEATURE_SQL}, '') NOT IN ('agent_edit', 'copilot_app')`;
-
 /** Aggregate language usage from totals_by_language_feature (excludes agent_edit and copilot_app) */
 export function getLanguageBreakdown(
   startDay: string,
@@ -928,6 +923,8 @@ export function getCompletionDailyTrend(
         THEN json_extract(j.value, '$.loc_added_sum') ELSE 0 END), 0) as completionAccepted,
       COALESCE(SUM(CASE WHEN ${IS_COMPLETION_SQL}
         THEN json_extract(j.value, '$.loc_deleted_sum') ELSE 0 END), 0) as completionDeleted,
+      COALESCE(SUM(CASE WHEN ${IS_COMPLETION_SQL}
+        THEN json_extract(j.value, '$.loc_suggested_to_delete_sum') ELSE 0 END), 0) as completionSuggestedDelete,
       COALESCE(SUM(CASE WHEN ${IS_AGENT_SQL}
         THEN json_extract(j.value, '$.loc_added_sum') ELSE 0 END), 0) as agentAdded,
       COALESCE(SUM(CASE WHEN ${IS_AGENT_SQL}
@@ -973,6 +970,8 @@ export function getCompletionTotals(
         THEN json_extract(j.value, '$.loc_added_sum') ELSE 0 END), 0) as completionAccepted,
       COALESCE(SUM(CASE WHEN ${IS_COMPLETION_SQL}
         THEN json_extract(j.value, '$.loc_deleted_sum') ELSE 0 END), 0) as completionDeleted,
+      COALESCE(SUM(CASE WHEN ${IS_COMPLETION_SQL}
+        THEN json_extract(j.value, '$.loc_suggested_to_delete_sum') ELSE 0 END), 0) as completionSuggestedDelete,
       COALESCE(SUM(CASE WHEN ${IS_AGENT_SQL}
         THEN json_extract(j.value, '$.loc_added_sum') ELSE 0 END), 0) as agentAdded,
       COALESCE(SUM(CASE WHEN ${IS_AGENT_SQL}
@@ -996,7 +995,7 @@ export function getCompletionTotals(
   `;
   const row = db.prepare(sql).get(startDay, endDay, ...filter.params, ...ef.params) as CompletionDailyRow | undefined;
   return row ?? {
-    day: '', completionSuggested: 0, completionAccepted: 0, completionDeleted: 0, agentAdded: 0, agentDeleted: 0,
+    day: '', completionSuggested: 0, completionAccepted: 0, completionDeleted: 0, completionSuggestedDelete: 0, agentAdded: 0, agentDeleted: 0,
     compGenCount: 0, compAcceptCount: 0, appAdded: 0, appDeleted: 0, appGenCount: 0, appAcceptCount: 0,
   };
 }
