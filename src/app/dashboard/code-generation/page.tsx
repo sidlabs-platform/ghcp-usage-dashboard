@@ -99,13 +99,13 @@ export default function CodeGenerationPage() {
 
       <ScopeFilter />
 
-      {/* KPI Cards — separated completion vs agent */}
-      <div ref={kpiRef} className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-6 mb-8">
+      {/* KPI Cards — separated completion vs agent vs Copilot App */}
+      <div ref={kpiRef} className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-7 mb-8">
         <MetricCard
           title="Total LoC Changed"
           value={kpis.totalLocChanged}
           icon={<Code2 className="h-4 w-4" />}
-          subtitle={`Completion + Agent (${days} days)`}
+          subtitle="Completion + Agent + Copilot App"
         />
         <MetricCard
           title="Completion Acceptance"
@@ -132,6 +132,12 @@ export default function CodeGenerationPage() {
           format="percent"
           icon={<TrendingUp className="h-4 w-4" />}
           subtitle="Agent-generated % of total added"
+        />
+        <MetricCard
+          title="Copilot App LoC"
+          value={kpis.appLocAdded}
+          icon={<Code2 className="h-4 w-4" />}
+          subtitle={`${formatNumber(kpis.appLocDeleted)} deleted by App`}
         />
         <MetricCard
           title="Code Generations"

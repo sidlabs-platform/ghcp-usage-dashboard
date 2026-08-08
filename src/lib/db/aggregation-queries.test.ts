@@ -541,3 +541,103 @@ describe("multi-enterprise SQL deduplication", () => {
     expect(rows[0].daily).toBe(2);
   });
 });
+
+// ═══════════════════════════════════════════════════════════════════════
+// Copilot App classification tests
+// Validates that `copilot_app` feature rows are never counted as
+// completion (or agent) activity in the raw json_each SQL patterns.
+// ═══════════════════════════════════════════════════════════════════════
+
+describe("copilot_app SQL classification", () => {
+  const FEATURE_SQL = "json_extract(j.value, '$.feature')";
+  const IS_COMPLETION_SQL = `(${FEATURE_SQL} IN ('code_completion', 'inline_chat', 'chat_panel') OR ${FEATURE_SQL} LIKE 'chat\\_panel\\_%' ESCAPE '\\')`;
+  const IS_AGENT_SQL = `${FEATURE_SQL} = 'agent_edit'`;
+  const IS_COPILOT_APP_SQL = `${FEATURE_SQL} = 'copilot_app'`;
+
+  let appDb: Database.Database;
+
+  beforeAll(() => {
+    appDb = new Database(":memory:");
+    appDb.pragma("journal_mode = WAL");
+    const schemaPath = path.join(process.cwd(), "src", "lib", "db", "schema.sql");
+    const summarySchemaPath = path.join(process.cwd(), "src", "lib", "db", "summary-schema.sql");
+    appDb.exec(fs.readFileSync(schemaPath, "utf-8"));
+    appDb.exec(fs.readFileSync(summarySchemaPath, "utf-8"));
+
+    const features = JSON.stringify([
+      { feature: "code_completion", loc_suggested_to_add_sum: 100, loc_added_sum: 80, loc_deleted_sum: 0, code_generation_activity_count: 50, code_acceptance_activity_count: 40 },
+      { feature: "agent_edit", loc_suggested_to_add_sum: 0, loc_added_sum: 500, loc_deleted_sum: 200, code_generation_activity_count: 10, code_acceptance_activity_count: 0 },
+      { feature: "copilot_app", loc_suggested_to_add_sum: 0, loc_added_sum: 60, loc_deleted_sum: 8, code_generation_activity_count: 7, code_acceptance_activity_count: 5 },
+    ]);
+
+    appDb.prepare(`INSERT INTO user_daily_metrics (day, enterprise_id, enterprise_slug, user_id, user_login, totals_by_feature)
+      VALUES ('2025-06-01', 'ent1', 'ent1', 1, 'user1', ?)`).run(features);
+  });
+
+  afterAll(() => {
+    appDb.close();
+  });
+
+  it("explicit completion allowlist excludes copilot_app from completion sums", () => {
+    const row = appDb.prepare(`
+      SELECT
+        COALESCE(SUM(CASE WHEN ${IS_COMPLETION_SQL} THEN json_extract(j.value, '$.loc_added_sum') ELSE 0 END), 0) as completionAccepted,
+        COALESCE(SUM(CASE WHEN ${IS_COMPLETION_SQL} THEN json_extract(j.value, '$.code_generation_activity_count') ELSE 0 END), 0) as compGenCount,
+        COALESCE(SUM(CASE WHEN ${IS_COMPLETION_SQL} THEN json_extract(j.value, '$.code_acceptance_activity_count') ELSE 0 END), 0) as compAcceptCount
+      FROM user_daily_metrics u, json_each(u.totals_by_feature) j
+      WHERE u.day = '2025-06-01'
+    `).get() as { completionAccepted: number; compGenCount: number; compAcceptCount: number };
+
+    // Only code_completion counts — copilot_app (60 loc / 7 gen / 5 accept) must not leak in
+    expect(row.completionAccepted).toBe(80);
+    expect(row.compGenCount).toBe(50);
+    expect(row.compAcceptCount).toBe(40);
+  });
+
+  it("IS_AGENT_SQL excludes copilot_app from agent sums", () => {
+    const row = appDb.prepare(`
+      SELECT
+        COALESCE(SUM(CASE WHEN ${IS_AGENT_SQL} THEN json_extract(j.value, '$.loc_added_sum') ELSE 0 END), 0) as agentAdded
+      FROM user_daily_metrics u, json_each(u.totals_by_feature) j
+      WHERE u.day = '2025-06-01'
+    `).get() as { agentAdded: number };
+
+    expect(row.agentAdded).toBe(500);
+  });
+
+  it("IS_COPILOT_APP_SQL isolates App-only activity", () => {
+    const row = appDb.prepare(`
+      SELECT
+        COALESCE(SUM(CASE WHEN ${IS_COPILOT_APP_SQL} THEN json_extract(j.value, '$.loc_added_sum') ELSE 0 END), 0) as appAdded,
+        COALESCE(SUM(CASE WHEN ${IS_COPILOT_APP_SQL} THEN json_extract(j.value, '$.loc_deleted_sum') ELSE 0 END), 0) as appDeleted,
+        COALESCE(SUM(CASE WHEN ${IS_COPILOT_APP_SQL} THEN json_extract(j.value, '$.code_generation_activity_count') ELSE 0 END), 0) as appGenCount,
+        COALESCE(SUM(CASE WHEN ${IS_COPILOT_APP_SQL} THEN json_extract(j.value, '$.code_acceptance_activity_count') ELSE 0 END), 0) as appAcceptCount
+      FROM user_daily_metrics u, json_each(u.totals_by_feature) j
+      WHERE u.day = '2025-06-01'
+    `).get() as { appAdded: number; appDeleted: number; appGenCount: number; appAcceptCount: number };
+
+    expect(row.appAdded).toBe(60);
+    expect(row.appDeleted).toBe(8);
+    expect(row.appGenCount).toBe(7);
+    expect(row.appAcceptCount).toBe(5);
+  });
+
+  it("chat_panel_* user-level modes still classify as completion", () => {
+    const chatFeatures = JSON.stringify([
+      { feature: "chat_panel_agent_mode", loc_added_sum: 15, code_generation_activity_count: 3, code_acceptance_activity_count: 2 },
+      { feature: "copilot_app", loc_added_sum: 99, code_generation_activity_count: 99, code_acceptance_activity_count: 99 },
+    ]);
+    appDb.prepare(`INSERT INTO user_daily_metrics (day, enterprise_id, enterprise_slug, user_id, user_login, totals_by_feature)
+      VALUES ('2025-06-02', 'ent1', 'ent1', 2, 'user2', ?)`).run(chatFeatures);
+
+    const row = appDb.prepare(`
+      SELECT
+        COALESCE(SUM(CASE WHEN ${IS_COMPLETION_SQL} THEN json_extract(j.value, '$.loc_added_sum') ELSE 0 END), 0) as completionAccepted
+      FROM user_daily_metrics u, json_each(u.totals_by_feature) j
+      WHERE u.day = '2025-06-02'
+    `).get() as { completionAccepted: number };
+
+    // Only the chat_panel_agent_mode row (15) counts, copilot_app (99) excluded
+    expect(row.completionAccepted).toBe(15);
+  });
+});

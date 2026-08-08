@@ -219,6 +219,29 @@ describe("getCompletionTotals", () => {
     expect(totals.compGenCount).toBe(50);
     expect(totals.compAcceptCount).toBe(40);
   });
+
+  it("isolates copilot_app activity from completion sums and reports it separately", () => {
+    const features = JSON.stringify([
+      { feature: "code_completion", loc_suggested_to_add_sum: 100, loc_added_sum: 80, loc_deleted_sum: 0, code_generation_activity_count: 50, code_acceptance_activity_count: 40 },
+      { feature: "agent_edit", loc_suggested_to_add_sum: 0, loc_added_sum: 500, loc_deleted_sum: 200, code_generation_activity_count: 10, code_acceptance_activity_count: 0 },
+      { feature: "copilot_app", loc_suggested_to_add_sum: 0, loc_added_sum: 60, loc_deleted_sum: 8, code_generation_activity_count: 7, code_acceptance_activity_count: 5 },
+    ]);
+    db.prepare(`INSERT INTO user_daily_metrics (day, enterprise_id, enterprise_slug, user_id, user_login, totals_by_feature)
+      VALUES ('2024-01-10', 'ent1', 'ent1', 1, 'user1', ?)`).run(features);
+    const totals = getCompletionTotals("2024-01-01", "2024-01-31");
+    // copilot_app must not leak into completion sums
+    expect(totals.completionAccepted).toBe(80);
+    expect(totals.compGenCount).toBe(50);
+    expect(totals.compAcceptCount).toBe(40);
+    // agent stays isolated
+    expect(totals.agentAdded).toBe(500);
+    expect(totals.agentDeleted).toBe(200);
+    // App activity reported separately
+    expect(totals.appAdded).toBe(60);
+    expect(totals.appDeleted).toBe(8);
+    expect(totals.appGenCount).toBe(7);
+    expect(totals.appAcceptCount).toBe(5);
+  });
 });
 
 describe("getUserSummariesPaginated", () => {
@@ -446,6 +469,19 @@ describe("getLanguageBreakdown", () => {
     const ts = breakdown.find((r) => r.language === "TypeScript");
     expect(ts!.locAdded).toBe(100);
   });
+
+  it("excludes copilot_app rows from the language breakdown", () => {
+    const langFeature = JSON.stringify([
+      { language: "TypeScript", feature: "code_completion", loc_added_sum: 100, loc_suggested_to_add_sum: 120, code_generation_activity_count: 10, code_acceptance_activity_count: 8 },
+      { language: "TypeScript", feature: "copilot_app", loc_added_sum: 500, loc_suggested_to_add_sum: 0, code_generation_activity_count: 50, code_acceptance_activity_count: 40 },
+    ]);
+    db.prepare(`INSERT INTO user_daily_metrics (day, enterprise_id, enterprise_slug, user_id, user_login, totals_by_language_feature)
+      VALUES ('2024-01-12', 'ent1', 'ent1', 1, 'user1', ?)`).run(langFeature);
+    const breakdown = getLanguageBreakdown("2024-01-01", "2024-01-31");
+    const ts = breakdown.find((r) => r.language === "TypeScript");
+    // copilot_app's 500 loc_added must not be included
+    expect(ts!.locAdded).toBe(100);
+  });
 });
 
 describe("getLanguageByFeatureBreakdown", () => {
@@ -457,6 +493,20 @@ describe("getLanguageByFeatureBreakdown", () => {
       VALUES ('2024-01-13', 'ent1', 'ent1', 1, 'user1', ?)`).run(langFeature);
     const breakdown = getLanguageByFeatureBreakdown("2024-01-01", "2024-01-31");
     const go = breakdown.find((r) => r.language === "Go");
+    expect(go!.generations).toBe(7);
+    expect(go!.acceptances).toBe(4);
+  });
+
+  it("excludes copilot_app rows from language x feature breakdown", () => {
+    const langFeature = JSON.stringify([
+      { language: "Go", feature: "code_completion", loc_added_sum: 30, loc_deleted_sum: 5, code_generation_activity_count: 7, code_acceptance_activity_count: 4 },
+      { language: "Go", feature: "copilot_app", loc_added_sum: 300, loc_deleted_sum: 40, code_generation_activity_count: 70, code_acceptance_activity_count: 60 },
+    ]);
+    db.prepare(`INSERT INTO user_daily_metrics (day, enterprise_id, enterprise_slug, user_id, user_login, totals_by_language_feature)
+      VALUES ('2024-01-13', 'ent1', 'ent1', 1, 'user1', ?)`).run(langFeature);
+    const breakdown = getLanguageByFeatureBreakdown("2024-01-01", "2024-01-31");
+    const go = breakdown.find((r) => r.language === "Go");
+    expect(go!.locAdded).toBe(30);
     expect(go!.generations).toBe(7);
     expect(go!.acceptances).toBe(4);
   });
@@ -490,6 +540,26 @@ describe("getCompletionDailyTrend", () => {
     expect(row!.completionAccepted).toBe(80);
     expect(row!.agentAdded).toBe(30);
     expect(row!.agentDeleted).toBe(10);
+  });
+
+  it("reports copilot_app LoC/gen/accept separately without affecting completion or agent", () => {
+    const features = JSON.stringify([
+      { feature: "code_completion", loc_suggested_to_add_sum: 100, loc_added_sum: 80, loc_deleted_sum: 0, code_generation_activity_count: 20, code_acceptance_activity_count: 15 },
+      { feature: "agent_edit", loc_suggested_to_add_sum: 0, loc_added_sum: 30, loc_deleted_sum: 10, code_generation_activity_count: 5, code_acceptance_activity_count: 5 },
+      { feature: "copilot_app", loc_suggested_to_add_sum: 0, loc_added_sum: 45, loc_deleted_sum: 6, code_generation_activity_count: 9, code_acceptance_activity_count: 7 },
+    ]);
+    db.prepare(`INSERT INTO user_daily_metrics (day, enterprise_id, enterprise_slug, user_id, user_login, totals_by_feature)
+      VALUES ('2024-01-16', 'ent1', 'ent1', 1, 'user1', ?)`).run(features);
+    const trend = getCompletionDailyTrend("2024-01-01", "2024-01-31");
+    const row = trend.find((r) => r.day === "2024-01-16");
+    expect(row!.completionSuggested).toBe(100);
+    expect(row!.completionAccepted).toBe(80);
+    expect(row!.agentAdded).toBe(30);
+    expect(row!.agentDeleted).toBe(10);
+    expect(row!.appAdded).toBe(45);
+    expect(row!.appDeleted).toBe(6);
+    expect(row!.appGenCount).toBe(9);
+    expect(row!.appAcceptCount).toBe(7);
   });
 });
 

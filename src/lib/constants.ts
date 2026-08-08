@@ -39,6 +39,9 @@ export const CHART_COLORS = {
   human: "#3b82f6",
   copilot: "#8b5cf6",
   copilotReviewed: "#f59e0b",  // amber-500 — Copilot-reviewed PRs
+
+  // Copilot App surface (distinct from completion/agent, per code-generation classification)
+  copilotApp: "#f97316",  // orange-500
 } as const;
 
 export const FEATURE_LABELS: Record<string, string> = {

@@ -135,6 +135,10 @@ export interface CompletionDailyRow {
   agentDeleted: number;
   compGenCount: number;
   compAcceptCount: number;
+  appAdded: number;
+  appDeleted: number;
+  appGenCount: number;
+  appAcceptCount: number;
 }
 
 export interface CliDailyVolumeRow {
@@ -769,7 +773,22 @@ export function getModelByLanguageBreakdown(
 
 // ── Language breakdown (SQL via json_each) ────────────────────────────
 
-/** Aggregate language usage from totals_by_language_feature (excludes agent_edit) */
+// Explicit feature-classification SQL fragments — never rely on a bare
+// `!= 'agent_edit'` exclusion, since that would silently misclassify any
+// new/unknown feature (e.g. `copilot_app`) as a completion feature.
+const FEATURE_SQL = "json_extract(j.value, '$.feature')";
+// Mirrors isCompletionFeature() in src/lib/aggregation/separate-metrics.ts:
+// code_completion, inline_chat, chat_panel, and chat_panel_* user-level modes.
+const IS_COMPLETION_SQL = `(${FEATURE_SQL} IN ('code_completion', 'inline_chat', 'chat_panel') OR ${FEATURE_SQL} LIKE 'chat\\_panel\\_%' ESCAPE '\\')`;
+const IS_AGENT_SQL = `${FEATURE_SQL} = 'agent_edit'`;
+// The standalone Copilot App surface — distinct from completion and agent_edit.
+const IS_COPILOT_APP_SQL = `${FEATURE_SQL} = 'copilot_app'`;
+// Rows to exclude from "completion" language/LOC surfaces. Uses exclusion
+// (rather than the IS_COMPLETION_SQL allowlist) so language rows without a
+// `feature` key (older synced data) remain backward compatible.
+const NOT_AGENT_OR_APP_SQL = `COALESCE(${FEATURE_SQL}, '') NOT IN ('agent_edit', 'copilot_app')`;
+
+/** Aggregate language usage from totals_by_language_feature (excludes agent_edit and copilot_app) */
 export function getLanguageBreakdown(
   startDay: string,
   endDay: string,
@@ -788,7 +807,7 @@ export function getLanguageBreakdown(
     FROM user_daily_metrics u, json_each(u.totals_by_language_feature) j
     WHERE u.day >= ? AND u.day <= ?
       AND u.totals_by_language_feature IS NOT NULL AND u.totals_by_language_feature != '[]'
-      AND COALESCE(json_extract(j.value, '$.feature'), '') != 'agent_edit'
+      AND ${NOT_AGENT_OR_APP_SQL}
       ${filter.clause}${ef.clause}
     GROUP BY language
     ORDER BY locAdded DESC
@@ -797,7 +816,7 @@ export function getLanguageBreakdown(
   return db.prepare(sql).all(startDay, endDay, ...filter.params, ...ef.params, limit) as LanguageBreakdownRow[];
 }
 
-/** Full language breakdown with generations/acceptances from totals_by_language_feature (excludes agent_edit) */
+/** Full language breakdown with generations/acceptances from totals_by_language_feature (excludes agent_edit and copilot_app) */
 export function getLanguageByFeatureBreakdown(
   startDay: string,
   endDay: string,
@@ -817,7 +836,7 @@ export function getLanguageByFeatureBreakdown(
     FROM user_daily_metrics u, json_each(u.totals_by_language_feature) j
     WHERE u.day >= ? AND u.day <= ?
       AND u.totals_by_language_feature IS NOT NULL AND u.totals_by_language_feature != '[]'
-      AND COALESCE(json_extract(j.value, '$.feature'), '') != 'agent_edit'
+      AND ${NOT_AGENT_OR_APP_SQL}
       ${filter.clause}${ef.clause}
     GROUP BY language
     ORDER BY locAdded DESC
@@ -878,14 +897,9 @@ export function getFeatureDailyTrend(
   return db.prepare(sql).all(startDay, endDay, ...filter.params, ...ef.params) as FeatureDailyRow[];
 }
 
-// ── Completion vs Agent daily trend (SQL via json_each) ───────────────
+// ── Completion vs Agent vs Copilot App daily trend (SQL via json_each) ─
 
-// Use exclusion-based classification: anything that is NOT agent_edit is a completion feature.
-// This handles both org-level ('chat_panel') and user-level ('chat_panel_ask_mode', etc.) names.
-const IS_COMPLETION_SQL = "json_extract(j.value, '$.feature') != 'agent_edit'";
-const IS_AGENT_SQL = "json_extract(j.value, '$.feature') = 'agent_edit'";
-
-/** Daily completion vs agent LOC metrics aggregated via json_each */
+/** Daily completion vs agent vs copilot_app LOC metrics aggregated via json_each */
 export function getCompletionDailyTrend(
   startDay: string,
   endDay: string,
@@ -909,7 +923,15 @@ export function getCompletionDailyTrend(
       COALESCE(SUM(CASE WHEN ${IS_COMPLETION_SQL}
         THEN json_extract(j.value, '$.code_generation_activity_count') ELSE 0 END), 0) as compGenCount,
       COALESCE(SUM(CASE WHEN ${IS_COMPLETION_SQL}
-        THEN json_extract(j.value, '$.code_acceptance_activity_count') ELSE 0 END), 0) as compAcceptCount
+        THEN json_extract(j.value, '$.code_acceptance_activity_count') ELSE 0 END), 0) as compAcceptCount,
+      COALESCE(SUM(CASE WHEN ${IS_COPILOT_APP_SQL}
+        THEN json_extract(j.value, '$.loc_added_sum') ELSE 0 END), 0) as appAdded,
+      COALESCE(SUM(CASE WHEN ${IS_COPILOT_APP_SQL}
+        THEN json_extract(j.value, '$.loc_deleted_sum') ELSE 0 END), 0) as appDeleted,
+      COALESCE(SUM(CASE WHEN ${IS_COPILOT_APP_SQL}
+        THEN json_extract(j.value, '$.code_generation_activity_count') ELSE 0 END), 0) as appGenCount,
+      COALESCE(SUM(CASE WHEN ${IS_COPILOT_APP_SQL}
+        THEN json_extract(j.value, '$.code_acceptance_activity_count') ELSE 0 END), 0) as appAcceptCount
     FROM user_daily_metrics u, json_each(u.totals_by_feature) j
     WHERE u.day >= ? AND u.day <= ?
       AND u.totals_by_feature IS NOT NULL AND u.totals_by_feature != '[]'
@@ -920,7 +942,7 @@ export function getCompletionDailyTrend(
   return db.prepare(sql).all(startDay, endDay, ...filter.params, ...ef.params) as CompletionDailyRow[];
 }
 
-/** Aggregate completion vs agent totals for the whole period */
+/** Aggregate completion vs agent vs copilot_app totals for the whole period */
 export function getCompletionTotals(
   startDay: string,
   endDay: string,
@@ -944,14 +966,25 @@ export function getCompletionTotals(
       COALESCE(SUM(CASE WHEN ${IS_COMPLETION_SQL}
         THEN json_extract(j.value, '$.code_generation_activity_count') ELSE 0 END), 0) as compGenCount,
       COALESCE(SUM(CASE WHEN ${IS_COMPLETION_SQL}
-        THEN json_extract(j.value, '$.code_acceptance_activity_count') ELSE 0 END), 0) as compAcceptCount
+        THEN json_extract(j.value, '$.code_acceptance_activity_count') ELSE 0 END), 0) as compAcceptCount,
+      COALESCE(SUM(CASE WHEN ${IS_COPILOT_APP_SQL}
+        THEN json_extract(j.value, '$.loc_added_sum') ELSE 0 END), 0) as appAdded,
+      COALESCE(SUM(CASE WHEN ${IS_COPILOT_APP_SQL}
+        THEN json_extract(j.value, '$.loc_deleted_sum') ELSE 0 END), 0) as appDeleted,
+      COALESCE(SUM(CASE WHEN ${IS_COPILOT_APP_SQL}
+        THEN json_extract(j.value, '$.code_generation_activity_count') ELSE 0 END), 0) as appGenCount,
+      COALESCE(SUM(CASE WHEN ${IS_COPILOT_APP_SQL}
+        THEN json_extract(j.value, '$.code_acceptance_activity_count') ELSE 0 END), 0) as appAcceptCount
     FROM user_daily_metrics u, json_each(u.totals_by_feature) j
     WHERE u.day >= ? AND u.day <= ?
       AND u.totals_by_feature IS NOT NULL AND u.totals_by_feature != '[]'
       ${filter.clause}${ef.clause}
   `;
   const row = db.prepare(sql).get(startDay, endDay, ...filter.params, ...ef.params) as CompletionDailyRow | undefined;
-  return row ?? { day: '', completionSuggested: 0, completionAccepted: 0, agentAdded: 0, agentDeleted: 0, compGenCount: 0, compAcceptCount: 0 };
+  return row ?? {
+    day: '', completionSuggested: 0, completionAccepted: 0, agentAdded: 0, agentDeleted: 0,
+    compGenCount: 0, compAcceptCount: 0, appAdded: 0, appDeleted: 0, appGenCount: 0, appAcceptCount: 0,
+  };
 }
 
 // ── IDE breakdown (SQL via json_each) ─────────────────────────────────

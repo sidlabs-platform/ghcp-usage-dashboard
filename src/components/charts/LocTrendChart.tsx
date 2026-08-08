@@ -14,15 +14,28 @@ import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/com
 import { CHART_COLORS } from "@/lib/constants";
 
 interface LocTrendChartProps {
-  data: { day: string; completionSuggested: number; completionAccepted: number; agentAdded: number; agentDeleted: number }[];
+  data: {
+    day: string;
+    completionSuggested: number;
+    completionAccepted: number;
+    agentAdded: number;
+    agentDeleted: number;
+    appAdded: number;
+    appDeleted: number;
+  }[];
 }
+
+// Related-but-distinct shade for the App "Deleted" series (orange-300), so it reads as
+// part of the same App surface family as CHART_COLORS.copilotApp (orange-500) without
+// needing a second named constant.
+const APP_DELETED_COLOR = "#fdba74";
 
 export function LocTrendChart({ data }: LocTrendChartProps) {
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Lines of Code — Completion vs Agent</CardTitle>
-        <CardDescription>Code completions (suggested/accepted) shown separately from agent-written code</CardDescription>
+        <CardTitle>Lines of Code by Surface</CardTitle>
+        <CardDescription>Code completions (suggested/accepted), agent-written code, and Copilot App code shown separately</CardDescription>
       </CardHeader>
       <CardContent>
         <div className="h-80">
@@ -75,6 +88,22 @@ export function LocTrendChart({ data }: LocTrendChartProps) {
                 name="Agent Deleted"
                 stroke={CHART_COLORS.danger}
                 fill={CHART_COLORS.danger}
+                fillOpacity={0.1}
+              />
+              <Area
+                type="monotone"
+                dataKey="appAdded"
+                name="App Added"
+                stroke={CHART_COLORS.copilotApp}
+                fill={CHART_COLORS.copilotApp}
+                fillOpacity={0.15}
+              />
+              <Area
+                type="monotone"
+                dataKey="appDeleted"
+                name="App Deleted"
+                stroke={APP_DELETED_COLOR}
+                fill={APP_DELETED_COLOR}
                 fillOpacity={0.1}
               />
             </AreaChart>

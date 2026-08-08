@@ -65,7 +65,9 @@ vi.mock("recharts", () => ({
   Pie: makeMock("Pie"),
   XAxis: () => null,
   YAxis: () => null,
-  Area: () => null,
+  Area: ({ dataKey, name }: { dataKey?: string; name?: string }) => (
+    <span data-testid={`Area-${dataKey}`} data-name={name} />
+  ),
   Line: () => null,
   Bar: () => null,
   Cell: ({ children }: { children?: ReactNode }) => <>{children}</>,
@@ -118,6 +120,33 @@ describe("chart component coverage", () => {
   it.each(emptySmokeCases)("$name renders a stable empty-state branch", ({ element }) => {
     const { container } = render(element);
     expect(container.firstChild).not.toBeNull();
+  });
+
+  it("LocTrendChart renders a distinct Copilot App added/deleted series", () => {
+    render(
+      <LocTrendChart
+        data={[
+          {
+            day: "2025-01-01",
+            completionSuggested: 100,
+            completionAccepted: 80,
+            agentAdded: 20,
+            agentDeleted: 5,
+            appAdded: 30,
+            appDeleted: 4,
+          },
+        ]}
+      />,
+    );
+
+    const appAddedSeries = screen.getByTestId("Area-appAdded");
+    const appDeletedSeries = screen.getByTestId("Area-appDeleted");
+    expect(appAddedSeries.getAttribute("data-name")).toBe("App Added");
+    expect(appDeletedSeries.getAttribute("data-name")).toBe("App Deleted");
+
+    const chart = screen.getByTestId("AreaChart");
+    expect(chart.getAttribute("data-json")).toContain("\"appAdded\":30");
+    expect(chart.getAttribute("data-json")).toContain("\"appDeleted\":4");
   });
 
   it("renders AutofixInsightChart with computed chart data", () => {

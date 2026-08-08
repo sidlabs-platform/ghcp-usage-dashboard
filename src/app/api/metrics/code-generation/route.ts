@@ -13,7 +13,15 @@ import {
 // ── Response shape ────────────────────────────────────────────────────
 
 export interface CodeGenerationResponse {
-  dailyTrend: { day: string; completionSuggested: number; completionAccepted: number; agentAdded: number; agentDeleted: number }[];
+  dailyTrend: {
+    day: string;
+    completionSuggested: number;
+    completionAccepted: number;
+    agentAdded: number;
+    agentDeleted: number;
+    appAdded: number;
+    appDeleted: number;
+  }[];
   acceptanceRate: { day: string; rate: number }[];
   languageBreakdown: { language: string; locAdded: number; locSuggested: number }[];
   featureBreakdown: { feature: string; locAdded: number; interactions: number; acceptances: number }[];
@@ -27,6 +35,9 @@ export interface CodeGenerationResponse {
     agentLocDeleted: number;
     agentLocShare: number;
     totalCodeGenerations: number;
+    appLocAdded: number;
+    appLocDeleted: number;
+    appCodeGenerations: number;
   };
 }
 
@@ -70,6 +81,8 @@ export async function GET(request: NextRequest) {
         completionAccepted: r?.completionAccepted ?? 0,
         agentAdded: r?.agentAdded ?? 0,
         agentDeleted: r?.agentDeleted ?? 0,
+        appAdded: r?.appAdded ?? 0,
+        appDeleted: r?.appDeleted ?? 0,
       };
     });
 
@@ -88,7 +101,11 @@ export async function GET(request: NextRequest) {
 
     // KPIs — period totals via SQL
     const totals = getCompletionTotals(startDay, endDay, allowedLogins, enterpriseSlugs);
-    const totalLocChanged = totals.completionAccepted + totals.agentAdded + totals.agentDeleted;
+    // Total LoC changed spans every surface: completion (accepted), agent (added + deleted),
+    // and Copilot App (added + deleted) — App activity is additive here but never folds into
+    // completion-specific KPIs (see completionAcceptanceRate below).
+    const totalLocChanged =
+      totals.completionAccepted + totals.agentAdded + totals.agentDeleted + totals.appAdded + totals.appDeleted;
 
     return NextResponse.json({
       dailyTrend,
@@ -98,6 +115,7 @@ export async function GET(request: NextRequest) {
       modelBreakdown,
       kpis: {
         totalLocChanged,
+        // Completion-only ratio — App generations/acceptances must never leak in here.
         completionAcceptanceRate: totals.compGenCount > 0 ? (totals.compAcceptCount / totals.compGenCount) * 100 : 0,
         completionLocSuggested: totals.completionSuggested,
         completionLocAccepted: totals.completionAccepted,
@@ -106,6 +124,9 @@ export async function GET(request: NextRequest) {
         agentLocShare: (totals.completionAccepted + totals.agentAdded) > 0
           ? (totals.agentAdded / (totals.completionAccepted + totals.agentAdded)) * 100 : 0,
         totalCodeGenerations: totals.compGenCount,
+        appLocAdded: totals.appAdded,
+        appLocDeleted: totals.appDeleted,
+        appCodeGenerations: totals.appGenCount,
       },
     } as CodeGenerationResponse, {
       headers: { "Cache-Control": "private, max-age=300, stale-while-revalidate=60" },
