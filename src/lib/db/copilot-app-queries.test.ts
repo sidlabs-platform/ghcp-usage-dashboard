@@ -227,6 +227,18 @@ beforeAll(() => {
     null,
   );
 
+  // ── dave: explicit used_copilot_app=false, no dedicated totals, no App
+  // feature row — must be excluded from the adopters list. Distinct from
+  // bob, whose non-null (all-zero) totals_by_copilot_app object *does*
+  // count as App telemetry. Placed on 2025-04-03, outside the shared
+  // START/END window, so it does not affect other describe blocks above.
+  insertUser.run(
+    "2025-04-03", "ent1", "acme", 6, "dave",
+    1, 1, 1, 1, 0, 1, 0, 0, 0, 0, 0,
+    "[]", JSON.stringify([nonAppFeature(1)]), JSON.stringify([nonAppLanguage]), JSON.stringify([nonAppModel]), "[]",
+    null,
+  );
+
   // ── Enterprise aggregate rows ──
   const insertEnterprise = db.prepare(`
     INSERT INTO enterprise_daily_metrics (
@@ -433,6 +445,25 @@ describe("estimateCopilotAppRowCount", () => {
     const scoped = estimateCopilotAppRowCount(START, END, ["alice"]);
     expect(scoped.count).toBe(3);
   });
+
+  it("marks exceeds=true only once the row count is strictly greater than the 500,000 threshold", () => {
+    // Exercising the real 500,001-row boundary would mean physically
+    // inserting half a million rows into the in-memory database just to
+    // read back a COUNT(*). Instead, stub `db.prepare` for this one test
+    // so the query layer's own arithmetic (`row.cnt > 500_000`) runs
+    // against a controlled `cnt`, without altering production semantics.
+    const prepareSpy = vi.spyOn(db, "prepare").mockReturnValue({
+      get: () => ({ cnt: 500_001 }),
+    } as unknown as ReturnType<typeof db.prepare>);
+
+    try {
+      const result = estimateCopilotAppRowCount(START, END);
+      expect(result.count).toBe(500_001);
+      expect(result.exceeds).toBe(true);
+    } finally {
+      prepareSpy.mockRestore();
+    }
+  });
 });
 
 describe("getEnterpriseCopilotAppDaily", () => {
@@ -585,5 +616,19 @@ describe("getCopilotAppAdopters", () => {
 
     const unfiltered = getCopilotAppAdopters(START, END, 1, 10, "sessions", "desc", undefined, undefined);
     expect(unfiltered.total).toBe(4);
+  });
+
+  it("excludes a row with used_copilot_app=false, null dedicated totals, and no App feature row (unlike bob)", () => {
+    // dave (2025-04-03): used_copilot_app=0, totals_by_copilot_app=NULL, and
+    // no copilot_app entry in totals_by_feature — none of the three
+    // adopter-evidence signals are present, so he must be excluded.
+    // bob (2025-04-01) also has used_copilot_app=0, but his non-null
+    // totals_by_copilot_app object (even all-zero counters) still counts as
+    // App telemetry, so he remains included.
+    const { adopters, total } = getCopilotAppAdopters("2025-04-01", "2025-04-03", 1, 10, "sessions", "desc");
+    const logins = adopters.map((a) => a.login).sort();
+    expect(logins).toEqual(["alice", "bob", "erin", "frank"]);
+    expect(logins).not.toContain("dave");
+    expect(total).toBe(4);
   });
 });
