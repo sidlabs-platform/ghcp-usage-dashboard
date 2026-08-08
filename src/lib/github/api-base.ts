@@ -271,6 +271,11 @@ interface RateLimitState {
 
 const rateLimitStates = new Map<string, RateLimitState>();
 
+/** @internal Reset adaptive rate-limit tracking state — for testing only. */
+export function _resetRateLimitStateForTesting(): void {
+  rateLimitStates.clear();
+}
+
 function rateLimitKey(mode: AuthMode, enterpriseSlug?: string): string {
   return `${enterpriseSlug ?? "default"}:${mode}`;
 }
@@ -330,7 +335,129 @@ export class GitHubApiError extends Error {
   }
 }
 
-export async function githubFetch<T>(path: string, retries = 3, authMode?: AuthMode, enterpriseSlug?: string): Promise<T> {
+// ── Selected response header exposure (never Authorization) ──────────
+
+// Explicit allowlist — Authorization must never appear here even if a
+// misbehaving upstream (or test double) echoes it back.
+const SELECTED_RESPONSE_HEADERS = [
+  "x-oauth-scopes",
+  "x-accepted-oauth-scopes",
+  "x-ratelimit-limit",
+  "x-ratelimit-remaining",
+  "x-ratelimit-reset",
+  "x-ratelimit-used",
+  "x-ratelimit-resource",
+  "retry-after",
+  "link",
+] as const;
+
+function selectResponseHeaders(resp: Response): Record<string, string> {
+  const selected: Record<string, string> = {};
+  for (const key of SELECTED_RESPONSE_HEADERS) {
+    const value = resp.headers.get(key);
+    if (value != null) selected[key] = value;
+  }
+  // Defensive: guarantee Authorization can never leak through this path.
+  delete (selected as Record<string, string>).authorization;
+  return selected;
+}
+
+// ── Hardened retry classification & capped exponential full jitter ───
+
+const BACKOFF_BASE_MS = 1000;
+const BACKOFF_CAP_MS = 30_000;
+// Ceiling applied to explicit server-provided waits (Retry-After / reset)
+// so a misbehaving upstream can't stall a request indefinitely.
+const SERVER_HINT_CAP_MS = 120_000;
+
+function isSecondaryRateLimitBody(bodyText: string): boolean {
+  const lower = bodyText.toLowerCase();
+  return (
+    lower.includes("secondary rate limit") ||
+    lower.includes("secondary-rate-limit") ||
+    lower.includes("abuse detection")
+  );
+}
+
+/** Read a response body defensively — tolerates test doubles without `.text()`. */
+async function safeResponseText(resp: Response): Promise<string> {
+  if (typeof resp.text !== "function") return "";
+  try {
+    return await resp.text();
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * Determine whether a failed response should be retried:
+ * - 429 and 5xx are always retryable.
+ * - 403 is retryable only when it carries secondary/abuse rate-limit signals
+ *   (a Retry-After header, or a recognizable phrase in the body). Plain 403s
+ *   (missing scope, disabled feature, etc.) still fail fast.
+ */
+function isRetryableFailure(status: number, resp: Response, bodyText: string): boolean {
+  if (status === 429 || status >= 500) return true;
+  if (status === 403) {
+    if (resp.headers.get("retry-after") != null) return true;
+    return isSecondaryRateLimitBody(bodyText);
+  }
+  return false;
+}
+
+/**
+ * Compute the wait time before the next retry attempt.
+ * Priority: Retry-After header > X-RateLimit-Reset header > capped
+ * exponential backoff with full jitter.
+ */
+function computeRetryDelayMs(attempt: number, resp: Response): number {
+  const retryAfter = resp.headers.get("retry-after");
+  const parsedRetryAfter = retryAfter ? parseInt(retryAfter, 10) : NaN;
+  if (Number.isFinite(parsedRetryAfter) && parsedRetryAfter > 0) {
+    return Math.min(parsedRetryAfter * 1000, SERVER_HINT_CAP_MS);
+  }
+
+  const reset = resp.headers.get("x-ratelimit-reset");
+  const parsedReset = reset ? parseInt(reset, 10) : NaN;
+  if (Number.isFinite(parsedReset)) {
+    const waitMs = parsedReset * 1000 - Date.now();
+    if (waitMs > 0) return Math.min(waitMs, SERVER_HINT_CAP_MS);
+  }
+
+  // Capped exponential backoff with full jitter: random(0, min(cap, base*2^attempt)).
+  const exponential = Math.min(BACKOFF_CAP_MS, BACKOFF_BASE_MS * Math.pow(2, attempt));
+  return Math.random() * exponential;
+}
+
+export interface GithubFetchMetaOptions {
+  method?: "GET" | "POST" | "PATCH" | "PUT" | "DELETE";
+  body?: unknown;
+  retries?: number;
+  authMode?: AuthMode;
+  enterpriseSlug?: string;
+  extraHeaders?: Record<string, string>;
+}
+
+export interface GithubFetchMetaResult<T> {
+  data: T;
+  status: number;
+  /** Selected response headers only — never includes Authorization. */
+  headers: Record<string, string>;
+}
+
+/**
+ * @internal Authenticated request primitive shared by githubFetch and the
+ * GraphQL/preflight clients. Reuses validated URL construction, enterprise
+ * token selection, auth readiness, adaptive rate tracking, and hardened
+ * retry behavior. Returns the parsed body alongside status and a small
+ * allowlisted set of response headers — the Authorization header sent on
+ * the request is never exposed on the returned result.
+ */
+export async function githubFetchWithMeta<T>(
+  path: string,
+  options: GithubFetchMetaOptions = {},
+): Promise<GithubFetchMetaResult<T>> {
+  const { method = "GET", body, retries = 3, authMode, enterpriseSlug, extraHeaders } = options;
   const ctx = resolveOrOverrideContext(path, authMode, enterpriseSlug);
   await ensureAuthReady(ctx.mode);
   const url = buildValidatedUrl(path, ctx.mode);
@@ -338,31 +465,58 @@ export async function githubFetch<T>(path: string, retries = 3, authMode?: AuthM
   for (let attempt = 0; attempt < retries; attempt++) {
     await adaptiveRateDelay(ctx.mode, ctx.enterpriseSlug);
     const hdrs = await headersForAuth(ctx.mode, ctx.enterpriseSlug);
-    const resp = await fetch(url, { headers: hdrs, cache: "no-store" });
+    if (extraHeaders) Object.assign(hdrs, extraHeaders);
+    const init: RequestInit = { method, headers: hdrs, cache: "no-store" };
+    if (body !== undefined) {
+      init.body = JSON.stringify(body);
+      hdrs["Content-Type"] = "application/json";
+    }
+
+    const resp = await fetch(url, init);
     updateRateLimit(resp, ctx.mode, ctx.enterpriseSlug);
 
     if (resp.ok) {
-      return resp.json() as Promise<T>;
+      const data = resp.status === 204 ? (null as T) : ((await resp.json()) as T);
+      return { data, status: resp.status, headers: selectResponseHeaders(resp) };
     }
 
+    if (resp.status === 204) {
+      return { data: null as T, status: 204, headers: selectResponseHeaders(resp) };
+    }
+
+    // 429/5xx are always retryable — no need to read the body.
     if (resp.status === 429 || resp.status >= 500) {
-      const retryAfter = resp.headers.get("retry-after");
-      const parsed = retryAfter ? parseInt(retryAfter, 10) : NaN;
-      const waitMs = Number.isFinite(parsed) && parsed > 0 ? parsed * 1000 : Math.pow(2, attempt) * 1000;
-      console.warn("GitHub API %d on %s, retrying in %dms (attempt %d/%d)", resp.status, path.replace(/\n|\r/g, ""), waitMs, attempt + 1, retries);
+      const waitMs = computeRetryDelayMs(attempt, resp);
+      console.warn(
+        "GitHub API %d on %s, retrying in %dms (attempt %d/%d)",
+        resp.status, path.replace(/\n|\r/g, ""), Math.round(waitMs), attempt + 1, retries,
+      );
       await sleep(waitMs);
       continue;
     }
 
-    if (resp.status === 204) {
-      return null as T;
+    const bodyText = await safeResponseText(resp);
+
+    // 403 is only retryable when it carries secondary/abuse rate-limit signals.
+    if (resp.status === 403 && isRetryableFailure(resp.status, resp, bodyText)) {
+      const waitMs = computeRetryDelayMs(attempt, resp);
+      console.warn(
+        "GitHub API %d on %s, retrying in %dms (attempt %d/%d)",
+        resp.status, path.replace(/\n|\r/g, ""), Math.round(waitMs), attempt + 1, retries,
+      );
+      await sleep(waitMs);
+      continue;
     }
 
-    const body = await resp.text().catch(() => "");
-    throw new GitHubApiError(resp.status, path, body);
+    throw new GitHubApiError(resp.status, path, bodyText);
   }
 
   throw new Error(`GitHub API failed after ${retries} retries on ${path.replace(/\n|\r/g, "")}`);
+}
+
+export async function githubFetch<T>(path: string, retries = 3, authMode?: AuthMode, enterpriseSlug?: string): Promise<T> {
+  const result = await githubFetchWithMeta<T>(path, { retries, authMode, enterpriseSlug });
+  return result.data;
 }
 
 export async function githubFetchPaginated<T>(path: string, perPage = 100, authMode?: AuthMode, enterpriseSlug?: string): Promise<T[]> {
