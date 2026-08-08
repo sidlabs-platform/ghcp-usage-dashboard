@@ -1010,3 +1010,188 @@ describe("report content sanitization (legacy sourceStats/warnings/errorMessage)
     expect(run.sourceStats).toEqual({ note: `token ${secretToken}` });
   });
 });
+
+// ── Task 8 production-readiness privacy fixes ────────────────────────
+
+describe("buildLicenseRunReport: check message/details sanitization", () => {
+  it("sanitizes check message and recursively sanitizes nested details (arrays/objects, including nested sensitive keys) without leaking secrets, while safe fields remain readable", () => {
+    const runId = startLicenseRun({ enterpriseSlug: "ent1", requestedPeriods: ["2026-01"] });
+    const leakedEmail = "auditor@example.com";
+    const leakedToken = "ghp_abcdefghijklmnopqrstuvwxyz012345";
+    recordLicenseRunDiagnostics({
+      runId,
+      finish: { status: "warning" },
+      checks: [
+        {
+          checkName: "seat_count",
+          billingPeriod: "2026-01",
+          orgLogin: "org1",
+          status: "fail",
+          message: `mismatch reported by ${leakedEmail} using ${leakedToken}`,
+          details: {
+            toleranceUsed: 0.05,
+            source: "billing_report",
+            [leakedEmail]: "sensitive-keyed-value",
+            nested: {
+              contactEmail: leakedEmail,
+              history: [leakedToken, "safe-value", { deep: leakedEmail }],
+            },
+          },
+        },
+      ],
+    });
+    const run = getLicenseRun(runId)!;
+    const checks = listLicenseChecks(runId);
+    const report = buildLicenseRunReport(run, checks, []);
+
+    expect(report.checks[0].message).not.toContain(leakedEmail);
+    expect(report.checks[0].message).not.toContain(leakedToken);
+    const detailsStr = JSON.stringify(report.checks[0].details);
+    expect(detailsStr).not.toContain(leakedEmail);
+    expect(detailsStr).not.toContain(leakedToken);
+    expect(report.checks[0].details.toleranceUsed).toBe(0.05);
+    expect(report.checks[0].details.source).toBe("billing_report");
+
+    const serialized = serializeLicenseRunReport(report);
+    expect(serialized).not.toContain(leakedEmail);
+    expect(serialized).not.toContain(leakedToken);
+    const rendered = renderLicenseRunReportText(report);
+    expect(rendered).not.toContain(leakedEmail);
+    expect(rendered).not.toContain(leakedToken);
+    expect(serialized).toContain("billing_report");
+  });
+});
+
+describe("sanitizeReportValue/sanitizeReportRecord: key sanitization + prototype-safety", () => {
+  it("redacts sensitive object keys (email/token) and de-duplicates deterministically on collision, without leaking originals", () => {
+    const runId = startLicenseRun({ enterpriseSlug: "ent1", requestedPeriods: ["2026-01"] });
+    const emailKeyA = "alice@example.com";
+    const emailKeyB = "bob@example.com";
+    recordLicenseRunDiagnostics({
+      runId,
+      finish: {
+        status: "warning",
+        sourceStats: {
+          [emailKeyA]: 1,
+          [emailKeyB]: 2,
+          safeKey: 3,
+        },
+      },
+      checks: [],
+    });
+    const run = getLicenseRun(runId)!;
+    const report = buildLicenseRunReport(run, [], []);
+    const keys = Object.keys(report.sourceStats);
+    expect(keys).not.toContain(emailKeyA);
+    expect(keys).not.toContain(emailKeyB);
+    expect(keys).toContain("safeKey");
+    // Two distinct emails redact to the same marker: deterministic dedup suffix, not a merge/overwrite.
+    expect(keys.filter((k) => k.startsWith("[REDACTED_EMAIL]")).sort()).toEqual(["[REDACTED_EMAIL]", "[REDACTED_EMAIL]:2"]);
+    expect(report.sourceStats["[REDACTED_EMAIL]"]).toBe(1);
+    expect(report.sourceStats["[REDACTED_EMAIL]:2"]).toBe(2);
+
+    const serialized = serializeLicenseRunReport(report);
+    expect(serialized).not.toContain(emailKeyA);
+    expect(serialized).not.toContain(emailKeyB);
+
+    // Deterministic across repeated builds of the same underlying data.
+    const report2 = buildLicenseRunReport(run, [], []);
+    expect(Object.keys(report2.sourceStats).sort()).toEqual(keys.sort());
+  });
+
+  it("renames __proto__/constructor/prototype keys and never mutates a shared prototype", () => {
+    const runId = startLicenseRun({ enterpriseSlug: "ent1", requestedPeriods: ["2026-01"] });
+    // JSON.parse creates real *own* properties for these names (it never
+    // triggers the `__proto__` accessor setter), matching how sourceStats
+    // actually round-trips through the DB's JSON text column.
+    const maliciousSourceStats = JSON.parse(
+      '{"__proto__": {"polluted": true}, "constructor": {"polluted": true}, "prototype": {"polluted": true}, "safe": 1}'
+    ) as Record<string, unknown>;
+    recordLicenseRunDiagnostics({
+      runId,
+      finish: { status: "warning", sourceStats: maliciousSourceStats },
+      checks: [],
+    });
+    const run = getLicenseRun(runId)!;
+    expect(Object.getPrototypeOf(run.sourceStats)).toBe(Object.prototype);
+
+    const report = buildLicenseRunReport(run, [], []);
+    // No global prototype pollution occurred anywhere along the way.
+    expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+    expect(report.sourceStats.safe).toBe(1);
+    const keys = Object.keys(report.sourceStats);
+    expect(keys).not.toContain("__proto__");
+    expect(keys).not.toContain("constructor");
+    expect(keys).not.toContain("prototype");
+
+    // Serializing/parsing must not resurrect a real `__proto__` own key either.
+    const serialized = serializeLicenseRunReport(report);
+    const parsed = JSON.parse(serialized);
+    expect(Object.getPrototypeOf(parsed)).toBe(Object.prototype);
+    expect(Object.keys(parsed.sourceStats)).not.toContain("__proto__");
+  });
+});
+
+describe("buildLicenseRunReport diagnostics: apiRequestCounts.bySource key sanitization", () => {
+  it("redacts a token/email-like apiRequestCounts.bySource key without leaking the original, while safe source keys pass through", () => {
+    const runId = startLicenseRun({ enterpriseSlug: "ent1", requestedPeriods: ["2026-01"] });
+    const run = getLicenseRun(runId)!;
+    const leakedKey = "leaked@example.com";
+    const report = buildLicenseRunReport(run, [], [], {
+      apiRequestCounts: { total: 4, bySource: { [leakedKey]: 3, seat_snapshot: 1 } },
+    });
+    const bySourceKeys = Object.keys(report.diagnostics.apiRequestCounts.bySource);
+    expect(bySourceKeys).not.toContain(leakedKey);
+    expect(bySourceKeys).toContain("seat_snapshot");
+    expect(report.diagnostics.apiRequestCounts.bySource.seat_snapshot).toBe(1);
+
+    const serialized = serializeLicenseRunReport(report);
+    expect(serialized).not.toContain(leakedKey);
+    const rendered = renderLicenseRunReportText(report);
+    expect(rendered).not.toContain(leakedKey);
+    expect(rendered).toContain("seat_snapshot");
+  });
+});
+
+describe("buildLicenseRunReport: elapsedMs validity", () => {
+  it("is null (never NaN) for an unparseable startedAt timestamp, agreeing across the report object, JSON, and text", () => {
+    const runId = startLicenseRun({
+      enterpriseSlug: "ent1",
+      requestedPeriods: ["2026-01"],
+      startedAt: "not-a-real-timestamp",
+    });
+    recordLicenseRunDiagnostics({
+      runId,
+      finish: { status: "success", completedAt: "2026-01-01T00:00:00.000Z" },
+      checks: [],
+    });
+    const run = getLicenseRun(runId)!;
+    const report = buildLicenseRunReport(run, [], []);
+    expect(report.elapsedMs).toBeNull();
+    expect(Number.isNaN(report.elapsedMs as unknown as number)).toBe(false);
+    const parsed = JSON.parse(serializeLicenseRunReport(report));
+    expect(parsed.elapsedMs).toBeNull();
+    const rendered = renderLicenseRunReportText(report);
+    expect(rendered).toMatch(/in progress/i);
+  });
+
+  it("is null (never negative) when completedAt is before startedAt (out-of-order timestamps), agreeing across JSON and text", () => {
+    const runId = startLicenseRun({
+      enterpriseSlug: "ent1",
+      requestedPeriods: ["2026-01"],
+      startedAt: "2026-01-01T00:00:10.000Z",
+    });
+    recordLicenseRunDiagnostics({
+      runId,
+      finish: { status: "success", completedAt: "2026-01-01T00:00:00.000Z" },
+      checks: [],
+    });
+    const run = getLicenseRun(runId)!;
+    const report = buildLicenseRunReport(run, [], []);
+    expect(report.elapsedMs).toBeNull();
+    const parsed = JSON.parse(serializeLicenseRunReport(report));
+    expect(parsed.elapsedMs).toBeNull();
+    const rendered = renderLicenseRunReportText(report);
+    expect(rendered).toMatch(/in progress/i);
+  });
+});

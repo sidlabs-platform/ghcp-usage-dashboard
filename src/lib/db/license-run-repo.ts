@@ -607,12 +607,50 @@ function redactSensitiveSubstrings(text: string): string {
 }
 
 /**
+ * Object keys that must never reach an output object as a literal own key —
+ * regardless of their content — because bracket-assigning them onto a
+ * *plain* object can mutate that object's prototype (`__proto__`) or shadow
+ * built-ins (`constructor`, `prototype`) instead of creating a normal data
+ * property. See {@link sanitizeReportKey}.
+ */
+const DANGEROUS_KEYS = new Set(["__proto__", "constructor", "prototype"]);
+const REDACTED_KEY_MARKER = "[REDACTED_KEY]";
+
+/**
+ * Redact/bound an object key the same way a string *value* is redacted (see
+ * {@link redactSensitiveSubstrings}) so a secret/token/email stuffed into a
+ * key — not just a value — can never leak through a report. The three keys
+ * that could otherwise mutate a plain object's prototype via bracket
+ * assignment (`__proto__`, `constructor`, `prototype`) are always renamed to
+ * one constant marker, regardless of content, since some downstream
+ * consumers (e.g. `stableStringify`'s key-sorting step) build plain object
+ * literals from these keys.
+ *
+ * When two or more of one object's *own* keys redact to the same marker
+ * (e.g. two different email addresses used as keys), a stable `:2`, `:3`,
+ * ... suffix is appended in first-seen order — evaluated fresh per call via
+ * `seenKeys` (scoped to one object's own entries) — so entries are never
+ * silently merged/overwritten, without the suffix ever revealing which
+ * original key was which.
+ */
+function sanitizeReportKey(key: string, seenKeys: Map<string, number>): string {
+  const base = DANGEROUS_KEYS.has(key) ? REDACTED_KEY_MARKER : redactSensitiveSubstrings(key);
+  const priorCount = seenKeys.get(base) ?? 0;
+  seenKeys.set(base, priorCount + 1);
+  return priorCount === 0 ? base : `${base}:${priorCount + 1}`;
+}
+
+/**
  * Recursively sanitize an arbitrary caller-provided value for inclusion in a
  * report: strings are redacted/bounded (see {@link redactSensitiveSubstrings});
  * non-finite numbers become `null`; arrays/objects are recursed into with a
  * bounded depth and a bounded number of entries (excess entries are dropped
  * and replaced with a single truncation marker) to avoid log amplification;
- * anything else (functions, symbols, `undefined`) is dropped.
+ * object *keys* are redacted/bounded and de-duplicated the same way values
+ * are (see {@link sanitizeReportKey}), and the output is built on a
+ * null-prototype object so even an unexpected dangerous key can never
+ * mutate a shared prototype; anything else (functions, symbols, `undefined`)
+ * is dropped.
  */
 function sanitizeReportValue(value: unknown, depth = 0): unknown {
   if (depth > MAX_SANITIZE_DEPTH) return "[REDACTED_DEPTH_LIMIT]";
@@ -626,9 +664,11 @@ function sanitizeReportValue(value: unknown, depth = 0): unknown {
   }
   if (typeof value === "object") {
     const entries = Object.entries(value as Record<string, unknown>).slice(0, MAX_COLLECTION_SIZE);
-    const safe: Record<string, unknown> = {};
+    const safe: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
+    const seenKeys = new Map<string, number>();
     for (const [key, entryValue] of entries) {
-      safe[key] = sanitizeReportValue(entryValue, depth + 1);
+      const safeKey = sanitizeReportKey(key, seenKeys);
+      safe[safeKey] = sanitizeReportValue(entryValue, depth + 1);
     }
     return safe;
   }
@@ -716,6 +756,26 @@ function safeNonNegativeNumber(value: number | undefined): number {
 }
 
 /**
+ * Compute a run's elapsed duration in ms, or `null` when the run hasn't
+ * completed yet, either timestamp fails to parse (`Date.parse` returns
+ * `NaN` for an invalid/unparseable string), or the computed duration is
+ * negative (an out-of-order `completedAt` before `startedAt`). This can
+ * never produce `NaN` or a negative number in a report — both the report
+ * object and everything derived from it (JSON via
+ * {@link serializeLicenseRunReport}, text via
+ * {@link renderLicenseRunReportText}) always agree on `null` vs. a valid
+ * non-negative duration.
+ */
+function computeElapsedMs(startedAt: string, completedAt: string | null): number | null {
+  if (completedAt == null) return null;
+  const started = Date.parse(startedAt);
+  const completed = Date.parse(completedAt);
+  if (!Number.isFinite(started) || !Number.isFinite(completed)) return null;
+  const elapsed = completed - started;
+  return elapsed >= 0 ? elapsed : null;
+}
+
+/**
  * Build the always-present {@link LicenseRunReportDiagnostics} from a
  * caller's optional {@link LicenseRunReportDiagnosticsInput} plus this
  * report's already-fetched `sourceStates` (used to compute
@@ -733,7 +793,7 @@ function buildDiagnostics(
   const identityResolution: IdentityResolutionSummary = input.identityResolution
     ? {
         bySource: [...input.identityResolution.bySource]
-          .map((entry) => ({ source: entry.source, count: safeNonNegativeInt(entry.count) }))
+          .map((entry) => ({ source: redactSensitiveSubstrings(entry.source), count: safeNonNegativeInt(entry.count) }))
           .sort((a, b) => a.source.localeCompare(b.source)),
         unresolvedHolderKeys: [...input.identityResolution.unresolvedHolderKeys]
           .map(sanitizeUnresolvedHolderKey)
@@ -752,9 +812,10 @@ function buildDiagnostics(
   );
 
   const apiRequestCountsInput = input.apiRequestCounts ?? {};
+  const seenApiSourceKeys = new Map<string, number>();
   const bySourceEntries = Object.entries(apiRequestCountsInput.bySource ?? {})
     .slice(0, MAX_COLLECTION_SIZE)
-    .map(([key, count]) => [key.slice(0, MAX_STRING_LENGTH), safeNonNegativeInt(count)] as const)
+    .map(([key, count]) => [sanitizeReportKey(key, seenApiSourceKeys), safeNonNegativeInt(count)] as const)
     .sort((a, b) => a[0].localeCompare(b[0]));
   const apiRequestCounts: LicenseRunReportApiRequestCounts = {
     total: safeNonNegativeInt(apiRequestCountsInput.total),
@@ -847,8 +908,7 @@ export function buildLicenseRunReport(
   sourceStates: LicenseSourceStateRecord[],
   diagnosticsInput?: LicenseRunReportDiagnosticsInput
 ): LicenseRunReportObject {
-  const elapsedMs =
-    run.completedAt != null ? Date.parse(run.completedAt) - Date.parse(run.startedAt) : null;
+  const elapsedMs = computeElapsedMs(run.startedAt, run.completedAt);
 
   const sources: LicenseRunReportSourceEntry[] = sourceStates
     .map((s) => ({
@@ -868,10 +928,10 @@ export function buildLicenseRunReport(
       billingPeriod: c.billingPeriod,
       orgLogin: c.orgLogin,
       status: c.status,
-      message: c.message,
+      message: redactSensitiveSubstrings(c.message),
       expectedValue: c.expectedValue,
       actualValue: c.actualValue,
-      details: c.details,
+      details: sanitizeReportRecord(c.details),
     }))
     .sort(
       (a, b) =>
