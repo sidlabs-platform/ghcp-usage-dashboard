@@ -68,6 +68,15 @@ describe("CopilotOrgBillingClient", () => {
       expect(result).toEqual({ status: "unavailable", reason: "forbidden", orgLogin: "acme" });
     });
 
+    it("returns a typed unknown result for a 403 with retryable=true (rate limit), not unavailable/forbidden", async () => {
+      mockFetchWithMeta.mockRejectedValueOnce(new GitHubApiError(403, "/orgs/acme/copilot/billing", "secondary rate limit", true));
+      const result = await client.getOrgBilling("acme");
+      expect(result.status).toBe("unknown");
+      if (result.status !== "unknown") throw new Error("expected unknown");
+      expect(result.orgLogin).toBe("acme");
+      expect(result.message).toContain("403");
+    });
+
     it("returns a typed unknown result for other GitHubApiError statuses", async () => {
       mockFetchWithMeta.mockRejectedValueOnce(new GitHubApiError(500, "/orgs/acme/copilot/billing", "boom", true));
       const result = await client.getOrgBilling("acme");

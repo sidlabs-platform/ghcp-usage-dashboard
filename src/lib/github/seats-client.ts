@@ -56,7 +56,7 @@ export interface NormalizedCopilotSeat {
  * dropped or non-deterministically re-keyed.
  */
 function hashRawSeatIdentifiers(seat: CopilotSeat, orgLogin: string): string {
-  const assignee = seat.assignee ?? ({} as Partial<CopilotSeat["assignee"]>);
+  const assignee = seat.assignee ?? {};
   const material = JSON.stringify([
     orgLogin,
     assignee.node_id ?? "",

@@ -183,6 +183,13 @@ async function fetchEnterpriseScimUsers(
     }
   } catch (err) {
     if (err instanceof GitHubApiError) {
+      // Check retryable first: GitHub's primary/secondary rate limits
+      // commonly exhaust as 403 with retryable=true, and must be reported
+      // as a transient "unknown" outcome rather than a genuine permission
+      // denial. Mirrors auth-preflight's probeCapability ordering.
+      if (err.retryable) {
+        return { status: "unknown", enterprise, message: `GitHub API error ${err.status} (retryable) fetching enterprise SCIM users.` };
+      }
       if (err.status === 404) return { status: "unavailable", reason: "not_found", enterprise };
       if (err.status === 403) return { status: "unavailable", reason: "forbidden", enterprise };
       return { status: "unknown", enterprise, message: `GitHub API error ${err.status} fetching enterprise SCIM users.` };
@@ -195,10 +202,23 @@ async function fetchEnterpriseScimUsers(
   return { status: "ok", records };
 }
 
+// ── Org members pagination (bounded page/per_page loop) ─────────────────
+
+export interface OrgMembersFetchOptions {
+  /** Page size. Must be an integer in GitHub's sensible range 1..100. Default 100 (GitHub's max). */
+  perPage?: number;
+  /** Safety cap on the number of pages fetched. Must be >= 1. Default 200. */
+  maxPages?: number;
+  enterpriseSlug?: string;
+}
+
 async function fetchOrgMembers(org: string, options: OrgMembersFetchOptions = {}): Promise<NormalizedMembershipRecord[]> {
   const { perPage = 100, maxPages = 200, enterpriseSlug } = options;
   if (!Number.isInteger(maxPages) || maxPages < 1) {
     throw new Error(`copilotMembershipClient: maxPages must be an integer >= 1 (received ${maxPages}).`);
+  }
+  if (!Number.isInteger(perPage) || perPage < 1 || perPage > 100) {
+    throw new Error(`copilotMembershipClient: perPage must be an integer in the range 1..100 (received ${perPage}).`);
   }
 
   const now = new Date().toISOString();
@@ -222,16 +242,6 @@ async function fetchOrgMembers(org: string, options: OrgMembersFetchOptions = {}
   }
 
   return records;
-}
-
-// ── Org members pagination (bounded page/per_page loop) ─────────────────
-
-export interface OrgMembersFetchOptions {
-  /** Page size. Default 100 (GitHub's max). */
-  perPage?: number;
-  /** Safety cap on the number of pages fetched. Must be >= 1. Default 200. */
-  maxPages?: number;
-  enterpriseSlug?: string;
 }
 
 // ── Exported client ───────────────────────────────────────────────────

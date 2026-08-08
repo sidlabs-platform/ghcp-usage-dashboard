@@ -121,26 +121,44 @@ function deterministicEventId(event: RawCopilotAuditEvent, orgLogin: string): st
   return `sha256:${createHash("sha256").update(material).digest("hex")}`;
 }
 
-/** Normalize a single raw event. Returns `null` for unrecognized actions or events with no usable timestamp. */
-function normalizeEvent(event: RawCopilotAuditEvent, orgLoginFallback: string): NormalizedCopilotAuditEvent | null {
-  const action = classifyAction(event.action);
-  if (!action) return null;
+/** Outcome of attempting to normalize a single raw audit event. */
+type NormalizeEventOutcome =
+  | { kind: "normalized"; event: NormalizedCopilotAuditEvent }
+  | { kind: "unrecognized_action" }
+  | { kind: "missing_timestamp"; action: CopilotAuditAction; eventId: string };
 
-  const ts = eventTimestampMs(event);
-  if (ts === null) return null;
+/**
+ * Normalize a single raw event. Unrecognized (non seat-lifecycle) actions
+ * are silently skipped — they're outside this pipeline's scope, not a data
+ * quality problem. An otherwise-relevant assign/cancel event with no
+ * parseable timestamp is a genuine data quality gap, so it's reported as
+ * `missing_timestamp` (see `fetchAuditEvents`, which turns that into a
+ * structured `AuditFetchOk.warnings` entry) rather than dropped silently.
+ */
+function normalizeEvent(event: RawCopilotAuditEvent, orgLoginFallback: string): NormalizeEventOutcome {
+  const action = classifyAction(event.action);
+  if (!action) return { kind: "unrecognized_action" };
 
   const orgLogin = event.org || orgLoginFallback;
+  const ts = eventTimestampMs(event);
+  if (ts === null) {
+    return { kind: "missing_timestamp", action, eventId: deterministicEventId(event, orgLogin) };
+  }
+
   return {
-    eventId: deterministicEventId(event, orgLogin),
-    orgLogin,
-    action,
-    occurredAt: new Date(ts).toISOString(),
-    githubUserId: typeof event.user_id === "number" && Number.isFinite(event.user_id) ? event.user_id : null,
-    observedLogin: event.user ?? null,
-    externalIdentity: event.external_identity_nameid ?? event.external_identity_username ?? null,
-    team: event.team ?? null,
-    source: "audit_log",
-    raw: event,
+    kind: "normalized",
+    event: {
+      eventId: deterministicEventId(event, orgLogin),
+      orgLogin,
+      action,
+      occurredAt: new Date(ts).toISOString(),
+      githubUserId: typeof event.user_id === "number" && Number.isFinite(event.user_id) ? event.user_id : null,
+      observedLogin: event.user ?? null,
+      externalIdentity: event.external_identity_nameid ?? event.external_identity_username ?? null,
+      team: event.team ?? null,
+      source: "audit_log",
+      raw: event,
+    },
   };
 }
 
@@ -240,8 +258,18 @@ async function fetchAuditEvents(
         }
         if (untilMs !== null && ts !== null && ts > untilMs) continue;
 
-        const normalized = normalizeEvent(raw, orgLoginFallback);
-        if (!normalized) continue;
+        const outcome = normalizeEvent(raw, orgLoginFallback);
+        if (outcome.kind === "unrecognized_action") continue;
+        if (outcome.kind === "missing_timestamp") {
+          // Structured, non-sensitive warning: only the action name and a
+          // deterministic event id are included — never the raw payload
+          // (which may carry a login, email, or other identity data).
+          warnings.push(
+            `Skipped a Copilot audit "${outcome.action}" event (id ${outcome.eventId}) with no parseable timestamp.`,
+          );
+          continue;
+        }
+        const normalized = outcome.event;
         if (seenEventIds.has(normalized.eventId)) continue;
         seenEventIds.add(normalized.eventId);
         results.push(normalized);
@@ -270,6 +298,13 @@ async function fetchAuditEvents(
     }
   } catch (err) {
     if (err instanceof GitHubApiError) {
+      // Check retryable first: GitHub's primary/secondary rate limits
+      // commonly exhaust as 403 with retryable=true, and must be reported
+      // as a transient "unknown" outcome rather than a genuine permission
+      // denial. Mirrors auth-preflight's probeCapability ordering.
+      if (err.retryable) {
+        return { status: "unknown", target, message: `GitHub API error ${err.status} (retryable) fetching Copilot audit log events.` };
+      }
       if (err.status === 404) return { status: "unavailable", reason: "not_found", target };
       if (err.status === 403) return { status: "unavailable", reason: "forbidden", target };
       return { status: "unknown", target, message: `GitHub API error ${err.status} fetching Copilot audit log events.` };

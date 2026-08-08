@@ -93,13 +93,50 @@ describe("CopilotAuditClient", () => {
       expect(result.events).toHaveLength(0);
     });
 
-    it("drops events with no usable timestamp", async () => {
+    it("drops events with no usable timestamp and surfaces a structured warning (not a silent drop)", async () => {
       mockFetchWithMeta.mockResolvedValueOnce(
         page([{ action: "cfb_seat_added", user: "octocat", user_id: 1, _document_id: "doc-1" }]),
       );
       const result = await client.getOrgAuditEvents("acme");
       expectOk(result);
       expect(result.events).toHaveLength(0);
+      expect(result.warnings).toHaveLength(1);
+      expect(result.warnings[0]).toMatch(/timestamp/i);
+      expect(result.warnings[0]).toContain("doc-1");
+      expect(result.warnings[0]).toContain("assign");
+    });
+
+    it("surfaces a per-event timestamp warning while retaining other valid events, without leaking sensitive raw content into the warning", async () => {
+      mockFetchWithMeta.mockResolvedValueOnce(
+        page([
+          {
+            action: "cfb_seat_added",
+            user: "no-timestamp-user",
+            user_id: 1,
+            external_identity_nameid: "no-timestamp-user@example.com",
+            _document_id: "doc-missing-ts",
+          },
+          { action: "cfb_seat_added", user: "octocat", user_id: 2, "@timestamp": 1_700_000_000_000, _document_id: "doc-valid" },
+        ]),
+      );
+      const result = await client.getOrgAuditEvents("acme");
+      expectOk(result);
+      expect(result.events.map((e) => e.eventId)).toEqual(["doc-valid"]);
+      expect(result.warnings).toHaveLength(1);
+      expect(result.warnings[0]).toContain("doc-missing-ts");
+      // Must not leak sensitive raw content (login/email/external identity) into the warning.
+      expect(result.warnings[0]).not.toContain("no-timestamp-user");
+      expect(result.warnings[0]).not.toContain("example.com");
+    });
+
+    it("does not warn for unrecognized (non seat-lifecycle) actions lacking a timestamp — only relevant assign/cancel actions warn", async () => {
+      mockFetchWithMeta.mockResolvedValueOnce(
+        page([{ action: "org.update_member", user: "octocat", user_id: 1, _document_id: "doc-1" }]),
+      );
+      const result = await client.getOrgAuditEvents("acme");
+      expectOk(result);
+      expect(result.events).toHaveLength(0);
+      expect(result.warnings).toEqual([]);
     });
 
     it("preserves user id/login/external identity/org/team/source/raw JSON", async () => {
@@ -385,6 +422,24 @@ describe("CopilotAuditClient", () => {
       if (result.status !== "unknown") throw new Error("expected unknown");
       expect(result.target).toBe("acme");
       expect(result.message).toContain("429");
+    });
+
+    it("returns a typed unknown result for a 403 with retryable=true (primary/secondary rate limit), not unavailable/forbidden", async () => {
+      mockFetchWithMeta.mockRejectedValueOnce(new GitHubApiError(403, "/orgs/acme/audit-log", "secondary rate limit", true));
+      const result = await client.getOrgAuditEvents("acme");
+      expect(result.status).toBe("unknown");
+      if (result.status !== "unknown") throw new Error("expected unknown");
+      expect(result.target).toBe("acme");
+      expect(result.message).toContain("403");
+    });
+
+    it("returns a typed unknown result for an enterprise 403 with retryable=true (primary/secondary rate limit), not unavailable/forbidden", async () => {
+      mockFetchWithMeta.mockRejectedValueOnce(new GitHubApiError(403, "/enterprises/my-ent/audit-log", "secondary rate limit", true));
+      const result = await client.getEnterpriseAuditEvents("my-ent");
+      expect(result.status).toBe("unknown");
+      if (result.status !== "unknown") throw new Error("expected unknown");
+      expect(result.target).toBe("my-ent");
+      expect(result.message).toContain("403");
     });
 
     it("returns a typed unknown result for other GitHubApiError statuses (e.g. 500)", async () => {

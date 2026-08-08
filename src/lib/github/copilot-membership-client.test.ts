@@ -172,6 +172,15 @@ describe("CopilotMembershipClient", () => {
         expect(result.message).toContain("429");
       });
 
+      it("returns a typed unknown result for a 403 with retryable=true (primary/secondary rate limit), not unavailable/forbidden", async () => {
+        mockFetchWithMeta.mockRejectedValueOnce(new GitHubApiError(403, "/scim/v2/enterprises/my-ent/Users", "secondary rate limit", true));
+        const result = await client.getEnterpriseScimUsers("my-ent");
+        expect(result.status).toBe("unknown");
+        if (result.status !== "unknown") throw new Error("expected unknown");
+        expect(result.enterprise).toBe("my-ent");
+        expect(result.message).toContain("403");
+      });
+
       it("returns a typed unknown result for other GitHubApiError statuses (e.g. 500)", async () => {
         mockFetchWithMeta.mockRejectedValueOnce(new GitHubApiError(500, "/scim/v2/enterprises/my-ent/Users", "boom", true));
         const result = await client.getEnterpriseScimUsers("my-ent");
@@ -248,6 +257,35 @@ describe("CopilotMembershipClient", () => {
 
     it("throws when maxPages is not a positive integer", async () => {
       await expect(client.getOrgMembers("acme", { maxPages: 0 })).rejects.toThrow(/maxPages/);
+    });
+
+    it("throws when perPage is zero", async () => {
+      await expect(client.getOrgMembers("acme", { perPage: 0 })).rejects.toThrow(/perPage/);
+    });
+
+    it("throws when perPage is negative", async () => {
+      await expect(client.getOrgMembers("acme", { perPage: -5 })).rejects.toThrow(/perPage/);
+    });
+
+    it("throws when perPage exceeds GitHub's 100 max", async () => {
+      await expect(client.getOrgMembers("acme", { perPage: 101 })).rejects.toThrow(/perPage/);
+    });
+
+    it("throws when perPage is not an integer", async () => {
+      await expect(client.getOrgMembers("acme", { perPage: 50.5 })).rejects.toThrow(/perPage/);
+    });
+
+    it("accepts the boundary values perPage=1 and perPage=100", async () => {
+      // perPage=1: a full page (length === perPage) means "maybe more", so a
+      // second (empty) page request naturally follows before pagination stops.
+      mockFetchWithMeta
+        .mockResolvedValueOnce({ data: [{ login: "solo", id: 1 }], status: 200, headers: {} })
+        .mockResolvedValueOnce({ data: [], status: 200, headers: {} });
+      await expect(client.getOrgMembers("acme", { perPage: 1 })).resolves.toBeDefined();
+
+      mockFetchWithMeta.mockReset();
+      mockFetchWithMeta.mockResolvedValueOnce({ data: [{ login: "solo", id: 1 }], status: 200, headers: {} });
+      await expect(client.getOrgMembers("acme", { perPage: 100 })).resolves.toBeDefined();
     });
   });
 });

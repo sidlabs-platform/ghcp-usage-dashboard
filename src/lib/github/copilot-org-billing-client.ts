@@ -92,6 +92,14 @@ export class CopilotOrgBillingClient {
       return { status: "ok", snapshot: normalizeOrgBilling(org, result.data, now) };
     } catch (err) {
       if (err instanceof GitHubApiError) {
+        // Check retryable first: GitHub's primary/secondary rate limits
+        // commonly exhaust as 403 with retryable=true, and must be reported
+        // as a transient "unknown" outcome — never misclassified as a
+        // genuine (non-retryable) permission denial. Mirrors
+        // auth-preflight's probeCapability ordering.
+        if (err.retryable) {
+          return { status: "unknown", orgLogin: org, message: `GitHub API error ${err.status} (retryable) fetching org Copilot billing.` };
+        }
         if (err.status === 404) return { status: "unavailable", reason: "not_found", orgLogin: org };
         if (err.status === 403) return { status: "unavailable", reason: "forbidden", orgLogin: org };
         return { status: "unknown", orgLogin: org, message: `GitHub API error ${err.status} fetching org Copilot billing.` };
