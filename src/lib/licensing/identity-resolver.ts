@@ -85,6 +85,17 @@ export interface IdentityResolutionInput {
 // ── Real-login detection ─────────────────────────────────────────────────
 
 const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+/**
+ * Compact/dashless GUIDs (32 hex chars) and other hash-like hex blobs (Mongo
+ * ObjectIds, truncated SHA digests, opaque vendor identifiers, etc.) that
+ * still fit within `MAX_GITHUB_LOGIN_LENGTH`. A real GitHub login this long
+ * that is *also* composed entirely of hex characters is implausible in
+ * practice, so any all-hex value of 32+ characters is treated as opaque
+ * rather than a genuine login — without this, a dashless GUID (e.g. a seat
+ * assignee field that stripped the hyphens) would otherwise pass the
+ * alphanumeric login-shape check below undetected.
+ */
+const HEX_BLOB_RE = /^[0-9a-f]{32,}$/i;
 /** GitHub logins are alphanumeric-or-hyphen, never starting/ending with a hyphen, and never containing consecutive hyphens. */
 const GITHUB_LOGIN_SHAPE_RE = /^[A-Za-z0-9]+(-[A-Za-z0-9]+)*$/;
 const MAX_GITHUB_LOGIN_LENGTH = 39;
@@ -102,6 +113,7 @@ function looksLikeRealGitHubLogin(value: string | null | undefined): value is st
   const trimmed = value.trim();
   if (trimmed.length === 0 || trimmed.length > MAX_GITHUB_LOGIN_LENGTH) return false;
   if (GUID_RE.test(trimmed)) return false;
+  if (HEX_BLOB_RE.test(trimmed)) return false;
   if (trimmed.includes("@")) return false;
   if (trimmed.includes("_")) return false;
   return GITHUB_LOGIN_SHAPE_RE.test(trimmed);

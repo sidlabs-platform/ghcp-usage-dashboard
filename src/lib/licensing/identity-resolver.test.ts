@@ -118,6 +118,87 @@ describe("resolveIdentity — GUID/opaque login detection", () => {
   });
 });
 
+describe("resolveIdentity — hardened opaque-login detection (Task 6 spec-review)", () => {
+  it("does not treat a dashed GUID as a real GitHub login (regression baseline)", () => {
+    const input: IdentityResolutionInput = {
+      holderKey: "id:guid-dashed",
+      githubUserId: 100,
+      seatLogin: "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+      identityMap: { resolvedLogin: "real-login" },
+    };
+    const result = resolveIdentity(input);
+    expect(result.source).toBe("identity_map");
+    expect(result.userLogin).toBeNull();
+  });
+
+  it("does not treat a compact (dashless) 32-character hex GUID as a real GitHub login", () => {
+    const input: IdentityResolutionInput = {
+      holderKey: "id:guid-compact",
+      githubUserId: 101,
+      seatLogin: "3fa85f6457174562b3fc2c963f66afa6", // 32 hex chars, no dashes
+      identityMap: { resolvedLogin: "real-login" },
+    };
+    const result = resolveIdentity(input);
+    expect(result.source).toBe("identity_map");
+    expect(result.resolvedUserLogin).toBe("real-login");
+    expect(result.userLogin).toBeNull();
+    expect(result.notes.some((n) => n.toLowerCase().includes("guid") || n.toLowerCase().includes("opaque"))).toBe(true);
+  });
+
+  it("does not treat a longer hex/hash-like identifier (36 chars) as a real GitHub login", () => {
+    const hexBlob = "0123456789abcdef0123456789abcdef1234";
+    expect(hexBlob.length).toBe(36);
+    const input: IdentityResolutionInput = {
+      holderKey: "id:hexblob-36",
+      githubUserId: 102,
+      seatLogin: hexBlob,
+      identityMap: { resolvedLogin: "real-login" },
+    };
+    const result = resolveIdentity(input);
+    expect(result.source).toBe("identity_map");
+    expect(result.userLogin).toBeNull();
+  });
+
+  it("does not treat a 39-character all-hex identifier (at the max login length) as a real GitHub login", () => {
+    const hexBlob = "0123456789abcdef0123456789abcdef0123456"; // 39 hex chars
+    expect(hexBlob.length).toBe(39);
+    const input: IdentityResolutionInput = {
+      holderKey: "id:hexblob-39",
+      githubUserId: 103,
+      seatLogin: hexBlob,
+      identityMap: { resolvedLogin: "real-login" },
+    };
+    const result = resolveIdentity(input);
+    expect(result.source).toBe("identity_map");
+    expect(result.userLogin).toBeNull();
+  });
+
+  it("still accepts a legitimate short hex-looking login well under hash-blob length", () => {
+    const input: IdentityResolutionInput = { holderKey: "id:short-hex", githubUserId: 104, seatLogin: "deadbeef" };
+    const result = resolveIdentity(input);
+    expect(result.source).toBe("seat");
+    expect(result.userLogin).toBe("deadbeef");
+  });
+
+  it("still accepts a legitimate alphanumeric login at the 39-character max GitHub login length", () => {
+    const login = "z".repeat(39);
+    expect(login.length).toBe(39);
+    const input: IdentityResolutionInput = { holderKey: "id:max-len", githubUserId: 105, seatLogin: login };
+    const result = resolveIdentity(input);
+    expect(result.source).toBe("seat");
+    expect(result.userLogin).toBe(login);
+  });
+
+  it("still accepts a legitimate dashed login shape at the 39-character max GitHub login length", () => {
+    const login = "a-b-c-d-e-f-g-h-i-j-k-l-m-n-o-p-q-r-s-t";
+    expect(login.length).toBe(39);
+    const input: IdentityResolutionInput = { holderKey: "id:max-len-dashed", githubUserId: 106, seatLogin: login };
+    const result = resolveIdentity(input);
+    expect(result.source).toBe("seat");
+    expect(result.userLogin).toBe(login);
+  });
+});
+
 describe("resolveIdentity — numeric GitHub ID recovery across periods", () => {
   it("recovers a real login observed in a different period for the same numeric GitHub user ID", () => {
     const input: IdentityResolutionInput = {

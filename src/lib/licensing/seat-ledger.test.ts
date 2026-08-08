@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   buildSeatLedger,
+  UNATTRIBUTED_ORG,
   type SeatLedgerAuditEventInput,
   type SeatLedgerSnapshotInput,
   type SeatLedgerLiveSeatInput,
@@ -21,7 +22,7 @@ function auditEvent(overrides: Partial<SeatLedgerAuditEventInput>): SeatLedgerAu
 
 describe("buildSeatLedger — modern/legacy action normalization", () => {
   it("opens an assignment interval on assign and closes it on cancel", () => {
-    const result = buildSeatLedger({
+    const result = buildSeatLedger({ enterpriseSlug: "acme-corp",
       auditEvents: [
         auditEvent({ eventId: "e1", action: "assign", occurredAt: "2026-01-05T00:00:00Z" }),
         auditEvent({ eventId: "e2", action: "cancel", occurredAt: "2026-01-20T00:00:00Z" }),
@@ -37,7 +38,7 @@ describe("buildSeatLedger — modern/legacy action normalization", () => {
   });
 
   it("treats a refresh event as retaining activity rather than opening a duplicate interval", () => {
-    const result = buildSeatLedger({
+    const result = buildSeatLedger({ enterpriseSlug: "acme-corp",
       auditEvents: [
         auditEvent({ eventId: "e1", action: "assign", occurredAt: "2026-01-01T00:00:00Z" }),
         auditEvent({ eventId: "e2", action: "refresh", occurredAt: "2026-01-15T00:00:00Z" }),
@@ -55,7 +56,7 @@ describe("buildSeatLedger — modern/legacy action normalization", () => {
 
 describe("buildSeatLedger — repeated assignment / cancellation / missing cancellation", () => {
   it("does not create duplicate intervals for repeated assign events while already active", () => {
-    const result = buildSeatLedger({
+    const result = buildSeatLedger({ enterpriseSlug: "acme-corp",
       auditEvents: [
         auditEvent({ eventId: "e1", action: "assign", occurredAt: "2026-01-01T00:00:00Z" }),
         auditEvent({ eventId: "e2", action: "assign", occurredAt: "2026-01-10T00:00:00Z" }),
@@ -70,7 +71,7 @@ describe("buildSeatLedger — repeated assignment / cancellation / missing cance
   });
 
   it("ignores a cancel event with nothing currently active (no negative interval)", () => {
-    const result = buildSeatLedger({
+    const result = buildSeatLedger({ enterpriseSlug: "acme-corp",
       auditEvents: [auditEvent({ eventId: "e1", action: "cancel", occurredAt: "2026-01-05T00:00:00Z" })],
       periods: ["2026-01"],
       currentPeriod: "2026-02",
@@ -80,7 +81,7 @@ describe("buildSeatLedger — repeated assignment / cancellation / missing cance
   });
 
   it("leaves an interval open through the current period when cancellation is missing", () => {
-    const result = buildSeatLedger({
+    const result = buildSeatLedger({ enterpriseSlug: "acme-corp",
       auditEvents: [auditEvent({ eventId: "e1", action: "assign", occurredAt: "2026-01-01T00:00:00Z" })],
       periods: ["2026-01", "2026-02"],
       currentPeriod: "2026-02",
@@ -94,7 +95,7 @@ describe("buildSeatLedger — repeated assignment / cancellation / missing cance
   });
 
   it("does not extend an open interval (missing cancellation) into periods beyond the current period", () => {
-    const result = buildSeatLedger({
+    const result = buildSeatLedger({ enterpriseSlug: "acme-corp",
       auditEvents: [auditEvent({ eventId: "e1", action: "assign", occurredAt: "2026-01-01T00:00:00Z" })],
       periods: ["2026-03"],
       currentPeriod: "2026-02",
@@ -108,7 +109,7 @@ describe("buildSeatLedger — repeated assignment / cancellation / missing cance
 
 describe("buildSeatLedger — same-day / same-instant deterministic ordering", () => {
   it("processes a same-instant assign+cancel conservatively, ending inactive", () => {
-    const result = buildSeatLedger({
+    const result = buildSeatLedger({ enterpriseSlug: "acme-corp",
       auditEvents: [
         auditEvent({ eventId: "e1", action: "assign", occurredAt: "2026-01-10T00:00:00Z" }),
         auditEvent({ eventId: "e2", action: "cancel", occurredAt: "2026-01-10T00:00:00Z" }),
@@ -126,15 +127,15 @@ describe("buildSeatLedger — same-day / same-instant deterministic ordering", (
       auditEvent({ eventId: "e1", action: "assign", occurredAt: "2026-01-10T00:00:00Z" }),
       auditEvent({ eventId: "e2", action: "cancel", occurredAt: "2026-01-10T00:00:00Z" }),
     ];
-    const a = buildSeatLedger({ auditEvents: events, periods: ["2026-01"], currentPeriod: "2026-02" });
-    const b = buildSeatLedger({ auditEvents: [...events].reverse(), periods: ["2026-01"], currentPeriod: "2026-02" });
+    const a = buildSeatLedger({ enterpriseSlug: "acme-corp", auditEvents: events, periods: ["2026-01"], currentPeriod: "2026-02" });
+    const b = buildSeatLedger({ enterpriseSlug: "acme-corp", auditEvents: [...events].reverse(), periods: ["2026-01"], currentPeriod: "2026-02" });
     expect(a.rows).toEqual(b.rows);
   });
 });
 
 describe("buildSeatLedger — archive/API dedupe", () => {
   it("collapses an exact duplicate event_id+source pair from re-ingesting the same archive", () => {
-    const result = buildSeatLedger({
+    const result = buildSeatLedger({ enterpriseSlug: "acme-corp",
       auditEvents: [
         auditEvent({ eventId: "e1", source: "audit_archive", action: "assign", occurredAt: "2026-01-01T00:00:00Z" }),
         auditEvent({ eventId: "e1", source: "audit_archive", action: "assign", occurredAt: "2026-01-01T00:00:00Z" }),
@@ -148,7 +149,7 @@ describe("buildSeatLedger — archive/API dedupe", () => {
   });
 
   it("does not create a duplicate transition when the same logical assign is seen from both archive and live API sources", () => {
-    const result = buildSeatLedger({
+    const result = buildSeatLedger({ enterpriseSlug: "acme-corp",
       auditEvents: [
         auditEvent({ eventId: "archive-1", source: "audit_archive", action: "assign", occurredAt: "2026-01-01T00:00:00Z" }),
         auditEvent({ eventId: "api-1", source: "audit_log", action: "assign", occurredAt: "2026-01-01T00:00:00Z" }),
@@ -166,9 +167,190 @@ describe("buildSeatLedger — archive/API dedupe", () => {
       auditEvent({ eventId: "e1", source: "audit_archive", action: "assign", occurredAt: "2026-01-01T00:00:00Z" }),
       auditEvent({ eventId: "e1", source: "audit_archive", action: "assign", occurredAt: "2026-01-01T00:00:00Z" }),
     ];
-    const first = buildSeatLedger({ auditEvents: events, periods: ["2026-01"], currentPeriod: "2026-02" });
-    const second = buildSeatLedger({ auditEvents: events, periods: ["2026-01"], currentPeriod: "2026-02" });
+    const first = buildSeatLedger({ enterpriseSlug: "acme-corp", auditEvents: events, periods: ["2026-01"], currentPeriod: "2026-02" });
+    const second = buildSeatLedger({ enterpriseSlug: "acme-corp", auditEvents: events, periods: ["2026-01"], currentPeriod: "2026-02" });
     expect(first).toEqual(second);
+  });
+});
+
+describe("buildSeatLedger — within-month interval selection (assign→cancel→assign)", () => {
+  it("selects the latest reassignment interval, not the first stale revoked one, when assign→cancel→assign all occur within the same month", () => {
+    const result = buildSeatLedger({ enterpriseSlug: "acme-corp",
+      auditEvents: [
+        auditEvent({ eventId: "e1", action: "assign", occurredAt: "2026-01-01T00:00:00Z" }),
+        auditEvent({ eventId: "e2", action: "cancel", occurredAt: "2026-01-10T00:00:00Z" }),
+        auditEvent({ eventId: "e3", action: "assign", occurredAt: "2026-01-20T00:00:00Z" }),
+      ],
+      periods: ["2026-01"],
+      currentPeriod: "2026-02",
+    });
+    const row = result.rows.find((r) => r.holderKey === "id:1" && r.billingPeriod === "2026-01");
+    expect(row).toBeDefined();
+    expect(row?.confidence).toBe("audit_reconstructed");
+    // Must reflect the later, still-open reassignment — never the earlier, already-revoked interval.
+    expect(row?.assignedAt).toBe("2026-01-20T00:00:00.000Z");
+    expect(row?.revokedAt).toBeNull();
+  });
+
+  it("selects the interval representing final state when a later reassignment is followed by a final cancellation, all within the same month", () => {
+    const result = buildSeatLedger({ enterpriseSlug: "acme-corp",
+      auditEvents: [
+        auditEvent({ eventId: "e1", action: "assign", occurredAt: "2026-01-01T00:00:00Z" }),
+        auditEvent({ eventId: "e2", action: "cancel", occurredAt: "2026-01-05T00:00:00Z" }),
+        auditEvent({ eventId: "e3", action: "assign", occurredAt: "2026-01-10T00:00:00Z" }),
+        auditEvent({ eventId: "e4", action: "cancel", occurredAt: "2026-01-25T00:00:00Z" }),
+      ],
+      periods: ["2026-01"],
+      currentPeriod: "2026-02",
+    });
+    const row = result.rows.find((r) => r.holderKey === "id:1" && r.billingPeriod === "2026-01");
+    expect(row).toBeDefined();
+    expect(row?.assignedAt).toBe("2026-01-10T00:00:00.000Z");
+    expect(row?.revokedAt).toBe("2026-01-25T00:00:00.000Z");
+  });
+
+  it("surfaces a deterministic coverage warning when multiple audit-reconstructed intervals overlap the same period", () => {
+    const build = () =>
+      buildSeatLedger({ enterpriseSlug: "acme-corp",
+        auditEvents: [
+          auditEvent({ eventId: "e1", action: "assign", occurredAt: "2026-01-01T00:00:00Z" }),
+          auditEvent({ eventId: "e2", action: "cancel", occurredAt: "2026-01-10T00:00:00Z" }),
+          auditEvent({ eventId: "e3", action: "assign", occurredAt: "2026-01-20T00:00:00Z" }),
+        ],
+        periods: ["2026-01"],
+        currentPeriod: "2026-02",
+      });
+    const first = build();
+    const second = build();
+    const coverage = first.coverage.find((c) => c.billingPeriod === "2026-01" && c.orgLogin === "acme");
+    expect(coverage?.warnings.some((w) => w.toLowerCase().includes("multiple"))).toBe(true);
+    // Deterministic across repeated calls with identical input.
+    expect(first).toEqual(second);
+  });
+});
+
+describe("buildSeatLedger — org normalization (missing/blank -> sentinel, real org unchanged)", () => {
+  it("normalizes a missing/blank org to the (unattributed) sentinel for audit events", () => {
+    const result = buildSeatLedger({ enterpriseSlug: "acme-corp",
+      auditEvents: [
+        auditEvent({ eventId: "e1", orgLogin: "", action: "assign", occurredAt: "2026-01-01T00:00:00Z" }),
+        auditEvent({ eventId: "e2", orgLogin: "   ", action: "cancel", occurredAt: "2026-01-20T00:00:00Z" }),
+      ],
+      periods: ["2026-01"],
+      currentPeriod: "2026-02",
+    });
+    const row = result.rows.find((r) => r.holderKey === "id:1" && r.billingPeriod === "2026-01");
+    expect(row?.orgLogin).toBe(UNATTRIBUTED_ORG);
+  });
+
+  it("leaves a real org unchanged for audit events", () => {
+    const result = buildSeatLedger({ enterpriseSlug: "acme-corp",
+      auditEvents: [auditEvent({ eventId: "e1", orgLogin: "real-org", action: "assign", occurredAt: "2026-01-01T00:00:00Z" })],
+      periods: ["2026-01"],
+      currentPeriod: "2026-02",
+    });
+    const row = result.rows.find((r) => r.holderKey === "id:1" && r.billingPeriod === "2026-01");
+    expect(row?.orgLogin).toBe("real-org");
+  });
+
+  it("normalizes a missing/blank org to the (unattributed) sentinel for authoritative snapshot input", () => {
+    const result = buildSeatLedger({ enterpriseSlug: "acme-corp",
+      snapshots: [
+        { billingPeriod: "2026-01", orgLogin: "", holderKey: "id:1", githubUserId: 1, observedLogin: "octocat", snapshotAt: "2026-01-31T00:00:00Z" },
+      ],
+      periods: ["2026-01"],
+      currentPeriod: "2026-02",
+    });
+    const row = result.rows.find((r) => r.holderKey === "id:1" && r.billingPeriod === "2026-01");
+    expect(row?.orgLogin).toBe(UNATTRIBUTED_ORG);
+  });
+
+  it("leaves a real org unchanged for authoritative snapshot input", () => {
+    const result = buildSeatLedger({ enterpriseSlug: "acme-corp",
+      snapshots: [
+        { billingPeriod: "2026-01", orgLogin: "real-org", holderKey: "id:1", githubUserId: 1, observedLogin: "octocat", snapshotAt: "2026-01-31T00:00:00Z" },
+      ],
+      periods: ["2026-01"],
+      currentPeriod: "2026-02",
+    });
+    const row = result.rows.find((r) => r.holderKey === "id:1" && r.billingPeriod === "2026-01");
+    expect(row?.orgLogin).toBe("real-org");
+  });
+
+  it("normalizes a missing/blank org to the (unattributed) sentinel for live-seat input", () => {
+    const result = buildSeatLedger({ enterpriseSlug: "acme-corp",
+      liveSeats: [{ orgLogin: "  ", holderKey: "id:1", githubUserId: 1, observedLogin: "octocat", observedAt: "2026-02-15T00:00:00Z" }],
+      periods: ["2026-02"],
+      currentPeriod: "2026-02",
+    });
+    const row = result.rows.find((r) => r.holderKey === "id:1" && r.billingPeriod === "2026-02");
+    expect(row?.orgLogin).toBe(UNATTRIBUTED_ORG);
+  });
+
+  it("leaves a real org unchanged for live-seat input", () => {
+    const result = buildSeatLedger({ enterpriseSlug: "acme-corp",
+      liveSeats: [{ orgLogin: "real-org", holderKey: "id:1", githubUserId: 1, observedLogin: "octocat", observedAt: "2026-02-15T00:00:00Z" }],
+      periods: ["2026-02"],
+      currentPeriod: "2026-02",
+    });
+    const row = result.rows.find((r) => r.holderKey === "id:1" && r.billingPeriod === "2026-02");
+    expect(row?.orgLogin).toBe("real-org");
+  });
+});
+
+describe("buildSeatLedger — coverage confidence is conservative (worst observation wins)", () => {
+  it("does not report exact_snapshot for a period/org when another expected holder in that org/period is unrecoverable", () => {
+    const result = buildSeatLedger({ enterpriseSlug: "acme-corp",
+      snapshots: [
+        { billingPeriod: "2026-01", orgLogin: "acme", holderKey: "id:1", githubUserId: 1, observedLogin: "octocat", snapshotAt: "2026-01-31T00:00:00Z" },
+      ],
+      // id:2 is a known holder in "acme" (established via a Feb audit trail) but has no
+      // source at all covering January — that holder's January observation is unrecoverable.
+      auditEvents: [
+        auditEvent({ eventId: "e1", orgLogin: "acme", holderKey: "id:2", githubUserId: 2, action: "assign", occurredAt: "2026-02-01T00:00:00Z" }),
+        auditEvent({ eventId: "e2", orgLogin: "acme", holderKey: "id:2", githubUserId: 2, action: "cancel", occurredAt: "2026-02-20T00:00:00Z" }),
+      ],
+      periods: ["2026-01"],
+      currentPeriod: "2026-02",
+    });
+    const coverage = result.coverage.find((c) => c.billingPeriod === "2026-01" && c.orgLogin === "acme");
+    expect(coverage).toBeDefined();
+    // Worst observation wins: one exact_snapshot holder cannot mask another unrecoverable holder.
+    expect(coverage?.confidence).toBe("unrecoverable");
+    expect(coverage?.counts.exact_snapshot).toBe(1);
+    expect(coverage?.counts.unrecoverable).toBe(1);
+  });
+
+  it("reports exact_snapshot when every known holder in the org/period is exactly covered", () => {
+    const result = buildSeatLedger({ enterpriseSlug: "acme-corp",
+      snapshots: [
+        { billingPeriod: "2026-01", orgLogin: "acme", holderKey: "id:1", githubUserId: 1, observedLogin: "octocat", snapshotAt: "2026-01-31T00:00:00Z" },
+        { billingPeriod: "2026-01", orgLogin: "acme", holderKey: "id:2", githubUserId: 2, observedLogin: "hubot", snapshotAt: "2026-01-31T00:00:00Z" },
+      ],
+      periods: ["2026-01"],
+      currentPeriod: "2026-02",
+    });
+    const coverage = result.coverage.find((c) => c.billingPeriod === "2026-01" && c.orgLogin === "acme");
+    expect(coverage?.confidence).toBe("exact_snapshot");
+    expect(coverage?.counts.exact_snapshot).toBe(2);
+    expect(coverage?.counts.unrecoverable).toBe(0);
+  });
+
+  it("never fabricates an unknown holder just to mark it unrecoverable", () => {
+    const result = buildSeatLedger({ enterpriseSlug: "acme-corp",
+      snapshots: [
+        { billingPeriod: "2026-01", orgLogin: "acme", holderKey: "id:1", githubUserId: 1, observedLogin: "octocat", snapshotAt: "2026-01-31T00:00:00Z" },
+      ],
+      periods: ["2026-01"],
+      currentPeriod: "2026-02",
+    });
+    // Only the one known holder (id:1) should ever appear as a row or contribute to counts —
+    // no fabricated holders are invented merely to populate coverage.
+    const rows = result.rows.filter((r) => r.billingPeriod === "2026-01" && r.orgLogin === "acme");
+    expect(rows.length).toBe(1);
+    const coverage = result.coverage.find((c) => c.billingPeriod === "2026-01" && c.orgLogin === "acme");
+    const totalCounted = Object.values(coverage!.counts).reduce((a, b) => a + b, 0);
+    expect(totalCounted).toBe(1);
   });
 });
 
@@ -183,7 +365,7 @@ describe("buildSeatLedger — seat source precedence", () => {
   };
 
   it("prefers a stored authoritative monthly snapshot over a reconstructed audit interval for the same period/key", () => {
-    const result = buildSeatLedger({
+    const result = buildSeatLedger({ enterpriseSlug: "acme-corp",
       snapshots: [snapshot],
       auditEvents: [auditEvent({ eventId: "e1", action: "assign", occurredAt: "2026-01-01T00:00:00Z" })],
       periods: ["2026-01"],
@@ -194,7 +376,7 @@ describe("buildSeatLedger — seat source precedence", () => {
   });
 
   it("falls back to an audit-reconstructed interval when no snapshot exists for that period/key", () => {
-    const result = buildSeatLedger({
+    const result = buildSeatLedger({ enterpriseSlug: "acme-corp",
       auditEvents: [
         auditEvent({ eventId: "e1", action: "assign", occurredAt: "2026-01-01T00:00:00Z" }),
         auditEvent({ eventId: "e2", action: "cancel", occurredAt: "2026-01-20T00:00:00Z" }),
@@ -214,7 +396,7 @@ describe("buildSeatLedger — seat source precedence", () => {
       observedLogin: "octocat",
       observedAt: "2026-02-15T00:00:00Z",
     };
-    const result = buildSeatLedger({
+    const result = buildSeatLedger({ enterpriseSlug: "acme-corp",
       liveSeats: [live],
       periods: ["2026-02"],
       currentPeriod: "2026-02",
@@ -231,7 +413,7 @@ describe("buildSeatLedger — seat source precedence", () => {
       observedLogin: "octocat",
       observedAt: "2026-02-15T00:00:00Z",
     };
-    const result = buildSeatLedger({
+    const result = buildSeatLedger({ enterpriseSlug: "acme-corp",
       liveSeats: [live],
       periods: ["2026-01"],
       currentPeriod: "2026-02",
@@ -243,7 +425,7 @@ describe("buildSeatLedger — seat source precedence", () => {
   });
 
   it("marks a period/org as unrecoverable (never a fabricated row) when no source covers it", () => {
-    const result = buildSeatLedger({
+    const result = buildSeatLedger({ enterpriseSlug: "acme-corp",
       periods: ["2025-06"],
       currentPeriod: "2026-02",
       auditEvents: [auditEvent({ eventId: "e1", orgLogin: "other-org", action: "assign", occurredAt: "2026-01-01T00:00:00Z" })],
@@ -257,7 +439,7 @@ describe("buildSeatLedger — seat source precedence", () => {
 
 describe("buildSeatLedger — period overlap and month materialization", () => {
   it("materializes only the requested months using UTC period boundaries", () => {
-    const result = buildSeatLedger({
+    const result = buildSeatLedger({ enterpriseSlug: "acme-corp",
       auditEvents: [
         auditEvent({ eventId: "e1", action: "assign", occurredAt: "2026-01-15T00:00:00Z" }),
         auditEvent({ eventId: "e2", action: "cancel", occurredAt: "2026-03-15T00:00:00Z" }),
@@ -274,13 +456,13 @@ describe("buildSeatLedger — period overlap and month materialization", () => {
   });
 
   it("throws for a malformed requested period rather than silently ignoring it", () => {
-    expect(() => buildSeatLedger({ periods: ["not-a-period"], currentPeriod: "2026-02" })).toThrow();
+    expect(() => buildSeatLedger({ enterpriseSlug: "acme-corp", periods: ["not-a-period"], currentPeriod: "2026-02" })).toThrow();
   });
 });
 
 describe("buildSeatLedger — canonical org separation for multi-org users", () => {
   it("does not collapse or copy the same holderKey's assignment across different orgs", () => {
-    const result = buildSeatLedger({
+    const result = buildSeatLedger({ enterpriseSlug: "acme-corp",
       auditEvents: [
         auditEvent({ eventId: "e1", orgLogin: "acme", action: "assign", occurredAt: "2026-01-01T00:00:00Z" }),
         auditEvent({ eventId: "e2", orgLogin: "acme", action: "cancel", occurredAt: "2026-01-20T00:00:00Z" }),
@@ -295,7 +477,7 @@ describe("buildSeatLedger — canonical org separation for multi-org users", () 
   });
 
   it("tracks independent assignment intervals per org for the same holder", () => {
-    const result = buildSeatLedger({
+    const result = buildSeatLedger({ enterpriseSlug: "acme-corp",
       auditEvents: [
         auditEvent({ eventId: "e1", orgLogin: "acme", action: "assign", occurredAt: "2026-01-01T00:00:00Z" }),
         auditEvent({ eventId: "e2", orgLogin: "beta-corp", action: "assign", occurredAt: "2026-01-10T00:00:00Z" }),
@@ -314,7 +496,7 @@ describe("buildSeatLedger — canonical org separation for multi-org users", () 
 describe("buildSeatLedger — confidence classification", () => {
   it("classifies exactly exact_snapshot | audit_reconstructed | live_snapshot_only | unrecoverable", () => {
     const validValues = new Set(["exact_snapshot", "audit_reconstructed", "live_snapshot_only", "unrecoverable"]);
-    const result = buildSeatLedger({
+    const result = buildSeatLedger({ enterpriseSlug: "acme-corp",
       snapshots: [
         { billingPeriod: "2026-01", orgLogin: "acme", holderKey: "id:1", githubUserId: 1, observedLogin: "octocat", snapshotAt: "2026-01-31T00:00:00Z" },
       ],
@@ -332,14 +514,14 @@ describe("buildSeatLedger — confidence classification", () => {
   });
 
   it("never fabricates an assignment row for unrecoverable coverage", () => {
-    const result = buildSeatLedger({ periods: ["2025-01"], currentPeriod: "2026-02" });
+    const result = buildSeatLedger({ enterpriseSlug: "acme-corp", periods: ["2025-01"], currentPeriod: "2026-02" });
     expect(result.rows.length).toBe(0);
   });
 });
 
 describe("buildSeatLedger — deterministic output sorting", () => {
   it("sorts rows by billingPeriod, orgLogin, then holderKey", () => {
-    const result = buildSeatLedger({
+    const result = buildSeatLedger({ enterpriseSlug: "acme-corp",
       auditEvents: [
         auditEvent({ eventId: "e1", orgLogin: "zeta", holderKey: "id:2", githubUserId: 2, action: "assign", occurredAt: "2026-01-01T00:00:00Z" }),
         auditEvent({ eventId: "e2", orgLogin: "acme", holderKey: "id:1", githubUserId: 1, action: "assign", occurredAt: "2026-01-01T00:00:00Z" }),
@@ -356,5 +538,61 @@ describe("buildSeatLedger — deterministic output sorting", () => {
         : a.billingPeriod.localeCompare(b.billingPeriod),
     );
     expect(rows).toEqual(sorted);
+  });
+});
+
+describe("buildSeatLedger — enterpriseSlug is explicit and threaded into every row/coverage entry", () => {
+  it("threads enterpriseSlug into every SeatLedgerRow and SeatLedgerCoverage produced by the call", () => {
+    const result = buildSeatLedger({
+      enterpriseSlug: "my-enterprise",
+      snapshots: [
+        { billingPeriod: "2026-01", orgLogin: "acme", holderKey: "id:1", githubUserId: 1, observedLogin: "octocat", snapshotAt: "2026-01-31T00:00:00Z" },
+      ],
+      auditEvents: [auditEvent({ eventId: "e1", orgLogin: "acme", holderKey: "id:2", githubUserId: 2, action: "assign", occurredAt: "2026-01-01T00:00:00Z" })],
+      liveSeats: [{ orgLogin: "acme", holderKey: "id:3", githubUserId: 3, observedLogin: "live-user", observedAt: "2026-02-01T00:00:00Z" }],
+      periods: ["2026-01", "2026-02"],
+      currentPeriod: "2026-02",
+    });
+    expect(result.rows.length).toBeGreaterThan(0);
+    for (const row of result.rows) {
+      expect(row.enterpriseSlug).toBe("my-enterprise");
+    }
+    expect(result.coverage.length).toBeGreaterThan(0);
+    for (const c of result.coverage) {
+      expect(c.enterpriseSlug).toBe("my-enterprise");
+    }
+  });
+
+  it("normalizes surrounding whitespace in enterpriseSlug", () => {
+    const result = buildSeatLedger({
+      enterpriseSlug: "  my-enterprise  ",
+      auditEvents: [auditEvent({ eventId: "e1", action: "assign", occurredAt: "2026-01-01T00:00:00Z" })],
+      periods: ["2026-01"],
+      currentPeriod: "2026-02",
+    });
+    const row = result.rows.find((r) => r.holderKey === "id:1");
+    expect(row?.enterpriseSlug).toBe("my-enterprise");
+  });
+
+  it("throws for a missing/empty enterpriseSlug rather than silently defaulting", () => {
+    expect(() =>
+      buildSeatLedger({
+        enterpriseSlug: "",
+        auditEvents: [auditEvent({ eventId: "e1", action: "assign", occurredAt: "2026-01-01T00:00:00Z" })],
+        periods: ["2026-01"],
+        currentPeriod: "2026-02",
+      }),
+    ).toThrow();
+  });
+
+  it("throws for a blank (whitespace-only) enterpriseSlug rather than silently defaulting", () => {
+    expect(() =>
+      buildSeatLedger({
+        enterpriseSlug: "   ",
+        auditEvents: [auditEvent({ eventId: "e1", action: "assign", occurredAt: "2026-01-01T00:00:00Z" })],
+        periods: ["2026-01"],
+        currentPeriod: "2026-02",
+      }),
+    ).toThrow();
   });
 });

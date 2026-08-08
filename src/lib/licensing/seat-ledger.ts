@@ -11,12 +11,13 @@
 //   4. `unrecoverable`       — no source covers this period; never a
 //                              fabricated row, only a typed coverage/warning.
 //
-// Canonical key grain: (billingPeriod, orgLogin, holderKey) — the caller is
-// expected to scope a single `buildSeatLedger` call to one enterprise (the
-// `enterpriseSlug` dimension the wider plan's canonical key includes is
-// simply "this whole call"), so multi-org users are never collapsed or
-// copied across orgs: every group is keyed by (orgLogin, holderKey), never
-// by holderKey alone.
+// Canonical key grain: (enterpriseSlug, billingPeriod, orgLogin, holderKey) —
+// `enterpriseSlug` is an explicit, required, validated option threaded into
+// every `SeatLedgerRow`/`SeatLedgerCoverage` this call produces, so the
+// public canonical grain is truly enterprise-scoped rather than merely
+// "whichever enterprise called this". Multi-org users are never collapsed
+// or copied across orgs: every group is keyed by (orgLogin, holderKey),
+// never by holderKey alone.
 
 import { cycleBoundsUtc, intervalOverlapsPeriod, MAX_REPORT_MONTHS } from "./periods";
 
@@ -77,6 +78,16 @@ export interface SeatLedgerLiveSeatInput {
 }
 
 export interface BuildSeatLedgerOptions {
+  /**
+   * The enterprise this entire call is scoped to. Required and explicit —
+   * the wider plan's canonical key is (enterpriseSlug, billingPeriod,
+   * orgLogin, holderKey), and a single `buildSeatLedger` call always
+   * produces rows/coverage for exactly one enterprise, so every output row
+   * and coverage entry carries this same value. Normalized (trimmed) and
+   * validated as a non-empty string; throws for a missing, empty, or
+   * whitespace-only value rather than silently defaulting.
+   */
+  enterpriseSlug: string;
   auditEvents?: SeatLedgerAuditEventInput[];
   snapshots?: SeatLedgerSnapshotInput[];
   liveSeats?: SeatLedgerLiveSeatInput[];
@@ -99,6 +110,8 @@ export type SeatLedgerConfidence = "exact_snapshot" | "audit_reconstructed" | "l
 
 /** A single reconstructed (or authoritatively known) seat assignment for one (org, holder, period). */
 export interface SeatLedgerRow {
+  /** The enterprise this call was scoped to (see `BuildSeatLedgerOptions.enterpriseSlug`). Completes the canonical grain (enterpriseSlug, billingPeriod, orgLogin, holderKey). */
+  enterpriseSlug: string;
   billingPeriod: string;
   orgLogin: string;
   holderKey: string;
@@ -113,11 +126,26 @@ export interface SeatLedgerRow {
   source: SeatLedgerConfidence;
 }
 
-/** Per (period, org) reconstruction coverage summary — sufficient for Task 7 materialization to report data-quality gaps rather than silently guessing. */
+/** Per (period, org) reconstruction coverage summary — sufficient for Task 7 materialization to report data-quality gaps rather than silently guessing.
+ *
+ * `confidence` is computed *conservatively*: it reflects the single worst
+ * per-holder observation counted in `counts` for this (period, org), not the
+ * best. A period/org is only ever reported as `"exact_snapshot"` when every
+ * known holder observed for it that month resolved to an exact snapshot —
+ * one holder's `exact_snapshot` row can never mask another expected
+ * holder's `unrecoverable` observation in the same period/org. See
+ * `worstConfidence` below for the precise precedence
+ * (`unrecoverable` > `live_snapshot_only` > `audit_reconstructed` >
+ * `exact_snapshot`, worst wins).
+ */
 export interface SeatLedgerCoverage {
+  /** The enterprise this call was scoped to (see `BuildSeatLedgerOptions.enterpriseSlug`). Completes the canonical grain (enterpriseSlug, billingPeriod, orgLogin). */
+  enterpriseSlug: string;
   billingPeriod: string;
   orgLogin: string;
   confidence: SeatLedgerConfidence;
+  /** Count of holder/org/period observations at each confidence tier that contributed to this coverage entry. Never fabricated: a holder only ever contributes a count when some source (snapshot, audit trail, or live seat) establishes it has an expected seat for this org/period, or when it is a known holder (from any period) with nothing covering this specific period. */
+  counts: Record<SeatLedgerConfidence, number>;
   warnings: string[];
 }
 
@@ -128,11 +156,47 @@ export interface SeatLedgerResult {
   warnings: string[];
 }
 
+// ── Conservative coverage confidence ────────────────────────────────────
+
+/**
+ * Precedence used to compute a (period, org) coverage entry's overall
+ * `confidence` from its per-tier observation `counts`: worst observation
+ * wins. Ordered here from worst to best; `worstConfidence` returns the
+ * first tier (in this order) with a nonzero count, so a single
+ * `unrecoverable` holder always outranks any number of `exact_snapshot`
+ * holders in the same period/org.
+ */
+const CONFIDENCE_WORST_TO_BEST: SeatLedgerConfidence[] = [
+  "unrecoverable",
+  "live_snapshot_only",
+  "audit_reconstructed",
+  "exact_snapshot",
+];
+
+/** Compute a (period, org) coverage entry's overall confidence conservatively from its per-tier counts: the worst confidence with a nonzero count wins, using only the four mandated {@link SeatLedgerConfidence} values. */
+function worstConfidence(counts: Record<SeatLedgerConfidence, number>): SeatLedgerConfidence {
+  for (const tier of CONFIDENCE_WORST_TO_BEST) {
+    if (counts[tier] > 0) return tier;
+  }
+  // Defensive: recordCoverage always increments some tier before a coverage
+  // entry is ever created, so this is unreachable in practice.
+  return "unrecoverable";
+}
+
 // ── Validation ────────────────────────────────────────────────────────
 
 /** Validate a "YYYY-MM" period token, throwing the same descriptive error `periods.ts` uses elsewhere. Reuses `cycleBoundsUtc` purely for its validation side effect. */
 function assertValidPeriod(period: string): void {
   cycleBoundsUtc(period);
+}
+
+/** Normalize (trim) and validate the required `enterpriseSlug` option as a non-empty slug, throwing a descriptive error for a missing, empty, or whitespace-only value rather than silently defaulting to an empty string or omitting the dimension. */
+function normalizeEnterpriseSlug(enterpriseSlug: string): string {
+  const trimmed = (enterpriseSlug ?? "").trim();
+  if (trimmed.length === 0) {
+    throw new Error(`buildSeatLedger: enterpriseSlug must be a non-empty string, got ${JSON.stringify(enterpriseSlug)}`);
+  }
+  return trimmed;
 }
 
 // ── Deterministic event dedupe ────────────────────────────────────────
@@ -247,6 +311,52 @@ function toIsoInstant(value: string): string {
   return new Date(Date.parse(value)).toISOString();
 }
 
+/**
+ * Among a (org, holder) group's reconstructed intervals, select the single
+ * interval overlapping `period` that represents the holder's *final* state
+ * for that calendar month, rather than naively taking the first overlapping
+ * interval in array order.
+ *
+ * Because `reconstructIntervals` replays events chronologically, a
+ * within-month assign→cancel→assign(→cancel) sequence can produce two or
+ * more distinct, non-overlapping-in-time intervals that nonetheless *all*
+ * overlap the same calendar month (e.g. Jan 1–10 revoked, then Jan 20–open).
+ * The canonical grain permits exactly one row per (holder, org, period), so
+ * the interval with the latest `assignedAt` wins deterministically — never
+ * a stale, already-revoked interval that merely happened to be reconstructed
+ * first. `multipleOverlap` is reported back so the caller can surface a
+ * deterministic, non-fatal coverage warning when this disambiguation
+ * actually mattered.
+ */
+function selectOverlappingInterval(
+  intervals: ReconstructedInterval[],
+  period: string,
+  currentPeriod: string,
+): { interval: ReconstructedInterval; multipleOverlap: boolean } | null {
+  const candidates = intervals.filter((interval) => {
+    if (interval.revokedAt === null && period > currentPeriod) return false;
+    return intervalOverlapsPeriod(interval.assignedAt, interval.revokedAt, period);
+  });
+  if (candidates.length === 0) return null;
+
+  const sorted = [...candidates].sort((a, b) => {
+    const aStart = Date.parse(a.assignedAt);
+    const bStart = Date.parse(b.assignedAt);
+    if (aStart !== bStart) return bStart - aStart; // latest assignedAt (most recent state) first.
+    // Deterministic tie-break for the (practically unreachable) case of two
+    // intervals with an identical assignedAt: a still-open interval outranks
+    // a closed one, then the later revokedAt wins.
+    const aOpen = a.revokedAt === null;
+    const bOpen = b.revokedAt === null;
+    if (aOpen !== bOpen) return aOpen ? -1 : 1;
+    const aEnd = a.revokedAt === null ? Infinity : Date.parse(a.revokedAt);
+    const bEnd = b.revokedAt === null ? Infinity : Date.parse(b.revokedAt);
+    return bEnd - aEnd;
+  });
+
+  return { interval: sorted[0], multipleOverlap: candidates.length > 1 };
+}
+
 // ── Grouping helpers ──────────────────────────────────────────────────
 
 function groupKey(orgLogin: string, holderKey: string): string {
@@ -270,6 +380,7 @@ function normalizeOrgLogin(orgLogin: string | null | undefined): string {
  * or guessed at.
  */
 export function buildSeatLedger(options: BuildSeatLedgerOptions): SeatLedgerResult {
+  const enterpriseSlug = normalizeEnterpriseSlug(options.enterpriseSlug);
   const { auditEvents = [], snapshots = [], liveSeats = [], periods, currentPeriod } = options;
 
   if (!Number.isInteger(periods.length) || periods.length === 0) {
@@ -339,17 +450,30 @@ export function buildSeatLedger(options: BuildSeatLedgerOptions): SeatLedgerResu
   for (const key of allGroupKeys) allOrgs.add(key.split("\u0000")[0]);
 
   const rows: SeatLedgerRow[] = [];
-  // coverageMap tracks the best confidence + warnings seen per (period, org).
-  const coverageMap = new Map<string, { confidence: SeatLedgerConfidence; warnings: Set<string> }>();
+  // coverageMap tracks a per-confidence observation count + warnings for
+  // each (period, org). The overall reported confidence is computed
+  // conservatively from these counts (see `worstConfidence` below) rather
+  // than tracked as a single running "best" value, so that one
+  // exactly-covered holder can never mask another, genuinely unrecoverable
+  // holder in the same period/org.
+  const coverageMap = new Map<string, { counts: Record<SeatLedgerConfidence, number>; warnings: Set<string> }>();
+
+  const emptyConfidenceCounts = (): Record<SeatLedgerConfidence, number> => ({
+    exact_snapshot: 0,
+    audit_reconstructed: 0,
+    live_snapshot_only: 0,
+    unrecoverable: 0,
+  });
 
   const recordCoverage = (period: string, org: string, confidence: SeatLedgerConfidence, warning?: string) => {
     const key = `${period}\u0000${org}`;
-    const existing = coverageMap.get(key);
-    const rank: Record<SeatLedgerConfidence, number> = { exact_snapshot: 3, audit_reconstructed: 2, live_snapshot_only: 1, unrecoverable: 0 };
-    if (!existing || rank[confidence] > rank[existing.confidence]) {
-      coverageMap.set(key, { confidence, warnings: existing?.warnings ?? new Set() });
+    let entry = coverageMap.get(key);
+    if (!entry) {
+      entry = { counts: emptyConfidenceCounts(), warnings: new Set() };
+      coverageMap.set(key, entry);
     }
-    if (warning) coverageMap.get(key)!.warnings.add(warning);
+    entry.counts[confidence]++;
+    if (warning) entry.warnings.add(warning);
   };
 
   for (const period of periods) {
@@ -360,6 +484,7 @@ export function buildSeatLedger(options: BuildSeatLedgerOptions): SeatLedgerResu
       const snapshot = snapshotIndex.get(`${period}\u0000${groupKeyStr}`);
       if (snapshot) {
         rows.push({
+          enterpriseSlug,
           billingPeriod: period,
           orgLogin: org,
           holderKey,
@@ -374,17 +499,17 @@ export function buildSeatLedger(options: BuildSeatLedgerOptions): SeatLedgerResu
         continue;
       }
 
-      // Tier 2: audit-reconstructed interval overlapping this period.
+      // Tier 2: audit-reconstructed interval overlapping this period. When
+      // more than one reconstructed interval overlaps the same month (a
+      // within-month assign→cancel→assign, or assign→cancel→assign→cancel),
+      // the one reflecting the holder's final state for the month wins —
+      // never the first, possibly-stale interval found.
       const reconstructed = intervalsByGroup.get(groupKeyStr);
-      const overlapping = reconstructed?.intervals.find((interval) => {
-        if (interval.revokedAt === null) {
-          // A missing cancellation is only honored through the current period.
-          if (period > currentPeriod) return false;
-        }
-        return intervalOverlapsPeriod(interval.assignedAt, interval.revokedAt, period);
-      });
-      if (overlapping) {
+      const selection = reconstructed ? selectOverlappingInterval(reconstructed.intervals, period, currentPeriod) : null;
+      if (selection) {
+        const { interval: overlapping, multipleOverlap } = selection;
         rows.push({
+          enterpriseSlug,
           billingPeriod: period,
           orgLogin: org,
           holderKey,
@@ -395,7 +520,14 @@ export function buildSeatLedger(options: BuildSeatLedgerOptions): SeatLedgerResu
           confidence: "audit_reconstructed",
           source: "audit_reconstructed",
         });
-        recordCoverage(period, org, "audit_reconstructed");
+        recordCoverage(
+          period,
+          org,
+          "audit_reconstructed",
+          multipleOverlap
+            ? `Multiple audit-reconstructed assignment intervals overlap period ${period} for holder "${holderKey}" in org "${org}"; deterministically selected the interval reflecting the holder's final state for the month (assignedAt ${toIsoInstant(overlapping.assignedAt)}).`
+            : undefined,
+        );
         continue;
       }
 
@@ -404,6 +536,7 @@ export function buildSeatLedger(options: BuildSeatLedgerOptions): SeatLedgerResu
         const live = liveIndex.get(groupKeyStr);
         if (live) {
           rows.push({
+            enterpriseSlug,
             billingPeriod: period,
             orgLogin: org,
             holderKey,
@@ -442,7 +575,14 @@ export function buildSeatLedger(options: BuildSeatLedgerOptions): SeatLedgerResu
   const coverage: SeatLedgerCoverage[] = [...coverageMap.entries()]
     .map(([key, value]) => {
       const [billingPeriod, orgLogin] = key.split("\u0000");
-      return { billingPeriod, orgLogin, confidence: value.confidence, warnings: [...value.warnings].sort() };
+      return {
+        enterpriseSlug,
+        billingPeriod,
+        orgLogin,
+        confidence: worstConfidence(value.counts),
+        counts: value.counts,
+        warnings: [...value.warnings].sort(),
+      };
     })
     .sort((a, b) => (a.billingPeriod === b.billingPeriod ? a.orgLogin.localeCompare(b.orgLogin) : a.billingPeriod.localeCompare(b.billingPeriod)));
 
