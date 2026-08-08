@@ -202,6 +202,12 @@ describe("getLicenseReconciliationRows", () => {
 });
 
 describe("computeLicenseKPIs", () => {
+  it("marks output as live_snapshot_only (this is the legacy live-query path, not materialized history)", () => {
+    insertSeat({ user_login: "dev1", plan_type: "business" });
+    const kpis = computeLicenseKPIs(getLicenseReconciliationRows(WINDOW));
+    expect(kpis.dataSource).toBe("live_snapshot_only");
+  });
+
   it("aggregates totals and utilization", () => {
     insertSeat({ user_login: "dev1", plan_type: "business" });
     insertSeat({ user_login: "dev2", plan_type: "enterprise" });

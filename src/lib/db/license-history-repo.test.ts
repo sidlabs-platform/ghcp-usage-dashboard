@@ -17,6 +17,10 @@ import {
   upsertAicConsumption,
   replaceMaterializedPeriod,
   queryLicensePeriodRows,
+  getMaterializedPeriodKPIs,
+  getMaterializedPlanBreakdown,
+  getMaterializedOrgBreakdown,
+  hasMaterializedRows,
   stableStringify,
   parseJsonArray,
   parseJsonObject,
@@ -791,6 +795,88 @@ describe("replaceMaterializedPeriod + queryLicensePeriodRows", () => {
     expect(index).toBeDefined();
     expect(index?.sql).toContain("resolved_user_login");
     expect(index?.sql).toContain("holder_key");
+  });
+
+  describe("getMaterializedPeriodKPIs / getMaterializedPlanBreakdown / getMaterializedOrgBreakdown / hasMaterializedRows", () => {
+    // Fixture (from the outer beforeEach): ent1/2026-01 has
+    //   - user1/org1: business, licenseCost 19, defaultAicCredits 300, defaultAicUsd 19,
+    //     aicAssignedUsd 19, aicConsumedCredits 100, aicConsumedUsd 6.33, high confidence
+    //   - user2/org2: enterprise, licenseCost 19, defaultAicCredits 300, defaultAicUsd 19,
+    //     aicAssignedUsd 19, aicConsumedCredits 100, aicConsumedUsd 40 (over budget), low confidence
+    // plus ent1/2026-02 (user1/org1) and ent2/2026-01 (userX/org9), excluded by the period/enterprise filter below.
+
+    it("computes KPI totals in SQL, scoped to the requested enterprise/period only", () => {
+      const kpis = getMaterializedPeriodKPIs({ enterpriseSlug: "ent1", periods: ["2026-01"] });
+      expect(kpis.totalRows).toBe(2);
+      expect(kpis.totalUsers).toBe(2);
+      expect(kpis.activeSeats).toBe(2);
+      expect(kpis.inactiveSeats).toBe(0);
+      expect(kpis.zeroConsumptionRows).toBe(0);
+      expect(kpis.totalLicenseCost).toBe(38);
+      expect(kpis.totalAllowanceCredits).toBe(600);
+      expect(kpis.totalAssignedUsd).toBe(38);
+      expect(kpis.totalConsumedCredits).toBe(200);
+      expect(kpis.totalConsumedUsd).toBe(46.33);
+      expect(kpis.overBudgetRows).toBe(1); // only user2 (40 > 19)
+      expect(kpis.totalOverageUsd).toBe(21); // max(40-19,0) + max(6.33-19,0)
+      expect(kpis.totalCostOfOwnership).toBe(59); // 38 + 21
+      expect(kpis.overallUtilizationPct).toBe(121.92); // 46.33/38*100
+      expect(kpis.currency).toBe("USD");
+    });
+
+    it("never returns NaN/Infinity and defaults currency to USD for an empty scope", () => {
+      const kpis = getMaterializedPeriodKPIs({ enterpriseSlug: "ent1", periods: ["2099-01"] });
+      expect(kpis.totalRows).toBe(0);
+      expect(kpis.totalUsers).toBe(0);
+      expect(kpis.totalLicenseCost).toBe(0);
+      expect(kpis.overallUtilizationPct).toBe(0);
+      expect(kpis.totalOverageUsd).toBe(0);
+      expect(kpis.currency).toBe("USD");
+      for (const value of Object.values(kpis)) {
+        if (typeof value === "number") expect(Number.isFinite(value)).toBe(true);
+      }
+    });
+
+    it("breaks totals down by plan_type, aggregated in SQL", () => {
+      const plans = getMaterializedPlanBreakdown({ enterpriseSlug: "ent1", periods: ["2026-01"] });
+      expect(plans.map((p) => p.key).sort()).toEqual(["business", "enterprise"]);
+      const business = plans.find((p) => p.key === "business")!;
+      const enterprise = plans.find((p) => p.key === "enterprise")!;
+      expect(business.rows).toBe(1);
+      expect(business.consumedUsd).toBe(6.33);
+      expect(business.overageUsd).toBe(0);
+      expect(enterprise.consumedUsd).toBe(40);
+      expect(enterprise.overageUsd).toBe(21);
+      expect(enterprise.utilizationPct).toBe(210.53); // 40/19*100
+    });
+
+    it("breaks totals down by org_login, aggregated in SQL", () => {
+      const orgs = getMaterializedOrgBreakdown({ enterpriseSlug: "ent1", periods: ["2026-01"] });
+      expect(orgs.map((o) => o.key).sort()).toEqual(["org1", "org2"]);
+      expect(orgs.find((o) => o.key === "org2")!.overageUsd).toBe(21);
+    });
+
+    it("returns empty breakdown arrays for a scope with no materialized rows", () => {
+      expect(getMaterializedPlanBreakdown({ enterpriseSlug: "ent1", periods: ["2099-01"] })).toEqual([]);
+      expect(getMaterializedOrgBreakdown({ enterpriseSlug: "ent1", periods: ["2099-01"] })).toEqual([]);
+    });
+
+    it("detects materialized rows exist for a scope, letting callers skip the legacy fallback", () => {
+      expect(hasMaterializedRows({ enterpriseSlug: "ent1", periods: ["2026-01"] })).toBe(true);
+    });
+
+    it("detects NO materialized rows for an unmaterialized scope, without a false historical success", () => {
+      expect(hasMaterializedRows({ enterpriseSlug: "ent1", periods: ["2099-01"] })).toBe(false);
+      expect(hasMaterializedRows({ enterpriseSlug: "never-synced-enterprise" })).toBe(false);
+    });
+
+    it("respects enterprise/org/login/plan/account/seat/confidence filters shared with the detail/rollup query", () => {
+      expect(getMaterializedPeriodKPIs({ enterpriseSlug: "ent1", periods: ["2026-01"], planTypes: ["enterprise"] }).totalRows).toBe(1);
+      expect(getMaterializedPeriodKPIs({ enterpriseSlug: "ent1", periods: ["2026-01"], orgLogins: ["org1"] }).totalRows).toBe(1);
+      expect(getMaterializedPeriodKPIs({ enterpriseSlug: "ent1", periods: ["2026-01"], logins: ["user2"] }).totalRows).toBe(1);
+      expect(getMaterializedPeriodKPIs({ enterpriseSlug: "ent1", periods: ["2026-01"], historyConfidence: ["low"] }).totalRows).toBe(1);
+      expect(getMaterializedPeriodKPIs({ enterpriseSlugs: ["ent1", "ent2"], periods: ["2026-01"] }).totalRows).toBe(3);
+    });
   });
 });
 

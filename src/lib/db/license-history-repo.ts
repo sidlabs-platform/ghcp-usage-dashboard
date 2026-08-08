@@ -9,6 +9,7 @@
 
 import { getDb } from "./database";
 import { buildOrderBy, buildLimitOffset, type PaginationParams } from "@/lib/api/pagination";
+import type { LicensePeriodFilterQuery, LicenseHistoryKPIs, LicenseHistoryGroupBreakdown } from "@/lib/types/licensing";
 
 // ── Deterministic JSON serialization ─────────────────────────────────
 
@@ -241,26 +242,16 @@ export interface LicenseRollupRowRecord {
   historyConfidence: string;
 }
 
-export interface LicensePeriodQuery {
+/**
+ * Extends the shared {@link LicensePeriodFilterQuery} (also used by
+ * `getMaterializedPeriodKPIs`/`getMaterializedPlanBreakdown`/
+ * `getMaterializedOrgBreakdown`/`hasMaterializedRows`, so every materialized
+ * query in this module filters identically) with the pagination/sort/view
+ * fields specific to the paginated detail/rollup query.
+ */
+export interface LicensePeriodQuery extends LicensePeriodFilterQuery {
   /** "detail" (default) returns one row per period/org/holder; "rollup" groups by resolved login. */
   view?: "detail" | "rollup";
-  enterpriseSlug?: string;
-  enterpriseSlugs?: string[];
-  /** Explicit list of "YYYY-MM" billing periods. Combinable with periodStart/periodEnd. */
-  periods?: string[];
-  /** Inclusive "YYYY-MM" range start. */
-  periodStart?: string;
-  /** Inclusive "YYYY-MM" range end. */
-  periodEnd?: string;
-  orgLogins?: string[];
-  /** Matches user_login, resolved_user_login, or holder_key. */
-  logins?: string[];
-  planTypes?: string[];
-  accountStates?: string[];
-  seatStatuses?: string[];
-  historyConfidence?: string[];
-  /** Free-text search across login/org/external-identity columns. */
-  search?: string;
   page?: number;
   pageSize?: number;
   sortField?: string;
@@ -337,8 +328,15 @@ function clampPagination(query: LicensePeriodQuery): PaginationParams {
   return { page, pageSize, sortField: query.sortField || "", sortDir, search: query.search };
 }
 
-/** Build a shared WHERE clause (applies to both detail and rollup views) from a query's filters. */
-function appendPeriodFilters(clauses: string[], params: unknown[], query: LicensePeriodQuery): void {
+/**
+ * Build a shared WHERE clause from a query's filters. Takes the minimal
+ * {@link LicensePeriodFilterQuery} shape (rather than the full
+ * `LicensePeriodQuery`) so it can be reused by every materialized query in
+ * this module — the paginated detail/rollup query, KPI totals, plan/org
+ * breakdowns, and the existence check — guaranteeing they all filter
+ * identically.
+ */
+function appendPeriodFilters(clauses: string[], params: unknown[], query: LicensePeriodFilterQuery): void {
   const enterpriseSlugs = query.enterpriseSlugs?.length
     ? query.enterpriseSlugs
     : query.enterpriseSlug
@@ -872,4 +870,170 @@ export function replaceMaterializedPeriod(
   });
   tx(rows);
   return rows.length;
+}
+
+// ── Materialized history: KPI totals / breakdowns / existence check ─────
+//
+// All aggregation happens in SQL (COUNT/SUM/GROUP BY) — full row sets are
+// never loaded into JS just to total them, per project performance
+// guidelines. Every function here shares `appendPeriodFilters` with
+// `queryLicensePeriodRows`, so a KPI/breakdown call and a paginated detail
+// call for the same filter object always agree on which rows are in scope.
+
+function round2(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  return Math.round((value + Number.EPSILON) * 100) / 100;
+}
+
+/**
+ * Per-row effective budget: the assigned AI-credit budget when set, else the
+ * plan's default allowance, else 0. Mirrors `materialize-license-period.ts`'s
+ * `finalizeRow` so overage/utilization computed here from persisted columns
+ * always agrees with the materializer's own (pre-persistence) calculation.
+ */
+const EFFECTIVE_BUDGET_SQL = `
+  CASE
+    WHEN aic_assigned_usd > 0 THEN aic_assigned_usd
+    WHEN default_aic_usd > 0 THEN default_aic_usd
+    ELSE 0
+  END
+`;
+
+/**
+ * Per-row overage in USD: `MAX(consumed - effective budget, 0)` — the 2+
+ * argument form of SQLite's `MAX()` is the per-row *scalar* function (not
+ * the single-argument aggregate), so this expression is evaluated once per
+ * row before an enclosing `SUM()` aggregates it. Doing `MAX(SUM(consumed) -
+ * SUM(budget), 0)` instead would be wrong whenever some rows are under
+ * budget and others are over: this clamps every row individually first.
+ */
+const OVERAGE_USD_SQL = `MAX(aic_consumed_usd - (${EFFECTIVE_BUDGET_SQL}), 0)`;
+
+function buildFilterWhere(query: LicensePeriodFilterQuery): { where: string; params: unknown[] } {
+  const clauses: string[] = [];
+  const params: unknown[] = [];
+  appendPeriodFilters(clauses, params, query);
+  return { where: buildWhereClause(clauses), params };
+}
+
+/**
+ * Headline KPI totals for materialized `license_period_rows` matching a
+ * filter, aggregated entirely in SQL. Returns all-zero counts (and
+ * `currency: "USD"`) for a scope with no matching rows — never throws, never
+ * NaN/Infinity — so callers can safely combine this with
+ * {@link hasMaterializedRows} to detect "no historical data yet" and fall
+ * back to the legacy live-query path (`license-repo.ts`) without a false
+ * historical success.
+ */
+export function getMaterializedPeriodKPIs(query: LicensePeriodFilterQuery = {}): LicenseHistoryKPIs {
+  const db = getDb();
+  const { where, params } = buildFilterWhere(query);
+  const groupKey = `COALESCE(NULLIF(resolved_user_login, ''), holder_key)`;
+
+  const row = db
+    .prepare(
+      `
+      SELECT
+        COUNT(*) AS total_rows,
+        COUNT(DISTINCT ${groupKey}) AS total_users,
+        COALESCE(SUM(CASE WHEN seat_status = 'active' THEN 1 ELSE 0 END), 0) AS active_seats,
+        COALESCE(SUM(CASE WHEN seat_status != 'active' THEN 1 ELSE 0 END), 0) AS inactive_seats,
+        COALESCE(SUM(CASE WHEN aic_consumed_credits <= 0 THEN 1 ELSE 0 END), 0) AS zero_consumption_rows,
+        COALESCE(SUM(license_cost), 0) AS total_license_cost,
+        COALESCE(SUM(default_aic_credits), 0) AS total_allowance_credits,
+        COALESCE(SUM(aic_assigned_usd), 0) AS total_assigned_usd,
+        COALESCE(SUM(aic_consumed_credits), 0) AS total_consumed_credits,
+        COALESCE(SUM(aic_consumed_usd), 0) AS total_consumed_usd,
+        COALESCE(SUM(CASE WHEN aic_consumed_usd > (${EFFECTIVE_BUDGET_SQL}) THEN 1 ELSE 0 END), 0) AS over_budget_rows,
+        COALESCE(SUM(${OVERAGE_USD_SQL}), 0) AS total_overage_usd,
+        ${UTILIZATION_PCT_SQL} AS overall_utilization_pct,
+        MAX(currency) AS currency
+      FROM license_period_rows${where}
+    `
+    )
+    .get(...params) as Record<string, number | string | null>;
+
+  const totalLicenseCost = round2((row.total_license_cost as number) ?? 0);
+  const totalOverageUsd = round2((row.total_overage_usd as number) ?? 0);
+
+  return {
+    totalRows: (row.total_rows as number) ?? 0,
+    totalUsers: (row.total_users as number) ?? 0,
+    activeSeats: (row.active_seats as number) ?? 0,
+    inactiveSeats: (row.inactive_seats as number) ?? 0,
+    zeroConsumptionRows: (row.zero_consumption_rows as number) ?? 0,
+    totalLicenseCost,
+    totalAllowanceCredits: round2((row.total_allowance_credits as number) ?? 0),
+    totalAssignedUsd: round2((row.total_assigned_usd as number) ?? 0),
+    totalConsumedCredits: round2((row.total_consumed_credits as number) ?? 0),
+    totalConsumedUsd: round2((row.total_consumed_usd as number) ?? 0),
+    overallUtilizationPct: round2((row.overall_utilization_pct as number) ?? 0),
+    overBudgetRows: (row.over_budget_rows as number) ?? 0,
+    totalOverageUsd,
+    totalCostOfOwnership: round2(totalLicenseCost + totalOverageUsd),
+    currency: (row.currency as string) || "USD",
+  };
+}
+
+function queryGroupBreakdown(groupByColumn: "plan_type" | "org_login", query: LicensePeriodFilterQuery): LicenseHistoryGroupBreakdown[] {
+  const db = getDb();
+  const { where, params } = buildFilterWhere(query);
+
+  const rows = db
+    .prepare(
+      `
+      SELECT
+        ${groupByColumn} AS group_key,
+        COUNT(*) AS row_count,
+        COALESCE(SUM(license_cost), 0) AS license_cost,
+        COALESCE(SUM(default_aic_credits), 0) AS allowance_credits,
+        COALESCE(SUM(aic_assigned_usd), 0) AS assigned_usd,
+        COALESCE(SUM(aic_consumed_credits), 0) AS consumed_credits,
+        COALESCE(SUM(aic_consumed_usd), 0) AS consumed_usd,
+        COALESCE(SUM(${OVERAGE_USD_SQL}), 0) AS overage_usd,
+        ${UTILIZATION_PCT_SQL} AS utilization_pct
+      FROM license_period_rows${where}
+      GROUP BY ${groupByColumn}
+      ORDER BY consumed_credits DESC, row_count DESC
+    `
+    )
+    .all(...params) as Record<string, number | string>[];
+
+  return rows.map((r) => ({
+    key: r.group_key as string,
+    rows: (r.row_count as number) ?? 0,
+    licenseCost: round2((r.license_cost as number) ?? 0),
+    allowanceCredits: round2((r.allowance_credits as number) ?? 0),
+    assignedUsd: round2((r.assigned_usd as number) ?? 0),
+    consumedCredits: round2((r.consumed_credits as number) ?? 0),
+    consumedUsd: round2((r.consumed_usd as number) ?? 0),
+    utilizationPct: round2((r.utilization_pct as number) ?? 0),
+    overageUsd: round2((r.overage_usd as number) ?? 0),
+  }));
+}
+
+/** Allocation-vs-consumption breakdown by plan, aggregated in SQL over materialized rows matching a filter. Empty array for a scope with no matching rows. */
+export function getMaterializedPlanBreakdown(query: LicensePeriodFilterQuery = {}): LicenseHistoryGroupBreakdown[] {
+  return queryGroupBreakdown("plan_type", query);
+}
+
+/** Allocation-vs-consumption breakdown by org, aggregated in SQL over materialized rows matching a filter. Empty array for a scope with no matching rows. */
+export function getMaterializedOrgBreakdown(query: LicensePeriodFilterQuery = {}): LicenseHistoryGroupBreakdown[] {
+  return queryGroupBreakdown("org_login", query);
+}
+
+/**
+ * True when at least one materialized `license_period_rows` row matches the
+ * filter. Lets callers (e.g. the reconciliation API route) distinguish "no
+ * history has been materialized for this scope yet — fall back to the
+ * legacy live-query path" from a genuine (but empty) historical result,
+ * without ever reporting a false historical success.
+ */
+export function hasMaterializedRows(query: LicensePeriodFilterQuery = {}): boolean {
+  const db = getDb();
+  const { where, params } = buildFilterWhere(query);
+  const row = db.prepare(`SELECT EXISTS(SELECT 1 FROM license_period_rows${where} LIMIT 1) AS found`).get(...params) as {
+    found: number;
+  };
+  return row.found === 1;
 }
