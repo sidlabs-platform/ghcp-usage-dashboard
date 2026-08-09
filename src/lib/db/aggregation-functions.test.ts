@@ -943,7 +943,7 @@ describe("getFeatureUsageDaily", () => {
     expect(row!.appUsers).toBe(1);
   });
 
-  it("returns zero appUsers for empty allowedLogins scoping with no matches (empty means no filter)", () => {
+  it("counts all appUsers when empty allowedLogins means no filter", () => {
     db.prepare(`INSERT INTO user_daily_metrics (day, enterprise_id, enterprise_slug, user_id, user_login, used_copilot_app)
       VALUES ('2024-01-24', 'ent1', 'ent1', 1, 'app-user', 1)`).run();
     const daily = getFeatureUsageDaily("2024-01-01", "2024-01-31", []);
