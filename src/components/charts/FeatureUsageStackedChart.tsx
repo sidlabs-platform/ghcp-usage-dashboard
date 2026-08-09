@@ -21,6 +21,8 @@ interface FeatureUsageStackedChartProps {
     chat: number;
     agent: number;
     cli: number;
+    // Optional so existing/older data still renders without the App series.
+    app?: number;
   }[];
 }
 
@@ -34,6 +36,11 @@ const AREAS = [
   { key: "chat", name: "Chat", color: CHART_COLORS.chat },
   { key: "agent", name: "Agent", color: CHART_COLORS.agent },
   { key: "cli", name: "CLI", color: CHART_COLORS.cli },
+  // Copilot App is an overlapping active-surface count (a user can also be
+  // counted in completions/chat/agent/cli for the same day) — it is stacked
+  // here purely for at-a-glance daily volume comparison, not to imply a
+  // mutually-exclusive breakdown of total usage.
+  { key: "app", name: "Copilot App", color: CHART_COLORS.copilotApp },
 ] as const;
 
 export function FeatureUsageStackedChart({ data }: FeatureUsageStackedChartProps) {

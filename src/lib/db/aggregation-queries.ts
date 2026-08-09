@@ -27,6 +27,13 @@ export interface AdoptionStats {
   codeReviewUsers: number;
   cliUsers: number;
   chatUsers: number;
+  // Distinct users with `used_copilot_app = 1` in the period. This is an
+  // additional, overlapping active-surface signal — App users are *not*
+  // mutually exclusive with agent/chat/CLI/coding-agent users, so this
+  // count must never be added to or subtracted from the other cohorts.
+  // Legacy rows with `used_copilot_app IS NULL` (unsupported) contribute 0,
+  // same as any other boolean flag column here.
+  appUsers: number;
 }
 
 export interface UserSummary {
@@ -264,7 +271,8 @@ export function getAdoptionStats(
       COUNT(DISTINCT CASE WHEN used_copilot_coding_agent = 1 THEN user_login END) as codingAgentUsers,
       COUNT(DISTINCT CASE WHEN used_copilot_code_review_active = 1 THEN user_login END) as codeReviewUsers,
       COUNT(DISTINCT CASE WHEN used_cli = 1 THEN user_login END) as cliUsers,
-      COUNT(DISTINCT CASE WHEN used_chat = 1 THEN user_login END) as chatUsers
+      COUNT(DISTINCT CASE WHEN used_chat = 1 THEN user_login END) as chatUsers,
+      COUNT(DISTINCT CASE WHEN used_copilot_app = 1 THEN user_login END) as appUsers
     FROM user_daily_metrics
     WHERE day >= ? AND day <= ? ${filter.clause}${ef.clause}
   `;
@@ -1478,6 +1486,9 @@ export interface FeatureUsageDailyRow {
   chatUsers: number;
   agentUsers: number;
   cliUsers: number;
+  // Distinct `used_copilot_app = 1` users for the day — see AdoptionStats.appUsers
+  // for the overlap-semantics note; this is the daily-granularity counterpart.
+  appUsers: number;
 }
 
 /** Daily feature usage from structured columns */
@@ -1496,7 +1507,8 @@ export function getFeatureUsageDaily(
       COALESCE(SUM(code_generation_activity_count), 0) as completions,
       COUNT(DISTINCT CASE WHEN used_chat = 1 THEN user_login END) as chatUsers,
       COUNT(DISTINCT CASE WHEN used_agent = 1 THEN user_login END) as agentUsers,
-      COUNT(DISTINCT CASE WHEN used_cli = 1 THEN user_login END) as cliUsers
+      COUNT(DISTINCT CASE WHEN used_cli = 1 THEN user_login END) as cliUsers,
+      COUNT(DISTINCT CASE WHEN used_copilot_app = 1 THEN user_login END) as appUsers
     FROM user_daily_metrics
     WHERE day >= ? AND day <= ? ${filter.clause}${ef.clause}
     GROUP BY day

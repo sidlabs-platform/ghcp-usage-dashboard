@@ -292,6 +292,10 @@ export interface OverviewKpis {
   cliUsers: number;
   licenseUtilization: number;
   periodActiveUsers: number;
+  // Latest-day Copilot App active-user count (from the featureUsage series'
+  // last entry). An overlapping active-surface signal — not additive with
+  // the other adoption KPIs above (see OverviewData.featureUsage.app).
+  copilotAppUsers: number;
   deltas: { dau: number };
 }
 
@@ -301,7 +305,10 @@ export interface OverviewData {
   activeUsersTrend: { day: string; daily: number; weekly: number; monthly: number }[];
   acceptanceRateTrend: { day: string; suggested: number; accepted: number; rate: number }[];
   chatModes: { ask: number; edit: number; plan: number; agent: number; custom: number; unknown: number };
-  featureUsage: { day: string; completions: number; chat: number; agent: number; cli: number }[];
+  // `app` is an overlapping active-surface count (Copilot App usage), not
+  // an exclusive/additive slice of completions/chat/agent/cli — a user can
+  // be counted in `app` and in any of the other fields for the same day.
+  featureUsage: { day: string; completions: number; chat: number; agent: number; cli: number; app: number }[];
   cliVsIde: { day: string; ideUsers: number; cliUsers: number }[];
   dataAsOf: string;
   daysLoaded: number;

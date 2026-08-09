@@ -170,3 +170,165 @@ describe("overview route — completion allowlist regression", { timeout: 10000 
     expect(dayRow.accepted).toBe(120);
   });
 });
+
+describe("overview route — Copilot App featureUsage.app", () => {
+  it("filtered/SQL-aggregated branch: featureUsage[].app and kpis.copilotAppUsers reflect distinct used_copilot_app=1 users", async () => {
+    const testDay = yesterday();
+
+    db.prepare(`
+      INSERT INTO team_memberships (enterprise_slug, team_slug, team_name, source, org_slug, user_login, updated_at)
+      VALUES ('ent1', 'platform', 'Platform', 'org', 'octo-org', 'octocat', ?)
+    `).run(`${testDay}T00:00:00Z`);
+    db.prepare(`
+      INSERT INTO team_memberships (enterprise_slug, team_slug, team_name, source, org_slug, user_login, updated_at)
+      VALUES ('ent1', 'platform', 'Platform', 'org', 'octo-org', 'hubot', ?)
+    `).run(`${testDay}T00:00:00Z`);
+
+    db.prepare(`
+      INSERT INTO user_daily_metrics (
+        day, enterprise_id, enterprise_slug, user_id, user_login,
+        used_agent, used_chat, used_cli, used_copilot_app
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(testDay, "ent1", "ent1", 1, "octocat", 0, 0, 0, 1);
+    db.prepare(`
+      INSERT INTO user_daily_metrics (
+        day, enterprise_id, enterprise_slug, user_id, user_login,
+        used_agent, used_chat, used_cli, used_copilot_app
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(testDay, "ent1", "ent1", 2, "hubot", 0, 0, 0, 0);
+
+    const GET = await getHandler();
+    const res = await GET(new NextRequest(
+      "http://localhost/api/metrics/overview?days=1&teams=platform",
+    ));
+    expect(res.status).toBe(200);
+    const json = await res.json();
+
+    expect(json.dataSource).toBe("filtered-users");
+    const dayRow = json.featureUsage.find((t: { day: string }) => t.day === testDay);
+    expect(dayRow).toBeDefined();
+    expect(dayRow.app).toBe(1);
+    expect(json.kpis.copilotAppUsers).toBe(1);
+  });
+
+  it("aggregated-summary fallback (no direct enterprise_daily_metrics rows, no filter): featureUsage[].app uses the SQL-aggregated appUsers count", async () => {
+    const testDay = yesterday();
+
+    // No enterprise_daily_metrics row is inserted, so the enterprise-direct
+    // branch has no data for this day and the route falls back to
+    // getAggregatedDailySummary (grouped from user_daily_metrics) for the
+    // day's metrics, including `app` via featureByDay.
+    db.prepare(`
+      INSERT INTO user_daily_metrics (
+        day, enterprise_id, enterprise_slug, user_id, user_login,
+        used_agent, used_chat, used_cli, used_copilot_app
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(testDay, "ent1", "ent1", 1, "octocat", 0, 0, 0, 1);
+
+    const GET = await getHandler();
+    const res = await GET(new NextRequest("http://localhost/api/metrics/overview?days=1"));
+    expect(res.status).toBe(200);
+    const json = await res.json();
+
+    const dayRow = json.featureUsage.find((t: { day: string }) => t.day === testDay);
+    expect(dayRow).toBeDefined();
+    expect(dayRow.app).toBe(1);
+    expect(json.kpis.copilotAppUsers).toBe(1);
+  });
+
+  it("enterprise-direct branch: an explicit daily_active_copilot_app_users=0 stays 0 even when the user-level fallback would be nonzero", async () => {
+    const { upsertEnterpriseDayMetrics } = await import("@/lib/db/metrics-repo");
+    const testDay = yesterday();
+
+    // A nonzero user-level App signal exists for the same day/enterprise —
+    // this MUST NOT override the enterprise row's own explicit, supported 0.
+    db.prepare(`
+      INSERT INTO user_daily_metrics (
+        day, enterprise_id, enterprise_slug, user_id, user_login,
+        used_agent, used_chat, used_cli, used_copilot_app
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(testDay, "ent1", "ent1", 1, "octocat", 0, 0, 0, 1);
+
+    upsertEnterpriseDayMetrics("ent1", {
+      day: testDay,
+      enterprise_id: "ent1",
+      daily_active_users: 10,
+      weekly_active_users: 10,
+      monthly_active_users: 10,
+      monthly_active_agent_users: 1,
+      monthly_active_chat_users: 1,
+      daily_active_cli_users: 0,
+      daily_active_copilot_app_users: 0,
+      code_generation_activity_count: 100,
+      code_acceptance_activity_count: 80,
+      user_initiated_interaction_count: 5,
+      loc_suggested_to_add_sum: 100,
+      loc_suggested_to_delete_sum: 0,
+      loc_added_sum: 100,
+      loc_deleted_sum: 0,
+      totals_by_ide: [],
+      totals_by_feature: [],
+      totals_by_language_feature: [],
+      totals_by_model_feature: [],
+      totals_by_language_model: [],
+    });
+
+    const GET = await getHandler();
+    const res = await GET(new NextRequest("http://localhost/api/metrics/overview?days=1"));
+    expect(res.status).toBe(200);
+    const json = await res.json();
+
+    expect(json.dataSource).toBe("enterprise");
+    const dayRow = json.featureUsage.find((t: { day: string }) => t.day === testDay);
+    expect(dayRow).toBeDefined();
+    expect(dayRow.app).toBe(0);
+    expect(json.kpis.copilotAppUsers).toBe(0);
+  });
+
+  it("enterprise-direct branch: a NULL daily_active_copilot_app_users (unavailable) falls back to the SQL-aggregated appUsers count", async () => {
+    const { upsertEnterpriseDayMetrics } = await import("@/lib/db/metrics-repo");
+    const testDay = yesterday();
+
+    db.prepare(`
+      INSERT INTO user_daily_metrics (
+        day, enterprise_id, enterprise_slug, user_id, user_login,
+        used_agent, used_chat, used_cli, used_copilot_app
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(testDay, "ent1", "ent1", 1, "octocat", 0, 0, 0, 1);
+
+    upsertEnterpriseDayMetrics("ent1", {
+      day: testDay,
+      enterprise_id: "ent1",
+      daily_active_users: 10,
+      weekly_active_users: 10,
+      monthly_active_users: 10,
+      monthly_active_agent_users: 1,
+      monthly_active_chat_users: 1,
+      daily_active_cli_users: 0,
+      daily_active_copilot_app_users: null,
+      code_generation_activity_count: 100,
+      code_acceptance_activity_count: 80,
+      user_initiated_interaction_count: 5,
+      loc_suggested_to_add_sum: 100,
+      loc_suggested_to_delete_sum: 0,
+      loc_added_sum: 100,
+      loc_deleted_sum: 0,
+      totals_by_ide: [],
+      totals_by_feature: [],
+      totals_by_language_feature: [],
+      totals_by_model_feature: [],
+      totals_by_language_model: [],
+    });
+
+    const GET = await getHandler();
+    const res = await GET(new NextRequest("http://localhost/api/metrics/overview?days=1"));
+    expect(res.status).toBe(200);
+    const json = await res.json();
+
+    expect(json.dataSource).toBe("enterprise");
+    const dayRow = json.featureUsage.find((t: { day: string }) => t.day === testDay);
+    expect(dayRow).toBeDefined();
+    expect(dayRow.app).toBe(1);
+    expect(json.kpis.copilotAppUsers).toBe(1);
+  });
+});

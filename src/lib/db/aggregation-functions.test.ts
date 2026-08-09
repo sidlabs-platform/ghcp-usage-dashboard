@@ -86,6 +86,9 @@ function insertMetric(overrides: Partial<Record<string, unknown>> = {}) {
     used_copilot_code_review_active: 0,
     used_copilot_code_review_passive: 0,
     used_copilot_coding_agent: 0,
+    // NULL (unsupported/legacy) by default, matching the schema default —
+    // callers that care about App adoption pass an explicit 0/1 override.
+    used_copilot_app: null,
   };
   const m = { ...defaults, ...overrides };
   db.prepare(`
@@ -94,8 +97,9 @@ function insertMetric(overrides: Partial<Record<string, unknown>> = {}) {
       ai_credits_used, loc_suggested_to_add_sum, loc_added_sum, loc_deleted_sum,
       chat_panel_agent_mode, chat_panel_ask_mode, chat_panel_edit_mode, chat_panel_plan_mode,
       chat_panel_custom_mode, chat_panel_unknown_mode,
-      used_agent, used_chat, used_cli, used_copilot_code_review_active, used_copilot_code_review_passive, used_copilot_coding_agent)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      used_agent, used_chat, used_cli, used_copilot_code_review_active, used_copilot_code_review_passive, used_copilot_coding_agent,
+      used_copilot_app)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     m.day, m.enterprise_id, m.enterprise_slug, m.user_id, m.user_login,
     m.code_generation_activity_count, m.code_acceptance_activity_count, m.user_initiated_interaction_count,
@@ -103,6 +107,7 @@ function insertMetric(overrides: Partial<Record<string, unknown>> = {}) {
     m.chat_panel_agent_mode, m.chat_panel_ask_mode, m.chat_panel_edit_mode, m.chat_panel_plan_mode,
     m.chat_panel_custom_mode, m.chat_panel_unknown_mode,
     m.used_agent, m.used_chat, m.used_cli, m.used_copilot_code_review_active, m.used_copilot_code_review_passive, m.used_copilot_coding_agent,
+    m.used_copilot_app,
   );
 }
 
@@ -143,6 +148,29 @@ describe("getAdoptionStats", () => {
     expect(stats.totalUsers).toBe(2);
     expect(stats.agentUsers).toBe(1);
     expect(stats.cliUsers).toBe(1);
+  });
+
+  it("counts distinct appUsers from used_copilot_app=1, treating NULL as unsupported/zero", () => {
+    insertMetric({ user_login: "user1", used_copilot_app: 1 });
+    insertMetric({ day: "2024-01-11", user_login: "user2", user_id: 2, used_copilot_app: 0 });
+    insertMetric({ day: "2024-01-12", user_login: "user3", user_id: 3, used_copilot_app: null });
+    const stats = getAdoptionStats("2024-01-01", "2024-01-31");
+    expect(stats.totalUsers).toBe(3);
+    expect(stats.appUsers).toBe(1);
+  });
+
+  it("dedupes appUsers across multiple enterprise rows for the same user/day", () => {
+    insertMetric({ user_login: "user1", enterprise_id: "ent-a", enterprise_slug: "ent-a", used_copilot_app: 1 });
+    insertMetric({ user_login: "user1", user_id: 1, enterprise_id: "ent-b", enterprise_slug: "ent-b", used_copilot_app: 1 });
+    const stats = getAdoptionStats("2024-01-01", "2024-01-31");
+    expect(stats.appUsers).toBe(1);
+  });
+
+  it("respects allowedLogins scoping for appUsers", () => {
+    insertMetric({ user_login: "user1", used_copilot_app: 1 });
+    insertMetric({ day: "2024-01-11", user_login: "user2", user_id: 2, used_copilot_app: 1 });
+    const stats = getAdoptionStats("2024-01-01", "2024-01-31", ["user1"]);
+    expect(stats.appUsers).toBe(1);
   });
 });
 
@@ -891,6 +919,36 @@ describe("getFeatureUsageDaily", () => {
     const row = daily.find((r) => r.day === "2024-01-18");
     expect(row!.completions).toBeGreaterThanOrEqual(15);
     expect(row!.chatUsers).toBeGreaterThanOrEqual(1);
+  });
+
+  it("counts distinct appUsers per day, treating NULL used_copilot_app as unsupported/zero", () => {
+    db.prepare(`INSERT INTO user_daily_metrics (day, enterprise_id, enterprise_slug, user_id, user_login, used_copilot_app)
+      VALUES ('2024-01-22', 'ent1', 'ent1', 1, 'app-user-1', 1)`).run();
+    db.prepare(`INSERT INTO user_daily_metrics (day, enterprise_id, enterprise_slug, user_id, user_login, used_copilot_app)
+      VALUES ('2024-01-22', 'ent1', 'ent1', 2, 'app-user-2', 0)`).run();
+    db.prepare(`INSERT INTO user_daily_metrics (day, enterprise_id, enterprise_slug, user_id, user_login, used_copilot_app)
+      VALUES ('2024-01-22', 'ent1', 'ent1', 3, 'legacy-user', NULL)`).run();
+    const daily = getFeatureUsageDaily("2024-01-01", "2024-01-31");
+    const row = daily.find((r) => r.day === "2024-01-22");
+    expect(row!.appUsers).toBe(1);
+  });
+
+  it("dedupes appUsers per day across multiple enterprise rows for the same user", () => {
+    db.prepare(`INSERT INTO user_daily_metrics (day, enterprise_id, enterprise_slug, user_id, user_login, used_copilot_app)
+      VALUES ('2024-01-23', 'ent-a', 'ent-a', 1, 'multi-ent-user', 1)`).run();
+    db.prepare(`INSERT INTO user_daily_metrics (day, enterprise_id, enterprise_slug, user_id, user_login, used_copilot_app)
+      VALUES ('2024-01-23', 'ent-b', 'ent-b', 1, 'multi-ent-user', 1)`).run();
+    const daily = getFeatureUsageDaily("2024-01-01", "2024-01-31");
+    const row = daily.find((r) => r.day === "2024-01-23");
+    expect(row!.appUsers).toBe(1);
+  });
+
+  it("returns zero appUsers for empty allowedLogins scoping with no matches (empty means no filter)", () => {
+    db.prepare(`INSERT INTO user_daily_metrics (day, enterprise_id, enterprise_slug, user_id, user_login, used_copilot_app)
+      VALUES ('2024-01-24', 'ent1', 'ent1', 1, 'app-user', 1)`).run();
+    const daily = getFeatureUsageDaily("2024-01-01", "2024-01-31", []);
+    const row = daily.find((r) => r.day === "2024-01-24");
+    expect(row!.appUsers).toBe(1);
   });
 });
 

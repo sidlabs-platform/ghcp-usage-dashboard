@@ -215,6 +215,29 @@ describe("chart component coverage", () => {
     expect(screen.getByText("14")).toBeInTheDocument();
   });
 
+  it("FeatureUsageStackedChart plots a populated Copilot App series with an accessible, distinct legend label", () => {
+    render(
+      <FeatureUsageStackedChart
+        data={[
+          { day: "2026-07-29", completions: 100, chat: 20, agent: 5, cli: 3, app: 12 },
+        ]}
+      />,
+    );
+
+    const appSeries = screen.getByTestId("Area-app");
+    expect(appSeries.getAttribute("data-name")).toBe("Copilot App");
+    // Distinct, named color — not reused from another series — so App is
+    // differentiable in both the stacked area chart and its legend.
+    expect(appSeries.getAttribute("data-stroke")).toBe(CHART_COLORS.copilotApp);
+    expect(appSeries.getAttribute("data-stroke")).not.toBe(CHART_COLORS.completions);
+    expect(appSeries.getAttribute("data-stroke")).not.toBe(CHART_COLORS.chat);
+    expect(appSeries.getAttribute("data-stroke")).not.toBe(CHART_COLORS.agent);
+    expect(appSeries.getAttribute("data-stroke")).not.toBe(CHART_COLORS.cli);
+
+    const chart = screen.getByTestId("AreaChart");
+    expect(chart.getAttribute("data-json")).toContain("\"app\":12");
+  });
+
   it("AdoptionVolumeTooltip renders nothing when inactive or the payload is empty", () => {
     const data = [{ day: "2026-07-29", activeUsers: 12, sessions: 40, requests: 90, prompts: 150 }];
 
