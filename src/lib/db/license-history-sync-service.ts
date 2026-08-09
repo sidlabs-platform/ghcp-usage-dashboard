@@ -367,16 +367,64 @@ function resolveLicenseSnapshotFilePathDefault(baseDir: string, enterpriseSlug: 
 }
 
 /**
+ * Minimal low-level filesystem operations {@link writeLicenseSnapshotFileDefault}
+ * needs, injectable so tests can exercise real-temp-directory success paths
+ * alongside controlled failure/cleanup paths (rename conflicts, permission
+ * errors) without depending on platform-specific rename-failure semantics.
+ * The default implementation delegates to `node:fs/promises` unchanged.
+ */
+export interface LicenseSnapshotFsOps {
+  mkdir: (dir: string, options: { recursive: boolean }) => Promise<unknown>;
+  writeFile: (path: string, contents: string, encoding: BufferEncoding) => Promise<void>;
+  rename: (oldPath: string, newPath: string) => Promise<void>;
+  unlink: (path: string) => Promise<void>;
+}
+
+const defaultLicenseSnapshotFsOps: LicenseSnapshotFsOps = {
+  mkdir: (dir, options) => fsPromises.mkdir(dir, options),
+  writeFile: (path, contents, encoding) => fsPromises.writeFile(path, contents, encoding),
+  rename: (oldPath, newPath) => fsPromises.rename(oldPath, newPath),
+  unlink: (path) => fsPromises.unlink(path),
+};
+
+/**
  * Production default for `writeLicenseSnapshotFile` — atomic temp-write then
  * rename, so a crash mid-write never leaves a partial/corrupt snapshot file.
  * Creates the target directory (recursively) if it doesn't already exist.
+ *
+ * Task 9 re-review fix #3: if the write or the rename fails, the temp file is
+ * always cleaned up (best-effort `unlink`) in a `finally`-equivalent
+ * catch/rethrow path — never left orphaned on disk. Cleanup itself never
+ * masks the original failure: a missing temp file (`ENOENT` — nothing to
+ * remove, e.g. because the write itself never created it) is silently
+ * ignored, but any *other* cleanup error is logged (`console.error`, safely
+ * isolated in its own try/catch) without ever replacing or swallowing the
+ * original error, which is always rethrown unchanged.
  */
-async function writeLicenseSnapshotFileDefault(filePath: string, contents: string): Promise<void> {
+export async function writeLicenseSnapshotFileDefault(
+  filePath: string,
+  contents: string,
+  fsOps: LicenseSnapshotFsOps = defaultLicenseSnapshotFsOps,
+): Promise<void> {
   const dir = nodePath.dirname(filePath);
-  await fsPromises.mkdir(dir, { recursive: true });
+  await fsOps.mkdir(dir, { recursive: true });
   const tempPath = `${filePath}.tmp-${process.pid}-${Date.now()}`;
-  await fsPromises.writeFile(tempPath, contents, "utf8");
-  await fsPromises.rename(tempPath, filePath);
+  try {
+    await fsOps.writeFile(tempPath, contents, "utf8");
+    await fsOps.rename(tempPath, filePath);
+  } catch (err) {
+    try {
+      await fsOps.unlink(tempPath);
+    } catch (cleanupErr) {
+      const code = (cleanupErr as NodeJS.ErrnoException)?.code;
+      if (code !== "ENOENT") {
+        // Never let a cleanup failure mask the original error below — just
+        // surface it for observability.
+        console.error("writeLicenseSnapshotFileDefault: failed to clean up temp file", tempPath, cleanupErr);
+      }
+    }
+    throw err;
+  }
 }
 
 function sanitizeForLog(s: string): string {
@@ -456,6 +504,87 @@ function toMaterializedRowLike(row: LicensePeriodRowLike, enterpriseSlug: string
     totalCost: 0,
     asOfUtc: "",
     generatedAtUtc: "",
+  };
+}
+
+/**
+ * Safe, explicit-allowlist projection of a materialized period row for the
+ * optional on-disk snapshot artifact (Task 9 re-review fix #1). Snapshot
+ * files are operational reconciliation artifacts, not identity exports —
+ * they must never carry `externalIdentity` (raw email/SAML NameID/SCIM
+ * external ID) or the free-form `dataQualityNotes` array (which can contain
+ * arbitrary diagnostic text, including tokens or identity fragments copied
+ * from upstream sources). The raw/unverified `userLogin` and the numeric
+ * `githubUserId` are also omitted — only `resolvedUserLogin` (the identity
+ * pipeline's verified login, when policy allows one to be assigned) and the
+ * non-PII `holderKey` are kept as holder identifiers. Every other field is a
+ * purely operational/numeric reconciliation value (seat/plan/status/
+ * confidence/source, consumption/cost/currency, or a safe ISO timestamp).
+ */
+export interface SafeLicenseSnapshotRow {
+  enterpriseSlug: string;
+  billingPeriod: string;
+  orgLogin: string;
+  holderKey: string;
+  resolvedUserLogin: string | null;
+  accountState: string;
+  planType: string;
+  seatStatus: string;
+  assignedVia: string;
+  historyConfidence: MaterializedLicensePeriodRow["historyConfidence"];
+  rowSource: string;
+  consumptionSource: string | null;
+  licenseCost: number;
+  defaultAicCredits: number;
+  defaultAicUsd: number;
+  aicAssignedUsd: number;
+  aicAssignedRule: string;
+  aicConsumedCredits: number;
+  aicConsumedUsd: number;
+  currency: string;
+  utilizationPct: number;
+  overageCredits: number;
+  overageUsd: number;
+  totalCost: number;
+  licenseAssignedDate: string | null;
+  userRevokedDate: string | null;
+  lastActivityAt: string | null;
+  asOfUtc: string;
+  generatedAtUtc: string;
+}
+
+/** Project one materialized row through the safe snapshot allowlist — see {@link SafeLicenseSnapshotRow}. */
+function toSafeSnapshotRow(row: MaterializedLicensePeriodRow): SafeLicenseSnapshotRow {
+  return {
+    enterpriseSlug: row.enterpriseSlug,
+    billingPeriod: row.billingPeriod,
+    orgLogin: row.orgLogin,
+    holderKey: row.holderKey,
+    resolvedUserLogin: row.resolvedUserLogin,
+    accountState: row.accountState,
+    planType: row.planType,
+    seatStatus: row.seatStatus,
+    assignedVia: row.assignedVia,
+    historyConfidence: row.historyConfidence,
+    rowSource: row.rowSource,
+    consumptionSource: row.consumptionSource,
+    licenseCost: row.licenseCost,
+    defaultAicCredits: row.defaultAicCredits,
+    defaultAicUsd: row.defaultAicUsd,
+    aicAssignedUsd: row.aicAssignedUsd,
+    aicAssignedRule: row.aicAssignedRule,
+    aicConsumedCredits: row.aicConsumedCredits,
+    aicConsumedUsd: row.aicConsumedUsd,
+    currency: row.currency,
+    utilizationPct: row.utilizationPct,
+    overageCredits: row.overageCredits,
+    overageUsd: row.overageUsd,
+    totalCost: row.totalCost,
+    licenseAssignedDate: row.licenseAssignedDate,
+    userRevokedDate: row.userRevokedDate,
+    lastActivityAt: row.lastActivityAt,
+    asOfUtc: row.asOfUtc,
+    generatedAtUtc: row.generatedAtUtc,
   };
 }
 
@@ -578,6 +707,7 @@ function failedResult(
 export async function syncLicenseHistoryForEnterprise(
   enterpriseSlug: string,
   deps: LicenseHistorySyncDeps,
+  preCaptured?: CaptureCurrentLicenseSeatSnapshotResult,
 ): Promise<LicenseHistoryEnterpriseSyncResult> {
   const config = deps.getConfig();
   if (!config.history.enabled) {
@@ -650,7 +780,34 @@ export async function syncLicenseHistoryForEnterprise(
 
     // ── live seats + current authoritative monthly snapshot ────────────
     deps.onProgress?.({ enterprise: enterpriseSlug, source: "seats", period: currentPeriod, current: 0, total: 1, message: `Fetching live seats for ${sanitizeForLog(enterpriseSlug)}...` });
-    const { seats: liveSeats } = await deps.getEnterpriseSeatsNormalized(enterpriseSlug);
+    // Task 9 re-review fix #2: when the caller (normally `sync-service.ts`'s
+    // `fullSync()`) already captured-and-persisted this enterprise's
+    // current-month snapshot once, reuse its normalized seats verbatim and
+    // skip both the live-seat re-fetch and the redundant re-persist below —
+    // eliminating the duplicate API call and duplicate `replacePeriodSnapshots`
+    // write for the same period. Any other case (no pre-capture supplied, or
+    // a supplied pre-capture that failed to persist) preserves this
+    // function's original standalone behavior exactly: fetch once, then
+    // persist once via the shared primitive.
+    let liveSeats: NormalizedCopilotSeat[];
+    let captureResult: CaptureCurrentLicenseSeatSnapshotResult;
+    if (preCaptured?.persisted) {
+      liveSeats = preCaptured.seats;
+      captureResult = preCaptured;
+    } else {
+      const fetched = await deps.getEnterpriseSeatsNormalized(enterpriseSlug);
+      liveSeats = fetched.seats;
+      // Reuse the already-fetched live seats — no extra fetch — while
+      // delegating the actual persistence to the shared primitive so
+      // `sync-service.ts` and this module both go through the exact same
+      // capture logic (Task 9 spec-review fix #2). Preserve this function's
+      // existing contract: a required live-seat/snapshot failure fails the
+      // whole enterprise run (never a false snapshot).
+      captureResult = await captureCurrentLicenseSeatSnapshot(enterpriseSlug, deps, liveSeats);
+    }
+    if (captureResult.errorMessage) {
+      throw new Error(captureResult.errorMessage);
+    }
     const currentSnapshotInputs: LicenseSeatSnapshotInput[] = liveSeats.map((seat) => ({
       orgLogin: seat.orgLogin,
       holderKey: seat.holderKey,
@@ -664,16 +821,6 @@ export async function syncLicenseHistoryForEnterprise(
       source: "live_seats",
       raw: seat.raw,
     }));
-    // Reuse the already-fetched live seats — no extra fetch — while
-    // delegating the actual persistence to the shared primitive so
-    // `sync-service.ts` and this module both go through the exact same
-    // capture logic (Task 9 spec-review fix #2). Preserve this function's
-    // existing contract: a required live-seat/snapshot failure fails the
-    // whole enterprise run (never a false snapshot).
-    const captureResult = await captureCurrentLicenseSeatSnapshot(enterpriseSlug, deps, liveSeats);
-    if (captureResult.errorMessage) {
-      throw new Error(captureResult.errorMessage);
-    }
     sourceStates.push({ enterpriseSlug, source: "live_seats", billingPeriod: currentPeriod, lastSyncedAt: now.toISOString(), status: "ok" });
     // Design note: this hook is an internal test seam for this module's own
     // phase ordering only — see the module doc for how the real
@@ -944,6 +1091,11 @@ export async function syncLicenseHistoryForEnterprise(
           let chosenSource: AicConsumptionSource = enterpriseResult.source;
           let orgFallbackAttempted = false;
           let orgFallbackHadAnySuccess = false;
+          // Task 9 re-review fix #4: tracks whether *any* org in the
+          // fallback loop returned a non-"ok" result or threw, independent
+          // of `capabilityWideFailure` — used below so a mixed
+          // success/failure fallback is never reported as a "clean" one.
+          let orgFallbackHadAnyFailure = false;
 
           if (!capabilityWideFailure) {
             chosenResults = enterpriseResult.results;
@@ -953,6 +1105,10 @@ export async function syncLicenseHistoryForEnterprise(
             // assigned logins only — never re-consuming the enterprise-only
             // batch, and never duplicating a multi-org user's consumption
             // across orgs (each org call only carries its own holders).
+            // Task 9 re-review fix #4: each org's fetch is isolated in its
+            // own try/catch so a single org throwing (or returning
+            // non-"ok" results) never discards another org's already-
+            // successful results — only that org's holders are skipped.
             for (const org of orgs) {
               const orgLogins = Array.from(
                 new Map(
@@ -963,17 +1119,42 @@ export async function syncLicenseHistoryForEnterprise(
               );
               if (orgLogins.length === 0) continue;
               orgFallbackAttempted = true;
-              const orgResult = await deps.fetchAicConsumptionForUsers({
-                orgLogin: org,
-                year,
-                month,
-                users: orgLogins,
-                concurrency: config.aicConsumption.concurrency,
-                creditToUsd: config.creditToUsd,
-              });
-              chosenSource = orgResult.source;
-              if (orgResult.results.some((r) => r.status === "ok")) orgFallbackHadAnySuccess = true;
-              chosenResults.push(...orgResult.results);
+              try {
+                const orgResult = await deps.fetchAicConsumptionForUsers({
+                  orgLogin: org,
+                  year,
+                  month,
+                  users: orgLogins,
+                  concurrency: config.aicConsumption.concurrency,
+                  creditToUsd: config.creditToUsd,
+                });
+                chosenSource = orgResult.source;
+                const orgFailures = orgResult.results.filter((r) => r.status !== "ok");
+                if (orgResult.results.some((r) => r.status === "ok")) orgFallbackHadAnySuccess = true;
+                if (orgFailures.length > 0) {
+                  orgFallbackHadAnyFailure = true;
+                  // Deterministic, PII-free summary: org + failed-count +
+                  // status-category breakdown — never individual user logins.
+                  const statusCounts = orgFailures.reduce<Record<string, number>>((acc, r) => {
+                    acc[r.status] = (acc[r.status] ?? 0) + 1;
+                    return acc;
+                  }, {});
+                  const categorySummary = Object.entries(statusCounts)
+                    .sort(([a], [b]) => a.localeCompare(b))
+                    .map(([status, count]) => `${status}:${count}`)
+                    .join(", ");
+                  warnings.push(
+                    `AI-Credit org fallback for ${sanitizeForLog(org)}: ${orgFailures.length} of ${orgResult.results.length} holder(s) failed (${categorySummary}).`,
+                  );
+                }
+                chosenResults.push(...orgResult.results);
+              } catch (err) {
+                orgFallbackHadAnyFailure = true;
+                const message = err instanceof Error ? err.message : String(err);
+                warnings.push(`AI-Credit org fallback for ${sanitizeForLog(org)} failed unexpectedly: ${sanitizeForLog(message)}.`);
+                // This org contributes no results — its failure never
+                // discards results already collected from other orgs.
+              }
             }
           }
 
@@ -1010,9 +1191,16 @@ export async function syncLicenseHistoryForEnterprise(
 
           let aicErrorMessage: string | null = null;
           if (enterpriseApiUnavailable) {
-            aicErrorMessage = orgFallbackAttempted && orgFallbackHadAnySuccess
-              ? "Enterprise AI-Credit API unavailable; fell back to per-org endpoint(s)."
-              : "Enterprise AI-Credit API unavailable and org fallback did not return any consumption.";
+            if (orgFallbackAttempted && orgFallbackHadAnySuccess && !orgFallbackHadAnyFailure) {
+              aicErrorMessage = "Enterprise AI-Credit API unavailable; fell back to per-org endpoint(s).";
+            } else if (orgFallbackAttempted && orgFallbackHadAnySuccess && orgFallbackHadAnyFailure) {
+              // Task 9 re-review fix #4: never report a "clean" fallback
+              // when at least one org partially or fully failed — the
+              // per-org warning(s) above already carry the detail.
+              aicErrorMessage = "Enterprise AI-Credit API unavailable; fell back to per-org endpoint(s) with partial per-org failures (see org fallback warnings).";
+            } else {
+              aicErrorMessage = "Enterprise AI-Credit API unavailable and org fallback did not return any consumption.";
+            }
           }
           sourceStates.push({
             enterpriseSlug,
@@ -1257,7 +1445,8 @@ export async function syncLicenseHistoryForEnterprise(
           const rowsForPeriod = allMaterializedRows
             .filter((row) => row.billingPeriod === period)
             .slice()
-            .sort((a, b) => (a.orgLogin === b.orgLogin ? a.holderKey.localeCompare(b.holderKey) : a.orgLogin.localeCompare(b.orgLogin)));
+            .sort((a, b) => (a.orgLogin === b.orgLogin ? a.holderKey.localeCompare(b.holderKey) : a.orgLogin.localeCompare(b.orgLogin)))
+            .map(toSafeSnapshotRow);
           const filePath = deps.resolveLicenseSnapshotFilePath(config.history.snapshotDirectory, enterpriseSlug, period);
           const contents = JSON.stringify({ enterpriseSlug, billingPeriod: period, generatedAtUtc, rows: rowsForPeriod }, null, 2);
           await deps.writeLicenseSnapshotFile(filePath, contents);

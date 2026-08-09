@@ -23,13 +23,23 @@ import type { NormalizedAuditEvent } from "@/lib/licensing/audit-archive-import"
 import type { AicCsvConsumptionRecord } from "@/lib/licensing/aic-csv-import";
 import type { NormalizedIdentityRecord as ImportedIdentityMapRecord } from "@/lib/licensing/identity-map-import";
 import type { LicenseRunDiagnosticsInput, StartLicenseRunInput } from "./license-run-repo";
-import type { LicenseHistorySyncDeps, LicenseHistorySyncProgress, LicenseRunSummary } from "./license-history-sync-service";
+import type {
+  LicenseHistorySyncDeps,
+  LicenseHistorySyncProgress,
+  LicenseRunSummary,
+  CaptureCurrentLicenseSeatSnapshotResult,
+  LicenseSnapshotFsOps,
+} from "./license-history-sync-service";
+import { promises as fsReal } from "node:fs";
+import { tmpdir } from "node:os";
+import nodePathReal from "node:path";
 
 import {
   syncLicenseHistoryForEnterprise,
   syncLicenseHistory,
   captureCurrentLicenseSeatSnapshot,
   createDefaultLicenseHistorySyncDeps,
+  writeLicenseSnapshotFileDefault,
 } from "./license-history-sync-service";
 
 // ── Fixture builders ──────────────────────────────────────────────────────
@@ -674,6 +684,106 @@ describe("license-history-sync-service", () => {
       expect(aicState?.status).toBe("warning");
       expect(result.status).not.toBe("failed");
     });
+
+    // ── Task 9 re-review fix #4: partial per-org fallback failures ────
+    it("retains only the successful org's records and emits a deterministic per-org warning when one org succeeds and another fails", async () => {
+      const seats = [
+        makeSeat({ holderKey: "login:alice", observedLogin: "alice", orgLogin: "acme-org" }),
+        makeSeat({ holderKey: "login:bob", githubUserId: 2, observedLogin: "bob", orgLogin: "other-org" }),
+      ];
+      const persistedRecords: { holderKey: string }[] = [];
+      const capturedSourceStates: { source: string; status: string }[] = [];
+      const deps = makeDeps({
+        getResolvedOrgsForEnterprise: vi.fn(() => ["acme-org", "other-org"]),
+        getEnterpriseSeatsNormalized: vi.fn(async () => ({ totalSeats: 2, seats })),
+        fetchAicConsumptionForUsers: vi.fn(async (options: FetchAicConsumptionOptions): Promise<FetchAicConsumptionResult> => {
+          if (!options.orgLogin) {
+            return { results: options.users.map((u: string) => makeAicFailure(u, "forbidden")), source: "enterprise_api", fellBackToOrg: false };
+          }
+          if (options.orgLogin === "acme-org") {
+            return { results: options.users.map((u: string) => makeAicOk(u, { orgLogin: options.orgLogin })), source: "org_api", fellBackToOrg: false };
+          }
+          return { results: options.users.map((u: string) => makeAicFailure(u, "forbidden")), source: "org_api", fellBackToOrg: false };
+        }),
+        upsertAicConsumption: vi.fn((_enterpriseSlug: string, records: { holderKey: string }[]) => {
+          persistedRecords.push(...records);
+          return records.length;
+        }),
+        recordLicenseRunDiagnostics: vi.fn((input: LicenseRunDiagnosticsInput) => {
+          for (const s of input.sourceStates ?? []) capturedSourceStates.push({ source: s.source, status: s.status ?? "" });
+        }),
+      });
+
+      const result = await syncLicenseHistoryForEnterprise("acme", deps);
+
+      // Only the successful org's holder is retained.
+      expect(persistedRecords).toHaveLength(1);
+      expect(persistedRecords[0].holderKey).toBe("login:alice");
+
+      // A deterministic per-org warning is present, with counts/status categories only — no user logins.
+      const orgWarning = result.warnings.find((w) => w.includes("org fallback") && w.includes("forbidden"));
+      expect(orgWarning).toBeDefined();
+      expect(orgWarning).not.toMatch(/bob/i);
+      expect(orgWarning).not.toMatch(/alice/i);
+
+      // Source state remains "warning" — never a false clean/ok result.
+      const aicState = capturedSourceStates.find((s) => s.source === "aic_consumption");
+      expect(aicState?.status).toBe("warning");
+      expect(result.status).not.toBe("failed");
+    });
+
+    it("emits a per-org warning for every org and persists no consumption when every org fallback fails or throws", async () => {
+      const seats = [
+        makeSeat({ holderKey: "login:alice", observedLogin: "alice", orgLogin: "acme-org" }),
+        makeSeat({ holderKey: "login:bob", githubUserId: 2, observedLogin: "bob", orgLogin: "other-org" }),
+      ];
+      const persistedRecords: unknown[] = [];
+      const deps = makeDeps({
+        getResolvedOrgsForEnterprise: vi.fn(() => ["acme-org", "other-org"]),
+        getEnterpriseSeatsNormalized: vi.fn(async () => ({ totalSeats: 2, seats })),
+        fetchAicConsumptionForUsers: vi.fn(async (options: FetchAicConsumptionOptions): Promise<FetchAicConsumptionResult> => {
+          if (!options.orgLogin) {
+            return { results: options.users.map((u: string) => makeAicFailure(u, "unavailable")), source: "enterprise_api", fellBackToOrg: false };
+          }
+          if (options.orgLogin === "acme-org") {
+            return { results: options.users.map((u: string) => makeAicFailure(u, "forbidden")), source: "org_api", fellBackToOrg: false };
+          }
+          throw new Error("org endpoint exploded");
+        }),
+        upsertAicConsumption: vi.fn((_enterpriseSlug: string, records: unknown[]) => {
+          persistedRecords.push(...records);
+          return records.length;
+        }),
+      });
+
+      const result = await syncLicenseHistoryForEnterprise("acme", deps);
+
+      expect(persistedRecords).toHaveLength(0);
+      const orgWarnings = result.warnings.filter((w) => w.includes("org fallback"));
+      expect(orgWarnings.length).toBeGreaterThanOrEqual(2);
+      expect(result.status).not.toBe("failed");
+    });
+
+    it("emits no per-org failure warning when every org fallback succeeds cleanly", async () => {
+      const seats = [
+        makeSeat({ holderKey: "login:alice", observedLogin: "alice", orgLogin: "acme-org" }),
+        makeSeat({ holderKey: "login:bob", githubUserId: 2, observedLogin: "bob", orgLogin: "other-org" }),
+      ];
+      const deps = makeDeps({
+        getResolvedOrgsForEnterprise: vi.fn(() => ["acme-org", "other-org"]),
+        getEnterpriseSeatsNormalized: vi.fn(async () => ({ totalSeats: 2, seats })),
+        fetchAicConsumptionForUsers: vi.fn(async (options: FetchAicConsumptionOptions): Promise<FetchAicConsumptionResult> => {
+          if (!options.orgLogin) {
+            return { results: options.users.map((u: string) => makeAicFailure(u, "unavailable")), source: "enterprise_api", fellBackToOrg: false };
+          }
+          return { results: options.users.map((u: string) => makeAicOk(u, { orgLogin: options.orgLogin })), source: "org_api", fellBackToOrg: false };
+        }),
+      });
+
+      const result = await syncLicenseHistoryForEnterprise("acme", deps);
+
+      expect(result.warnings.some((w) => w.includes("org fallback"))).toBe(false);
+    });
   });
 
   // ── source precedence / no double count through materialized output ─
@@ -918,6 +1028,75 @@ describe("license-history-sync-service", () => {
     });
   });
 
+  // ── Task 9 re-review fix #2: reuse a pre-captured snapshot end-to-end ──
+  describe("syncLicenseHistoryForEnterprise reusing a pre-captured seat snapshot", () => {
+    it("does not refetch live seats or re-persist the current snapshot when a persisted pre-capture is supplied", async () => {
+      const preCapturedSeats = [makeSeat({ holderKey: "login:carol", observedLogin: "carol" })];
+      const deps = makeDeps();
+      const preCaptured: CaptureCurrentLicenseSeatSnapshotResult = {
+        attempted: true,
+        persisted: true,
+        period: "2025-03",
+        seats: preCapturedSeats,
+        errorMessage: null,
+      };
+
+      await syncLicenseHistoryForEnterprise("acme", deps, preCaptured);
+
+      expect(deps.getEnterpriseSeatsNormalized).not.toHaveBeenCalled();
+      expect(deps.replacePeriodSnapshots).not.toHaveBeenCalled();
+    });
+
+    it("still resolves the seat ledger using the reused pre-captured seats, not empty data", async () => {
+      const preCapturedSeats = [makeSeat({ holderKey: "login:carol", observedLogin: "carol", orgLogin: "acme-org" })];
+      const buildSeatLedgerSpy = vi.fn((options: BuildSeatLedgerOptions): SeatLedgerResult => ({
+        rows: options.periods.map((period: string) => makeLedgerRow(period, { enterpriseSlug: options.enterpriseSlug, holderKey: "login:carol", observedLogin: "carol" })),
+        coverage: [],
+        warnings: [],
+      }));
+      const deps = makeDeps({ buildSeatLedger: buildSeatLedgerSpy });
+      const preCaptured: CaptureCurrentLicenseSeatSnapshotResult = {
+        attempted: true,
+        persisted: true,
+        period: "2025-03",
+        seats: preCapturedSeats,
+        errorMessage: null,
+      };
+
+      await syncLicenseHistoryForEnterprise("acme", deps, preCaptured);
+
+      expect(buildSeatLedgerSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          liveSeats: expect.arrayContaining([expect.objectContaining({ holderKey: "login:carol" })]),
+        }),
+      );
+    });
+
+    it("falls back to fetching + persisting its own snapshot when the pre-capture failed (never drops seats)", async () => {
+      const deps = makeDeps({ getEnterpriseSeatsNormalized: vi.fn(async () => ({ totalSeats: 1, seats: [makeSeat()] })) });
+      const preCaptured: CaptureCurrentLicenseSeatSnapshotResult = {
+        attempted: true,
+        persisted: false,
+        period: "2025-03",
+        seats: [],
+        errorMessage: "seats API down",
+      };
+
+      const result = await syncLicenseHistoryForEnterprise("acme", deps, preCaptured);
+
+      expect(deps.getEnterpriseSeatsNormalized).toHaveBeenCalledTimes(1);
+      expect(deps.replacePeriodSnapshots).toHaveBeenCalledTimes(1);
+      expect(result.status).not.toBe("failed");
+    });
+
+    it("standalone call (no pre-capture supplied) still fetches and persists exactly once, as before", async () => {
+      const deps = makeDeps();
+      await syncLicenseHistoryForEnterprise("acme", deps);
+      expect(deps.getEnterpriseSeatsNormalized).toHaveBeenCalledTimes(1);
+      expect(deps.replacePeriodSnapshots).toHaveBeenCalledTimes(1);
+    });
+  });
+
   // ── optional configured snapshot output (Task 9 spec-review fix #4) ──
   describe("configured snapshot output", () => {
     it("emits nothing when history.emitSnapshots is disabled (default)", async () => {
@@ -958,6 +1137,138 @@ describe("license-history-sync-service", () => {
       const result = await syncLicenseHistoryForEnterprise("acme", deps);
       expect(result.status).not.toBe("failed");
       expect(result.warnings.some((w) => w.includes("disk full"))).toBe(true);
+    });
+
+    // ── Task 9 re-review fix #1: safe snapshot artifact allowlist ────
+    it("never serializes externalIdentity or free-form dataQualityNotes into the snapshot file, while keeping the expected safe grain/metrics", async () => {
+      const written: { path: string; contents: string }[] = [];
+      const deps = makeDeps({
+        getConfig: vi.fn(() => makeConfig({ history: { ...makeConfig().history, emitSnapshots: true, snapshotDirectory: "data/license-snapshots" } })),
+        materializeLicensePeriodRows: vi.fn((input: MaterializeLicensePeriodInput) => ({
+          rows: [
+            makeMaterializedRow(input.billingPeriod, {
+              enterpriseSlug: input.enterpriseSlug,
+              userLogin: "alice_raw_observed_login",
+              resolvedUserLogin: "alice",
+              externalIdentity: "alice@example.com",
+              dataQualityNotes: ["SAML NameID alice@example.com mismatch", "token=ghp_1234567890abcdef leaked in audit log"],
+              aicConsumedCredits: 42,
+              totalCost: 58.5,
+            }),
+          ],
+          warnings: [],
+        })),
+        writeLicenseSnapshotFile: vi.fn(async (path: string, contents: string) => {
+          written.push({ path, contents });
+        }),
+      });
+
+      await syncLicenseHistoryForEnterprise("acme", deps);
+
+      expect(written.length).toBeGreaterThan(0);
+      for (const w of written) {
+        expect(w.contents).not.toContain("alice@example.com");
+        expect(w.contents).not.toContain("ghp_1234567890abcdef");
+        expect(w.contents).not.toContain("alice_raw_observed_login");
+        expect(w.contents).not.toContain("externalIdentity");
+        expect(w.contents).not.toContain("dataQualityNotes");
+        const parsed = JSON.parse(w.contents);
+        expect(Array.isArray(parsed.rows)).toBe(true);
+        expect(parsed.rows[0]).not.toHaveProperty("externalIdentity");
+        expect(parsed.rows[0]).not.toHaveProperty("dataQualityNotes");
+        expect(parsed.rows[0]).not.toHaveProperty("userLogin");
+        expect(parsed.rows[0]).toMatchObject({
+          enterpriseSlug: "acme",
+          orgLogin: "acme-org",
+          holderKey: "login:alice",
+          resolvedUserLogin: "alice",
+          seatStatus: "active",
+          historyConfidence: "exact_snapshot",
+          aicConsumedCredits: 42,
+          totalCost: 58.5,
+          currency: "USD",
+        });
+      }
+    });
+  });
+
+  // ── Task 9 re-review fix #3: atomic snapshot temp cleanup, real writer ──
+  describe("writeLicenseSnapshotFileDefault — atomic write + temp cleanup (real fs)", () => {
+    async function withTempDir<T>(fn: (dir: string) => Promise<T>): Promise<T> {
+      const dir = await fsReal.mkdtemp(nodePathReal.join(tmpdir(), "license-snapshot-test-"));
+      try {
+        return await fn(dir);
+      } finally {
+        await fsReal.rm(dir, { recursive: true, force: true });
+      }
+    }
+
+    it("writes the file atomically in a real OS temp directory with no leftover temp file", async () => {
+      await withTempDir(async (dir) => {
+        const filePath = nodePathReal.join(dir, "acme_2025-03.json");
+        await writeLicenseSnapshotFileDefault(filePath, JSON.stringify({ ok: true }));
+
+        const contents = await fsReal.readFile(filePath, "utf8");
+        expect(JSON.parse(contents)).toEqual({ ok: true });
+
+        const entries = await fsReal.readdir(dir);
+        expect(entries).toEqual(["acme_2025-03.json"]);
+      });
+    });
+
+    it("deletes the temp file and rethrows the original error, without masking it, when rename fails", async () => {
+      await withTempDir(async (dir) => {
+        const filePath = nodePathReal.join(dir, "acme_2025-03.json");
+        const renameError = new Error("simulated rename failure");
+        const fsOps: LicenseSnapshotFsOps = {
+          mkdir: (d, o) => fsReal.mkdir(d, o),
+          writeFile: (p, c, e) => fsReal.writeFile(p, c, e as BufferEncoding),
+          rename: async () => { throw renameError; },
+          unlink: (p) => fsReal.unlink(p),
+        };
+
+        await expect(writeLicenseSnapshotFileDefault(filePath, "{}", fsOps)).rejects.toThrow("simulated rename failure");
+
+        const entries = await fsReal.readdir(dir);
+        expect(entries).toEqual([]);
+      });
+    });
+
+    it("does not mask the original write error, and safely ignores an ENOENT cleanup (nothing to remove)", async () => {
+      await withTempDir(async (dir) => {
+        const filePath = nodePathReal.join(dir, "acme_2025-03.json");
+        const writeError = new Error("simulated write failure");
+        const fsOps: LicenseSnapshotFsOps = {
+          mkdir: (d, o) => fsReal.mkdir(d, o),
+          writeFile: async () => { throw writeError; },
+          rename: async () => { throw new Error("rename should never be reached"); },
+          unlink: (p) => fsReal.unlink(p),
+        };
+
+        await expect(writeLicenseSnapshotFileDefault(filePath, "{}", fsOps)).rejects.toThrow("simulated write failure");
+
+        const entries = await fsReal.readdir(dir);
+        expect(entries).toEqual([]);
+      });
+    });
+
+    it("does not swallow a genuine (non-ENOENT) cleanup failure — still rethrows the original error", async () => {
+      await withTempDir(async (dir) => {
+        const filePath = nodePathReal.join(dir, "acme_2025-03.json");
+        const renameError = new Error("simulated rename failure");
+        const cleanupError = Object.assign(new Error("cleanup permission denied"), { code: "EPERM" });
+        const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+        const fsOps: LicenseSnapshotFsOps = {
+          mkdir: (d, o) => fsReal.mkdir(d, o),
+          writeFile: (p, c, e) => fsReal.writeFile(p, c, e as BufferEncoding),
+          rename: async () => { throw renameError; },
+          unlink: async () => { throw cleanupError; },
+        };
+
+        await expect(writeLicenseSnapshotFileDefault(filePath, "{}", fsOps)).rejects.toThrow("simulated rename failure");
+        expect(consoleErrorSpy).toHaveBeenCalled();
+        consoleErrorSpy.mockRestore();
+      });
     });
   });
 

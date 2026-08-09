@@ -379,7 +379,7 @@ describe("sync-service", () => {
       await fullSync();
 
       expect(syncLicenseHistoryForEnterprise).toHaveBeenCalledTimes(1);
-      expect(syncLicenseHistoryForEnterprise).toHaveBeenCalledWith("test-ent", expect.anything());
+      expect(syncLicenseHistoryForEnterprise).toHaveBeenCalledWith("test-ent", expect.anything(), expect.anything());
       expect(callOrder.indexOf("seats")).toBeGreaterThanOrEqual(0);
       expect(callOrder.indexOf("billing")).toBeGreaterThan(callOrder.indexOf("seats"));
       expect(callOrder.indexOf("licensing")).toBeGreaterThan(callOrder.indexOf("billing"));
@@ -388,7 +388,7 @@ describe("sync-service", () => {
     it("captures the current-month licensing seat snapshot BEFORE the legacy copilot_seats replacement (Task 9 spec-review fix #2 — real DI-seam ordering proof)", async () => {
       const { replaceEnterpriseSeats } = await import("./seats-repo");
       const callOrder: string[] = [];
-      (captureCurrentLicenseSeatSnapshot as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+      (captureCurrentLicenseSeatSnapshot as ReturnType<typeof vi.fn>).mockImplementationOnce(async () => {
         callOrder.push("licensing-snapshot-capture");
         return { attempted: true, persisted: true, period: "2025-03", seats: [], errorMessage: null };
       });
@@ -403,6 +403,84 @@ describe("sync-service", () => {
       expect(callOrder).toContain("licensing-snapshot-capture");
       expect(callOrder).toContain("legacy-replace-enterprise-seats");
       expect(callOrder.indexOf("licensing-snapshot-capture")).toBeLessThan(callOrder.indexOf("legacy-replace-enterprise-seats"));
+    });
+
+    it("reuses the captured live seats for the legacy seat replacement — no duplicate seat API fetch (Task 9 re-review fix #2)", async () => {
+      const capturedRawSeat = makeSeat("carol", "test-org");
+      (captureCurrentLicenseSeatSnapshot as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+        attempted: true,
+        persisted: true,
+        period: "2025-03",
+        seats: [
+          {
+            holderKey: "login:carol",
+            githubUserId: 99,
+            observedLogin: "carol",
+            unresolved: false,
+            orgLogin: "test-org",
+            planType: "business",
+            assignedVia: "direct",
+            lastActivityAt: null,
+            lastActivityEditor: null,
+            pendingCancellationDate: null,
+            createdAt: "2025-01-01T00:00:00Z",
+            updatedAt: "2025-01-01T00:00:00Z",
+            raw: capturedRawSeat,
+          },
+        ],
+        errorMessage: null,
+      });
+      const getEnterpriseSeatsSpy = seatsClient.getEnterpriseSeats as ReturnType<typeof vi.fn>;
+      getEnterpriseSeatsSpy.mockClear();
+      const { replaceEnterpriseSeats } = await import("./seats-repo");
+      (replaceEnterpriseSeats as ReturnType<typeof vi.fn>).mockClear();
+
+      await fullSync();
+
+      expect(getEnterpriseSeatsSpy).not.toHaveBeenCalled();
+      expect(replaceEnterpriseSeats).toHaveBeenCalledTimes(1);
+      const [, seatsByOrg] = (replaceEnterpriseSeats as ReturnType<typeof vi.fn>).mock.calls[0];
+      expect(Array.from((seatsByOrg as Map<string, unknown[]>).keys())).toEqual(["test-org"]);
+    });
+
+    it("orders snapshot capture → legacy replace → billing → historical materialization, reusing the same captured snapshot for both legacy replace and historical sync, with exactly one capture per enterprise", async () => {
+      const { syncBilling } = await import("./billing-sync-service");
+      const { replaceEnterpriseSeats } = await import("./seats-repo");
+      const callOrder: string[] = [];
+      const capturedResult = { attempted: true, persisted: true, period: "2025-03", seats: [], errorMessage: null };
+      (captureCurrentLicenseSeatSnapshot as ReturnType<typeof vi.fn>).mockImplementationOnce(async () => {
+        callOrder.push("snapshot-write");
+        return capturedResult;
+      });
+      (replaceEnterpriseSeats as ReturnType<typeof vi.fn>).mockImplementation((_slug: string, seatsByOrg: Map<string, unknown[]>) => {
+        callOrder.push("legacy-replace");
+        return Array.from(seatsByOrg.values()).reduce((sum, seats) => sum + seats.length, 0);
+      });
+      (syncBilling as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+        callOrder.push("billing");
+        return { usageRecords: 0, premiumRecords: 0, errors: [] };
+      });
+      let receivedPreCaptured: unknown;
+      (syncLicenseHistoryForEnterprise as ReturnType<typeof vi.fn>).mockImplementation(async (enterpriseSlug: string, _deps: unknown, preCaptured: unknown) => {
+        callOrder.push("historical-materialization");
+        receivedPreCaptured = preCaptured;
+        return {
+          enterpriseSlug,
+          status: "success",
+          runId: "run-1",
+          requestedPeriods: [],
+          materializedPeriods: [],
+          skippedPeriods: [],
+          warnings: [],
+          errorMessage: null,
+        };
+      });
+
+      await fullSync();
+
+      expect(callOrder).toEqual(["snapshot-write", "legacy-replace", "billing", "historical-materialization"]);
+      expect(captureCurrentLicenseSeatSnapshot).toHaveBeenCalledTimes(1);
+      expect(receivedPreCaptured).toBe(capturedResult);
     });
 
     it("isolates a licensing failure: it is recorded as failed but does not roll back this enterprise's other successful results", async () => {

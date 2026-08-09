@@ -33,6 +33,7 @@ import {
   type LicenseHistoryEnterpriseSyncResult,
   type LicenseHistorySyncDeps,
   type LicenseHistorySyncProgress,
+  type CaptureCurrentLicenseSeatSnapshotResult,
 } from "./license-history-sync-service";
 import {
   getConfiguredEnterprises, getResolvedOrgsForEnterprise, getEnterpriseConfig,
@@ -592,13 +593,21 @@ export async function incrementalSync(
 
 // ── Sync seats (per-enterprise helper) ────────────────────────────────
 
-async function syncSeatsForEnterprise(slug: string): Promise<number> {
+async function syncSeatsForEnterprise(slug: string, preCaptured?: CaptureCurrentLicenseSeatSnapshotResult): Promise<number> {
   const orgs = getResolvedOrgsForEnterprise(slug);
   let total = 0;
 
   if (isCopilotSubEnabledForEnterprise(slug, "enterprise")) {
     try {
-      const { seats } = await getEnterpriseSeatsSnapshot(slug);
+      // Task 9 re-review fix #2: reuse the already-captured, already-
+      // normalized live seats (and their original raw payloads/org
+      // assignments) from `captureCurrentLicenseSeatSnapshot` instead of
+      // issuing a second `getEnterpriseSeats` API call for the same data —
+      // preserving today's exact legacy replacement semantics (same
+      // grouping-by-org, same skip-without-org-metadata handling).
+      const seats = preCaptured?.persisted
+        ? preCaptured.seats.map((seat) => seat.raw)
+        : (await getEnterpriseSeatsSnapshot(slug)).seats;
       const { seatsByOrg, skipped } = groupSeatsByOrganization(seats);
       if (skipped > 0 && seatsByOrg.size === 0) {
         console.warn(
@@ -761,6 +770,16 @@ export async function fullSync(
 
     // Seats
     let entSeats = 0;
+    // Task 9 re-review fix #2: capture-once, reuse-everywhere. This holds
+    // the single `captureCurrentLicenseSeatSnapshot` result for this
+    // enterprise (when licensing history sync ran it below), so both the
+    // legacy seat replacement (`syncSeatsForEnterprise`) and the historical
+    // materialization sync (`syncLicenseHistoryForEnterprise`) reuse the
+    // same already-fetched, already-normalized seats instead of each
+    // issuing their own redundant seat API fetch (and instead of
+    // `syncLicenseHistoryForEnterprise` re-persisting the same current-month
+    // snapshot a second time).
+    let capturedLicenseSnapshot: CaptureCurrentLicenseSeatSnapshotResult | undefined;
     if (isCopilotSubEnabledForEnterprise(slug, "seats")) {
       onProgress?.({ phase: "seats", current: 0, total: 1, message: `[${sanitizeForLog(slug)}] Syncing seat data...`, enterpriseSlug: slug });
       // Task 9 spec-review fix #2: capture the current-month authoritative
@@ -773,11 +792,11 @@ export async function fullSync(
       // or fails the legacy seat sync, and no-ops with zero side effects
       // when licensing history is disabled.
       try {
-        await captureCurrentLicenseSeatSnapshot(slug, licensingDeps);
+        capturedLicenseSnapshot = await captureCurrentLicenseSeatSnapshot(slug, licensingDeps);
       } catch (err) {
         console.error("[Sync] [%s] Pre-seat-replace licensing snapshot capture failed unexpectedly:", sanitizeForLog(slug), err);
       }
-      entSeats = await syncSeatsForEnterprise(slug);
+      entSeats = await syncSeatsForEnterprise(slug, capturedLicenseSnapshot);
       cache.invalidateByPrefix("/api/seats");
     }
     heartbeatSyncLock();
@@ -810,7 +829,7 @@ export async function fullSync(
     onProgress?.({ phase: "licensing", current: 0, total: 1, message: `[${sanitizeForLog(slug)}] Syncing historical license reconciliation...`, enterpriseSlug: slug });
     let entLicensing: LicenseHistoryEnterpriseSyncResult;
     try {
-      entLicensing = await syncLicenseHistoryForEnterprise(slug, licensingDeps);
+      entLicensing = await syncLicenseHistoryForEnterprise(slug, licensingDeps, capturedLicenseSnapshot);
     } catch (err) {
       console.error("[Sync] [%s] Licensing history sync failed unexpectedly:", sanitizeForLog(slug), err);
       entLicensing = {
