@@ -12,7 +12,7 @@ import {
   estimateRowCount,
 } from "@/lib/db/aggregation-queries";
 import { getDateRange, parseAndClampDays } from "@/lib/utils";
-import { extractCompletionMetrics, extractAgentMetrics, isCompletionFeature } from "@/lib/aggregation/separate-metrics";
+import { extractCompletionMetrics, extractAgentMetrics, isCompletionFeature, isAgentFeature } from "@/lib/aggregation/separate-metrics";
 import { withCache } from "@/lib/cache/with-cache";
 import { withTimeout } from "@/lib/api/timeout";
 import { CACHE_TTL } from "@/lib/cache/memory-cache";
@@ -200,11 +200,14 @@ async function handler(request: NextRequest) {
         // metrics are disabled/empty) so the chart never falsely reports
         // zero. `chat` is the total chat_panel*/chat_panel interaction
         // count from this enterprise row's own totals_by_feature (an event
-        // count, not a distinct-user count); `agent` reuses the enterprise
-        // row's own monthly_active_agent_users rolling counter.
+        // count, not a distinct-user count); `agent` uses the
+        // code_generation_activity_count from agent_edit rows.
         const legacyChatInteractions =
           features.find((f) => f.feature === "chat_panel" || f.feature.startsWith("chat_panel_"))
             ?.user_initiated_interaction_count ?? 0;
+        const legacyAgentInteractions =
+          features.find((f) => isAgentFeature(f.feature))
+            ?.code_generation_activity_count ?? 0;
         return {
           day: d.day,
           completions: completionFeatures.reduce((s, f) => s + (f.code_generation_activity_count || 0), 0),
@@ -217,7 +220,7 @@ async function handler(request: NextRequest) {
           // enterprise-direct aggregate above, so the chart never falsely
           // reports zero just because user-level metrics are unavailable.
           chat: featureByDay.get(d.day)?.chatUsers ?? legacyChatInteractions,
-          agent: featureByDay.get(d.day)?.agentUsers ?? (d.monthly_active_agent_users ?? 0),
+          agent: featureByDay.get(d.day)?.agentUsers ?? legacyAgentInteractions,
           cli: d.daily_active_cli_users || 0,
           // Prefer the enterprise row's own dedicated App counter; NULL means
           // unavailable (fall back to the SQL-aggregated featureByDay value),

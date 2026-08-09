@@ -442,8 +442,8 @@ describe("overview route — Copilot App featureUsage.app", () => {
     const dayRow = json.featureUsage.find((t: { day: string }) => t.day === testDay);
     expect(dayRow).toBeDefined();
     // Legacy fallback: chat = totals_by_feature chat_panel* interaction count;
-    // agent = the enterprise row's own monthly_active_agent_users.
+    // agent = totals_by_feature agent_edit code_generation_activity_count.
     expect(dayRow.chat).toBe(42);
-    expect(dayRow.agent).toBe(5);
+    expect(dayRow.agent).toBe(17);
   });
 });
