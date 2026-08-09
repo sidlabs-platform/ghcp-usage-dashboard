@@ -169,6 +169,25 @@ describe("chart component coverage", () => {
     expect(chart.getAttribute("data-json")).toContain("\"appDeleted\":4");
   });
 
+  it("LocTrendChart omits App series for legacy data without App metrics", () => {
+    render(
+      <LocTrendChart
+        data={[
+          {
+            day: "2025-01-01",
+            completionSuggested: 100,
+            completionAccepted: 80,
+            agentAdded: 20,
+            agentDeleted: 5,
+          },
+        ]}
+      />,
+    );
+
+    expect(screen.queryByTestId("Area-appAdded")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("Area-appDeleted")).not.toBeInTheDocument();
+  });
+
   it("CopilotAppAdoptionVolumeChart passes App adoption/volume fields to the chart", () => {
     render(
       <CopilotAppAdoptionVolumeChart
