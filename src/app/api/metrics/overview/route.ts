@@ -47,7 +47,7 @@ async function handler(request: NextRequest) {
     // across enterprises — overlapping users would be double-counted)
     const isMultiEnterprise = !hasFilter && countEffectiveEnterprises(enterpriseSlugs) > 1;
     const resolvedId = hasFilter || isMultiEnterprise ? null : resolveEnterpriseId(enterpriseSlugs);
-    let metrics = resolvedId ? getEnterpriseMetrics(start, end, enterpriseSlugs) : [];
+    const metrics = resolvedId ? getEnterpriseMetrics(start, end, enterpriseSlugs) : [];
 
     const useAggregated = metrics.length === 0;
     const aggregated = useAggregated && !hasFilter ? getAggregatedDailySummary(start, end, enterpriseSlugs) : [];

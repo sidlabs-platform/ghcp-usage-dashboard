@@ -233,7 +233,7 @@ describe("Copilot App analytics page", () => {
   });
 
   it("renders the full analytics view with KPIs, charts, composition, and adopters", async () => {
-    const fetchMock = vi.fn(async (_input: string) =>
+    const fetchMock = vi.fn(async () =>
       new Response(JSON.stringify(fullResponse()), { status: 200, headers: { "Content-Type": "application/json" } }),
     );
 
@@ -311,7 +311,7 @@ describe("Copilot App analytics page", () => {
 
   it("includes days and scope params in the request URL", async () => {
     scopeState.params = new URLSearchParams({ teams: "team-a", orgs: "org-b" });
-    const fetchMock = vi.fn(async (_input: string) =>
+    const fetchMock = vi.fn(async () =>
       new Response(JSON.stringify(fullResponse()), { status: 200, headers: { "Content-Type": "application/json" } }),
     );
 
