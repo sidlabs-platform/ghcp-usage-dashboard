@@ -20,6 +20,7 @@ import {
   getOrganizationCopilotAppDaily,
   getCopilotAppAdopters,
   countAggregateEnterprises,
+  countOrganizationCopilotAppEnterprises,
 } from "./copilot-app-queries";
 
 const START = "2025-04-01";
@@ -386,6 +387,41 @@ beforeAll(() => {
     }),
   );
   insertOrg.run("2025-04-02", "contoso-org", "acme", 18, null, JSON.stringify([nonAppFeature(1)]), null);
+
+  // ── Org-only aggregate rows for countOrganizationCopilotAppEnterprises ──
+  // Isolated on their own days (2025-04-03..05) so they never affect the
+  // START/END (2025-04-01..02) assertions above. `org_daily_metrics` has
+  // PRIMARY KEY (day, org_slug) — only one row per org per day — so
+  // contoso-org's App evidence under two distinct enterprises (acme on
+  // day 03, beta on day 04) must span separate days rather than duplicate
+  // rows on the same day. Day 05 (gamma) is unsupported. other-org carries
+  // a single supported enterprise (delta) on day 03, used to prove the
+  // count is scoped to the requested org_slug only.
+  insertOrg.run(
+    "2025-04-03", "contoso-org", "acme", 10, 1,
+    entAppFeature(8, 5, 32, 8),
+    JSON.stringify({
+      session_count: 4, request_count: 8, prompt_count: 5,
+      token_usage: { prompt_tokens_sum: 200, output_tokens_sum: 100, avg_tokens_per_request: 60 },
+    }),
+  );
+  insertOrg.run(
+    "2025-04-04", "contoso-org", "beta", 6, 1,
+    entAppFeature(4, 2, 16, 4),
+    JSON.stringify({
+      session_count: 2, request_count: 4, prompt_count: 3,
+      token_usage: { prompt_tokens_sum: 100, output_tokens_sum: 50, avg_tokens_per_request: 50 },
+    }),
+  );
+  insertOrg.run("2025-04-05", "contoso-org", "gamma", 5, null, JSON.stringify([nonAppFeature(1)]), null);
+  insertOrg.run(
+    "2025-04-03", "other-org", "delta", 3, 1,
+    entAppFeature(2, 1, 8, 2),
+    JSON.stringify({
+      session_count: 1, request_count: 2, prompt_count: 1,
+      token_usage: { prompt_tokens_sum: 50, output_tokens_sum: 25, avg_tokens_per_request: 50 },
+    }),
+  );
 });
 
 afterAll(() => {
@@ -740,6 +776,51 @@ describe("countAggregateEnterprises", () => {
   } finally {
     prepareSpy.mockRestore();
   }
+  });
+});
+
+describe("countOrganizationCopilotAppEnterprises", () => {
+  // Fixture recap (see org_daily_metrics inserts above, 2025-04-03..05):
+  // contoso-org carries App support evidence via two distinct enterprises
+  // on separate days (acme on 04-03, beta on 04-04) — `org_daily_metrics`
+  // has PRIMARY KEY (day, org_slug), so a single day can only carry one
+  // enterprise_slug per org. gamma (contoso-org, 04-05) has no App
+  // evidence; other-org carries a single supported enterprise (delta, on
+  // 04-03) — used to prove the count never leaks across org_slug.
+  const ORG_START = "2025-04-03";
+  const ORG_END = "2025-04-05";
+
+  it("counts exactly one supported org enterprise when scoped to it explicitly", () => {
+    expect(countOrganizationCopilotAppEnterprises("contoso-org", ORG_START, ORG_END, ["acme"])).toBe(1);
+  });
+
+  it("counts two distinct supported org enterprises when unfiltered", () => {
+    expect(countOrganizationCopilotAppEnterprises("contoso-org", ORG_START, ORG_END)).toBe(2); // acme, beta (gamma excluded — unsupported)
+  });
+
+  it("an explicit enterprise filter narrows the count", () => {
+    expect(countOrganizationCopilotAppEnterprises("contoso-org", ORG_START, ORG_END, ["beta"])).toBe(1);
+  });
+
+  it("counts zero for an unsupported enterprise", () => {
+    expect(countOrganizationCopilotAppEnterprises("contoso-org", ORG_START, ORG_END, ["gamma"])).toBe(0);
+  });
+
+  it("never counts a different org's supported enterprises", () => {
+    expect(countOrganizationCopilotAppEnterprises("other-org", ORG_START, ORG_END)).toBe(1); // delta only
+    expect(countOrganizationCopilotAppEnterprises("nonexistent-org", ORG_START, ORG_END)).toBe(0);
+  });
+
+  it("queries only the fixed org_daily_metrics table, never enterprise_daily_metrics", () => {
+    const prepareSpy = vi.spyOn(db, "prepare");
+    try {
+      countOrganizationCopilotAppEnterprises("contoso-org", ORG_START, ORG_END, ["acme"]);
+      const sqlText = prepareSpy.mock.calls.map((call) => String(call[0])).join("\n");
+      expect(sqlText).toContain("FROM org_daily_metrics");
+      expect(sqlText).not.toContain("enterprise_daily_metrics");
+    } finally {
+      prepareSpy.mockRestore();
+    }
   });
 });
 

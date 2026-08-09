@@ -395,4 +395,55 @@ describe("overview route — Copilot App featureUsage.app", () => {
     expect(dayRow.chat).toBe(1);
     expect(dayRow.agent).toBe(1);
   });
+
+  it("enterprise-direct branch: featureUsage[].chat and .agent fall back to legacy enterprise-direct values (never a false zero) when user_daily_metrics has no row for the day", async () => {
+    const { upsertEnterpriseDayMetrics } = await import("@/lib/db/metrics-repo");
+    const testDay = yesterday();
+
+    // Deliberately no user_daily_metrics rows for this day — userMetrics is
+    // disabled/empty in scope, so getFeatureUsageDaily's featureByDay map has
+    // no entry for testDay. Without a fallback, chat/agent would silently
+    // report 0 even though the enterprise row itself carries real evidence.
+    const totals_by_feature = [
+      { feature: "chat_panel", code_generation_activity_count: 0, code_acceptance_activity_count: 0, loc_added_sum: 0, loc_deleted_sum: 0, loc_suggested_to_add_sum: 0, loc_suggested_to_delete_sum: 0, user_initiated_interaction_count: 42 },
+      { feature: "agent_edit", code_generation_activity_count: 17, code_acceptance_activity_count: 0, loc_added_sum: 0, loc_deleted_sum: 0, loc_suggested_to_add_sum: 0, loc_suggested_to_delete_sum: 0, user_initiated_interaction_count: 0 },
+    ];
+
+    upsertEnterpriseDayMetrics("ent1", {
+      day: testDay,
+      enterprise_id: "ent1",
+      daily_active_users: 10,
+      weekly_active_users: 10,
+      monthly_active_users: 10,
+      monthly_active_agent_users: 5,
+      monthly_active_chat_users: 3,
+      daily_active_cli_users: 0,
+      daily_active_copilot_app_users: 0,
+      code_generation_activity_count: 17,
+      code_acceptance_activity_count: 0,
+      user_initiated_interaction_count: 42,
+      loc_suggested_to_add_sum: 0,
+      loc_suggested_to_delete_sum: 0,
+      loc_added_sum: 0,
+      loc_deleted_sum: 0,
+      totals_by_ide: [],
+      totals_by_feature,
+      totals_by_language_feature: [],
+      totals_by_model_feature: [],
+      totals_by_language_model: [],
+    });
+
+    const GET = await getHandler();
+    const res = await GET(new NextRequest("http://localhost/api/metrics/overview?days=1"));
+    expect(res.status).toBe(200);
+    const json = await res.json();
+
+    expect(json.dataSource).toBe("enterprise");
+    const dayRow = json.featureUsage.find((t: { day: string }) => t.day === testDay);
+    expect(dayRow).toBeDefined();
+    // Legacy fallback: chat = totals_by_feature chat_panel* interaction count;
+    // agent = the enterprise row's own monthly_active_agent_users.
+    expect(dayRow.chat).toBe(42);
+    expect(dayRow.agent).toBe(5);
+  });
 });

@@ -16,6 +16,7 @@ import {
   getEnterpriseCopilotAppDaily,
   getOrganizationCopilotAppDaily,
   countAggregateEnterprises,
+  countOrganizationCopilotAppEnterprises,
 } from "@/lib/db/copilot-app-queries";
 import type {
   CopilotAppAnalyticsResponse,
@@ -259,11 +260,31 @@ async function handler(request: NextRequest) {
     const effectiveAggregateEnterprises = countAggregateEnterprises(start, end, enterpriseSlugs);
     const effectiveEnterprises = Math.max(effectiveUserEnterprises, effectiveAggregateEnterprises);
 
+    // When exactly one organization is selected, also fold in App evidence
+    // that lives only in `org_daily_metrics` — `countAggregateEnterprises`
+    // (above) reads `enterprise_daily_metrics` only, so a selected org whose
+    // App evidence exists solely at the org level (no matching enterprise or
+    // user rows) would otherwise leave `effectiveEnterprises` at 0 and make
+    // the org fallback below unreachable even though exactly one
+    // organization is unambiguously selected. See
+    // {@link countOrganizationCopilotAppEnterprises}'s doc for the full
+    // rationale, including why a count > 1 here still blocks the fallback.
+    // This widened count is scoped to the org-fallback gate only — the
+    // enterprise fallback gate (`canUseEnterpriseFallback` below) still uses
+    // the unwidened `effectiveEnterprises`.
+    const orgEffectiveEnterprises =
+      scope.selectedOrgs.length === 1
+        ? Math.max(
+            effectiveEnterprises,
+            countOrganizationCopilotAppEnterprises(scope.selectedOrgs[0], start, end, enterpriseSlugs),
+          )
+        : effectiveEnterprises;
+
     const canUseOrgFallback =
       !isZeroEffectiveUserScope &&
       scope.selectedTeams.length === 0 &&
       scope.selectedOrgs.length === 1 &&
-      effectiveEnterprises === 1;
+      orgEffectiveEnterprises === 1;
     // Unlike the org fallback, an explicit enterprise-only selection (via
     // `enterprises=`, which sets `scope.hasFilter = true` without touching
     // `selectedTeams`/`selectedOrgs`/`allowedLogins`) narrows ambiguity rather

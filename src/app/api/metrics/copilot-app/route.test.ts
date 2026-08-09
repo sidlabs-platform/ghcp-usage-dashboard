@@ -47,6 +47,7 @@ const state = vi.hoisted(() => ({
   estimate: { exceeds: false, count: 0 },
   effectiveEnterprises: 1,
   aggregateEnterprises: 1,
+  orgAggregateEnterprises: 1,
   userSummary: {
     periodActiveUsers: 0,
     appActiveUsers: 0,
@@ -111,6 +112,7 @@ vi.mock("@/lib/db/metrics-repo", () => ({
 const getEnterpriseCopilotAppDaily = vi.fn(() => state.enterpriseDaily);
 const getOrganizationCopilotAppDaily = vi.fn(() => state.orgDaily);
 const countAggregateEnterprises = vi.fn(() => state.aggregateEnterprises);
+const countOrganizationCopilotAppEnterprises = vi.fn(() => state.orgAggregateEnterprises);
 
 vi.mock("@/lib/db/copilot-app-queries", () => ({
   estimateCopilotAppRowCount: vi.fn(() => state.estimate),
@@ -122,6 +124,7 @@ vi.mock("@/lib/db/copilot-app-queries", () => ({
   getEnterpriseCopilotAppDaily: (...args: unknown[]) => getEnterpriseCopilotAppDaily(...(args as [])),
   getOrganizationCopilotAppDaily: (...args: unknown[]) => getOrganizationCopilotAppDaily(...(args as [])),
   countAggregateEnterprises: (...args: unknown[]) => countAggregateEnterprises(...(args as [])),
+  countOrganizationCopilotAppEnterprises: (...args: unknown[]) => countOrganizationCopilotAppEnterprises(...(args as [])),
 }));
 
 async function getHandler() {
@@ -140,6 +143,7 @@ function resetState() {
   state.estimate = { exceeds: false, count: 0 };
   state.effectiveEnterprises = 1;
   state.aggregateEnterprises = 1;
+  state.orgAggregateEnterprises = 1;
   state.userSummary = { ...ZERO_USER_SUMMARY };
   state.adoptionRows = [];
   state.codeImpactRows = [];
@@ -700,5 +704,92 @@ describe("GET /api/metrics/copilot-app", () => {
 
     expect(estimateCopilotAppRowCount).toHaveBeenCalledWith(expect.any(String), expect.any(String), [], undefined);
     expect(getCopilotAppUserSummary).toHaveBeenCalledWith(expect.any(String), expect.any(String), [], undefined);
+  });
+
+  it("falls back to the organization aggregate when user and enterprise aggregate counts are 0 but org aggregate evidence is exactly one enterprise (org-only App data)", async () => {
+    // user_daily_metrics and enterprise_daily_metrics are both empty for App
+    // evidence (effectiveEnterprises=0, aggregateEnterprises=0 combined via
+    // countEffectiveEnterprises/countAggregateEnterprises), but the selected
+    // org has supported App data in org_daily_metrics under exactly one
+    // enterprise_slug (orgAggregateEnterprises=1) — this must unblock the
+    // org fallback rather than leaving it unreachable.
+    state.scope = {
+      allowedLogins: undefined,
+      enterpriseSlugs: undefined,
+      hasFilter: true,
+      selectedTeams: [],
+      selectedOrgs: ["contoso-org"],
+    };
+    state.userSummary = { ...ZERO_USER_SUMMARY, supportedRows: 0 };
+    state.effectiveEnterprises = 0;
+    state.aggregateEnterprises = 0;
+    state.orgAggregateEnterprises = 1;
+    state.orgDaily = [
+      {
+        day: "2026-01-01",
+        sourceActiveUsers: 10,
+        activeUsers: 4,
+        sessions: 20,
+        requests: 50,
+        prompts: 30,
+        promptTokens: 800,
+        outputTokens: 400,
+        generations: 8,
+        acceptances: 6,
+        locAdded: 40,
+        locDeleted: 4,
+        isSupported: true,
+      },
+    ];
+
+    const GET = await getHandler();
+    const res = await GET(new NextRequest("http://localhost/api/metrics/copilot-app?days=7&orgs=contoso-org"));
+    expect(res.status).toBe(200);
+    const json = await res.json();
+
+    expect(json.dataSource).toBe("organization");
+    expect(json.hasCopilotAppData).toBe(true);
+    expect(getOrganizationCopilotAppDaily).toHaveBeenCalled();
+    expect(countOrganizationCopilotAppEnterprises).toHaveBeenCalled();
+  });
+
+  it("still blocks the organization fallback when the org aggregate enterprise count is ambiguous (2+), even if user/enterprise counts are 0", async () => {
+    state.scope = {
+      allowedLogins: undefined,
+      enterpriseSlugs: undefined,
+      hasFilter: true,
+      selectedTeams: [],
+      selectedOrgs: ["contoso-org"],
+    };
+    state.userSummary = { ...ZERO_USER_SUMMARY, supportedRows: 0 };
+    state.effectiveEnterprises = 0;
+    state.aggregateEnterprises = 0;
+    state.orgAggregateEnterprises = 2;
+    state.orgDaily = [
+      {
+        day: "2026-01-01",
+        sourceActiveUsers: 10,
+        activeUsers: 4,
+        sessions: 20,
+        requests: 50,
+        prompts: 30,
+        promptTokens: 800,
+        outputTokens: 400,
+        generations: 8,
+        acceptances: 6,
+        locAdded: 40,
+        locDeleted: 4,
+        isSupported: true,
+      },
+    ];
+
+    const GET = await getHandler();
+    const res = await GET(new NextRequest("http://localhost/api/metrics/copilot-app?days=7&orgs=contoso-org"));
+    expect(res.status).toBe(200);
+    const json = await res.json();
+
+    expect(json.dataSource).toBe("none");
+    expect(json.hasCopilotAppData).toBe(false);
+    expect(getOrganizationCopilotAppDaily).not.toHaveBeenCalled();
   });
 });

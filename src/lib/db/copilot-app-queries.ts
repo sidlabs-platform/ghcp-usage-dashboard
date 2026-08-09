@@ -653,6 +653,44 @@ export function countAggregateEnterprises(
   return row.cnt;
 }
 
+/**
+ * Count distinct enterprises that carry Copilot App aggregate evidence
+ * (`org_daily_metrics` rows satisfying {@link AGGREGATE_ROW_SUPPORTED}) for a
+ * single organization within `[startDay, endDay]`. Reads only the fixed
+ * `org_daily_metrics` table (never `enterprise_daily_metrics`) and is scoped
+ * exactly to `orgSlug` — evidence from any other organization never counts.
+ *
+ * Used by the Copilot App analytics route's organization fallback gate:
+ * `countAggregateEnterprises` (above) and `countEffectiveEnterprises`
+ * (metrics-repo.ts) only ever look at `enterprise_daily_metrics` /
+ * `user_daily_metrics`, so when a selected organization has App evidence
+ * *only* in `org_daily_metrics` (no matching enterprise/user rows), both of
+ * those counts report 0 and the org-only fallback would otherwise be
+ * unreachable even though exactly one organization is unambiguously
+ * selected. Note `org_daily_metrics` has `PRIMARY KEY (day, org_slug)` — a
+ * single day can carry only one `enterprise_slug` for a given org — so a
+ * count > 1 here means the org's App evidence spans more than one
+ * enterprise_slug value across the requested date range, which is still
+ * ambiguous enough to block the fallback.
+ */
+export function countOrganizationCopilotAppEnterprises(
+  orgSlug: string,
+  startDay: string,
+  endDay: string,
+  enterpriseSlugs?: string[],
+): number {
+  const db = getDb();
+  const ef = buildEnterpriseFilter(enterpriseSlugs, "enterprise_slug");
+  const sql = `
+    SELECT COUNT(DISTINCT enterprise_slug) as cnt
+    FROM org_daily_metrics
+    WHERE day >= ? AND day <= ? AND org_slug = ? ${ef.clause}
+      AND ${AGGREGATE_ROW_SUPPORTED}
+  `;
+  const row = db.prepare(sql).get(startDay, endDay, orgSlug, ...ef.params) as { cnt: number };
+  return row.cnt;
+}
+
 // ── Adopters (paginated) ─────────────────────────────────────────────────
 
 /** Allowlisted adopter sort fields, keyed by the API-facing field name and

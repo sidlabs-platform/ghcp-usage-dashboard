@@ -195,20 +195,29 @@ async function handler(request: NextRequest) {
       featureUsage = metrics.map((d) => {
         const features = d.totals_by_feature || [];
         const completionFeatures = features.filter((f) => isCompletionFeature(f.feature));
+        // Legacy (pre-Task6) enterprise-direct fallback values, used only
+        // when featureByDay has no row for this day (e.g. user-level
+        // metrics are disabled/empty) so the chart never falsely reports
+        // zero. `chat` is the total chat_panel*/chat_panel interaction
+        // count from this enterprise row's own totals_by_feature (an event
+        // count, not a distinct-user count); `agent` reuses the enterprise
+        // row's own monthly_active_agent_users rolling counter.
+        const legacyChatInteractions =
+          features.find((f) => f.feature === "chat_panel" || f.feature.startsWith("chat_panel_"))
+            ?.user_initiated_interaction_count ?? 0;
         return {
           day: d.day,
           completions: completionFeatures.reduce((s, f) => s + (f.code_generation_activity_count || 0), 0),
-          // `chat`/`agent` must be distinct-user counts to match the unit
+          // `chat`/`agent` prefer distinct-user counts to match the unit
           // used by every other branch (hasFilter/aggregated above both use
-          // chatUsers/agentUsers from getFeatureUsageDaily). The enterprise
-          // row's own totals_by_feature only carries event/interaction
-          // counts (user_initiated_interaction_count, code_generation_
-          // activity_count) — there is no daily distinct chat/agent user
-          // column on enterprise_daily_metrics (see schema.sql) — so reuse
-          // the SQL-aggregated featureByDay value here, exactly like `app`
-          // below.
-          chat: featureByDay.get(d.day)?.chatUsers ?? 0,
-          agent: featureByDay.get(d.day)?.agentUsers ?? 0,
+          // chatUsers/agentUsers from getFeatureUsageDaily) — the
+          // SQL-aggregated featureByDay value, exactly like `app` below.
+          // Only when featureByDay has no row for the day (undefined, not
+          // an explicit supported zero) do we fall back to the legacy
+          // enterprise-direct aggregate above, so the chart never falsely
+          // reports zero just because user-level metrics are unavailable.
+          chat: featureByDay.get(d.day)?.chatUsers ?? legacyChatInteractions,
+          agent: featureByDay.get(d.day)?.agentUsers ?? (d.monthly_active_agent_users ?? 0),
           cli: d.daily_active_cli_users || 0,
           // Prefer the enterprise row's own dedicated App counter; NULL means
           // unavailable (fall back to the SQL-aggregated featureByDay value),
