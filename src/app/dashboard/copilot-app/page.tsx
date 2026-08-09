@@ -258,17 +258,17 @@ export default function CopilotAppPage() {
       {/* KPI Cards */}
       <div ref={kpiRef} className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 mb-8">
         <MetricCard
-          title="App Active Users"
+          title={isAggregateFallback ? "App Active User-Days" : "App Active Users"}
           value={kpis.appActiveUsers}
           icon={<Users className="h-4 w-4" />}
-          subtitle={`${days}-day window`}
+          subtitle={isAggregateFallback ? `Sum of daily counts over ${days} days` : `${days}-day window`}
         />
         <MetricCard
           title="App Adoption"
           value={kpis.adoptionRate}
           format="percent"
           icon={<TrendingUp className="h-4 w-4" />}
-          subtitle="Of period-active Copilot users"
+          subtitle={isAggregateFallback ? "Share of active user-days" : "Of period-active Copilot users"}
         />
         <MetricCard
           title="Sessions"

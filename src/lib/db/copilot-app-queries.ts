@@ -496,6 +496,22 @@ function mapAggregateDayRow(r: RawAggregateDayRow): CopilotAppAggregateDay {
   };
 }
 
+/** SQL fragment: true when an enterprise/org daily row (from either
+ * `enterprise_daily_metrics` or `org_daily_metrics` — both share this column
+ * shape) carries explicit Copilot App support evidence: a non-null
+ * `daily_active_copilot_app_users`, a non-null `totals_by_copilot_app`, or a
+ * `copilot_app` entry in `totals_by_feature`. Shared by {@link aggregateDailySql}
+ * (per-day rollup) and {@link countAggregateEnterprises} (distinct-enterprise
+ * count) so both use identical availability semantics. */
+const AGGREGATE_ROW_SUPPORTED = `(
+  daily_active_copilot_app_users IS NOT NULL
+  OR totals_by_copilot_app IS NOT NULL
+  OR EXISTS (
+    SELECT 1 FROM json_each(totals_by_feature) f
+    WHERE json_extract(f.value, '$.feature') = 'copilot_app'
+  )
+)`;
+
 /** Shared CTE body for the enterprise/org aggregate fallback queries. Always
  * reads from a single fixed table name supplied internally (never from
  * caller/request input) and never cross-joins the dedicated-totals fields
@@ -508,14 +524,7 @@ function mapAggregateDayRow(r: RawAggregateDayRow): CopilotAppAggregateDay {
  * legacy enterprise/org with no App tracking at all) never inflates the
  * denominator just because a *different*, supported row shares the same day. */
 function aggregateDailySql(table: "enterprise_daily_metrics" | "org_daily_metrics", extraWhere: string): string {
-  const rowSupported = `(
-    daily_active_copilot_app_users IS NOT NULL
-    OR totals_by_copilot_app IS NOT NULL
-    OR EXISTS (
-      SELECT 1 FROM json_each(totals_by_feature) f
-      WHERE json_extract(f.value, '$.feature') = 'copilot_app'
-    )
-  )`;
+  const rowSupported = AGGREGATE_ROW_SUPPORTED;
   return `
     WITH base AS (
       SELECT
@@ -606,6 +615,42 @@ export function getOrganizationCopilotAppDaily(
   const sql = aggregateDailySql("org_daily_metrics", `AND org_slug = ? ${ef.clause}`);
   const rows = db.prepare(sql).all(startDay, endDay, orgSlug, ...ef.params) as RawAggregateDayRow[];
   return rows.map(mapAggregateDayRow);
+}
+
+/**
+ * Count distinct enterprises that carry Copilot App aggregate evidence
+ * (`enterprise_daily_metrics` rows satisfying {@link AGGREGATE_ROW_SUPPORTED})
+ * within `[startDay, endDay]`. Used by the Copilot App analytics route to
+ * decide whether the enterprise/organization aggregate fallback can safely
+ * apply when `user_daily_metrics` has no App evidence in scope:
+ * `countEffectiveEnterprises` (metrics-repo.ts) only ever looks at
+ * `user_daily_metrics`, so when user-level App data is absent/disabled but a
+ * single supported enterprise aggregate row exists, that helper alone
+ * reports 0 and can never unblock the fallback. This function derives
+ * enterprise-count evidence directly from the aggregate source instead of
+ * inferring it from `enterprise-config` (static config can list enterprises
+ * that have no actual App data, or omit enterprises loaded only via sync).
+ *
+ * Reads only the fixed `enterprise_daily_metrics` table (never
+ * `org_daily_metrics` — orgs are not enterprises and are not part of this
+ * ambiguity check) and is date-range aware so a stale/unrelated enterprise
+ * with old App data outside the requested range never counts as ambiguous.
+ */
+export function countAggregateEnterprises(
+  startDay: string,
+  endDay: string,
+  enterpriseSlugs?: string[],
+): number {
+  const db = getDb();
+  const ef = buildEnterpriseFilter(enterpriseSlugs, "enterprise_slug");
+  const sql = `
+    SELECT COUNT(DISTINCT enterprise_slug) as cnt
+    FROM enterprise_daily_metrics
+    WHERE day >= ? AND day <= ? ${ef.clause}
+      AND ${AGGREGATE_ROW_SUPPORTED}
+  `;
+  const row = db.prepare(sql).get(startDay, endDay, ...ef.params) as { cnt: number };
+  return row.cnt;
 }
 
 // ── Adopters (paginated) ─────────────────────────────────────────────────

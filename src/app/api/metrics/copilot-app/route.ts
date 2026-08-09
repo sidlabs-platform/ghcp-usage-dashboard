@@ -15,6 +15,7 @@ import {
   estimateCopilotAppRowCount,
   getEnterpriseCopilotAppDaily,
   getOrganizationCopilotAppDaily,
+  countAggregateEnterprises,
 } from "@/lib/db/copilot-app-queries";
 import type {
   CopilotAppAnalyticsResponse,
@@ -238,15 +239,41 @@ async function handler(request: NextRequest) {
     //     double-count across enterprises)
     const isZeroEffectiveUserScope =
       scope.hasFilter && scope.allowedLogins !== undefined && scope.allowedLogins.size === 0;
-    const effectiveEnterprises = countEffectiveEnterprises(enterpriseSlugs);
+
+    // `countEffectiveEnterprises` (metrics-repo.ts) only ever looks at
+    // `user_daily_metrics`, so when user-level metrics are disabled/empty it
+    // reports 0 even though a single enterprise/org aggregate row with App
+    // evidence exists — which would otherwise make the fallback impossible to
+    // reach. `countAggregateEnterprises` derives the same ambiguity signal
+    // directly from the aggregate source (date-range-aware, App-evidence-only)
+    // instead. Combine both with Math.max rather than summing: the two counts
+    // describe overlapping evidence for the same scope (not additive
+    // populations), and by the time this code runs `userSummary.supportedRows`
+    // is already known to be 0, so the user-level count reflects enterprises
+    // with *some* user-day data but no App evidence — taking the larger of the
+    // two conservatively still blocks the fallback whenever either source sees
+    // more than one candidate enterprise, while unblocking it when only one
+    // source has evidence at all (e.g. user metrics fully disabled, count 0,
+    // aggregate count 1).
+    const effectiveUserEnterprises = countEffectiveEnterprises(enterpriseSlugs);
+    const effectiveAggregateEnterprises = countAggregateEnterprises(start, end, enterpriseSlugs);
+    const effectiveEnterprises = Math.max(effectiveUserEnterprises, effectiveAggregateEnterprises);
 
     const canUseOrgFallback =
       !isZeroEffectiveUserScope &&
       scope.selectedTeams.length === 0 &&
       scope.selectedOrgs.length === 1 &&
       effectiveEnterprises === 1;
+    // Unlike the org fallback, an explicit enterprise-only selection (via
+    // `enterprises=`, which sets `scope.hasFilter = true` without touching
+    // `selectedTeams`/`selectedOrgs`/`allowedLogins`) narrows ambiguity rather
+    // than creating it, so it must not block this fallback — only an active
+    // team or org filter should.
     const canUseEnterpriseFallback =
-      !isZeroEffectiveUserScope && !scope.hasFilter && effectiveEnterprises === 1;
+      !isZeroEffectiveUserScope &&
+      scope.selectedTeams.length === 0 &&
+      scope.selectedOrgs.length === 0 &&
+      effectiveEnterprises === 1;
 
     let aggregateRows: CopilotAppAggregateDay[] = [];
     let aggregateSource: CopilotAppDataSource = "none";

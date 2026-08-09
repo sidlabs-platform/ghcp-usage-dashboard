@@ -111,27 +111,6 @@ export function getDb(): Database.Database {
     throw err;
   }
 
-  // One-time, idempotent recompute of classification-dependent summary/cache
-  // columns (user_period_summary.acceptance_rate, daily_aggregate_cache's
-  // completion_loc_suggested/completion_loc_accepted, and
-  // team_summary_cache.overall_acceptance_rate) that may have been persisted
-  // under the old, looser completion-allowlist semantics. Runs transactionally
-  // and records its own ledger entry in summary_cache_migrations — see
-  // summary-cache-migration.ts. Uses the exact same fail-closed handling as
-  // migrateCopilotAppMetrics above: on error, do not leave a cached `_db`
-  // whose migration never completed.
-  try {
-    migrateSummaryCacheClassification(_db);
-  } catch (err) {
-    try {
-      _db.close();
-    } catch {
-      /* best-effort close; the original migration error is what matters */
-    }
-    _db = null;
-    throw err;
-  }
-
   const userMetricColumns = _db.prepare("PRAGMA table_info(user_daily_metrics)").all() as { name: string }[];
   const hasAiCreditsColumn = userMetricColumns.some((col) => col.name === "ai_credits_used");
   const hasRawJsonColumn = userMetricColumns.some((col) => col.name === "raw_json");
@@ -208,6 +187,37 @@ export function getDb(): Database.Database {
     _db.exec(summarySchema);
     _db.exec(billingSchema);
     console.log("[DB Migration] Tables recreated. Please run a full sync to repopulate data.");
+  }
+
+  // One-time, idempotent recompute of classification-dependent summary/cache
+  // columns (user_period_summary.acceptance_rate, daily_aggregate_cache's
+  // completion_loc_suggested/completion_loc_accepted, and
+  // team_summary_cache.overall_acceptance_rate) that may have been persisted
+  // under the old, looser completion-allowlist semantics. Runs transactionally
+  // and records its own ledger entry in summary_cache_migrations — see
+  // summary-cache-migration.ts. Uses the exact same fail-closed handling as
+  // migrateCopilotAppMetrics above: on error, do not leave a cached `_db`
+  // whose migration never completed.
+  //
+  // MUST run AFTER the needsPKMigration block above: that block can DROP
+  // TABLE and recreate daily_aggregate_cache/user_period_summary/
+  // team_summary_cache (see tablesToRecreate). Running the classification
+  // recompute before that point would (a) waste the work, since the tables
+  // it just wrote get dropped immediately afterward, and (b) still record
+  // the migration as "applied" in the summary_cache_migrations ledger table
+  // — which is NOT among the dropped/recreated tables — so it would never
+  // re-run against the freshly recreated (empty) tables. Running it here
+  // ensures it always operates on the final, post-migration schema/data.
+  try {
+    migrateSummaryCacheClassification(_db);
+  } catch (err) {
+    try {
+      _db.close();
+    } catch {
+      /* best-effort close; the original migration error is what matters */
+    }
+    _db = null;
+    throw err;
   }
 
   // Backfill enterprise_slug on legacy rows (created before multi-enterprise support).

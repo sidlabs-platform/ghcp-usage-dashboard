@@ -233,7 +233,7 @@ describe("Copilot App analytics page", () => {
   });
 
   it("renders the full analytics view with KPIs, charts, composition, and adopters", async () => {
-    const fetchMock = vi.fn(async () =>
+    const fetchMock = vi.fn<typeof fetch>(async () =>
       new Response(JSON.stringify(fullResponse()), { status: 200, headers: { "Content-Type": "application/json" } }),
     );
 
@@ -273,7 +273,7 @@ describe("Copilot App analytics page", () => {
   });
 
   it("shows the exact no-data message when Copilot App data is absent from the synced range", async () => {
-    const fetchMock = vi.fn(async () =>
+    const fetchMock = vi.fn<typeof fetch>(async () =>
       new Response(JSON.stringify(noDataResponse()), { status: 200, headers: { "Content-Type": "application/json" } }),
     );
 
@@ -285,7 +285,7 @@ describe("Copilot App analytics page", () => {
   });
 
   it("falls back to aggregate KPIs/trends and hides adopters when user attribution is unavailable", async () => {
-    const fetchMock = vi.fn(async () =>
+    const fetchMock = vi.fn<typeof fetch>(async () =>
       new Response(JSON.stringify(aggregateResponse()), { status: 200, headers: { "Content-Type": "application/json" } }),
     );
 
@@ -293,15 +293,20 @@ describe("Copilot App analytics page", () => {
 
     expect(await screen.findByText(/User-attributed App data is unavailable/)).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Top Copilot App Adopters" })).not.toBeInTheDocument();
-    // KPIs and trends still render from the aggregate fallback.
-    expect(screen.getByText("App Active Users")).toBeInTheDocument();
+    // KPIs and trends still render from the aggregate fallback, using the
+    // aggregate-specific "user-days" labels (see CopilotAppKpis JSDoc):
+    // aggregate sources sum daily active-user counts, not distinct users.
+    expect(screen.getByText("App Active User-Days")).toBeInTheDocument();
+    expect(screen.getByText("Sum of daily counts over 30 days")).toBeInTheDocument();
+    expect(screen.getByText("Share of active user-days")).toBeInTheDocument();
+    expect(screen.queryByText("App Active Users")).not.toBeInTheDocument();
     await waitFor(() => {
       expect(screen.getByTestId("adoption-volume-chart")).toHaveTextContent("Adoption chart rows: 1");
     });
   });
 
   it("shows an error state with retry copy when the request fails", async () => {
-    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ error: "boom" }), { status: 500 }));
+    const fetchMock = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ error: "boom" }), { status: 500 }));
 
     await renderPage(fetchMock as unknown as typeof fetch);
 
@@ -311,7 +316,7 @@ describe("Copilot App analytics page", () => {
 
   it("includes days and scope params in the request URL", async () => {
     scopeState.params = new URLSearchParams({ teams: "team-a", orgs: "org-b" });
-    const fetchMock = vi.fn(async () =>
+    const fetchMock = vi.fn<typeof fetch>(async () =>
       new Response(JSON.stringify(fullResponse()), { status: 200, headers: { "Content-Type": "application/json" } }),
     );
 

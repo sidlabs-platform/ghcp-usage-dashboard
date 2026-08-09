@@ -319,22 +319,46 @@ export interface OverviewData {
 
 /** Period-level Copilot App KPI summary. */
 export interface CopilotAppKpis {
+  /**
+   * Dual semantics depending on `dataSource` (see {@link CopilotAppDataSource}):
+   * - `"users"`: distinct **period-active users** in the scope — one row per
+   *   user in `user_daily_metrics`, so this is a true user headcount.
+   * - `"enterprise"` / `"organization"` (aggregate fallback): the enterprise/org
+   *   daily-metrics tables have no per-user rows, only one row per day, so
+   *   this field is the **sum of each day's `sourceActiveUsers`** across the
+   *   period — i.e. active **user-days**, not distinct users. A user active
+   *   on every day of a 28-day window is counted 28 times. Callers/UI must
+   *   label this accordingly (e.g. "Active User-Days") instead of implying a
+   *   distinct-user count for aggregate sources.
+   */
   periodActiveUsers: number;
+  /**
+   * Same dual semantics as {@link CopilotAppKpis.periodActiveUsers}: distinct
+   * App-active users for `dataSource: "users"`, but a sum-of-daily-counts
+   * (active App user-days) for the `"enterprise"`/`"organization"` aggregate
+   * fallback.
+   */
   appActiveUsers: number;
   /**
-   * `appActiveUsers / periodActiveUsers * 100` — the App-active distinct
-   * user count divided by *all* period-active scoped users (not just users
-   * with App telemetry support), per the approved product definition for
-   * user-level adoption rate. This is intentionally a different
-   * denominator than the enterprise/org aggregate fallback's
-   * `sourceActiveUsers` (see {@link CopilotAppAggregateDay.sourceActiveUsers}):
-   * at user level every scoped user's `user_daily_metrics` row is known and
-   * countable, so the full scoped population is the correct denominator.
-   * At aggregate level, only rows with explicit App support evidence can be
-   * safely summed into the denominator — see
-   * {@link CopilotAppAggregateDay.sourceActiveUsers} for why. Do not
-   * "align" these two denominators; they measure different things by
-   * design.
+   * `appActiveUsers / periodActiveUsers * 100`. For `dataSource: "users"`
+   * this is the App-active distinct user count divided by *all*
+   * period-active scoped users (not just users with App telemetry support),
+   * per the approved product definition for user-level adoption rate. This
+   * is intentionally a different denominator than the enterprise/org
+   * aggregate fallback's `sourceActiveUsers` (see
+   * {@link CopilotAppAggregateDay.sourceActiveUsers}): at user level every
+   * scoped user's `user_daily_metrics` row is known and countable, so the
+   * full scoped population is the correct denominator. At aggregate level,
+   * only rows with explicit App support evidence can be safely summed into
+   * the denominator — see {@link CopilotAppAggregateDay.sourceActiveUsers}
+   * for why. Do not "align" these two denominators; they measure different
+   * things by design.
+   *
+   * For aggregate sources, both numerator and denominator are sums of daily
+   * counts (user-days), so this ratio remains a meaningful *weighted*
+   * adoption share across the period even though neither input is a
+   * distinct-user count — it should be labeled "share of active user-days",
+   * not "share of active users".
    */
   adoptionRate: number;
   sessions: number;

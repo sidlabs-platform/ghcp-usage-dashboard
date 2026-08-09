@@ -19,6 +19,7 @@ import {
   getEnterpriseCopilotAppDaily,
   getOrganizationCopilotAppDaily,
   getCopilotAppAdopters,
+  countAggregateEnterprises,
 } from "./copilot-app-queries";
 
 const START = "2025-04-01";
@@ -701,6 +702,44 @@ describe("getOrganizationCopilotAppDaily", () => {
     } finally {
       prepareSpy.mockRestore();
     }
+  });
+});
+
+describe("countAggregateEnterprises", () => {
+  // Fixture recap (see enterprise_daily_metrics inserts above, START..END =
+  // 2025-04-01..2025-04-02): acme and beta both carry App support evidence
+  // on 2025-04-01 (dedicated totals + a copilot_app feature row); gamma has
+  // no App evidence at all (legacy enterprise, non-App totals_by_feature only).
+  it("counts zero when no enterprise carries App support evidence in range", () => {
+  expect(countAggregateEnterprises(START, END, ["gamma"])).toBe(0);
+  });
+
+  it("counts exactly one supported aggregate enterprise when scoped to it explicitly", () => {
+  expect(countAggregateEnterprises(START, END, ["acme"])).toBe(1);
+  });
+
+  it("counts two distinct supported aggregate enterprises when both are in scope", () => {
+  expect(countAggregateEnterprises(START, END, ["acme", "beta"])).toBe(2);
+  });
+
+  it("excludes an unsupported enterprise from the count even when scoped alongside supported ones", () => {
+  expect(countAggregateEnterprises(START, END, ["acme", "beta", "gamma"])).toBe(2);
+  });
+
+  it("counts every supported enterprise in range when unfiltered", () => {
+  expect(countAggregateEnterprises(START, END)).toBe(2); // acme, beta (gamma excluded — unsupported)
+  });
+
+  it("queries only the fixed enterprise_daily_metrics table", () => {
+  const prepareSpy = vi.spyOn(db, "prepare");
+  try {
+    countAggregateEnterprises(START, END, ["acme"]);
+    const sqlText = prepareSpy.mock.calls.map((call) => String(call[0])).join("\n");
+    expect(sqlText).toContain("FROM enterprise_daily_metrics");
+    expect(sqlText).not.toContain("org_daily_metrics");
+  } finally {
+    prepareSpy.mockRestore();
+  }
   });
 });
 

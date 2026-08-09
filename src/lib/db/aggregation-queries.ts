@@ -1482,6 +1482,11 @@ export function getActiveUsersRollingTrend(
 
 export interface FeatureUsageDailyRow {
   day: string;
+  // Sum of `code_generation_activity_count` — an activity/event volume count,
+  // NOT a distinct-user count. This is intentionally a different unit than
+  // the four `*Users` fields below (each `COUNT(DISTINCT user_login ...)`);
+  // do not "align" it to a user count — see chart/consumer usage for the
+  // rationale (completions volume vs. feature adoption headcount).
   completions: number;
   chatUsers: number;
   agentUsers: number;

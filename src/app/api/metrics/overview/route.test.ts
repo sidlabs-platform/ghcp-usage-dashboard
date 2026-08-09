@@ -331,4 +331,68 @@ describe("overview route — Copilot App featureUsage.app", () => {
     expect(dayRow.app).toBe(1);
     expect(json.kpis.copilotAppUsers).toBe(1);
   });
+
+  it("enterprise-direct branch: featureUsage[].chat and .agent are distinct used_chat=1/used_agent=1 user counts, not totals_by_feature event/interaction counts", async () => {
+    const { upsertEnterpriseDayMetrics } = await import("@/lib/db/metrics-repo");
+    const testDay = yesterday();
+
+    // Two distinct users: one chat-active, one agent-active (neither both),
+    // so the SQL-derived distinct-user counts (chatUsers=1, agentUsers=1)
+    // are unambiguously different from the much larger totals_by_feature
+    // event counts below.
+    db.prepare(`
+      INSERT INTO user_daily_metrics (
+        day, enterprise_id, enterprise_slug, user_id, user_login,
+        used_agent, used_chat, used_cli, used_copilot_app
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(testDay, "ent1", "ent1", 1, "alice", 0, 1, 0, 0);
+    db.prepare(`
+      INSERT INTO user_daily_metrics (
+        day, enterprise_id, enterprise_slug, user_id, user_login,
+        used_agent, used_chat, used_cli, used_copilot_app
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(testDay, "ent1", "ent1", 2, "bob", 1, 0, 0, 0);
+
+    const totals_by_feature = [
+      // Deliberately large event/interaction counts to expose any leakage
+      // into the distinct-user fields.
+      { feature: "chat_panel", code_generation_activity_count: 0, code_acceptance_activity_count: 0, loc_added_sum: 0, loc_deleted_sum: 0, loc_suggested_to_add_sum: 0, loc_suggested_to_delete_sum: 0, user_initiated_interaction_count: 900 },
+      { feature: "agent_edit", code_generation_activity_count: 700, code_acceptance_activity_count: 0, loc_added_sum: 0, loc_deleted_sum: 0, loc_suggested_to_add_sum: 0, loc_suggested_to_delete_sum: 0, user_initiated_interaction_count: 0 },
+    ];
+
+    upsertEnterpriseDayMetrics("ent1", {
+      day: testDay,
+      enterprise_id: "ent1",
+      daily_active_users: 10,
+      weekly_active_users: 10,
+      monthly_active_users: 10,
+      monthly_active_agent_users: 1,
+      monthly_active_chat_users: 1,
+      daily_active_cli_users: 0,
+      daily_active_copilot_app_users: 0,
+      code_generation_activity_count: 700,
+      code_acceptance_activity_count: 80,
+      user_initiated_interaction_count: 900,
+      loc_suggested_to_add_sum: 0,
+      loc_suggested_to_delete_sum: 0,
+      loc_added_sum: 0,
+      loc_deleted_sum: 0,
+      totals_by_ide: [],
+      totals_by_feature,
+      totals_by_language_feature: [],
+      totals_by_model_feature: [],
+      totals_by_language_model: [],
+    });
+
+    const GET = await getHandler();
+    const res = await GET(new NextRequest("http://localhost/api/metrics/overview?days=1"));
+    expect(res.status).toBe(200);
+    const json = await res.json();
+
+    expect(json.dataSource).toBe("enterprise");
+    const dayRow = json.featureUsage.find((t: { day: string }) => t.day === testDay);
+    expect(dayRow).toBeDefined();
+    expect(dayRow.chat).toBe(1);
+    expect(dayRow.agent).toBe(1);
+  });
 });

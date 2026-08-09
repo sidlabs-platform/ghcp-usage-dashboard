@@ -46,6 +46,7 @@ const state = vi.hoisted(() => ({
   },
   estimate: { exceeds: false, count: 0 },
   effectiveEnterprises: 1,
+  aggregateEnterprises: 1,
   userSummary: {
     periodActiveUsers: 0,
     appActiveUsers: 0,
@@ -109,6 +110,7 @@ vi.mock("@/lib/db/metrics-repo", () => ({
 
 const getEnterpriseCopilotAppDaily = vi.fn(() => state.enterpriseDaily);
 const getOrganizationCopilotAppDaily = vi.fn(() => state.orgDaily);
+const countAggregateEnterprises = vi.fn(() => state.aggregateEnterprises);
 
 vi.mock("@/lib/db/copilot-app-queries", () => ({
   estimateCopilotAppRowCount: vi.fn(() => state.estimate),
@@ -119,6 +121,7 @@ vi.mock("@/lib/db/copilot-app-queries", () => ({
   getCopilotAppLanguageBreakdown: vi.fn(() => state.languageBreakdown),
   getEnterpriseCopilotAppDaily: (...args: unknown[]) => getEnterpriseCopilotAppDaily(...(args as [])),
   getOrganizationCopilotAppDaily: (...args: unknown[]) => getOrganizationCopilotAppDaily(...(args as [])),
+  countAggregateEnterprises: (...args: unknown[]) => countAggregateEnterprises(...(args as [])),
 }));
 
 async function getHandler() {
@@ -136,6 +139,7 @@ function resetState() {
   };
   state.estimate = { exceeds: false, count: 0 };
   state.effectiveEnterprises = 1;
+  state.aggregateEnterprises = 1;
   state.userSummary = { ...ZERO_USER_SUMMARY };
   state.adoptionRows = [];
   state.codeImpactRows = [];
@@ -311,6 +315,60 @@ describe("GET /api/metrics/copilot-app", () => {
     expect(json.adoptionTrend[0]).toMatchObject({ activeUsers: 20, sessions: 100 });
   });
 
+  it("sums aggregate KPIs across multiple days as active user-days, not distinct users (enterprise fallback)", async () => {
+    state.userSummary = { ...ZERO_USER_SUMMARY, supportedRows: 0 };
+    state.effectiveEnterprises = 1;
+    state.enterpriseDaily = [
+      {
+        day: "2026-02-01",
+        sourceActiveUsers: 50,
+        activeUsers: 20,
+        sessions: 100,
+        requests: 250,
+        prompts: 150,
+        promptTokens: 4000,
+        outputTokens: 2000,
+        generations: 40,
+        acceptances: 30,
+        locAdded: 200,
+        locDeleted: 20,
+        isSupported: true,
+      },
+      {
+        day: "2026-02-02",
+        sourceActiveUsers: 60,
+        activeUsers: 25,
+        sessions: 120,
+        requests: 300,
+        prompts: 180,
+        promptTokens: 5000,
+        outputTokens: 2500,
+        generations: 45,
+        acceptances: 35,
+        locAdded: 250,
+        locDeleted: 25,
+        isSupported: true,
+      },
+    ];
+
+    const GET = await getHandler();
+    const res = await GET(new NextRequest("http://localhost/api/metrics/copilot-app?days=2"));
+    expect(res.status).toBe(200);
+    const json = await res.json();
+
+    expect(json.dataSource).toBe("enterprise");
+    // Same user counted on both days must sum, not de-duplicate: this is
+    // "active user-days" semantics for aggregate sources, not a distinct
+    // user count. 50 + 60 = 110, 20 + 25 = 45.
+    expect(json.kpis.periodActiveUsers).toBe(110);
+    expect(json.kpis.appActiveUsers).toBe(45);
+    expect(json.kpis.adoptionRate).toBeCloseTo((45 / 110) * 100, 5);
+    expect(json.kpis.sessions).toBe(220);
+    expect(json.kpis.requests).toBe(550);
+    expect(json.kpis.locAdded).toBe(450);
+    expect(json.kpis.locDeleted).toBe(45);
+  });
+
   it("falls back to the organization aggregate when exactly one org is selected with a single enterprise", async () => {
     const { end } = getDateRange(1);
     state.scope = {
@@ -439,6 +497,130 @@ describe("GET /api/metrics/copilot-app", () => {
     };
     state.userSummary = { ...ZERO_USER_SUMMARY, supportedRows: 0 };
     state.effectiveEnterprises = 2;
+    state.enterpriseDaily = [
+      {
+        day: "2026-01-01",
+        sourceActiveUsers: 50,
+        activeUsers: 20,
+        sessions: 100,
+        requests: 250,
+        prompts: 150,
+        promptTokens: 4000,
+        outputTokens: 2000,
+        generations: 40,
+        acceptances: 30,
+        locAdded: 200,
+        locDeleted: 20,
+        isSupported: true,
+      },
+    ];
+
+    const GET = await getHandler();
+    const res = await GET(new NextRequest("http://localhost/api/metrics/copilot-app?days=7"));
+    expect(res.status).toBe(200);
+    const json = await res.json();
+
+    expect(json.dataSource).toBe("none");
+    expect(json.hasCopilotAppData).toBe(false);
+    expect(getEnterpriseCopilotAppDaily).not.toHaveBeenCalled();
+  });
+
+  it("falls back to the enterprise aggregate when user_daily_metrics is empty but exactly one enterprise carries aggregate App evidence in range", async () => {
+    // countEffectiveEnterprises (user-level) reports 0 because user metrics
+    // are disabled/empty, but countAggregateEnterprises (aggregate-level)
+    // reports exactly 1 supported enterprise — the combined effective count
+    // must still be 1, not 0, so the fallback is not blocked.
+    state.scope = {
+      allowedLogins: undefined,
+      enterpriseSlugs: undefined,
+      hasFilter: false,
+      selectedTeams: [],
+      selectedOrgs: [],
+    };
+    state.userSummary = { ...ZERO_USER_SUMMARY, supportedRows: 0 };
+    state.effectiveEnterprises = 0;
+    state.aggregateEnterprises = 1;
+    state.enterpriseDaily = [
+      {
+        day: "2026-01-01",
+        sourceActiveUsers: 50,
+        activeUsers: 20,
+        sessions: 100,
+        requests: 250,
+        prompts: 150,
+        promptTokens: 4000,
+        outputTokens: 2000,
+        generations: 40,
+        acceptances: 30,
+        locAdded: 200,
+        locDeleted: 20,
+        isSupported: true,
+      },
+    ];
+
+    const GET = await getHandler();
+    const res = await GET(new NextRequest("http://localhost/api/metrics/copilot-app?days=7"));
+    expect(res.status).toBe(200);
+    const json = await res.json();
+
+    expect(json.dataSource).toBe("enterprise");
+    expect(json.hasCopilotAppData).toBe(true);
+    expect(getEnterpriseCopilotAppDaily).toHaveBeenCalled();
+  });
+
+  it("falls back to the enterprise aggregate for an explicit single-enterprise selection even though scope.hasFilter is true (no team/org filter)", async () => {
+    // selectedEnterprises-only filters set hasFilter=true but never populate
+    // allowedLogins/selectedTeams/selectedOrgs — this must not be treated
+    // the same as an ambiguous/blocking team or org filter.
+    state.scope = {
+      allowedLogins: undefined,
+      enterpriseSlugs: ["acme"],
+      hasFilter: true,
+      selectedTeams: [],
+      selectedOrgs: [],
+    };
+    state.userSummary = { ...ZERO_USER_SUMMARY, supportedRows: 0 };
+    state.effectiveEnterprises = 1;
+    state.aggregateEnterprises = 1;
+    state.enterpriseDaily = [
+      {
+        day: "2026-01-01",
+        sourceActiveUsers: 30,
+        activeUsers: 10,
+        sessions: 50,
+        requests: 100,
+        prompts: 60,
+        promptTokens: 1500,
+        outputTokens: 800,
+        generations: 20,
+        acceptances: 15,
+        locAdded: 80,
+        locDeleted: 8,
+        isSupported: true,
+      },
+    ];
+
+    const GET = await getHandler();
+    const res = await GET(new NextRequest("http://localhost/api/metrics/copilot-app?days=7&enterprises=acme"));
+    expect(res.status).toBe(200);
+    const json = await res.json();
+
+    expect(json.dataSource).toBe("enterprise");
+    expect(json.hasCopilotAppData).toBe(true);
+    expect(getEnterpriseCopilotAppDaily).toHaveBeenCalledWith(expect.any(String), expect.any(String), ["acme"]);
+  });
+
+  it("still blocks the aggregate fallback when the combined enterprise count is ambiguous (2+), even if user_daily_metrics is empty", async () => {
+    state.scope = {
+      allowedLogins: undefined,
+      enterpriseSlugs: undefined,
+      hasFilter: false,
+      selectedTeams: [],
+      selectedOrgs: [],
+    };
+    state.userSummary = { ...ZERO_USER_SUMMARY, supportedRows: 0 };
+    state.effectiveEnterprises = 0;
+    state.aggregateEnterprises = 2;
     state.enterpriseDaily = [
       {
         day: "2026-01-01",
