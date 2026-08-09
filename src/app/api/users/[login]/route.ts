@@ -11,6 +11,13 @@ import { CACHE_TTL } from "@/lib/cache/memory-cache";
 // `!= 'agent_edit'` exclusion, since that would silently misclassify
 // `copilot_app`, `chat_inline`, or any future unknown feature as completion.
 import { IS_COMPLETION_SQL, NOT_AGENT_OR_APP_SQL, getCompletionDailyTrend } from "@/lib/db/aggregation-queries";
+// Copilot App KPI aggregation is delegated entirely to this shared query
+// helper (Task 2/3's SQL layer) rather than re-implemented here: it already
+// dedupes same-login/same-day rows across enterprises via MAX-before-SUM and
+// computes the weighted avgTokensPerRequest = (promptTokens + outputTokens) /
+// requests, so re-deriving either here would risk drifting from the
+// org/enterprise-level Copilot App analytics routes that use the same helper.
+import { getCopilotAppUserSummary } from "@/lib/db/copilot-app-queries";
 
 interface DailyActivity {
   day: string;
@@ -70,6 +77,34 @@ interface UserSummary {
   usedCodeReview: boolean;
   usedCodingAgent: boolean;
   usedCodeReviewPassive: boolean;
+  // Copilot App availability/activity — three-state, distinct from the other
+  // used* booleans above:
+  //   true  — at least one row has used_copilot_app = 1, OR real App activity
+  //           (sessions/requests/prompts/generations/LOC) is present. Actual
+  //           data evidence always wins over a missing/stale flag.
+  //   false — App support evidence exists (the flag, dedicated totals, or an
+  //           App feature row) but every value is zero/false — "supported,
+  //           never used".
+  //   null  — no App evidence at all for this user/period (legacy data
+  //           synced before Copilot App tracking existed).
+  usedCopilotApp: boolean | null;
+}
+
+/** Copilot App activity stats for a single user, combining the dedicated
+ * `totals_by_copilot_app` totals (sessions/requests/prompts/tokens) with the
+ * `copilot_app` feature-code totals from `totals_by_feature`
+ * (generations/acceptances/LOC) — see {@link getCopilotAppUserSummary}. */
+interface CopilotAppStats {
+  sessions: number;
+  requests: number;
+  prompts: number;
+  promptTokens: number;
+  outputTokens: number;
+  avgTokensPerRequest: number;
+  codeGenerations: number;
+  codeAcceptances: number;
+  locAdded: number;
+  locDeleted: number;
 }
 
 interface TopLanguage {
@@ -266,6 +301,30 @@ async function handler(request: NextRequest) {
       compCodeAccept: number;
     } | undefined;
 
+    // Copilot App — a single call to the shared Task 2/3 query helper
+    // (getCopilotAppUserSummary) scoped to this one login, handles the
+    // multi-enterprise MAX-before-SUM dedupe and weighted avgTokensPerRequest
+    // internally. `supportedRows` distinguishes "no App evidence at all"
+    // (usedCopilotApp: null) from "supported but inactive" (usedCopilotApp:
+    // false, zero-value stats) and "actual activity" (usedCopilotApp: true).
+    const appSummary = getCopilotAppUserSummary(start, end, [decodedLogin], scope.enterpriseSlugs);
+    const hasCopilotAppEvidence = appSummary.supportedRows > 0;
+    const usedCopilotApp: boolean | null = hasCopilotAppEvidence ? appSummary.appActiveUsers > 0 : null;
+    const copilotAppStats: CopilotAppStats | null = hasCopilotAppEvidence
+      ? {
+          sessions: appSummary.sessions,
+          requests: appSummary.requests,
+          prompts: appSummary.prompts,
+          promptTokens: appSummary.promptTokens,
+          outputTokens: appSummary.outputTokens,
+          avgTokensPerRequest: appSummary.avgTokensPerRequest,
+          codeGenerations: appSummary.codeGenerations,
+          codeAcceptances: appSummary.codeAcceptances,
+          locAdded: appSummary.locAdded,
+          locDeleted: appSummary.locDeleted,
+        }
+      : null;
+
     let summary: UserSummary | null = null;
     if (summaryRow && summaryRow.totalActiveDays > 0) {
       const agentAdded = agentLocRow?.agentLocAdded ?? 0;
@@ -314,6 +373,7 @@ async function handler(request: NextRequest) {
         usedCodeReview: summaryRow.usedCodeReview === 1,
         usedCodingAgent: summaryRow.usedCodingAgent === 1,
         usedCodeReviewPassive: summaryRow.usedCodeReviewPassive === 1,
+        usedCopilotApp,
       };
     }
 
@@ -417,6 +477,7 @@ async function handler(request: NextRequest) {
       featureUsage,
       chatModes,
       cliStats,
+      copilotAppStats,
     }, {
       headers: { "Cache-Control": "private, max-age=300, stale-while-revalidate=60" },
     });
