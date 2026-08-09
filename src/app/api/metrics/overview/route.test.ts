@@ -446,4 +446,79 @@ describe("overview route — Copilot App featureUsage.app", () => {
     expect(dayRow.chat).toBe(42);
     expect(dayRow.agent).toBe(17);
   });
+
+  it("enterprise-direct branch: source decision is made ONCE per range — a day covered by user_daily_metrics never mixes with a day that legacy-falls-back, even within the same response", async () => {
+    const { upsertEnterpriseDayMetrics } = await import("@/lib/db/metrics-repo");
+    const testDay = yesterday();
+    const prevDay = (() => {
+      const d = new Date(testDay);
+      d.setDate(d.getDate() - 1);
+      return d.toISOString().split("T")[0];
+    })();
+
+    // Only `testDay` has user_daily_metrics rows — `prevDay` has none, so
+    // getFeatureUsageDaily returns exactly one row for the whole 2-day range.
+    // Because at least one row exists in range, the covered day must use the
+    // distinct-user count (1) and the uncovered day must report 0 — NOT the
+    // uncovered day's legacy totals_by_feature values (42/17) — proving the
+    // source decision is made once for the whole range, not per day.
+    db.prepare(`
+      INSERT INTO user_daily_metrics (
+        day, enterprise_id, enterprise_slug, user_id, user_login,
+        used_agent, used_chat, used_cli, used_copilot_app
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(testDay, "ent1", "ent1", 1, "alice", 1, 1, 0, 0);
+
+    const totals_by_feature = [
+      { feature: "chat_panel", code_generation_activity_count: 0, code_acceptance_activity_count: 0, loc_added_sum: 0, loc_deleted_sum: 0, loc_suggested_to_add_sum: 0, loc_suggested_to_delete_sum: 0, user_initiated_interaction_count: 42 },
+      { feature: "agent_edit", code_generation_activity_count: 17, code_acceptance_activity_count: 0, loc_added_sum: 0, loc_deleted_sum: 0, loc_suggested_to_add_sum: 0, loc_suggested_to_delete_sum: 0, user_initiated_interaction_count: 0 },
+    ];
+
+    for (const day of [prevDay, testDay]) {
+      upsertEnterpriseDayMetrics("ent1", {
+        day,
+        enterprise_id: "ent1",
+        daily_active_users: 10,
+        weekly_active_users: 10,
+        monthly_active_users: 10,
+        monthly_active_agent_users: 5,
+        monthly_active_chat_users: 3,
+        daily_active_cli_users: 0,
+        daily_active_copilot_app_users: 0,
+        code_generation_activity_count: 17,
+        code_acceptance_activity_count: 0,
+        user_initiated_interaction_count: 42,
+        loc_suggested_to_add_sum: 0,
+        loc_suggested_to_delete_sum: 0,
+        loc_added_sum: 0,
+        loc_deleted_sum: 0,
+        totals_by_ide: [],
+        totals_by_feature,
+        totals_by_language_feature: [],
+        totals_by_model_feature: [],
+        totals_by_language_model: [],
+      });
+    }
+
+    const GET = await getHandler();
+    const res = await GET(new NextRequest("http://localhost/api/metrics/overview?days=2"));
+    expect(res.status).toBe(200);
+    const json = await res.json();
+
+    expect(json.dataSource).toBe("enterprise");
+    const coveredRow = json.featureUsage.find((t: { day: string }) => t.day === testDay);
+    const uncoveredRow = json.featureUsage.find((t: { day: string }) => t.day === prevDay);
+    expect(coveredRow).toBeDefined();
+    expect(uncoveredRow).toBeDefined();
+
+    // Covered day: distinct-user counts from user_daily_metrics.
+    expect(coveredRow.chat).toBe(1);
+    expect(coveredRow.agent).toBe(1);
+
+    // Uncovered day: 0, not the legacy 42/17 — since at least one row exists
+    // in range, every day must use user-level counts (missing days become 0),
+    // never mixing units within the same response.
+    expect(uncoveredRow.chat).toBe(0);
+    expect(uncoveredRow.agent).toBe(0);
+  });
 });
