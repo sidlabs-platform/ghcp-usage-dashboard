@@ -54,6 +54,7 @@
 import {
   getLicensingConfig,
   type ResolvedLicensingConfig,
+  type DatedAllowance,
 } from "@/lib/config/dashboard-config";
 import { getResolvedOrgsForEnterprise as defaultGetResolvedOrgsForEnterprise } from "@/lib/config/enterprise-config";
 import { heartbeatSyncLock } from "./metrics-repo";
@@ -70,6 +71,7 @@ import {
   type FetchAicConsumptionOptions,
   type FetchAicConsumptionResult,
   type AicConsumptionUserResult,
+  type AicConsumptionOk,
   type AicConsumptionSource,
 } from "@/lib/github/aic-consumption-client";
 import {
@@ -105,6 +107,7 @@ import {
 import {
   materializeLicensePeriodRows as pureMaterializeLicensePeriodRows,
   licensePeriodCanonicalKey,
+  normalizePlanKey,
   type MaterializeLicensePeriodInput,
   type MaterializeLicensePeriodResult,
   type MaterializedLicensePeriodRow,
@@ -131,6 +134,7 @@ import {
   replaceMaterializedPeriod,
   queryLicensePeriodRows,
   hasMaterializedRows,
+  stableStringify,
   type LicenseSeatSnapshotInput,
   type LicenseAuditEventInput,
   type LicenseIdentityRecordInput,
@@ -151,6 +155,7 @@ import {
 import type { LicensePeriodFilterQuery } from "@/lib/types/licensing";
 import { promises as fsPromises } from "node:fs";
 import * as nodePath from "node:path";
+import { createHash } from "node:crypto";
 
 // ── Public progress/result types ─────────────────────────────────────────
 
@@ -260,7 +265,18 @@ export interface LicenseHistorySyncDeps {
   onCurrentSnapshotPersisted?: (enterpriseSlug: string, period: string) => void;
 }
 
-/** Minimal shape this module reads off a persisted period row (see `LicensePeriodRowRecord`). Declared locally so this module doesn't need the full read-side repo type. */
+/**
+ * Shape this module reads off a persisted period row (see
+ * `LicensePeriodRowRecord`) when reusing an already-materialized row for a
+ * skipped historical period. Declared locally so this module doesn't need
+ * the full read-side repo type, but mirrors every real, persisted
+ * reconciliation field `LicensePeriodRowRecord` carries (everything except
+ * `enterpriseSlug`, which the caller already knows and supplies separately)
+ * — a skipped period must reconstruct the exact same materialized row shape
+ * a freshly-materialized period would produce, never inventing zeros/
+ * "unknown" placeholders for data that is actually persisted (see
+ * `toMaterializedRowLike`).
+ */
 export interface LicensePeriodRowLike {
   billingPeriod: string;
   orgLogin: string;
@@ -271,8 +287,26 @@ export interface LicensePeriodRowLike {
   externalIdentity: string | null;
   identityResolutionSource: string;
   accountState: string;
+  licenseAssignedDate: string | null;
+  userRevokedDate: string | null;
+  planType: string;
   seatStatus: string;
+  assignedVia: string;
+  lastActivityAt: string | null;
+  licenseCost: number;
+  defaultAicCredits: number;
+  defaultAicUsd: number;
+  aicAssignedUsd: number;
+  aicAssignedRule: string;
+  aicConsumedCredits: number;
+  aicConsumedUsd: number;
+  currency: string;
+  rowSource: string;
+  consumptionSource: string | null;
   historyConfidence: "exact_snapshot" | "audit_reconstructed" | "live_snapshot_only" | "unrecoverable";
+  dataQualityNotes: unknown[];
+  asOfUtc: string;
+  generatedAtUtc: string;
 }
 
 /** Minimal shape this module reads off a listed run (see `LicenseRunRecord`). */
@@ -454,21 +488,139 @@ function isCapabilityWideAicFailure(results: AicConsumptionUserResult[]): boolea
   return failureStatuses.every((status) => status === failureStatuses[0]);
 }
 
-/** Deterministic (order-independent) fingerprint over a set of source-derived string tokens for one period, so historical-period skip decisions never depend on array/iteration order. */
-function computePeriodFingerprint(tokens: string[]): string {
-  const sorted = [...tokens].sort();
-  let hash = 0;
-  for (const token of sorted) {
-    for (let i = 0; i < token.length; i++) {
-      hash = (hash * 31 + token.charCodeAt(i)) | 0;
-    }
-    hash = (hash * 31 + 0x1f) | 0; // token separator
+/**
+ * Task 9 re-review fix #5: defend against duplicate replicated consumption
+ * when the multi-org AI-Credit fallback (see `isCapabilityWideAicFailure`
+ * above) queries more than one org and a single holder happens to have a
+ * seat in more than one of them. A holder with genuinely distinct per-org
+ * consumption keeps every org-attributed record — that is legitimate
+ * multi-org usage. But when two or more org-scoped responses return
+ * byte-identical, *non-zero* `(credits, grossUsd)` for the very same
+ * holder in the same billing period, that is not real distinct
+ * consumption — it is the same underlying usage figure replicated by the
+ * endpoint across each org query — so this collapses the group into a
+ * single deterministic `(unattributed)` record (`orgLogin: null`) instead
+ * of persisting/materializing N duplicate org-attributed copies. Grouped
+ * and iterated by sorted `(billingPeriod, userLogin)` key so output order
+ * never depends on org iteration order. All-zero identical values are
+ * left alone (never collapsed) since a zero result carries no consumption
+ * to conflate.
+ */
+function collapseDuplicateOrgFallbackConsumption(results: AicConsumptionUserResult[], warnings: string[]): AicConsumptionUserResult[] {
+  const okResults = results.filter((r): r is AicConsumptionOk => r.status === "ok");
+  const otherResults = results.filter((r) => r.status !== "ok");
+
+  const groups = new Map<string, AicConsumptionOk[]>();
+  for (const result of okResults) {
+    const key = `${result.record.billingPeriod}\u0000${result.record.userLogin.toLowerCase()}`;
+    const list = groups.get(key) ?? [];
+    list.push(result);
+    groups.set(key, list);
   }
-  return `fnv:${(hash >>> 0).toString(16)}`;
+
+  const collapsed: AicConsumptionOk[] = [];
+  let collapsedHolderCount = 0;
+  let collapsedResponseCount = 0;
+  for (const key of [...groups.keys()].sort()) {
+    const group = groups.get(key)!;
+    if (group.length === 1) {
+      collapsed.push(group[0]);
+      continue;
+    }
+    const credits = group[0].record.credits ?? 0;
+    const grossUsd = group[0].record.grossUsd ?? 0;
+    const isNonZero = credits !== 0 || grossUsd !== 0;
+    const allIdentical = group.every((r) => (r.record.credits ?? 0) === credits && (r.record.grossUsd ?? 0) === grossUsd);
+    if (isNonZero && allIdentical) {
+      collapsed.push({ ...group[0], record: { ...group[0].record, orgLogin: null } });
+      collapsedHolderCount++;
+      collapsedResponseCount += group.length;
+    } else {
+      // Distinct per-org values (legitimate multi-org consumption), or
+      // identical-but-all-zero values — never collapsed.
+      collapsed.push(...group);
+    }
+  }
+
+  if (collapsedHolderCount > 0) {
+    warnings.push(
+      `AI-Credit org fallback returned byte-identical non-zero consumption for ${collapsedHolderCount} holder(s) across ${collapsedResponseCount} org-scoped response(s) in the same billing period; collapsed each to a single unattributed record rather than persisting duplicate org-attributed rows.`,
+    );
+  }
+
+  return [...collapsed, ...otherResults];
 }
 
-/** Adapt a persisted, already-materialized period row (reused for a skipped historical period) into the shape reconciliation checks expect. Derived cost/utilization fields are not re-derived (not needed by any check function consumed here — see module doc). */
+/** Round to 2 decimal places, matching `materialize-license-period.ts`'s own `round2` convention exactly (kept as a tiny local copy — this module intentionally stays free of that module's internal, unexported helpers). Never returns a non-finite value. */
+function round2(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  return Math.round((value + Number.EPSILON) * 100) / 100;
+}
+
+/**
+ * Structured, deterministic input to one period's fingerprint — every
+ * category of source-derived data that can change Task 7 rows or
+ * reconciliation-check outcomes for that period (see module doc's
+ * "historical-period skip fingerprints" design note). Every array field
+ * must already be a *sorted* array of canonicalized string tokens (each
+ * produced via `stableStringify` over a token object) so fingerprint
+ * equality never depends on array/iteration order — only `computePeriodFingerprint`
+ * itself sorts nothing further.
+ */
+interface PeriodFingerprintInput {
+  period: string;
+  /** Normalized (org, holder, action, occurredAt, eventId, source) tokens for this period's merged audit events — never the whole-archive-file fingerprint, so an archive edit affecting only one period never forces every other period to rerun. */
+  auditEvents: string[];
+  /** (org, holder, source, credits, grossUsd) tokens for this period's chosen/available consumption records. */
+  consumption: string[];
+  /** Per-holder resolved-identity tokens (resolved login, resolution source, account state, numeric GitHub id) for every holder present in this period — never the raw external identity value. */
+  identities: string[];
+  /** (org, holder, assignedAt, revokedAt, confidence, source) tokens for this period's seat ledger rows. */
+  ledger: string[];
+  /** Org billing comparator snapshot tokens for this period, where they affect `checkSeatCount`/`checkAicGrossVsNet`. */
+  orgBilling: string[];
+  pricing: {
+    licenseCost: Record<string, number>;
+    aicAllowance: Record<string, number>;
+    perUserBudgetUsd: Record<string, number>;
+    creditToUsd: number;
+    currency: string;
+    /** Only the dated-allowance windows whose range actually covers this period. */
+    datedAllowances: string[];
+  };
+  /** Whether this period's consumption was sourced via the per-org fallback (affects row provenance/checks). */
+  enterpriseApiUnavailable: boolean;
+}
+
+/**
+ * Cryptographic (SHA-256), deterministic fingerprint over a period's full
+ * fingerprint input — replaces a prior weak, collision-prone 32-bit
+ * FNV-like hash. `stableStringify` recursively sorts object keys (see
+ * `license-history-repo.ts`), and every array field on the input is already
+ * pre-sorted by the caller, so two logically-equivalent inputs (same
+ * content, any construction order) always hash identically, while any
+ * semantic change to a single field changes the digest.
+ */
+function computePeriodFingerprint(input: PeriodFingerprintInput): string {
+  return `sha256:${createHash("sha256").update(stableStringify(input)).digest("hex")}`;
+}
+
+/** True when a configured dated-allowance window's range covers the given "YYYY-MM" period — mirrors `materialize-license-period.ts`'s own `resolveAllowanceCredits` window-matching convention (compares the period's first-of-month date against `start`/`end` lexicographically) so fingerprinting and materialization always agree on which windows are "in effect" for a period. */
+function datedAllowanceAffectsPeriod(allowance: DatedAllowance, period: string): boolean {
+  const periodStartDate = `${period}-01`;
+  if (periodStartDate < allowance.start) return false;
+  if (allowance.end && periodStartDate > allowance.end) return false;
+  return true;
+}
+
+/** Adapt a persisted, already-materialized period row (reused for a skipped historical period) into the shape reconciliation checks expect — reusing every real, persisted field verbatim (see `LicensePeriodRowLike`) rather than inventing zero/"unknown" placeholders. Only the four cost/utilization fields that are genuinely never persisted (`utilizationPct`, `overageCredits`, `overageUsd`, `totalCost`) are re-derived here, using the exact same formula `materialize-license-period.ts` uses to produce them the first time, from the row's own real persisted cost/consumption fields. */
 function toMaterializedRowLike(row: LicensePeriodRowLike, enterpriseSlug: string): MaterializedLicensePeriodRow {
+  const effectiveBudgetUsd = row.aicAssignedUsd > 0 ? row.aicAssignedUsd : row.defaultAicUsd > 0 ? row.defaultAicUsd : 0;
+  const utilizationPct = effectiveBudgetUsd > 0 ? round2((row.aicConsumedUsd / effectiveBudgetUsd) * 100) : 0;
+  const overageUsd = Math.max(round2(row.aicConsumedUsd - effectiveBudgetUsd), 0);
+  const overageCredits = Math.max(round2(row.aicConsumedCredits - row.defaultAicCredits), 0);
+  const totalCost = round2(row.licenseCost + overageUsd);
+
   return {
     enterpriseSlug,
     billingPeriod: row.billingPeriod,
@@ -480,30 +632,30 @@ function toMaterializedRowLike(row: LicensePeriodRowLike, enterpriseSlug: string
     externalIdentity: row.externalIdentity,
     identityResolutionSource: row.identityResolutionSource,
     accountState: row.accountState,
-    licenseAssignedDate: null,
-    userRevokedDate: null,
-    planType: "unknown",
+    licenseAssignedDate: row.licenseAssignedDate,
+    userRevokedDate: row.userRevokedDate,
+    planType: normalizePlanKey(row.planType),
     seatStatus: row.seatStatus,
-    assignedVia: "direct",
-    lastActivityAt: null,
-    licenseCost: 0,
-    defaultAicCredits: 0,
-    defaultAicUsd: 0,
-    aicAssignedUsd: 0,
-    aicAssignedRule: "reused_skip",
-    aicConsumedCredits: 0,
-    aicConsumedUsd: 0,
-    currency: "USD",
-    rowSource: "reused_skip",
-    consumptionSource: null,
+    assignedVia: row.assignedVia,
+    lastActivityAt: row.lastActivityAt,
+    licenseCost: row.licenseCost,
+    defaultAicCredits: row.defaultAicCredits,
+    defaultAicUsd: row.defaultAicUsd,
+    aicAssignedUsd: row.aicAssignedUsd,
+    aicAssignedRule: row.aicAssignedRule,
+    aicConsumedCredits: row.aicConsumedCredits,
+    aicConsumedUsd: row.aicConsumedUsd,
+    currency: row.currency,
+    rowSource: row.rowSource,
+    consumptionSource: row.consumptionSource,
     historyConfidence: row.historyConfidence,
-    dataQualityNotes: [],
-    utilizationPct: 0,
-    overageCredits: 0,
-    overageUsd: 0,
-    totalCost: 0,
-    asOfUtc: "",
-    generatedAtUtc: "",
+    dataQualityNotes: (row.dataQualityNotes as string[] | undefined) ?? [],
+    utilizationPct,
+    overageCredits,
+    overageUsd,
+    totalCost,
+    asOfUtc: row.asOfUtc,
+    generatedAtUtc: row.generatedAtUtc,
   };
 }
 
@@ -719,25 +871,45 @@ export async function syncLicenseHistoryForEnterprise(
   const currentPeriod = currentPeriodOf(now);
   const warnings: string[] = [];
 
-  // ── preflight ───────────────────────────────────────────────────────
-  deps.onProgress?.({ enterprise: enterpriseSlug, source: "preflight", current: 0, total: 1, message: `Checking auth capabilities for ${sanitizeForLog(enterpriseSlug)}...` });
-  const preflight = await deps.preflightEnterpriseAuth(enterpriseSlug);
-  deps.heartbeatSyncLock();
-  if (!preflight.ok) {
-    const failedCapabilities = preflight.capabilities.filter((c) => c.required && c.status !== "supported");
-    const message = `Required licensing capability preflight failed for ${enterpriseSlug}: ${failedCapabilities.map((c) => c.message).join(" ")}`;
-    return failedResult(enterpriseSlug, requestedPeriods, null, message, warnings);
-  }
-  for (const capability of preflight.capabilities) {
-    if (!capability.required && capability.status !== "supported") {
-      warnings.push(capability.message);
-    }
-  }
-
-  // ── start durable run ────────────────────────────────────────────────
+  // ── start durable run (Task 9 re-review fix #4) ─────────────────────
+  // Started *before* preflight so a required-capability preflight failure
+  // still produces a durable, operator-visible run record — never a
+  // silent, unrecorded failure. (`config.history.enabled` is checked above
+  // this point, so a disabled history sync remains zero-side-effect: no
+  // run is ever started for it.)
   const runId = deps.startLicenseRun({ enterpriseSlug, requestedPeriods, startedAt: now.toISOString() });
 
   try {
+    // ── preflight ─────────────────────────────────────────────────────
+    deps.onProgress?.({ enterprise: enterpriseSlug, source: "preflight", current: 0, total: 1, message: `Checking auth capabilities for ${sanitizeForLog(enterpriseSlug)}...` });
+    const preflight = await deps.preflightEnterpriseAuth(enterpriseSlug);
+    deps.heartbeatSyncLock();
+    if (!preflight.ok) {
+      const failedCapabilities = preflight.capabilities.filter((c) => c.required && c.status !== "supported");
+      const message = `Required licensing capability preflight failed for ${enterpriseSlug}: ${failedCapabilities.map((c) => c.message).join(" ")}`;
+      // Atomically record the failed run's diagnostics (source state/checks
+      // stay empty — no phase beyond preflight was ever attempted) so the
+      // failure is durably visible via the same run history/diagnostics
+      // surfaces a successful run uses, then return without attempting any
+      // later phase.
+      try {
+        deps.recordLicenseRunDiagnostics({
+          runId,
+          finish: { status: "failed", completedAt: deps.clock().toISOString(), errorMessage: message, warnings },
+          checks: [],
+          sourceStates: [],
+        });
+      } catch (persistErr) {
+        console.error("[LicenseHistorySync] Failed to persist failed-run diagnostics for %s:", sanitizeForLog(enterpriseSlug), persistErr);
+      }
+      return failedResult(enterpriseSlug, requestedPeriods, runId, message, warnings);
+    }
+    for (const capability of preflight.capabilities) {
+      if (!capability.required && capability.status !== "supported") {
+        warnings.push(capability.message);
+      }
+    }
+
     const sourceStates: LicenseSourceStateInput[] = [];
     const orgs = deps.getResolvedOrgsForEnterprise(enterpriseSlug);
 
@@ -874,26 +1046,107 @@ export async function syncLicenseHistoryForEnterprise(
       sourceStates.push({ enterpriseSlug, source: "audit_api", lastSyncedAt: now.toISOString(), status: "warning", errorMessage: message });
     }
 
-    // Merge configured archive import + API events, deterministically
-    // deduped by (eventId, source) — configured imports are ingested first
-    // (see module doc's exact phase order), so an archive event and an API
-    // event that happen to share an id/source pair keep the archive's copy.
-    const archiveAuditEvents: (SeatLedgerAuditEventInput & { observedLogin: string | null })[] = archiveImport.records.map((event) => ({
-      eventId: event.eventId,
-      source: "audit_archive",
-      orgLogin: event.orgLogin ?? "",
-      holderKey: `login:${(event.observedLogin ?? "unknown").toLowerCase()}`,
-      githubUserId: null,
-      action: event.action === "cancel" ? "cancel" : "assign",
-      occurredAt: event.occurredAt,
-      observedLogin: event.observedLogin ?? null,
-    }));
-    const mergedAuditEventsByKey = new Map<string, SeatLedgerAuditEventInput & { observedLogin: string | null }>();
-    for (const event of [...archiveAuditEvents, ...apiAuditEvents]) {
-      const key = `${event.eventId}\u0000${event.source}`;
-      if (!mergedAuditEventsByKey.has(key)) mergedAuditEventsByKey.set(key, event);
+    // Task 9 re-review fix #3: build an unambiguous observed-login (lowercased)
+    // → numeric GitHub ID map from normalized live seats and API audit events
+    // — the only two sources in scope that can carry a verified numeric
+    // GitHub ID alongside an observed login. Archive events never carry a
+    // numeric ID (see `audit-archive-import.ts`), so without this map an
+    // archive-derived `login:` holderKey can never correlate with the same
+    // real person's `id:`-keyed API/seat events, fragmenting ledger history.
+    // A login maps only when every observed numeric ID for it agrees; an
+    // ambiguous login (2+ distinct IDs across sources) is never guessed —
+    // its archive events keep their login-based holderKey, and a safe
+    // (count-only, no login/PII) warning is emitted instead.
+    const idsByLogin = new Map<string, Set<number>>();
+    const recordLoginId = (login: string | null | undefined, githubUserId: number | null | undefined) => {
+      if (!login || githubUserId == null) return;
+      const key = login.toLowerCase();
+      const set = idsByLogin.get(key) ?? new Set<number>();
+      set.add(githubUserId);
+      idsByLogin.set(key, set);
+    };
+    for (const seat of liveSeats) recordLoginId(seat.observedLogin, seat.githubUserId);
+    for (const event of apiAuditEvents) recordLoginId(event.observedLogin, event.githubUserId);
+    const loginToGithubId = new Map<string, number>();
+    let ambiguousLoginCount = 0;
+    for (const [login, ids] of idsByLogin) {
+      if (ids.size === 1) {
+        loginToGithubId.set(login, [...ids][0]);
+      } else {
+        ambiguousLoginCount++;
+      }
     }
-    const mergedAuditEvents = [...mergedAuditEventsByKey.values()];
+    if (ambiguousLoginCount > 0) {
+      warnings.push(
+        `Skipped GitHub ID correlation for ${ambiguousLoginCount} observed login(s) with ambiguous/conflicting numeric IDs across sources; retaining login-based holder keys for those events.`,
+      );
+    }
+
+    // Merge configured archive import + API events. Archive events are
+    // first upgraded to an `id:`-keyed holderKey wherever the login→ID map
+    // above unambiguously resolves them (see fix #3 above) — this must
+    // happen *before* dedup/grouping so an archive-sourced event and an
+    // API-sourced event describing the same real holder always share a
+    // `holderKey`, letting the ledger reconstruct a single assignment
+    // interval across "assign in archive, cancel via API" (or vice versa).
+    const archiveAuditEvents: (SeatLedgerAuditEventInput & { observedLogin: string | null })[] = archiveImport.records.map((event) => {
+      const observedLogin = event.observedLogin ?? null;
+      const mappedId = observedLogin ? loginToGithubId.get(observedLogin.toLowerCase()) ?? null : null;
+      return {
+        eventId: event.eventId,
+        source: "audit_archive",
+        orgLogin: event.orgLogin ?? "",
+        holderKey: mappedId != null ? `id:${mappedId}` : `login:${(observedLogin ?? "unknown").toLowerCase()}`,
+        githubUserId: mappedId,
+        action: event.action === "cancel" ? "cancel" : "assign",
+        occurredAt: event.occurredAt,
+        observedLogin,
+      };
+    });
+
+    // Deterministic two-pass merge/dedupe (Task 9 re-review fix #3):
+    //   1) exact eventId dedupe, regardless of source — the same literal
+    //      event id ingested via both an archive re-import and a live API
+    //      fetch is one event, not two. Archive wins the tie (matches the
+    //      module's documented phase order: configured imports ingested
+    //      first), but enrichment fields (`githubUserId`/`observedLogin`)
+    //      are backfilled from whichever copy has them, in case the
+    //      archive copy is the poorer-evidence one.
+    //   2) semantic-key dedupe among survivors — `(orgLogin, holderKey,
+    //      action, occurredAt)` — catches equivalent normalized records
+    //      that happen to carry different source-generated event ids
+    //      (e.g. an archive export and a live API page describing the
+    //      exact same occurrence). Never collapses events that differ in
+    //      holder, org, action, or timestamp — an "assign in archive" +
+    //      "cancel in API" pair for the same holder always survives as two
+    //      distinct events (one ledger interval, via the shared
+    //      holderKey — not one collapsed event).
+    type MergeableAuditEvent = SeatLedgerAuditEventInput & { observedLogin: string | null };
+    function mergeEnrichment(primary: MergeableAuditEvent, secondary: MergeableAuditEvent): MergeableAuditEvent {
+      return {
+        ...primary,
+        githubUserId: primary.githubUserId ?? secondary.githubUserId ?? null,
+        observedLogin: primary.observedLogin ?? secondary.observedLogin ?? null,
+      };
+    }
+    function preferArchive(a: MergeableAuditEvent, b: MergeableAuditEvent): MergeableAuditEvent {
+      const [archiveEvent, otherEvent] = a.source === "audit_archive" ? [a, b] : b.source === "audit_archive" ? [b, a] : [a, b];
+      return mergeEnrichment(archiveEvent, otherEvent);
+    }
+
+    const byEventId = new Map<string, MergeableAuditEvent>();
+    for (const event of [...archiveAuditEvents, ...apiAuditEvents]) {
+      const existing = byEventId.get(event.eventId);
+      byEventId.set(event.eventId, existing ? preferArchive(existing, event) : event);
+    }
+
+    const bySemanticKey = new Map<string, MergeableAuditEvent>();
+    for (const event of byEventId.values()) {
+      const key = `${event.orgLogin}\u0000${event.holderKey}\u0000${event.action}\u0000${event.occurredAt}`;
+      const existing = bySemanticKey.get(key);
+      bySemanticKey.set(key, existing ? preferArchive(existing, event) : event);
+    }
+    const mergedAuditEvents = [...bySemanticKey.values()];
     deps.upsertAuditEvents(
       enterpriseSlug,
       mergedAuditEvents.map((event) => ({
@@ -1156,6 +1409,11 @@ export async function syncLicenseHistoryForEnterprise(
                 // discards results already collected from other orgs.
               }
             }
+            // Task 9 re-review fix #5: defend against the same holder's
+            // consumption being replicated byte-identically across
+            // multiple org-scoped fallback responses (see
+            // `collapseDuplicateOrgFallbackConsumption` doc comment).
+            chosenResults = collapseDuplicateOrgFallbackConsumption(chosenResults, warnings);
           }
 
           const aicPersist: LicenseAicConsumptionInput[] = [];
@@ -1289,10 +1547,6 @@ export async function syncLicenseHistoryForEnterprise(
     const priorRuns = deps.listLicenseRuns(enterpriseSlug, 20).filter((r) => r.status === "success" || r.status === "warning");
     const priorFingerprints = (priorRuns[0]?.sourceStats?.periodFingerprints as Record<string, string> | undefined) ?? {};
 
-    const allConsumptionForFingerprint = consumptionRecordsWithPeriod.map((c) => `${c.billingPeriod}:${c.orgLogin ?? ""}:${c.holderKey}:${c.credits ?? 0}:${c.grossUsd ?? 0}`);
-    const auditFingerprintTokens = mergedAuditEvents.map((e) => `${e.eventId}:${e.source}`);
-    const archiveFingerprint = archiveImport.sourceFingerprint;
-
     const nextPeriodFingerprints: Record<string, string> = { ...priorFingerprints };
     const materializedPeriods: string[] = [];
     const skippedPeriods: string[] = [];
@@ -1304,9 +1558,57 @@ export async function syncLicenseHistoryForEnterprise(
       const period = recoverablePeriods[i];
       deps.onProgress?.({ enterprise: enterpriseSlug, source: "materialize", period, current: i + 1, total: recoverablePeriods.length, message: `Materializing ${period} for ${sanitizeForLog(enterpriseSlug)}...` });
 
-      const periodAuditTokens = auditFingerprintTokens.filter((_, idx) => mergedAuditEvents[idx].occurredAt.slice(0, 7) === period);
-      const periodConsumptionTokens = allConsumptionForFingerprint.filter((_, idx) => consumptionRecordsWithPeriod[idx].billingPeriod === period);
-      const fingerprint = computePeriodFingerprint([archiveFingerprint, ...periodAuditTokens, ...periodConsumptionTokens]);
+      const periodAuditTokens = mergedAuditEvents
+        .filter((e) => e.occurredAt.slice(0, 7) === period)
+        .map((e) => stableStringify({ eventId: e.eventId, source: e.source, orgLogin: e.orgLogin, holderKey: e.holderKey, action: e.action, occurredAt: e.occurredAt }))
+        .sort();
+      const periodConsumptionTokens = consumptionRecordsWithPeriod
+        .filter((c) => c.billingPeriod === period)
+        .map((c) => stableStringify({ orgLogin: c.orgLogin ?? null, holderKey: c.holderKey, source: c.source, credits: c.credits ?? 0, grossUsd: c.grossUsd ?? 0 }))
+        .sort();
+      const periodHolderKeys = new Set(ledger.rows.filter((row) => row.billingPeriod === period).map((row) => row.holderKey));
+      const periodIdentityTokens = [...periodHolderKeys]
+        .map((holderKey) => {
+          const identity = identities[holderKey];
+          return stableStringify({
+            holderKey,
+            resolvedUserLogin: identity?.resolvedUserLogin ?? null,
+            identityResolutionSource: identity?.source ?? "unresolved",
+            accountState: identity?.accountState ?? "unknown",
+            githubUserId: identity?.githubUserId ?? null,
+          });
+        })
+        .sort();
+      const periodLedgerTokens = ledger.rows
+        .filter((row) => row.billingPeriod === period)
+        .map((row) => stableStringify({ orgLogin: row.orgLogin, holderKey: row.holderKey, assignedAt: row.assignedAt, revokedAt: row.revokedAt, confidence: row.confidence, source: row.source }))
+        .sort();
+      const periodOrgBillingTokens = orgBillingSnapshots
+        .filter((snapshot) => snapshot.billingPeriod === period)
+        .map((snapshot) => stableStringify({ orgLogin: snapshot.orgLogin, planType: snapshot.planType, totalSeats: snapshot.totalSeats, pendingCancellation: snapshot.pendingCancellation }))
+        .sort();
+      const periodDatedAllowanceTokens = config.datedAllowances
+        .filter((allowance) => datedAllowanceAffectsPeriod(allowance, period))
+        .map((allowance) => stableStringify(allowance))
+        .sort();
+
+      const fingerprint = computePeriodFingerprint({
+        period,
+        auditEvents: periodAuditTokens,
+        consumption: periodConsumptionTokens,
+        identities: periodIdentityTokens,
+        ledger: periodLedgerTokens,
+        orgBilling: periodOrgBillingTokens,
+        pricing: {
+          licenseCost: config.licenseCost,
+          aicAllowance: config.aicAllowance,
+          perUserBudgetUsd: config.perUserBudgetUsd,
+          creditToUsd: config.creditToUsd,
+          currency: config.currency,
+          datedAllowances: periodDatedAllowanceTokens,
+        },
+        enterpriseApiUnavailable,
+      });
 
       const canSkip =
         period !== currentPeriod &&

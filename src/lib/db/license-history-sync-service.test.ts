@@ -23,12 +23,14 @@ import type { NormalizedAuditEvent } from "@/lib/licensing/audit-archive-import"
 import type { AicCsvConsumptionRecord } from "@/lib/licensing/aic-csv-import";
 import type { NormalizedIdentityRecord as ImportedIdentityMapRecord } from "@/lib/licensing/identity-map-import";
 import type { LicenseRunDiagnosticsInput, StartLicenseRunInput } from "./license-run-repo";
+import type { LicenseAicConsumptionInput } from "./license-history-repo";
 import type {
   LicenseHistorySyncDeps,
   LicenseHistorySyncProgress,
   LicenseRunSummary,
   CaptureCurrentLicenseSeatSnapshotResult,
   LicenseSnapshotFsOps,
+  LicensePeriodRowLike,
 } from "./license-history-sync-service";
 import { promises as fsReal } from "node:fs";
 import { tmpdir } from "node:os";
@@ -424,6 +426,144 @@ describe("license-history-sync-service", () => {
     });
   });
 
+  // ── Task 9 re-review fix #3: archive/API holder-key correlation ─────
+  describe("archive/API holder-key correlation", () => {
+    it("dedupes the same literal eventId appearing in both archive and API sources into a single merged event, archive wins, enrichment backfilled", async () => {
+      const archiveEvent: NormalizedAuditEvent = {
+        eventId: "shared-1",
+        orgLogin: "acme-org",
+        action: "assign",
+        occurredAt: "2025-01-05T00:00:00.000Z",
+        observedLogin: "alice",
+        externalIdentity: null,
+        assignedVia: null,
+        source: "audit_archive",
+        raw: {},
+      };
+      const apiEvent: NormalizedCopilotAuditEvent = {
+        eventId: "shared-1",
+        orgLogin: "acme-org",
+        action: "assign",
+        occurredAt: "2025-01-05T00:00:00.000Z",
+        githubUserId: 1,
+        observedLogin: "alice",
+        externalIdentity: null,
+        team: null,
+        source: "audit_log",
+        raw: {} as never,
+      };
+      let capturedEvents: { eventId: string; source: string; githubUserId: number | null }[] = [];
+      const deps = makeDeps({
+        importAuditArchive: vi.fn(() => ({ records: [archiveEvent], warnings: [], skippedRows: 0, sourceFingerprint: "fp" })),
+        getEnterpriseAuditEvents: vi.fn(async (): Promise<AuditFetchResult> => ({ status: "ok", events: [apiEvent], truncated: false, warnings: [] })),
+        upsertAuditEvents: vi.fn((_enterpriseSlug: string, events) => {
+          capturedEvents = events.map((e: { eventId: string; source: string; githubUserId: number | null }) => ({ eventId: e.eventId, source: e.source, githubUserId: e.githubUserId }));
+          return events.length;
+        }),
+      });
+
+      await syncLicenseHistoryForEnterprise("acme", deps);
+
+      expect(capturedEvents).toHaveLength(1);
+      expect(capturedEvents[0].eventId).toBe("shared-1");
+      expect(capturedEvents[0].source).toBe("audit_archive");
+      // Enrichment (numeric GitHub id) is backfilled from the losing (API) copy.
+      expect(capturedEvents[0].githubUserId).toBe(1);
+    });
+
+    it("correlates an archive-sourced assign with an API-sourced cancel for the same holder via a shared holderKey, feeding one ledger interval", async () => {
+      const archiveAssign: NormalizedAuditEvent = {
+        eventId: "assign-1",
+        orgLogin: "acme-org",
+        action: "assign",
+        occurredAt: "2025-01-05T00:00:00.000Z",
+        observedLogin: "alice",
+        externalIdentity: null,
+        assignedVia: null,
+        source: "audit_archive",
+        raw: {},
+      };
+      const apiCancel: NormalizedCopilotAuditEvent = {
+        eventId: "cancel-1",
+        orgLogin: "acme-org",
+        action: "cancel",
+        occurredAt: "2025-01-20T00:00:00.000Z",
+        githubUserId: 1,
+        observedLogin: "alice",
+        externalIdentity: null,
+        team: null,
+        source: "audit_log",
+        raw: {} as never,
+      };
+      let ledgerAuditEvents: { eventId: string; holderKey: string; action: string }[] = [];
+      const deps = makeDeps({
+        importAuditArchive: vi.fn(() => ({ records: [archiveAssign], warnings: [], skippedRows: 0, sourceFingerprint: "fp" })),
+        getEnterpriseAuditEvents: vi.fn(async (): Promise<AuditFetchResult> => ({ status: "ok", events: [apiCancel], truncated: false, warnings: [] })),
+        buildSeatLedger: vi.fn((options: BuildSeatLedgerOptions) => {
+          ledgerAuditEvents = (options.auditEvents ?? []).map((e) => ({ eventId: e.eventId, holderKey: e.holderKey, action: e.action }));
+          return { rows: options.periods.map((p) => makeLedgerRow(p)), coverage: [], warnings: [] };
+        }),
+      });
+
+      await syncLicenseHistoryForEnterprise("acme", deps);
+
+      const assignEvent = ledgerAuditEvents.find((e) => e.eventId === "assign-1");
+      const cancelEvent = ledgerAuditEvents.find((e) => e.eventId === "cancel-1");
+      expect(assignEvent).toBeDefined();
+      expect(cancelEvent).toBeDefined();
+      // Distinct events — never collapsed into one (different eventId/action/occurredAt) —
+      // but they now share a holderKey so the ledger reconstructs one assign→cancel interval.
+      expect(assignEvent!.holderKey).toBe(cancelEvent!.holderKey);
+      expect(assignEvent!.holderKey).toBe("id:1");
+    });
+
+    it("emits a safe count-only warning and retains a login-based holderKey (never guesses) when a login maps to conflicting numeric IDs across sources", async () => {
+      const archiveEvent: NormalizedAuditEvent = {
+        eventId: "evt-ambiguous",
+        orgLogin: "acme-org",
+        action: "assign",
+        occurredAt: "2025-01-05T00:00:00.000Z",
+        observedLogin: "dave",
+        externalIdentity: null,
+        assignedVia: null,
+        source: "audit_archive",
+        raw: {},
+      };
+      const seatWithId10 = makeSeat({ holderKey: "id:10", githubUserId: 10, observedLogin: "dave", orgLogin: "acme-org" });
+      const apiEventWithId11: NormalizedCopilotAuditEvent = {
+        eventId: "evt-api-dave",
+        orgLogin: "acme-org",
+        action: "assign",
+        occurredAt: "2025-01-06T00:00:00.000Z",
+        githubUserId: 11,
+        observedLogin: "dave",
+        externalIdentity: null,
+        team: null,
+        source: "audit_log",
+        raw: {} as never,
+      };
+      let capturedEvents: { eventId: string; holderKey: string }[] = [];
+      const deps = makeDeps({
+        getEnterpriseSeatsNormalized: vi.fn(async () => ({ totalSeats: 1, seats: [seatWithId10] })),
+        importAuditArchive: vi.fn(() => ({ records: [archiveEvent], warnings: [], skippedRows: 0, sourceFingerprint: "fp" })),
+        getEnterpriseAuditEvents: vi.fn(async (): Promise<AuditFetchResult> => ({ status: "ok", events: [apiEventWithId11], truncated: false, warnings: [] })),
+        buildSeatLedger: vi.fn((options: BuildSeatLedgerOptions) => {
+          capturedEvents = (options.auditEvents ?? []).map((e) => ({ eventId: e.eventId, holderKey: e.holderKey }));
+          return { rows: options.periods.map((p) => makeLedgerRow(p)), coverage: [], warnings: [] };
+        }),
+      });
+
+      const result = await syncLicenseHistoryForEnterprise("acme", deps);
+
+      const archiveMerged = capturedEvents.find((e) => e.eventId === "evt-ambiguous");
+      expect(archiveMerged).toBeDefined();
+      expect(archiveMerged!.holderKey).toBe("login:dave");
+      const warning = result.warnings.find((w) => w.includes("ambiguous"));
+      expect(warning).toBeDefined();
+      expect(warning).not.toMatch(/dave/i);
+    });
+  });
+
   // ── current snapshot before legacy replacement/integration callback ─
   describe("current snapshot ordering", () => {
     it("persists the current snapshot and invokes onCurrentSnapshotPersisted before any later phase", async () => {
@@ -475,8 +615,20 @@ describe("license-history-sync-service", () => {
 
       expect(broken.status).toBe("failed");
       expect(broken.errorMessage).toContain("Required licensing capability preflight failed");
-      expect(broken.runId).toBeNull(); // failed before a durable run ever started
-      expect(deps.startLicenseRun).not.toHaveBeenCalledWith(expect.objectContaining({ enterpriseSlug: "broken-ent" }));
+      // Task 9 re-review fix #4: a required-preflight failure must still
+      // start a durable run before failing, so the failure is
+      // operator-visible via run history/diagnostics — never a silent,
+      // unrecorded failure.
+      expect(broken.runId).not.toBeNull();
+      expect(deps.startLicenseRun).toHaveBeenCalledWith(expect.objectContaining({ enterpriseSlug: "broken-ent" }));
+      expect(deps.recordLicenseRunDiagnostics).toHaveBeenCalledWith(
+        expect.objectContaining({
+          runId: broken.runId,
+          finish: expect.objectContaining({ status: "failed", errorMessage: expect.stringContaining("Required licensing capability preflight failed") }),
+          checks: [],
+          sourceStates: [],
+        }),
+      );
 
       // "warning" (not "success") is the correct healthy-run outcome here:
       // `checkStatusAgreement` (Task 8) has no independent per-holder status
@@ -485,6 +637,36 @@ describe("license-history-sync-service", () => {
       // intentional "never false success" behavior, not a defect.
       expect(healthy.status).toBe("warning");
       expect(healthy.errorMessage).toBeNull();
+    });
+
+    it("never attempts any phase beyond preflight when the required preflight check fails", async () => {
+      const deps = makeDeps({
+        preflightEnterpriseAuth: vi.fn(async () => makePreflight("acme", false)),
+      });
+
+      const result = await syncLicenseHistoryForEnterprise("acme", deps);
+
+      expect(result.status).toBe("failed");
+      expect(result.runId).not.toBeNull();
+      expect(deps.importAuditArchive).not.toHaveBeenCalled();
+      expect(deps.getEnterpriseSeatsNormalized).not.toHaveBeenCalled();
+      expect(deps.getEnterpriseAuditEvents).not.toHaveBeenCalled();
+      expect(deps.getOrgBilling).not.toHaveBeenCalled();
+      expect(deps.fetchAicConsumptionForUsers).not.toHaveBeenCalled();
+      expect(deps.buildSeatLedger).not.toHaveBeenCalled();
+      expect(deps.materializeLicensePeriodRows).not.toHaveBeenCalled();
+    });
+
+    it("continues normally across multiple enterprises when one has a durable preflight failure and others succeed", async () => {
+      const deps = makeDeps({
+        preflightEnterpriseAuth: vi.fn(async (enterpriseSlug: string) => makePreflight(enterpriseSlug, enterpriseSlug !== "broken-ent")),
+      });
+
+      const result = await syncLicenseHistory(["broken-ent", "mid-ent", "healthy-ent"], deps);
+      expect(result.enterprises.map((e) => e.enterpriseSlug)).toEqual(["broken-ent", "healthy-ent", "mid-ent"]);
+      expect(result.enterprises.find((e) => e.enterpriseSlug === "broken-ent")!.runId).not.toBeNull();
+      expect(result.enterprises.find((e) => e.enterpriseSlug === "mid-ent")!.status).not.toBe("failed");
+      expect(result.enterprises.find((e) => e.enterpriseSlug === "healthy-ent")!.status).not.toBe("failed");
     });
   });
 
@@ -786,6 +968,126 @@ describe("license-history-sync-service", () => {
     });
   });
 
+  // ── Task 9 re-review fix #5: multi-org duplicate consumption defense ─
+  describe("duplicate multi-org fallback consumption defense", () => {
+    it("collapses byte-identical non-zero consumption for the same holder returned by multiple org fallback endpoints into one unattributed record", async () => {
+      const seats = [
+        makeSeat({ holderKey: "login:alice", observedLogin: "alice", orgLogin: "acme-org" }),
+        makeSeat({ holderKey: "login:alice", observedLogin: "alice", orgLogin: "other-org" }),
+      ];
+      const persistedRecords: LicenseAicConsumptionInput[] = [];
+      const deps = makeDeps({
+        getResolvedOrgsForEnterprise: vi.fn(() => ["acme-org", "other-org"]),
+        getEnterpriseSeatsNormalized: vi.fn(async () => ({ totalSeats: 2, seats })),
+        fetchAicConsumptionForUsers: vi.fn(async (options: FetchAicConsumptionOptions): Promise<FetchAicConsumptionResult> => {
+          if (!options.orgLogin) {
+            return { results: options.users.map((u: string) => makeAicFailure(u, "unavailable")), source: "enterprise_api", fellBackToOrg: false };
+          }
+          return { results: options.users.map((u: string) => makeAicOk(u, { orgLogin: options.orgLogin, credits: 500, grossUsd: 5 })), source: "org_api", fellBackToOrg: false };
+        }),
+        upsertAicConsumption: vi.fn((_enterpriseSlug: string, records: LicenseAicConsumptionInput[]) => {
+          persistedRecords.push(...records);
+          return records.length;
+        }),
+      });
+
+      const result = await syncLicenseHistoryForEnterprise("acme", deps);
+
+      expect(persistedRecords).toHaveLength(1);
+      expect(persistedRecords[0].holderKey).toBe("login:alice");
+      expect(persistedRecords[0].orgLogin).toBeUndefined();
+      expect(persistedRecords[0].credits).toBe(500);
+      const warning = result.warnings.find((w) => w.includes("byte-identical"));
+      expect(warning).toBeDefined();
+      expect(warning).not.toMatch(/alice/i);
+    });
+
+    it("retains distinct per-org consumption values for the same holder without collapsing (legitimate multi-org usage)", async () => {
+      const seats = [
+        makeSeat({ holderKey: "login:alice", observedLogin: "alice", orgLogin: "acme-org" }),
+        makeSeat({ holderKey: "login:alice", observedLogin: "alice", orgLogin: "other-org" }),
+      ];
+      const persistedRecords: LicenseAicConsumptionInput[] = [];
+      const deps = makeDeps({
+        getResolvedOrgsForEnterprise: vi.fn(() => ["acme-org", "other-org"]),
+        getEnterpriseSeatsNormalized: vi.fn(async () => ({ totalSeats: 2, seats })),
+        fetchAicConsumptionForUsers: vi.fn(async (options: FetchAicConsumptionOptions): Promise<FetchAicConsumptionResult> => {
+          if (!options.orgLogin) {
+            return { results: options.users.map((u: string) => makeAicFailure(u, "unavailable")), source: "enterprise_api", fellBackToOrg: false };
+          }
+          const credits = options.orgLogin === "acme-org" ? 100 : 200;
+          return { results: options.users.map((u: string) => makeAicOk(u, { orgLogin: options.orgLogin, credits, grossUsd: credits / 100 })), source: "org_api", fellBackToOrg: false };
+        }),
+        upsertAicConsumption: vi.fn((_enterpriseSlug: string, records: LicenseAicConsumptionInput[]) => {
+          persistedRecords.push(...records);
+          return records.length;
+        }),
+      });
+
+      const result = await syncLicenseHistoryForEnterprise("acme", deps);
+
+      expect(persistedRecords).toHaveLength(2);
+      expect(persistedRecords.map((r) => r.orgLogin).sort()).toEqual(["acme-org", "other-org"]);
+      expect(result.warnings.some((w) => w.includes("byte-identical"))).toBe(false);
+    });
+
+    it("does not collapse identical all-zero consumption across orgs (no consumption to conflate)", async () => {
+      const seats = [
+        makeSeat({ holderKey: "login:alice", observedLogin: "alice", orgLogin: "acme-org" }),
+        makeSeat({ holderKey: "login:alice", observedLogin: "alice", orgLogin: "other-org" }),
+      ];
+      const persistedRecords: LicenseAicConsumptionInput[] = [];
+      const deps = makeDeps({
+        getResolvedOrgsForEnterprise: vi.fn(() => ["acme-org", "other-org"]),
+        getEnterpriseSeatsNormalized: vi.fn(async () => ({ totalSeats: 2, seats })),
+        fetchAicConsumptionForUsers: vi.fn(async (options: FetchAicConsumptionOptions): Promise<FetchAicConsumptionResult> => {
+          if (!options.orgLogin) {
+            return { results: options.users.map((u: string) => makeAicFailure(u, "unavailable")), source: "enterprise_api", fellBackToOrg: false };
+          }
+          return { results: options.users.map((u: string) => makeAicOk(u, { orgLogin: options.orgLogin, credits: 0, grossUsd: 0 })), source: "org_api", fellBackToOrg: false };
+        }),
+        upsertAicConsumption: vi.fn((_enterpriseSlug: string, records: LicenseAicConsumptionInput[]) => {
+          persistedRecords.push(...records);
+          return records.length;
+        }),
+      });
+
+      const result = await syncLicenseHistoryForEnterprise("acme", deps);
+
+      expect(persistedRecords).toHaveLength(2);
+      expect(result.warnings.some((w) => w.includes("byte-identical"))).toBe(false);
+    });
+
+    it("collapses duplicates in deterministic (billingPeriod, userLogin) order regardless of org iteration order", async () => {
+      const seats = [
+        makeSeat({ holderKey: "login:bob", githubUserId: 2, observedLogin: "bob", orgLogin: "zzz-org" }),
+        makeSeat({ holderKey: "login:bob", githubUserId: 2, observedLogin: "bob", orgLogin: "aaa-org" }),
+        makeSeat({ holderKey: "login:alice", observedLogin: "alice", orgLogin: "zzz-org" }),
+        makeSeat({ holderKey: "login:alice", observedLogin: "alice", orgLogin: "aaa-org" }),
+      ];
+      const persistedRecords: { holderKey: string }[] = [];
+      const deps = makeDeps({
+        getResolvedOrgsForEnterprise: vi.fn(() => ["zzz-org", "aaa-org"]),
+        getEnterpriseSeatsNormalized: vi.fn(async () => ({ totalSeats: 4, seats })),
+        fetchAicConsumptionForUsers: vi.fn(async (options: FetchAicConsumptionOptions): Promise<FetchAicConsumptionResult> => {
+          if (!options.orgLogin) {
+            return { results: options.users.map((u: string) => makeAicFailure(u, "unavailable")), source: "enterprise_api", fellBackToOrg: false };
+          }
+          return { results: options.users.map((u: string) => makeAicOk(u, { orgLogin: options.orgLogin, credits: 10, grossUsd: 0.1 })), source: "org_api", fellBackToOrg: false };
+        }),
+        upsertAicConsumption: vi.fn((_enterpriseSlug: string, records: { holderKey: string }[]) => {
+          persistedRecords.push(...records);
+          return records.length;
+        }),
+      });
+
+      await syncLicenseHistoryForEnterprise("acme", deps);
+
+      expect(persistedRecords).toHaveLength(2);
+      expect(persistedRecords.map((r) => r.holderKey)).toEqual(["login:alice", "login:bob"]);
+    });
+  });
+
   // ── source precedence / no double count through materialized output ─
   describe("consumption source precedence and period scoping", () => {
     it("scopes CSV consumption rows to their own billingPeriod instead of applying them to every period", async () => {
@@ -843,25 +1145,44 @@ describe("license-history-sync-service", () => {
       expect(periodFingerprints["2025-01"]).toBeDefined();
 
       // Second run: same conditions, prior run reports success with the same fingerprint, and rows already persisted -> 2025-01 should be skipped.
-      const persistedRow = makeMaterializedRow("2025-01");
+      // Task 9 re-review fix #2: the persisted row carries real, nonzero
+      // costs/consumption and a non-USD currency — the reused snapshot must
+      // surface these exact values, never zeros/"unknown" placeholders.
+      const persistedRow: LicensePeriodRowLike = {
+        billingPeriod: "2025-01",
+        orgLogin: "acme-org",
+        holderKey: "login:alice",
+        githubUserId: 1,
+        userLogin: "alice",
+        resolvedUserLogin: "alice",
+        externalIdentity: null,
+        identityResolutionSource: "seat",
+        accountState: "member",
+        licenseAssignedDate: "2024-06-01",
+        userRevokedDate: null,
+        planType: "enterprise",
+        seatStatus: "active",
+        assignedVia: "direct",
+        lastActivityAt: "2025-01-20T00:00:00.000Z",
+        licenseCost: 39,
+        defaultAicCredits: 3900,
+        defaultAicUsd: 39,
+        aicAssignedUsd: 39,
+        aicAssignedRule: "plan_default",
+        aicConsumedCredits: 4200,
+        aicConsumedUsd: 42,
+        currency: "EUR",
+        rowSource: "materialized",
+        consumptionSource: "org_api",
+        historyConfidence: "exact_snapshot",
+        dataQualityNotes: [],
+        asOfUtc: "2025-01-31T00:00:00.000Z",
+        generatedAtUtc: "2025-01-31T00:00:00.000Z",
+      };
       const secondDeps = makeDeps({
         listLicenseRuns: vi.fn(() => [{ status: "success", sourceStats: { periodFingerprints } }]),
         hasMaterializedRows: vi.fn((query) => query.periods?.includes("2025-01") ?? false),
-        queryLicensePeriodRows: vi.fn(() => ({
-          rows: [{
-            billingPeriod: persistedRow.billingPeriod,
-            orgLogin: persistedRow.orgLogin,
-            holderKey: persistedRow.holderKey,
-            githubUserId: persistedRow.githubUserId,
-            userLogin: persistedRow.userLogin,
-            resolvedUserLogin: persistedRow.resolvedUserLogin,
-            externalIdentity: persistedRow.externalIdentity,
-            identityResolutionSource: persistedRow.identityResolutionSource,
-            accountState: persistedRow.accountState,
-            seatStatus: persistedRow.seatStatus,
-            historyConfidence: persistedRow.historyConfidence,
-          }],
-        })),
+        queryLicensePeriodRows: vi.fn(() => ({ rows: [persistedRow] })),
       });
       const result = await syncLicenseHistoryForEnterprise("acme", secondDeps);
 
@@ -869,6 +1190,89 @@ describe("license-history-sync-service", () => {
       expect(result.materializedPeriods).not.toContain("2025-01");
       expect(secondDeps.materializeLicensePeriodRows).not.toHaveBeenCalledWith(expect.objectContaining({ billingPeriod: "2025-01" }));
       expect(secondDeps.replaceMaterializedPeriod).not.toHaveBeenCalledWith("acme", "2025-01", expect.anything());
+
+      // The reused row's real identity/resolution values must reach the
+      // reconciliation checks — real_login_coverage groups by (billingPeriod,
+      // orgLogin) and counts the reused holder as resolved, proving the real
+      // row (not a zeroed/synthetic placeholder) flowed into
+      // `allMaterializedRows` for the skipped period. The real cost/currency
+      // values themselves are asserted directly in the emitted snapshot
+      // artifact — see the next test.
+      const checksCall = (secondDeps.recordLicenseRunDiagnostics as ReturnType<typeof vi.fn>).mock.calls[0]![0] as LicenseRunDiagnosticsInput;
+      const coverageCheck = checksCall.checks.find((c) => c.checkName === "real_login_coverage" && c.billingPeriod === "2025-01" && c.orgLogin === "acme-org");
+      expect(coverageCheck).toBeDefined();
+      expect(coverageCheck!.status).toBe("pass");
+      expect((coverageCheck!.details as { totalHolders: number; resolvedHolders: number }).totalHolders).toBe(1);
+      expect((coverageCheck!.details as { totalHolders: number; resolvedHolders: number }).resolvedHolders).toBe(1);
+    });
+
+    it("reuses real persisted values (nonzero costs/consumption, non-USD currency) verbatim in the emitted snapshot artifact for a skipped period", async () => {
+      const persistedRow: LicensePeriodRowLike = {
+        billingPeriod: "2025-01",
+        orgLogin: "acme-org",
+        holderKey: "login:alice",
+        githubUserId: 1,
+        userLogin: "alice",
+        resolvedUserLogin: "alice",
+        externalIdentity: null,
+        identityResolutionSource: "seat",
+        accountState: "member",
+        licenseAssignedDate: "2024-06-01",
+        userRevokedDate: null,
+        planType: "enterprise",
+        seatStatus: "active",
+        assignedVia: "direct",
+        lastActivityAt: "2025-01-20T00:00:00.000Z",
+        licenseCost: 39,
+        defaultAicCredits: 3900,
+        defaultAicUsd: 39,
+        aicAssignedUsd: 39,
+        aicAssignedRule: "plan_default",
+        aicConsumedCredits: 4200,
+        aicConsumedUsd: 42,
+        currency: "EUR",
+        rowSource: "materialized",
+        consumptionSource: "org_api",
+        historyConfidence: "exact_snapshot",
+        dataQualityNotes: [],
+        asOfUtc: "2025-01-31T00:00:00.000Z",
+        generatedAtUtc: "2025-01-31T00:00:00.000Z",
+      };
+      const emitSnapshotsConfig = () => makeConfig({ history: { ...makeConfig().history, emitSnapshots: true, snapshotDirectory: "/snap" } });
+
+      // First run establishes the real fingerprint (with snapshots enabled)
+      // so the second run's prior-fingerprint lookup is guaranteed to match
+      // regardless of the exact hash algorithm used.
+      const probeDiagnostics: LicenseRunDiagnosticsInput[] = [];
+      const probeDeps = makeDeps({
+        getConfig: vi.fn(emitSnapshotsConfig),
+        recordLicenseRunDiagnostics: vi.fn((input: LicenseRunDiagnosticsInput) => probeDiagnostics.push(input)),
+      });
+      await syncLicenseHistoryForEnterprise("acme", probeDeps);
+      const computedFingerprints = probeDiagnostics[0]!.finish.sourceStats!.periodFingerprints as Record<string, string>;
+
+      const writtenContentsByPath: Record<string, string> = {};
+      const deps = makeDeps({
+        getConfig: vi.fn(emitSnapshotsConfig),
+        listLicenseRuns: vi.fn(() => [{ status: "success", sourceStats: { periodFingerprints: computedFingerprints } }]),
+        hasMaterializedRows: vi.fn((query) => query.periods?.includes("2025-01") ?? false),
+        queryLicensePeriodRows: vi.fn(() => ({ rows: [persistedRow] })),
+        writeLicenseSnapshotFile: vi.fn(async (path: string, contents: string) => {
+          writtenContentsByPath[path] = contents;
+        }),
+      });
+      const result = await syncLicenseHistoryForEnterprise("acme", deps);
+      expect(result.skippedPeriods).toContain("2025-01");
+
+      const janPath = deps.resolveLicenseSnapshotFilePath("/snap", "acme", "2025-01");
+      const writtenContents = writtenContentsByPath[janPath];
+      expect(writtenContents).toBeDefined();
+      const parsed = JSON.parse(writtenContents!) as { rows: { billingPeriod: string; currency: string; licenseCost: number; aicConsumedUsd: number }[] };
+      const janRow = parsed.rows.find((r) => r.billingPeriod === "2025-01");
+      expect(janRow).toBeDefined();
+      expect(janRow!.currency).toBe("EUR");
+      expect(janRow!.licenseCost).toBe(39);
+      expect(janRow!.aicConsumedUsd).toBe(42);
     });
 
     it("reruns a historical period when a new audit event changes its fingerprint", async () => {
@@ -895,6 +1299,187 @@ describe("license-history-sync-service", () => {
       expect(result.materializedPeriods).toContain("2025-01");
       expect(result.skippedPeriods).not.toContain("2025-01");
       expect(deps.materializeLicensePeriodRows).toHaveBeenCalledWith(expect.objectContaining({ billingPeriod: "2025-01" }));
+    });
+
+    // ── Task 9 re-review fix #1: SHA-256 fingerprint over rich, category-based input ──
+    it("computes a SHA-256-formatted fingerprint (sha256: prefix + 64 hex chars) rather than the old weak hash", async () => {
+      const diagnostics: LicenseRunDiagnosticsInput[] = [];
+      const deps = makeDeps({ recordLicenseRunDiagnostics: vi.fn((input: LicenseRunDiagnosticsInput) => diagnostics.push(input)) });
+
+      await syncLicenseHistoryForEnterprise("acme", deps);
+
+      const fingerprints = diagnostics[0]!.finish.sourceStats!.periodFingerprints as Record<string, string>;
+      for (const period of ["2025-01", "2025-02", "2025-03"]) {
+        expect(fingerprints[period]).toMatch(/^sha256:[0-9a-f]{64}$/);
+      }
+    });
+
+    it("reruns a historical period when a holder's resolved identity changes (identity-map/enterprise/org/SCIM-derived resolution)", async () => {
+      const probeDiagnostics: LicenseRunDiagnosticsInput[] = [];
+      const probeDeps = makeDeps({ recordLicenseRunDiagnostics: vi.fn((input: LicenseRunDiagnosticsInput) => probeDiagnostics.push(input)) });
+      await syncLicenseHistoryForEnterprise("acme", probeDeps);
+      const priorFingerprints = probeDiagnostics[0]!.finish.sourceStats!.periodFingerprints as Record<string, string>;
+
+      const deps = makeDeps({
+        listLicenseRuns: vi.fn(() => [{ status: "success", sourceStats: { periodFingerprints: priorFingerprints } }]),
+        hasMaterializedRows: vi.fn(() => true),
+        resolveIdentity: vi.fn((input) => makeIdentity({ holderKey: input.holderKey, githubUserId: input.githubUserId ?? null, accountState: "suspended" })),
+      });
+
+      const result = await syncLicenseHistoryForEnterprise("acme", deps);
+      expect(result.materializedPeriods).toContain("2025-01");
+      expect(result.skippedPeriods).not.toContain("2025-01");
+    });
+
+    it("reruns a historical period when pricing/allowance/currency configuration changes", async () => {
+      const probeDiagnostics: LicenseRunDiagnosticsInput[] = [];
+      const probeDeps = makeDeps({ recordLicenseRunDiagnostics: vi.fn((input: LicenseRunDiagnosticsInput) => probeDiagnostics.push(input)) });
+      await syncLicenseHistoryForEnterprise("acme", probeDeps);
+      const priorFingerprints = probeDiagnostics[0]!.finish.sourceStats!.periodFingerprints as Record<string, string>;
+
+      const deps = makeDeps({
+        listLicenseRuns: vi.fn(() => [{ status: "success", sourceStats: { periodFingerprints: priorFingerprints } }]),
+        hasMaterializedRows: vi.fn(() => true),
+        getConfig: vi.fn(() => makeConfig({ licenseCost: { business: 25, enterprise: 39, unknown: 0 } })),
+      });
+
+      const result = await syncLicenseHistoryForEnterprise("acme", deps);
+      expect(result.materializedPeriods).toContain("2025-01");
+      expect(result.skippedPeriods).not.toContain("2025-01");
+    });
+
+    it("reruns a historical period when its period-scoped consumption records change", async () => {
+      const csvConfig = () => makeConfig({ aicConsumption: { mode: "auto", csvPath: "consumption.csv", concurrency: 4 } });
+      const probeDiagnostics: LicenseRunDiagnosticsInput[] = [];
+      const probeDeps = makeDeps({
+        getConfig: vi.fn(csvConfig),
+        recordLicenseRunDiagnostics: vi.fn((input: LicenseRunDiagnosticsInput) => probeDiagnostics.push(input)),
+      });
+      await syncLicenseHistoryForEnterprise("acme", probeDeps);
+      const priorFingerprints = probeDiagnostics[0]!.finish.sourceStats!.periodFingerprints as Record<string, string>;
+
+      const csvRecord: AicCsvConsumptionRecord = {
+        billingPeriod: "2025-01",
+        orgLogin: "acme-org",
+        userLogin: "alice",
+        credits: 500,
+        grossUsd: 5,
+        netUsd: 5,
+        source: "csv_import",
+        raw: {},
+      };
+      const deps = makeDeps({
+        getConfig: vi.fn(csvConfig),
+        listLicenseRuns: vi.fn(() => [{ status: "success", sourceStats: { periodFingerprints: priorFingerprints } }]),
+        hasMaterializedRows: vi.fn(() => true),
+        importAicConsumptionCsv: vi.fn(() => ({ records: [csvRecord], warnings: [], skippedRows: 0, sourceFingerprint: "fp" })),
+      });
+
+      const result = await syncLicenseHistoryForEnterprise("acme", deps);
+      expect(result.materializedPeriods).toContain("2025-01");
+      expect(result.skippedPeriods).not.toContain("2025-01");
+    });
+
+    it("reruns a historical period when its org billing comparator snapshot changes", async () => {
+      const probeDiagnostics: LicenseRunDiagnosticsInput[] = [];
+      const probeDeps = makeDeps({ recordLicenseRunDiagnostics: vi.fn((input: LicenseRunDiagnosticsInput) => probeDiagnostics.push(input)) });
+      await syncLicenseHistoryForEnterprise("acme", probeDeps);
+      const priorFingerprints = probeDiagnostics[0]!.finish.sourceStats!.periodFingerprints as Record<string, string>;
+
+      const deps = makeDeps({
+        listLicenseRuns: vi.fn(() => [{ status: "success", sourceStats: { periodFingerprints: priorFingerprints } }]),
+        hasMaterializedRows: vi.fn(() => true),
+        getOrgBilling: vi.fn(async (): Promise<OrgBillingResult> => ({
+          status: "ok",
+          snapshot: {
+            orgLogin: "acme-org",
+            billingPeriod: "2025-01",
+            planType: "business",
+            totalSeats: 99,
+            pendingCancellation: 0,
+            observedAt: "2025-01-31T00:00:00.000Z",
+            raw: {} as never,
+          },
+        })),
+      });
+
+      const result = await syncLicenseHistoryForEnterprise("acme", deps);
+      expect(result.materializedPeriods).toContain("2025-01");
+      expect(result.skippedPeriods).not.toContain("2025-01");
+    });
+
+    it("reruns only the one period an archive audit-event change affects, leaving an unrelated period skipped", async () => {
+      const probeDiagnostics: LicenseRunDiagnosticsInput[] = [];
+      const probeDeps = makeDeps({ recordLicenseRunDiagnostics: vi.fn((input: LicenseRunDiagnosticsInput) => probeDiagnostics.push(input)) });
+      await syncLicenseHistoryForEnterprise("acme", probeDeps);
+      const priorFingerprints = probeDiagnostics[0]!.finish.sourceStats!.periodFingerprints as Record<string, string>;
+
+      const newArchiveEvent: NormalizedAuditEvent = {
+        eventId: "evt-jan-only",
+        orgLogin: "acme-org",
+        action: "assign",
+        occurredAt: "2025-01-15T00:00:00.000Z",
+        observedLogin: "carol",
+        externalIdentity: null,
+        assignedVia: null,
+        source: "audit_archive",
+        raw: {},
+      };
+      const deps = makeDeps({
+        listLicenseRuns: vi.fn(() => [{ status: "success", sourceStats: { periodFingerprints: priorFingerprints } }]),
+        hasMaterializedRows: vi.fn(() => true),
+        importAuditArchive: vi.fn(() => ({ records: [newArchiveEvent], warnings: [], skippedRows: 0, sourceFingerprint: "fp2" })),
+      });
+
+      const result = await syncLicenseHistoryForEnterprise("acme", deps);
+      expect(result.materializedPeriods).toContain("2025-01");
+      expect(result.skippedPeriods).not.toContain("2025-01");
+      // 2025-02 is unaffected by a change scoped only to 2025-01 — it stays skipped.
+      expect(result.skippedPeriods).toContain("2025-02");
+      expect(result.materializedPeriods).not.toContain("2025-02");
+    });
+
+    it("does not change a period's fingerprint when semantically-equivalent audit events are reordered", async () => {
+      const eventA: NormalizedAuditEvent = {
+        eventId: "evt-a",
+        orgLogin: "acme-org",
+        action: "assign",
+        occurredAt: "2025-01-05T00:00:00.000Z",
+        observedLogin: "alice",
+        externalIdentity: null,
+        assignedVia: null,
+        source: "audit_archive",
+        raw: {},
+      };
+      const eventB: NormalizedAuditEvent = {
+        eventId: "evt-b",
+        orgLogin: "acme-org",
+        action: "assign",
+        occurredAt: "2025-01-06T00:00:00.000Z",
+        observedLogin: "bob",
+        externalIdentity: null,
+        assignedVia: null,
+        source: "audit_archive",
+        raw: {},
+      };
+
+      const diagnosticsForward: LicenseRunDiagnosticsInput[] = [];
+      const depsForward = makeDeps({
+        importAuditArchive: vi.fn(() => ({ records: [eventA, eventB], warnings: [], skippedRows: 0, sourceFingerprint: "fp" })),
+        recordLicenseRunDiagnostics: vi.fn((input: LicenseRunDiagnosticsInput) => diagnosticsForward.push(input)),
+      });
+      await syncLicenseHistoryForEnterprise("acme", depsForward);
+
+      const diagnosticsReversed: LicenseRunDiagnosticsInput[] = [];
+      const depsReversed = makeDeps({
+        importAuditArchive: vi.fn(() => ({ records: [eventB, eventA], warnings: [], skippedRows: 0, sourceFingerprint: "fp" })),
+        recordLicenseRunDiagnostics: vi.fn((input: LicenseRunDiagnosticsInput) => diagnosticsReversed.push(input)),
+      });
+      await syncLicenseHistoryForEnterprise("acme", depsReversed);
+
+      const forwardFp = (diagnosticsForward[0]!.finish.sourceStats!.periodFingerprints as Record<string, string>)["2025-01"];
+      const reversedFp = (diagnosticsReversed[0]!.finish.sourceStats!.periodFingerprints as Record<string, string>)["2025-01"];
+      expect(forwardFp).toBe(reversedFp);
     });
   });
 
