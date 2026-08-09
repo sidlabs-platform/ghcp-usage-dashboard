@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { isBillingSubEnabledForAnyEnterprise } from "@/lib/config/enterprise-config";
-import { getDateRange, parseAndClampDays } from "@/lib/utils";
-import { getLicensingConfig, LicensingConfigError } from "@/lib/config/dashboard-config";
+import { parseDateRangeParams } from "@/lib/utils";
+import { getLicensingConfig, LicensingConfigError, type LicensePlanKey } from "@/lib/config/dashboard-config";
 import { parseScopeFilter } from "@/lib/api/scope-filter";
 import {
   getLicenseReconciliationRows,
@@ -12,6 +12,18 @@ import {
   sortLicenseRows,
   type LicenseSortField,
 } from "@/lib/db/license-repo";
+import {
+  queryLicensePeriodRows,
+  getMaterializedPeriodKPIs,
+  getMaterializedPlanBreakdown,
+  getMaterializedOrgBreakdown,
+  hasMaterializedRows,
+  type PaginatedLicenseRows,
+} from "@/lib/db/license-history-repo";
+import type { LicensePeriodFilterQuery } from "@/lib/types/licensing";
+import type { AccountState } from "@/lib/licensing/identity-resolver";
+import type { SeatLedgerConfidence } from "@/lib/licensing/seat-ledger";
+import { parseReportMonths, MAX_REPORT_MONTHS } from "@/lib/licensing/periods";
 import { withCache } from "@/lib/cache/with-cache";
 import { withTimeout } from "@/lib/api/timeout";
 import { withRateLimit } from "@/lib/api/rate-limit/rate-limiter";
@@ -29,6 +41,177 @@ const SORT_FIELDS: LicenseSortField[] = [
   "total_cost",
 ];
 
+const VIEWS = ["detail", "rollup"] as const;
+export type ReconciliationView = (typeof VIEWS)[number];
+
+// Mirrors `LicensePlanKey` from `@/lib/config/dashboard-config` (not exported
+// as a runtime array there), same convention as the existing `SORT_FIELDS`
+// allowlist above.
+const PLAN_TYPES: LicensePlanKey[] = ["business", "enterprise", "unknown"];
+
+// Mirrors `AccountState` from `@/lib/licensing/identity-resolver` (type-only
+// export; no runtime array exists there).
+const ACCOUNT_STATES: AccountState[] = ["unknown", "member", "suspended", "deprovisioned"];
+
+// No exported type backs these literals (see `materialize-license-period.ts`);
+// hardcoded here as the validation allowlist, same convention as PLAN_TYPES.
+const SEAT_STATUSES = ["active", "inactive", "no_seat"] as const;
+
+// Mirrors `SeatLedgerConfidence` from `@/lib/licensing/seat-ledger`.
+const HISTORY_CONFIDENCE_LEVELS: SeatLedgerConfidence[] = [
+  "exact_snapshot",
+  "audit_reconstructed",
+  "live_snapshot_only",
+  "unrecoverable",
+];
+
+function splitCsvParam(raw: string | null): string[] | undefined {
+  if (!raw) return undefined;
+  const values = raw
+    .split(",")
+    .map((v) => v.trim())
+    .filter(Boolean);
+  return values.length > 0 ? values : undefined;
+}
+
+function validateAllowlist<T extends string>(
+  values: string[] | undefined,
+  allowlist: readonly T[],
+  paramName: string,
+): T[] | { error: string } {
+  if (!values) return [];
+  for (const v of values) {
+    if (!allowlist.includes(v as T)) {
+      return {
+        error: `Invalid ${paramName} value "${v}". Expected one of: ${allowlist.join(", ")}.`,
+      };
+    }
+  }
+  return values as T[];
+}
+
+/** Structured 400 error shape returned by {@link resolveReconciliationFilters}. */
+export interface ReconciliationQueryError {
+  error: string;
+  status: 400;
+}
+
+/**
+ * Pure (no DB access) resolution of every query parameter shared by the JSON
+ * reconciliation API and the CSV export endpoint: period selection (with
+ * explicit `periods` > custom `startDate`/`endDate` > `days`/default
+ * precedence), view, scope, and every enum filter. Exported so
+ * `/api/export/license-reconciliation` can reuse identical validation/
+ * resolution logic without duplicating it (or resorting to SQL of its own).
+ */
+export interface ReconciliationFilterResolution {
+  /** Resolved "YYYY-MM" periods driving historical queries. */
+  periods: string[];
+  /** Legacy live-query date bounds (YYYY-MM-DD), always resolved regardless of mode. */
+  legacyStart: string;
+  legacyEnd: string;
+  view: ReconciliationView;
+  scope: ReturnType<typeof parseScopeFilter>;
+  search?: string;
+  /** Base scope (enterprise + period + allowedLogins only, no narrow filters) used to decide fallback vs historical. */
+  baseFilterQuery: LicensePeriodFilterQuery;
+  /** Full filter query (base scope + narrow filters) used for the actual historical query/KPIs/breakdowns. */
+  filterQuery: LicensePeriodFilterQuery;
+}
+
+export function resolveReconciliationFilters(
+  params: URLSearchParams,
+): ReconciliationFilterResolution | ReconciliationQueryError {
+  const dateRange = parseDateRangeParams(params, 28);
+  if ("error" in dateRange) {
+    return { error: dateRange.error, status: 400 };
+  }
+
+  const viewParam = params.get("view") || "detail";
+  if (!VIEWS.includes(viewParam as ReconciliationView)) {
+    return { error: `Invalid view "${viewParam}". Expected one of: ${VIEWS.join(", ")}.`, status: 400 };
+  }
+  const view = viewParam as ReconciliationView;
+
+  const explicitPeriods = splitCsvParam(params.get("periods"));
+  let periods: string[];
+  try {
+    if (explicitPeriods) {
+      periods = parseReportMonths(explicitPeriods);
+    } else {
+      // Derive month periods deterministically from the resolved date window
+      // (custom startDate/endDate, or the days/default fallback) by reusing
+      // `parseReportMonths`' range-expansion + `MAX_REPORT_MONTHS` cap rather
+      // than reimplementing date-range → month-list conversion.
+      const startMonth = dateRange.start.slice(0, 7);
+      const endMonth = dateRange.end.slice(0, 7);
+      periods = parseReportMonths([`${startMonth}..${endMonth}`]);
+    }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Invalid periods parameter.";
+    return { error: message, status: 400 };
+  }
+  if (periods.length > MAX_REPORT_MONTHS) {
+    // Defensive: parseReportMonths already enforces this per-token, but guard
+    // the merged/deduplicated result too since a caller could combine an
+    // explicit `periods` list of many individually-valid single months.
+    return {
+      error: `Requested periods span ${periods.length} months, exceeding the maximum of ${MAX_REPORT_MONTHS}.`,
+      status: 400,
+    };
+  }
+
+  const planTypes = validateAllowlist(splitCsvParam(params.get("plan")), PLAN_TYPES, "plan");
+  if ("error" in planTypes) return { ...planTypes, status: 400 };
+  const accountStates = validateAllowlist(splitCsvParam(params.get("accountState")), ACCOUNT_STATES, "accountState");
+  if ("error" in accountStates) return { ...accountStates, status: 400 };
+  const seatStatuses = validateAllowlist(splitCsvParam(params.get("seatStatus")), SEAT_STATUSES, "seatStatus");
+  if ("error" in seatStatuses) return { ...seatStatuses, status: 400 };
+  const historyConfidence = validateAllowlist(
+    splitCsvParam(params.get("historyConfidence")),
+    HISTORY_CONFIDENCE_LEVELS,
+    "historyConfidence",
+  );
+  if ("error" in historyConfidence) return { ...historyConfidence, status: 400 };
+
+  const logins = splitCsvParam(params.get("login"));
+  const search = params.get("search") || undefined;
+
+  const scope = parseScopeFilter(params);
+  // Fail-closed: `scope.allowedLogins` is a `Set` (possibly empty) when a
+  // team/org filter was applied; convert to the array shape
+  // `LicensePeriodFilterQuery` expects, preserving "undefined = unrestricted"
+  // vs "empty array = zero rows" semantics exactly.
+  const allowedLogins = scope.allowedLogins ? Array.from(scope.allowedLogins) : undefined;
+
+  const baseFilterQuery: LicensePeriodFilterQuery = {
+    enterpriseSlugs: scope.enterpriseSlugs,
+    periods,
+    allowedLogins,
+  };
+
+  const filterQuery: LicensePeriodFilterQuery = {
+    ...baseFilterQuery,
+    logins,
+    planTypes: planTypes.length > 0 ? planTypes : undefined,
+    accountStates: accountStates.length > 0 ? accountStates : undefined,
+    seatStatuses: seatStatuses.length > 0 ? seatStatuses : undefined,
+    historyConfidence: historyConfidence.length > 0 ? historyConfidence : undefined,
+    search,
+  };
+
+  return {
+    periods,
+    legacyStart: dateRange.start,
+    legacyEnd: dateRange.end,
+    view,
+    scope,
+    search,
+    baseFilterQuery,
+    filterQuery,
+  };
+}
+
 async function handler(request: NextRequest) {
   try {
     // Reconciliation depends on AI-credit consumption; gate on the same
@@ -41,11 +224,11 @@ async function handler(request: NextRequest) {
     }
 
     const params = request.nextUrl.searchParams;
-    const daysResult = parseAndClampDays(params.get("days"), 28);
-    if ("error" in daysResult) {
-      return NextResponse.json({ error: daysResult.error }, { status: 400 });
+    const resolved = resolveReconciliationFilters(params);
+    if ("error" in resolved) {
+      return NextResponse.json({ error: resolved.error }, { status: resolved.status });
     }
-    const { start, end } = getDateRange(daysResult.days);
+    const { periods, legacyStart, legacyEnd, view, scope, filterQuery, baseFilterQuery } = resolved;
 
     const rawPage = parseInt(params.get("page") || "1", 10);
     const page = Math.max(1, Number.isNaN(rawPage) ? 1 : rawPage);
@@ -55,56 +238,105 @@ async function handler(request: NextRequest) {
     const sortParam = (params.get("sort") || "total_cost") as LicenseSortField;
     const sort: LicenseSortField = SORT_FIELDS.includes(sortParam) ? sortParam : "total_cost";
     const sortDir = params.get("sortDir") === "asc" ? "asc" : "desc";
-    const search = params.get("search") || undefined;
 
-    const scope = parseScopeFilter(params);
+    const cfg = getLicensingConfig();
 
-    const allRows = getLicenseReconciliationRows({
-      start,
-      end,
-      filters: {
-        allowedLogins: scope.allowedLogins,
-        enterpriseSlugs: scope.enterpriseSlugs,
-        search,
-      },
-    });
+    // Only the base scope (enterprise + period + team/org-resolved
+    // allowedLogins) decides whether materialized history exists — narrow
+    // filters (search/login/plan/accountState/seatStatus/historyConfidence)
+    // must never cause a valid, narrowly-filtered *empty* historical result
+    // to be mistaken for "no history materialized yet".
+    const materialized = hasMaterializedRows(baseFilterQuery);
 
-    const MAX_ROWS = 10_000;
-    if (allRows.length > MAX_ROWS) {
+    if (!materialized) {
+      // Backward-compatible fallback: no materialized rows for this
+      // scope/period base — reuse the exact legacy live query unchanged so
+      // existing callers/tests keep working byte-for-byte, and additively
+      // mark the response with a `coverage`/`dataSource` indicator.
+      const allRows = getLicenseReconciliationRows({
+        start: legacyStart,
+        end: legacyEnd,
+        filters: {
+          allowedLogins: scope.allowedLogins,
+          enterpriseSlugs: scope.enterpriseSlugs,
+          search: resolved.search,
+        },
+      });
+
+      const MAX_ROWS = 10_000;
+      if (allRows.length > MAX_ROWS) {
+        return NextResponse.json(
+          { error: `Result set too large (${allRows.length} rows). Narrow the scope or reduce the date range.` },
+          { status: 400 },
+        );
+      }
+
+      const kpis = computeLicenseKPIs(allRows);
+      const planBreakdown = computePlanBreakdown(allRows);
+      const orgBreakdown = computeOrgBreakdown(allRows);
+      const utilizationBuckets = computeUtilizationBuckets(allRows);
+
+      const sorted = sortLicenseRows(allRows, sort, sortDir);
+      const offset = (page - 1) * pageSize;
+      const rows = sorted.slice(offset, offset + pageSize);
+
+      const warnings: string[] = [];
+      if (view === "rollup") {
+        warnings.push("rollup view requires materialized history; showing live snapshot detail rows instead.");
+      }
+
       return NextResponse.json(
-        { error: `Result set too large (${allRows.length} rows). Narrow the scope or reduce the date range.` },
-        { status: 400 },
+        {
+          enabled: true,
+          coverage: { mode: "live_snapshot_only", periods, view: "detail" },
+          dataSource: "live_snapshot_only",
+          kpis,
+          rows,
+          planBreakdown,
+          orgBreakdown,
+          utilizationBuckets,
+          config: { currency: cfg.currency, creditToUsd: cfg.creditToUsd },
+          pagination: {
+            page,
+            pageSize,
+            totalItems: sorted.length,
+            totalPages: Math.ceil(sorted.length / pageSize),
+          },
+          warnings,
+        },
+        { headers: { "Cache-Control": "private, max-age=300, stale-while-revalidate=60" } },
       );
     }
 
-    // KPIs and breakdowns are computed over the full (filtered) dataset so they
-    // remain accurate regardless of pagination.
-    const kpis = computeLicenseKPIs(allRows);
-    const planBreakdown = computePlanBreakdown(allRows);
-    const orgBreakdown = computeOrgBreakdown(allRows);
-    const utilizationBuckets = computeUtilizationBuckets(allRows);
+    // Historical mode: materialized rows exist for the requested base scope
+    // (an empty result could still occur once narrow filters are applied —
+    // that is expected and not a fallback trigger).
+    const paginated: PaginatedLicenseRows = queryLicensePeriodRows({
+      ...filterQuery,
+      view,
+      page,
+      pageSize,
+      sortField: sort,
+      sortDir,
+    } as Parameters<typeof queryLicensePeriodRows>[0]);
 
-    const sorted = sortLicenseRows(allRows, sort, sortDir);
-    const offset = (page - 1) * pageSize;
-    const rows = sorted.slice(offset, offset + pageSize);
-
-    const cfg = getLicensingConfig();
+    const kpis = getMaterializedPeriodKPIs(filterQuery);
+    const planBreakdown = getMaterializedPlanBreakdown(filterQuery);
+    const orgBreakdown = getMaterializedOrgBreakdown(filterQuery);
 
     return NextResponse.json(
       {
         enabled: true,
+        coverage: { mode: "historical", periods, view },
+        dataSource: "historical",
         kpis,
-        rows,
+        rows: paginated.rows,
         planBreakdown,
         orgBreakdown,
-        utilizationBuckets,
+        utilizationBuckets: [],
         config: { currency: cfg.currency, creditToUsd: cfg.creditToUsd },
-        pagination: {
-          page,
-          pageSize,
-          totalItems: sorted.length,
-          totalPages: Math.ceil(sorted.length / pageSize),
-        },
+        pagination: paginated.pagination,
+        warnings: [],
       },
       { headers: { "Cache-Control": "private, max-age=300, stale-while-revalidate=60" } },
     );

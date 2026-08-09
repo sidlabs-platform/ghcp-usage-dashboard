@@ -83,6 +83,11 @@ export function useExport() {
       let exportUrl = config.fetchUrl;
       if (exportUrl.startsWith("/api/users")) {
           exportUrl = "/api/export/users";
+      } else if (exportUrl.startsWith("/api/billing/license-reconciliation")) {
+          // Server-side CSV export queries the repository directly with the
+          // same period/view/scope/filter contract in a single bounded
+          // request — never a client-side N-page loop.
+          exportUrl = "/api/export/license-reconciliation";
       }
       
       // If we don't have a specific export endpoint, fallback to client-side data fetching
