@@ -79,7 +79,7 @@ describe("LicenseRunHistory", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    render(<LicenseRunHistory enterpriseSlug="acme" selectedRunId={null} onSelectRun={vi.fn()} onReportChange={vi.fn()} />);
+    render(<LicenseRunHistory enterpriseSlug="acme" selectedRunId={null} onSelectRun={vi.fn()} onReportChange={vi.fn()} onReportErrorChange={vi.fn()} />);
 
     await screen.findByText(/run-1/i);
     expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining("enterprise=acme"), expect.anything());
@@ -108,6 +108,7 @@ describe("LicenseRunHistory", () => {
         selectedRunId={null}
         onSelectRun={onSelectRun}
         onReportChange={onReportChange}
+        onReportErrorChange={vi.fn()}
       />,
     );
 
@@ -132,7 +133,7 @@ describe("LicenseRunHistory", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     render(
-      <LicenseRunHistory enterpriseSlug="acme" selectedRunId="run-1" onSelectRun={vi.fn()} onReportChange={vi.fn()} />,
+      <LicenseRunHistory enterpriseSlug="acme" selectedRunId="run-1" onSelectRun={vi.fn()} onReportChange={vi.fn()} onReportErrorChange={vi.fn()} />,
     );
 
     const row = await screen.findByRole("button", { name: /run-1/i });
@@ -151,7 +152,7 @@ describe("LicenseRunHistory", () => {
 
     const onSelectRun = vi.fn();
     render(
-      <LicenseRunHistory enterpriseSlug="acme" selectedRunId={null} onSelectRun={onSelectRun} onReportChange={vi.fn()} />,
+      <LicenseRunHistory enterpriseSlug="acme" selectedRunId={null} onSelectRun={onSelectRun} onReportChange={vi.fn()} onReportErrorChange={vi.fn()} />,
     );
     const row = await screen.findByRole("button", { name: /run-1/i });
     row.focus();
@@ -160,7 +161,7 @@ describe("LicenseRunHistory", () => {
   });
 
   it("shows an empty state when there is no enterprise selected", () => {
-    render(<LicenseRunHistory enterpriseSlug={null} selectedRunId={null} onSelectRun={vi.fn()} onReportChange={vi.fn()} />);
+    render(<LicenseRunHistory enterpriseSlug={null} selectedRunId={null} onSelectRun={vi.fn()} onReportChange={vi.fn()} onReportErrorChange={vi.fn()} />);
     expect(screen.getByText(/select an enterprise/i)).toBeInTheDocument();
   });
 
@@ -169,14 +170,14 @@ describe("LicenseRunHistory", () => {
       "fetch",
       vi.fn(() => mockJsonResponse({ enterprise: "acme", runs: [] })),
     );
-    render(<LicenseRunHistory enterpriseSlug="acme" selectedRunId={null} onSelectRun={vi.fn()} onReportChange={vi.fn()} />);
+    render(<LicenseRunHistory enterpriseSlug="acme" selectedRunId={null} onSelectRun={vi.fn()} onReportChange={vi.fn()} onReportErrorChange={vi.fn()} />);
     await screen.findByText(/no reconciliation runs/i);
   });
 
   it("shows an error state with retry on list fetch failure", async () => {
     const fetchMock = vi.fn(() => mockJsonResponse({ error: "boom" }, false));
     vi.stubGlobal("fetch", fetchMock);
-    render(<LicenseRunHistory enterpriseSlug="acme" selectedRunId={null} onSelectRun={vi.fn()} onReportChange={vi.fn()} />);
+    render(<LicenseRunHistory enterpriseSlug="acme" selectedRunId={null} onSelectRun={vi.fn()} onReportChange={vi.fn()} onReportErrorChange={vi.fn()} />);
     await screen.findByText(/failed to load/i);
     const retry = screen.getByRole("button", { name: /retry/i });
     fireEvent.click(retry);
@@ -199,10 +200,10 @@ describe("LicenseRunHistory", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     const { rerender } = render(
-      <LicenseRunHistory enterpriseSlug="first" selectedRunId={null} onSelectRun={vi.fn()} onReportChange={vi.fn()} />,
+      <LicenseRunHistory enterpriseSlug="first" selectedRunId={null} onSelectRun={vi.fn()} onReportChange={vi.fn()} onReportErrorChange={vi.fn()} />,
     );
     rerender(
-      <LicenseRunHistory enterpriseSlug="second" selectedRunId={null} onSelectRun={vi.fn()} onReportChange={vi.fn()} />,
+      <LicenseRunHistory enterpriseSlug="second" selectedRunId={null} onSelectRun={vi.fn()} onReportChange={vi.fn()} onReportErrorChange={vi.fn()} />,
     );
 
     await screen.findByText(/run-second/i);
@@ -216,5 +217,86 @@ describe("LicenseRunHistory", () => {
     await new Promise((r) => setTimeout(r, 0));
     expect(screen.queryByText(/run-first-stale/i)).not.toBeInTheDocument();
     expect(screen.getByText(/run-second/i)).toBeInTheDocument();
+  });
+
+  it("ignores a stale run-detail response after the enterprise changes", async () => {
+    let resolveFirstDetail: (value: Response) => void = () => {};
+    const firstDetail = new Promise<Response>((resolve) => {
+      resolveFirstDetail = resolve;
+    });
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/runs?enterprise=first")) {
+        return mockJsonResponse({ enterprise: "first", runs: [runSummary({ enterpriseSlug: "first" })] });
+      }
+      if (url.includes("/runs/run-1?enterprise=first")) return firstDetail;
+      if (url.includes("/runs?enterprise=second")) {
+        return mockJsonResponse({ enterprise: "second", runs: [runSummary({ id: "run-second", enterpriseSlug: "second" })] });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const onReportChange = vi.fn();
+
+    const { rerender } = render(
+      <LicenseRunHistory
+        enterpriseSlug="first"
+        selectedRunId={null}
+        onSelectRun={vi.fn()}
+        onReportChange={onReportChange}
+        onReportErrorChange={vi.fn()}
+      />,
+    );
+    fireEvent.click(await screen.findByRole("button", { name: /run-1/i }));
+
+    rerender(
+      <LicenseRunHistory
+        enterpriseSlug="second"
+        selectedRunId={null}
+        onSelectRun={vi.fn()}
+        onReportChange={onReportChange}
+        onReportErrorChange={vi.fn()}
+      />,
+    );
+    await screen.findByText(/run-second/i);
+
+    resolveFirstDetail({
+      ok: true,
+      json: async () => runReport({ enterpriseSlug: "first" }),
+    } as Response);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(onReportChange).not.toHaveBeenCalledWith(expect.objectContaining({ enterpriseSlug: "first" }));
+  });
+
+  it("surfaces a run-detail failure with an actionable retry", async () => {
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/runs?")) {
+        return mockJsonResponse({ enterprise: "acme", runs: [runSummary()] });
+      }
+      return mockJsonResponse({ error: "boom" }, false);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const onReportChange = vi.fn();
+    const onReportErrorChange = vi.fn();
+
+    render(
+      <LicenseRunHistory
+        enterpriseSlug="acme"
+        selectedRunId={null}
+        onSelectRun={vi.fn()}
+        onReportChange={onReportChange}
+        onReportErrorChange={onReportErrorChange}
+      />,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: /run-1/i }));
+    await screen.findByText(/failed to load run report/i);
+    expect(onReportChange).toHaveBeenCalledWith(null);
+    expect(onReportErrorChange).toHaveBeenCalledWith(expect.stringMatching(/failed to load/i));
+
+    fireEvent.click(screen.getByRole("button", { name: /retry run report/i }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
   });
 });

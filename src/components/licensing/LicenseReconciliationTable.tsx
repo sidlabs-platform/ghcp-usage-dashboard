@@ -107,7 +107,7 @@ const DETAIL_COLUMNS: ColumnDef<LicensePeriodRowRecord>[] = [
   {
     key: "allowance",
     label: "Allowance",
-    sortField: "default_aic_usd",
+    sortField: "aic_assigned_usd",
     align: "right",
     render: (r) => formatUsd(r.aicAssignedUsd, r.currency),
   },
@@ -157,7 +157,6 @@ const ROLLUP_COLUMNS: ColumnDef<LicenseRollupRowRecord>[] = [
   {
     key: "historyConfidence",
     label: "History confidence (worst)",
-    sortField: "history_confidence",
     render: (r) => r.historyConfidence,
   },
   {

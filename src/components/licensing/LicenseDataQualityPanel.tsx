@@ -9,6 +9,7 @@
 // `sanitizeReportRecord`/`sanitizeUnresolvedIdentity`).
 
 import type { LicenseRunReportObject } from "@/lib/db/license-run-repo";
+import type { EnterprisePreflightResult } from "@/lib/github/auth-preflight";
 
 export interface DataQualityCoverage {
   mode: string;
@@ -22,6 +23,10 @@ export interface LicenseDataQualityPanelProps {
   report: LicenseRunReportObject | null;
   reportLoading: boolean;
   reportError: string | null;
+  preflight?: EnterprisePreflightResult | null;
+  preflightLoading?: boolean;
+  preflightError?: string | null;
+  onRetryPreflight?: () => void;
 }
 
 const MAX_VISIBLE_UNRESOLVED = 20;
@@ -38,33 +43,113 @@ function statusStyles(status: "pass" | "warning" | "fail"): string {
   return "text-red-700 dark:text-red-400";
 }
 
+function capabilityStatusStyles(status: "supported" | "unsupported" | "unknown"): string {
+  if (status === "supported") return "text-emerald-700 dark:text-emerald-400";
+  if (status === "unsupported") return "text-red-700 dark:text-red-400";
+  return "text-amber-700 dark:text-amber-400";
+}
+
 function holderKeyOf(entry: Record<string, unknown>): string {
   const value = entry["holderKey"];
   return typeof value === "string" ? value : "unknown";
 }
 
-export function LicenseDataQualityPanel({ coverage, warnings, report, reportLoading, reportError }: LicenseDataQualityPanelProps) {
+export function LicenseDataQualityPanel({
+  coverage,
+  warnings,
+  report,
+  reportLoading,
+  reportError,
+  preflight = null,
+  preflightLoading = false,
+  preflightError = null,
+  onRetryPreflight,
+}: LicenseDataQualityPanelProps) {
+  const preflightPanel = (
+    <section aria-labelledby="dq-preflight-heading" className="space-y-2">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <h3 id="dq-preflight-heading" className="text-sm font-semibold">
+            Capability preflight
+          </h3>
+          <p className="text-xs text-[hsl(var(--muted-foreground))]">
+            Access required to build complete licensing history for the active enterprise.
+          </p>
+        </div>
+        {preflight && (
+          <span className={`text-xs font-medium ${preflight.ok ? capabilityStatusStyles("supported") : capabilityStatusStyles("unsupported")}`}>
+            {preflight.ok ? "Required access confirmed" : "Required access needs attention"}
+          </span>
+        )}
+      </div>
+
+      {preflightLoading ? (
+        <p role="status" className="text-sm text-[hsl(var(--muted-foreground))]">Checking capabilities…</p>
+      ) : preflightError ? (
+        <div role="alert" className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-red-300 bg-red-50 p-3 text-sm text-red-800 dark:border-red-900 dark:bg-red-950/40 dark:text-red-300">
+          <span>{preflightError}</span>
+          {onRetryPreflight && (
+            <button
+              type="button"
+              onClick={onRetryPreflight}
+              className="rounded-md border border-current px-3 py-1 text-xs font-medium"
+            >
+              Retry preflight
+            </button>
+          )}
+        </div>
+      ) : preflight ? (
+        <ul className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+          {preflight.capabilities.map((capability) => (
+            <li key={capability.capability} className="rounded-md border px-3 py-2">
+              <div className="flex items-start justify-between gap-3">
+                <span className="text-sm font-medium">{capability.label}</span>
+                <span className={`whitespace-nowrap text-xs font-medium ${capabilityStatusStyles(capability.status)}`}>
+                  {capability.status} · {capability.required ? "required" : "optional"}
+                </span>
+              </div>
+              <p className="mt-1 text-xs text-[hsl(var(--muted-foreground))]">{capability.message}</p>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="text-sm text-[hsl(var(--muted-foreground))]">
+          Capability status is unavailable until an enterprise is selected and preflight completes.
+        </p>
+      )}
+    </section>
+  );
+
   if (reportLoading) {
     return (
-      <div role="status" className="rounded-lg border p-6 text-sm text-[hsl(var(--muted-foreground))]">
-        Loading data quality report…
+      <div className="space-y-6">
+        {preflightPanel}
+        <div role="status" className="rounded-lg border p-6 text-sm text-[hsl(var(--muted-foreground))]">
+          Loading data quality report…
+        </div>
       </div>
     );
   }
 
   if (reportError) {
     return (
-      <div role="alert" className="rounded-lg border border-red-300 bg-red-50 p-4 text-sm text-red-800 dark:border-red-900 dark:bg-red-950/40 dark:text-red-300">
-        {reportError}
+      <div className="space-y-6">
+        {preflightPanel}
+        <div role="alert" className="rounded-lg border border-red-300 bg-red-50 p-4 text-sm text-red-800 dark:border-red-900 dark:bg-red-950/40 dark:text-red-300">
+          {reportError}
+        </div>
       </div>
     );
   }
 
   if (!report) {
     return (
-      <div className="rounded-lg border p-6 text-sm text-[hsl(var(--muted-foreground))]">
-        No reconciliation run is available for the current selection. Run a sync or select a run from history to view data
-        quality diagnostics.
+      <div className="space-y-6">
+        {preflightPanel}
+        <div className="rounded-lg border p-6 text-sm text-[hsl(var(--muted-foreground))]">
+          No reconciliation run is available for the current selection. Run a sync or select a run from history to view data
+          quality diagnostics.
+        </div>
       </div>
     );
   }
@@ -81,6 +166,8 @@ export function LicenseDataQualityPanel({ coverage, warnings, report, reportLoad
           Coverage: {coverage.mode} · {coverage.periods.join(", ") || "current"} · {coverage.view} view
         </p>
       )}
+
+      {preflightPanel}
 
       {/* Check severity counts */}
       <section aria-labelledby="dq-checks-heading" className="space-y-2">

@@ -203,6 +203,70 @@ describe("LicenseReconciliationTable", () => {
     expect(onSort).toHaveBeenCalledWith("license_cost");
   });
 
+  it("emits only repository-supported detail sort fields", () => {
+    const onSort = vi.fn();
+    render(
+      <LicenseReconciliationTable
+        view="detail"
+        rows={[detailRow()]}
+        currency="USD"
+        sort="total_cost"
+        sortDir="desc"
+        onSort={onSort}
+        pagination={basePagination}
+        onPageChange={vi.fn()}
+      />,
+    );
+
+    for (const button of screen.getAllByRole("button").filter((candidate) => candidate.closest("th"))) {
+      fireEvent.click(button);
+    }
+
+    expect(onSort.mock.calls.map(([field]) => field)).toEqual([
+      "billing_period",
+      "resolved_user_login",
+      "org_login",
+      "plan_type",
+      "account_state",
+      "seat_status",
+      "history_confidence",
+      "license_cost",
+      "aic_assigned_usd",
+      "aic_consumed_usd",
+      "total_cost",
+    ]);
+  });
+
+  it("emits only repository-supported rollup sort fields", () => {
+    const onSort = vi.fn();
+    render(
+      <LicenseReconciliationTable
+        view="rollup"
+        rows={[rollupRow()]}
+        currency="USD"
+        sort="total_cost"
+        sortDir="desc"
+        onSort={onSort}
+        pagination={basePagination}
+        onPageChange={vi.fn()}
+      />,
+    );
+
+    for (const button of screen.getAllByRole("button").filter((candidate) => candidate.closest("th"))) {
+      fireEvent.click(button);
+    }
+
+    expect(onSort.mock.calls.map(([field]) => field)).toEqual([
+      "resolved_user_login",
+      "org_count",
+      "seat_count",
+      "license_cost",
+      "aic_consumed_usd",
+      "utilization_pct",
+      "total_cost",
+    ]);
+  });
+
   it("uses stable multi-org row keys without React duplicate-key warnings", () => {
     const warnSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     render(

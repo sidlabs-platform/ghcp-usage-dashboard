@@ -40,6 +40,7 @@ import type {
 } from "@/lib/types/licensing";
 import type { LicensePeriodRowRecord, LicenseRollupRowRecord } from "@/lib/db/license-history-repo";
 import type { LicenseRunReportObject } from "@/lib/db/license-run-repo";
+import type { EnterprisePreflightResult } from "@/lib/github/auth-preflight";
 
 const PAGE_SIZE = 50;
 
@@ -103,11 +104,17 @@ export default function LicenseReconciliationPage() {
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [selectedRunReport, setSelectedRunReport] = useState<LicenseRunReportObject | null>(null);
   const [runReportLoading, setRunReportLoading] = useState(false);
+  const [runReportError, setRunReportError] = useState<string | null>(null);
+  const [preflight, setPreflight] = useState<EnterprisePreflightResult | null>(null);
+  const [preflightLoading, setPreflightLoading] = useState(false);
+  const [preflightError, setPreflightError] = useState<string | null>(null);
 
   const overviewRef = useRef<HTMLDivElement>(null);
   const qualityRef = useRef<HTMLDivElement>(null);
   const pageRef = useRef(page);
   const skipNextFetch = useRef(false);
+  const fetchRequestSeq = useRef(0);
+  const preflightRequestSeq = useRef(0);
 
   const activeEnterprise = selectedEnterprises[0] ?? filterOptions.enterprises[0]?.slug ?? null;
 
@@ -169,15 +176,18 @@ export default function LicenseReconciliationPage() {
   ]);
 
   const fetchData = useCallback(async () => {
+    const requestSeq = ++fetchRequestSeq.current;
     setLoading(true);
     setError(null);
     try {
       const res = await fetch(`/api/billing/license-reconciliation?${buildParams().toString()}`);
+      if (fetchRequestSeq.current !== requestSeq) return;
       if (!res.ok) {
-        setError("Failed to load reconciliation data");
+        setError("Failed to load reconciliation data. Review the current filters and try again.");
         return;
       }
       const data = await res.json();
+      if (fetchRequestSeq.current !== requestSeq) return;
       if (data.enabled === false) {
         setEnabled(false);
         return;
@@ -194,11 +204,44 @@ export default function LicenseReconciliationPage() {
       setWarnings(data.warnings || []);
       if (data.config?.currency) setCurrency(data.config.currency);
     } catch {
-      setError("Failed to load reconciliation data");
+      if (fetchRequestSeq.current !== requestSeq) return;
+      setError("Failed to load reconciliation data. Review the current filters and try again.");
     } finally {
-      setLoading(false);
+      if (fetchRequestSeq.current === requestSeq) setLoading(false);
     }
   }, [buildParams]);
+
+  const fetchPreflight = useCallback(async () => {
+    const requestSeq = ++preflightRequestSeq.current;
+    if (!activeEnterprise) {
+      setPreflight(null);
+      setPreflightError(null);
+      setPreflightLoading(false);
+      return;
+    }
+
+    setPreflightLoading(true);
+    setPreflightError(null);
+    try {
+      const response = await fetch(
+        `/api/billing/license-reconciliation/preflight?enterprise=${encodeURIComponent(activeEnterprise)}`,
+        { cache: "no-store" },
+      );
+      if (preflightRequestSeq.current !== requestSeq) return;
+      if (!response.ok) {
+        setPreflightError("Failed to check licensing capabilities.");
+        return;
+      }
+      const result = (await response.json()) as EnterprisePreflightResult;
+      if (preflightRequestSeq.current !== requestSeq) return;
+      setPreflight(result);
+    } catch {
+      if (preflightRequestSeq.current !== requestSeq) return;
+      setPreflightError("Failed to check licensing capabilities.");
+    } finally {
+      if (preflightRequestSeq.current === requestSeq) setPreflightLoading(false);
+    }
+  }, [activeEnterprise]);
 
   useEffect(() => { pageRef.current = page; }, [page]);
   useEffect(() => {
@@ -232,10 +275,28 @@ export default function LicenseReconciliationPage() {
     }
     fetchData();
   }, [fetchData]);
+  useEffect(() => {
+    setSelectedRunId(null);
+    setSelectedRunReport(null);
+    setRunReportLoading(false);
+    setRunReportError(null);
+    setPreflight(null);
+    setPreflightError(null);
+    preflightRequestSeq.current += 1;
+  }, [activeEnterprise]);
+  useEffect(() => {
+    if (activeTab === "quality") void fetchPreflight();
+  }, [activeTab, fetchPreflight]);
 
   const handleSort = (col: string) => {
     if (sort === col) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
     else { setSort(col); setSortDir("desc"); }
+  };
+
+  const handleViewChange = (nextView: "detail" | "rollup") => {
+    setSort("total_cost");
+    setSortDir("desc");
+    setView(nextView);
   };
 
   const handleClearFilters = () => {
@@ -250,12 +311,17 @@ export default function LicenseReconciliationPage() {
   const handleSelectRun = (runId: string) => {
     setSelectedRunId(runId);
     setRunReportLoading(true);
+    setRunReportError(null);
   };
 
   const handleReportChange = (report: LicenseRunReportObject | null) => {
     setSelectedRunReport(report);
     setRunReportLoading(false);
   };
+
+  const handleReportErrorChange = useCallback((message: string | null) => {
+    setRunReportError(message);
+  }, []);
 
   // ── Tab keyboard navigation (ArrowLeft/ArrowRight/Home/End, wraparound) ──
   const handleTabKeyDown = (event: KeyboardEvent<HTMLButtonElement>, index: number) => {
@@ -297,7 +363,7 @@ export default function LicenseReconciliationPage() {
     [currency],
   );
 
-  if (error) {
+  if (error && !kpis) {
     return (
       <div className="space-y-6">
         <PageHeader title="License & AI Credits" description="Per-user Copilot license + AI-credit reconciliation" />
@@ -451,6 +517,19 @@ export default function LicenseReconciliationPage() {
         </div>
       )}
 
+      {error && (
+        <div role="alert" className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-800 dark:border-red-900 dark:bg-red-950/40 dark:text-red-300">
+          <span>{error}</span>
+          <button
+            type="button"
+            onClick={() => fetchData()}
+            className="rounded-md border border-current px-3 py-1 text-xs font-medium"
+          >
+            Retry
+          </button>
+        </div>
+      )}
+
       {!hasData && (
         <div className="text-center py-16 text-[hsl(var(--muted-foreground))]">
           <CreditCard className="h-16 w-16 mx-auto mb-4 opacity-40" />
@@ -512,19 +591,25 @@ export default function LicenseReconciliationPage() {
                 <h3 className="text-sm font-semibold mb-1">Credit Utilization Distribution</h3>
                 <p className="text-xs text-[hsl(var(--muted-foreground))] mb-4">How many users fall into each allowance-utilization band.</p>
                 <div className="space-y-3">
-                  {utilizationBuckets.map((b) => (
-                    <div key={b.label} className="flex items-center gap-3">
-                      <span className="w-16 text-xs text-[hsl(var(--muted-foreground))] text-right">{b.label}</span>
-                      <div className="flex-1 h-5 rounded bg-[hsl(var(--accent))] overflow-hidden">
-                        <div
-                          className="h-full rounded bg-amber-500/80 flex items-center justify-end pr-2"
-                          style={{ width: `${Math.max((b.count / maxBucket) * 100, b.count > 0 ? 6 : 0)}%` }}
-                        >
-                          {b.count > 0 && <span className="text-[10px] font-semibold text-white">{b.count}</span>}
-                        </div>
-                      </div>
-                    </div>
-                  ))}
+                 {utilizationBuckets.length === 0 ? (
+                   <p className="text-sm text-[hsl(var(--muted-foreground))]">
+                     Utilization distribution is unavailable for the selected historical periods.
+                   </p>
+                 ) : (
+                   utilizationBuckets.map((b) => (
+                     <div key={b.label} className="flex items-center gap-3">
+                       <span className="w-16 text-xs text-[hsl(var(--muted-foreground))] text-right">{b.label}</span>
+                       <div className="flex-1 h-5 rounded bg-[hsl(var(--accent))] overflow-hidden">
+                         <div
+                           className="h-full rounded bg-amber-500/80 flex items-center justify-end pr-2"
+                           style={{ width: `${Math.max((b.count / maxBucket) * 100, b.count > 0 ? 6 : 0)}%` }}
+                         >
+                           {b.count > 0 && <span className="text-[10px] font-semibold text-white">{b.count}</span>}
+                         </div>
+                       </div>
+                     </div>
+                   ))
+                 )}
                 </div>
               </Card>
             </div>
@@ -576,7 +661,7 @@ export default function LicenseReconciliationPage() {
       >
         <LicensePeriodFilters
           view={view}
-          onViewChange={setView}
+          onViewChange={handleViewChange}
           periods={periods}
           onPeriodsChange={setPeriods}
           search={search}
@@ -616,13 +701,18 @@ export default function LicenseReconciliationPage() {
           selectedRunId={selectedRunId}
           onSelectRun={handleSelectRun}
           onReportChange={handleReportChange}
+          onReportErrorChange={handleReportErrorChange}
         />
         <LicenseDataQualityPanel
           coverage={qualityCoverage}
           warnings={warnings}
           report={selectedRunReport}
           reportLoading={runReportLoading}
-          reportError={null}
+          reportError={runReportError}
+          preflight={preflight}
+          preflightLoading={preflightLoading}
+          preflightError={preflightError}
+          onRetryPreflight={fetchPreflight}
         />
       </div>
     </div>

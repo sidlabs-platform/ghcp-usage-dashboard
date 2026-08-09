@@ -8,7 +8,7 @@
 // mirrored below as the client-side option lists). All state is owned by the
 // parent page — this component is fully controlled.
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { X } from "lucide-react";
 import { useDateRange } from "@/contexts/DateRangeContext";
 import { useScope } from "@/contexts/ScopeContext";
@@ -107,8 +107,13 @@ export function LicensePeriodFilters({
   const { mode, days, startDate, endDate } = useDateRange();
   const { hasFilter, selectedEntTeams, selectedOrgTeams, selectedOrgs } = useScope();
   const [monthDraft, setMonthDraft] = useState("");
+  const [searchDraft, setSearchDraft] = useState(search);
 
   const scopeLabels = [...selectedEntTeams, ...selectedOrgTeams, ...selectedOrgs];
+
+  useEffect(() => {
+    setSearchDraft(search);
+  }, [search]);
 
   const handleAddPeriod = () => {
     const trimmed = monthDraft.trim();
@@ -120,6 +125,11 @@ export function LicensePeriodFilters({
 
   const handleRemovePeriod = (period: string) => {
     onPeriodsChange(periods.filter((p) => p !== period));
+  };
+
+  const commitSearch = () => {
+    const nextSearch = searchDraft.trim();
+    if (nextSearch !== search) onSearchChange(nextSearch);
   };
 
   const sortedPeriods = [...periods].sort();
@@ -230,8 +240,12 @@ export function LicensePeriodFilters({
         <input
           id="license-search"
           type="text"
-          value={search}
-          onChange={(e) => onSearchChange(e.target.value)}
+          value={searchDraft}
+          onChange={(e) => setSearchDraft(e.target.value)}
+          onBlur={commitSearch}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") commitSearch();
+          }}
           aria-label="Search users or organizations"
           placeholder="login, org…"
           className="w-64 rounded-md border bg-[hsl(var(--background))] px-3 py-1.5 text-sm"

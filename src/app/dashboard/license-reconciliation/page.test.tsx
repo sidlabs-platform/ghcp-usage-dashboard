@@ -2,7 +2,7 @@
 
 import React from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen, fireEvent, waitFor } from "@testing-library/react";
 
 const dateRangeState = vi.hoisted(() => ({
   mode: "preset" as "preset" | "custom",
@@ -221,7 +221,7 @@ describe("License reconciliation page", () => {
     const Page = (await import("./page")).default;
     render(<Page />);
     await screen.findByText(/2026-05/);
-    expect(screen.getByText(/historical/i)).toBeInTheDocument();
+    expect(screen.getByText(/Historical coverage:/i)).toBeInTheDocument();
   });
 
   it("shows an explicit amber live-snapshot-only banner and never presents it as full history", async () => {
@@ -265,6 +265,7 @@ describe("License reconciliation page", () => {
     expect(screen.getByText("Monthly License Cost")).toBeInTheDocument();
     expect(screen.getByText("AI Credits Consumed")).toBeInTheDocument();
     expect(screen.getByText("Credit Utilization")).toBeInTheDocument();
+    expect(screen.getByText(/utilization distribution is unavailable/i)).toBeInTheDocument();
   });
 
   it("passes current periods/scope/view params to CSV export via the existing hook", async () => {
@@ -285,5 +286,131 @@ describe("License reconciliation page", () => {
     const retry = screen.getByRole("button", { name: /retry/i });
     fireEvent.click(retry);
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+  });
+
+  it("fetches capability preflight for the active enterprise in Data Quality", async () => {
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/preflight")) {
+        return jsonResponse({
+          enterpriseSlug: "acme",
+          ok: true,
+          capabilities: [
+            {
+              capability: "copilot_seats",
+              label: "Copilot seat assignments",
+              status: "supported",
+              required: true,
+              message: "Access confirmed.",
+            },
+          ],
+        });
+      }
+      return jsonResponse(enabledResponse);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const Page = (await import("./page")).default;
+    render(<Page />);
+    await screen.findByText("Licensed Users");
+
+    fireEvent.click(screen.getByRole("tab", { name: "Data Quality" }));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringContaining("/preflight?enterprise=acme"),
+        expect.objectContaining({ cache: "no-store" }),
+      );
+      expect(qualityState.props?.preflight).toEqual(expect.objectContaining({ enterpriseSlug: "acme" }));
+    });
+  });
+
+  it("ignores a stale response that resolves after a newer search", async () => {
+    let resolveOld: (value: Response) => void = () => {};
+    const oldResponse = new Promise<Response>((resolve) => {
+      resolveOld = resolve;
+    });
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("search=old")) return oldResponse;
+      if (url.includes("search=new")) {
+        return jsonResponse({
+          ...enabledResponse,
+          kpis: { ...enabledResponse.kpis, totalUsers: 20 },
+        });
+      }
+      return jsonResponse(enabledResponse);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const Page = (await import("./page")).default;
+    render(<Page />);
+    await screen.findByText("Licensed Users");
+
+    act(() => {
+      (filtersState.props?.onSearchChange as (value: string) => void)("old");
+    });
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining("search=old")));
+    act(() => {
+      (filtersState.props?.onSearchChange as (value: string) => void)("new");
+    });
+    await screen.findByText("20");
+
+    resolveOld({
+      ok: true,
+      json: async () => ({
+        ...enabledResponse,
+        kpis: { ...enabledResponse.kpis, totalUsers: 99 },
+      }),
+    } as Response);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(screen.getByText("20")).toBeInTheDocument();
+    expect(screen.queryByText("99")).not.toBeInTheDocument();
+  });
+
+  it("keeps existing controls available when a refresh request fails", async () => {
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("search=fail")) return jsonResponse({ error: "boom" }, false);
+      return jsonResponse(enabledResponse);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const Page = (await import("./page")).default;
+    render(<Page />);
+    await screen.findByText("Licensed Users");
+
+    act(() => {
+      (filtersState.props?.onSearchChange as (value: string) => void)("fail");
+    });
+
+    await screen.findByRole("button", { name: /retry/i });
+    expect(screen.getByRole("tablist")).toBeInTheDocument();
+    expect(screen.getByText(/Reconciliation table rows/i)).toBeInTheDocument();
+  });
+
+  it("resets sort to the cross-mode total-cost default when the view changes", async () => {
+    const Page = (await import("./page")).default;
+    render(<Page />);
+    await screen.findByText("Licensed Users");
+
+    act(() => {
+      (tableState.props?.onSort as (field: string) => void)("billing_period");
+    });
+    await waitFor(() =>
+      expect(fetch).toHaveBeenCalledWith(expect.stringContaining("sort=billing_period")),
+    );
+
+    act(() => {
+      (filtersState.props?.onViewChange as (view: "detail" | "rollup") => void)("rollup");
+    });
+
+    await waitFor(() => {
+      const calls = (fetch as unknown as ReturnType<typeof vi.fn>).mock.calls;
+      expect(
+        calls.some((call: unknown[]) => {
+          const url = String(call[0]);
+          return url.includes("view=rollup") && url.includes("sort=total_cost");
+        }),
+      ).toBe(true);
+    });
   });
 });

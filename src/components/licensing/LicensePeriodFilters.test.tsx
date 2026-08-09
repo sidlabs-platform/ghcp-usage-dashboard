@@ -127,11 +127,26 @@ describe("LicensePeriodFilters", () => {
     expect(onViewChange).toHaveBeenCalledWith("rollup");
   });
 
-  it("updates search", () => {
+  it("commits search on Enter instead of requesting on every keystroke", () => {
     const onSearchChange = vi.fn();
     render(<LicensePeriodFilters {...baseProps({ onSearchChange })} />);
-    fireEvent.change(screen.getByLabelText(/Search users or organizations/i), { target: { value: "acme" } });
+    const input = screen.getByLabelText(/Search users or organizations/i);
+    fireEvent.change(input, { target: { value: "acme" } });
+    expect(onSearchChange).not.toHaveBeenCalled();
+    fireEvent.keyDown(input, { key: "Enter" });
     expect(onSearchChange).toHaveBeenCalledWith("acme");
+  });
+
+  it("commits search on blur and resynchronizes when filters are cleared", () => {
+    const onSearchChange = vi.fn();
+    const { rerender } = render(<LicensePeriodFilters {...baseProps({ search: "octo", onSearchChange })} />);
+    const input = screen.getByLabelText(/Search users or organizations/i);
+    fireEvent.change(input, { target: { value: "acme" } });
+    fireEvent.blur(input);
+    expect(onSearchChange).toHaveBeenCalledWith("acme");
+
+    rerender(<LicensePeriodFilters {...baseProps({ search: "", onSearchChange })} />);
+    expect(screen.getByLabelText(/Search users or organizations/i)).toHaveValue("");
   });
 
   it("toggles enum filters matching the API allowlists", () => {

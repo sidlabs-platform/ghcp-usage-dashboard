@@ -70,6 +70,39 @@ vi.mock("@/lib/db/license-repo", () => ({
 }));
 
 vi.mock("@/lib/db/license-history-repo", () => ({
+  DETAIL_SORT_COLUMNS: [
+    "billing_period",
+    "org_login",
+    "user_login",
+    "resolved_user_login",
+    "plan_type",
+    "seat_status",
+    "account_state",
+    "history_confidence",
+    "license_cost",
+    "aic_consumed_credits",
+    "aic_consumed_usd",
+    "default_aic_credits",
+    "default_aic_usd",
+    "aic_assigned_usd",
+    "last_activity_at",
+    "as_of_utc",
+    "total_cost",
+  ],
+  ROLLUP_SORT_COLUMNS: [
+    "resolved_user_login",
+    "seat_count",
+    "org_count",
+    "period_count",
+    "license_cost",
+    "aic_consumed_credits",
+    "aic_consumed_usd",
+    "default_aic_credits",
+    "default_aic_usd",
+    "aic_assigned_usd",
+    "utilization_pct",
+    "total_cost",
+  ],
   queryLicensePeriodRows: (...a: unknown[]) => historyRepoState.queryLicensePeriodRows(...a),
   getMaterializedPeriodKPIs: (...a: unknown[]) => historyRepoState.getMaterializedPeriodKPIs(...a),
   getMaterializedPlanBreakdown: (...a: unknown[]) => historyRepoState.getMaterializedPlanBreakdown(...a),
@@ -508,6 +541,37 @@ describe("license reconciliation route", () => {
       expect(res.status).toBe(200);
       expect(historyRepoState.queryLicensePeriodRows).toHaveBeenCalledWith(
         expect.objectContaining({ sortField: "total_cost" }),
+      );
+    });
+
+    it("accepts detail-view sort fields supported by the historical repository", async () => {
+      const res = await GET(req("http://localhost/api/billing/license-reconciliation?view=detail&sort=billing_period"));
+      expect(res.status).toBe(200);
+      expect(historyRepoState.queryLicensePeriodRows).toHaveBeenCalledWith(
+        expect.objectContaining({ view: "detail", sortField: "billing_period" }),
+      );
+    });
+
+    it("accepts rollup-view sort fields supported by the historical repository", async () => {
+      const res = await GET(req("http://localhost/api/billing/license-reconciliation?view=rollup&sort=org_count"));
+      expect(res.status).toBe(200);
+      expect(historyRepoState.queryLicensePeriodRows).toHaveBeenCalledWith(
+        expect.objectContaining({ view: "rollup", sortField: "org_count" }),
+      );
+    });
+
+    it("falls back to total-cost sorting when a historical sort reaches live-snapshot mode", async () => {
+      historyRepoState.hasMaterializedRows.mockReturnValue(false);
+      const liveRows = [{ user_login: "octocat", total_cost: 10 }];
+      repoState.getLicenseReconciliationRows.mockReturnValue(liveRows);
+      repoState.sortLicenseRows.mockReturnValue(liveRows);
+
+      const res = await GET(req("http://localhost/api/billing/license-reconciliation?view=detail&sort=billing_period"));
+      expect(res.status).toBe(200);
+      expect(repoState.sortLicenseRows).toHaveBeenCalledWith(liveRows, "total_cost", "desc");
+      const body = await res.json();
+      expect(body.warnings).toContain(
+        "billing_period sorting requires materialized history; sorting the live snapshot by total cost instead.",
       );
     });
   });

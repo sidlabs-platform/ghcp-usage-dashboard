@@ -18,6 +18,8 @@ import {
   getMaterializedPlanBreakdown,
   getMaterializedOrgBreakdown,
   hasMaterializedRows,
+  DETAIL_SORT_COLUMNS,
+  ROLLUP_SORT_COLUMNS,
   type PaginatedLicenseRows,
 } from "@/lib/db/license-history-repo";
 import type { LicensePeriodFilterQuery } from "@/lib/types/licensing";
@@ -29,7 +31,7 @@ import { withTimeout } from "@/lib/api/timeout";
 import { withRateLimit } from "@/lib/api/rate-limit/rate-limiter";
 import { CACHE_TTL } from "@/lib/cache/memory-cache";
 
-const SORT_FIELDS: LicenseSortField[] = [
+const LEGACY_SORT_FIELDS: LicenseSortField[] = [
   "user_login",
   "plan_type",
   "license_assigned_date",
@@ -298,14 +300,7 @@ async function handler(request: NextRequest) {
     }
     const pageSize = pageSizeResult;
 
-    const sortParam = params.get("sort");
-    if (sortParam !== null && !SORT_FIELDS.includes(sortParam as LicenseSortField)) {
-      return NextResponse.json(
-        { error: `Invalid sort value "${sortParam}". Expected one of: ${SORT_FIELDS.join(", ")}.` },
-        { status: 400 },
-      );
-    }
-    const sort: LicenseSortField = (sortParam as LicenseSortField) || "total_cost";
+    const sort = params.get("sort") || "total_cost";
     const sortDir = params.get("sortDir") === "asc" ? "asc" : "desc";
 
     const cfg = getLicensingConfig();
@@ -316,6 +311,24 @@ async function handler(request: NextRequest) {
     // must never cause a valid, narrowly-filtered *empty* historical result
     // to be mistaken for "no history materialized yet".
     const materialized = hasMaterializedRows(baseFilterQuery);
+    const allKnownSortFields = Array.from(
+      new Set<string>([...LEGACY_SORT_FIELDS, ...DETAIL_SORT_COLUMNS, ...ROLLUP_SORT_COLUMNS]),
+    );
+    if (!allKnownSortFields.includes(sort)) {
+      return NextResponse.json(
+        { error: `Invalid sort value "${sort}". Expected one of: ${allKnownSortFields.join(", ")}.` },
+        { status: 400 },
+      );
+    }
+    if (materialized) {
+      const historicalSortFields = view === "rollup" ? ROLLUP_SORT_COLUMNS : DETAIL_SORT_COLUMNS;
+      if (!historicalSortFields.includes(sort)) {
+        return NextResponse.json(
+          { error: `Invalid sort value "${sort}" for ${view} view. Expected one of: ${historicalSortFields.join(", ")}.` },
+          { status: 400 },
+        );
+      }
+    }
 
     if (!materialized) {
       // Backward-compatible fallback: no materialized rows for this
@@ -345,11 +358,17 @@ async function handler(request: NextRequest) {
       const orgBreakdown = computeOrgBreakdown(allRows);
       const utilizationBuckets = computeUtilizationBuckets(allRows);
 
-      const sorted = sortLicenseRows(allRows, sort, sortDir);
+      const liveSort: LicenseSortField = LEGACY_SORT_FIELDS.includes(sort as LicenseSortField)
+        ? (sort as LicenseSortField)
+        : "total_cost";
+      const sorted = sortLicenseRows(allRows, liveSort, sortDir);
       const offset = (page - 1) * pageSize;
       const rows = sorted.slice(offset, offset + pageSize);
 
       const warnings: string[] = [];
+      if (liveSort !== sort) {
+        warnings.push(`${sort} sorting requires materialized history; sorting the live snapshot by total cost instead.`);
+      }
       if (view === "rollup") {
         warnings.push("rollup view requires materialized history; showing live snapshot detail rows instead.");
       }

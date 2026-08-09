@@ -4,6 +4,7 @@ import React from "react";
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
 import type { LicenseRunReportObject } from "@/lib/db/license-run-repo";
+import type { EnterprisePreflightResult } from "@/lib/github/auth-preflight";
 import { LicenseDataQualityPanel } from "./LicenseDataQualityPanel";
 
 function makeReport(overrides: Partial<LicenseRunReportObject> = {}): LicenseRunReportObject {
@@ -50,6 +51,27 @@ function makeReport(overrides: Partial<LicenseRunReportObject> = {}): LicenseRun
   };
 }
 
+const preflight: EnterprisePreflightResult = {
+  enterpriseSlug: "acme",
+  ok: false,
+  capabilities: [
+    {
+      capability: "copilot_seats",
+      label: "Copilot seat assignments",
+      status: "supported",
+      required: true,
+      message: "Copilot seat assignments: access confirmed.",
+    },
+    {
+      capability: "audit_log",
+      label: "Audit log access",
+      status: "unsupported",
+      required: false,
+      message: "Audit log access: optional access is missing.",
+    },
+  ],
+};
+
 describe("LicenseDataQualityPanel", () => {
   afterEach(() => cleanup());
 
@@ -68,6 +90,29 @@ describe("LicenseDataQualityPanel", () => {
     expect(screen.getByText(/0 fail/i)).toBeInTheDocument();
     expect(screen.getByText("seat_count")).toBeInTheDocument();
     expect(screen.getByText("real_login_coverage")).toBeInTheDocument();
+  });
+
+  it("renders required and optional preflight capability status without raw credentials", () => {
+    render(
+      <LicenseDataQualityPanel
+        coverage={{ mode: "historical", periods: ["2026-05"], view: "detail" }}
+        warnings={[]}
+        report={makeReport()}
+        reportLoading={false}
+        reportError={null}
+        preflight={preflight}
+        preflightLoading={false}
+        preflightError={null}
+        onRetryPreflight={() => {}}
+      />,
+    );
+
+    expect(screen.getByRole("heading", { name: /capability preflight/i })).toBeInTheDocument();
+    expect(screen.getByText("Copilot seat assignments")).toBeInTheDocument();
+    expect(screen.getByText(/supported · required/i)).toBeInTheDocument();
+    expect(screen.getByText("Audit log access")).toBeInTheDocument();
+    expect(screen.getByText(/unsupported · optional/i)).toBeInTheDocument();
+    expect(screen.queryByText(/authorization|token|scope header/i)).not.toBeInTheDocument();
   });
 
   it("shows a limitation message (not a success message) when no run/report is available", () => {
