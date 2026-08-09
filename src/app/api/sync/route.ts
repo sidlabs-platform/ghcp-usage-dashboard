@@ -47,6 +47,18 @@ export async function POST(request: Request) {
         errors: result.backfill.errors,
         seatsSynced: result.seats,
         teamsSynced: result.teams,
+        // Additive — historical license reconciliation summary; absent/inert
+        // when licensing history is disabled (existing behavior unchanged).
+        licensing: {
+          enabled: result.licensing.enabled,
+          enterprises: result.licensing.enterprises.map((e) => ({
+            enterpriseSlug: e.enterpriseSlug,
+            status: e.status,
+            runId: e.runId,
+            warningCount: e.warnings.length,
+            errorMessage: e.errorMessage,
+          })),
+        },
       }));
 
       // Run GHAS sync if any security metrics are enabled

@@ -54,6 +54,23 @@ vi.mock("./user-teams-repo", () => ({ batchUpsertUserTeams: vi.fn() }));
 vi.mock("@/lib/utils", () => ({ datesBetween: vi.fn(() => ["2025-01-01"]) }));
 vi.mock("./billing-sync-service", () => ({ syncBilling: vi.fn(async () => ({ usageRecords: 0, premiumRecords: 0, errors: [] })) }));
 
+vi.mock("./license-history-sync-service", () => ({
+  syncLicenseHistoryForEnterprise: vi.fn(async (enterpriseSlug: string) => ({
+    enterpriseSlug,
+    status: "disabled",
+    runId: null,
+    requestedPeriods: [],
+    materializedPeriods: [],
+    skippedPeriods: [],
+    warnings: [],
+    errorMessage: null,
+  })),
+  createDefaultLicenseHistorySyncDeps: vi.fn((overrides: Record<string, unknown> = {}) => ({
+    getConfig: () => ({ history: { enabled: false } }),
+    ...overrides,
+  })),
+}));
+
 vi.mock("@/lib/config/enterprise-config", () => ({
   getConfiguredEnterprises: vi.fn(() => [{ slug: "test-ent", displayName: "Test" }]),
   getResolvedOrgsForEnterprise: vi.fn(() => ["test-org"]),
@@ -87,6 +104,7 @@ import { upsertEnterpriseOrgs } from "./orgs-repo";
 import { replaceEnterpriseSeats, upsertSeats } from "./seats-repo";
 import { batchUpsertUserTeams } from "./user-teams-repo";
 import { datesBetween } from "@/lib/utils";
+import { syncLicenseHistoryForEnterprise } from "./license-history-sync-service";
 
 function makeSeat(login: string, orgLogin: string | null) {
   return {
@@ -299,6 +317,110 @@ describe("sync-service", () => {
     const result = await fullSync();
     expect(result.enterprises).toHaveLength(1);
     expect(result.enterprises[0].enterpriseSlug).toBe("test-ent");
+  });
+
+  // ── Task 9: additive licensing summary integration ──────────────────
+  describe("fullSync licensing integration", () => {
+    it("adds an additive licensing summary without changing existing top-level fields/semantics", async () => {
+      const result = await fullSync();
+      expect(result.enterprises).toHaveLength(1);
+      expect(result.enterprises[0].enterpriseSlug).toBe("test-ent");
+      // Additive field present with the disabled-by-default mock result.
+      expect(result.licensing).toEqual({
+        enabled: false,
+        enterprises: [
+          {
+            enterpriseSlug: "test-ent",
+            status: "disabled",
+            runId: null,
+            requestedPeriods: [],
+            materializedPeriods: [],
+            skippedPeriods: [],
+            warnings: [],
+            errorMessage: null,
+          },
+        ],
+      });
+      expect(result.enterprises[0].licensing).toEqual(result.licensing.enterprises[0]);
+    });
+
+    it("invokes licensing history sync once per enterprise only after seats and billing are synced", async () => {
+      const { syncBilling } = await import("./billing-sync-service");
+      const callOrder: string[] = [];
+      (seatsClient.getEnterpriseSeats as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+        callOrder.push("seats");
+        return { totalSeats: 1, seats: [makeSeat("u1", "test-org")] };
+      });
+      (syncBilling as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+        callOrder.push("billing");
+        return { usageRecords: 0, premiumRecords: 0, errors: [] };
+      });
+      (syncLicenseHistoryForEnterprise as ReturnType<typeof vi.fn>).mockImplementation(async (enterpriseSlug: string) => {
+        callOrder.push("licensing");
+        return {
+          enterpriseSlug,
+          status: "success",
+          runId: "run-1",
+          requestedPeriods: ["2025-03"],
+          materializedPeriods: ["2025-03"],
+          skippedPeriods: [],
+          warnings: [],
+          errorMessage: null,
+        };
+      });
+
+      await fullSync();
+
+      expect(syncLicenseHistoryForEnterprise).toHaveBeenCalledTimes(1);
+      expect(syncLicenseHistoryForEnterprise).toHaveBeenCalledWith("test-ent", expect.anything());
+      expect(callOrder.indexOf("seats")).toBeGreaterThanOrEqual(0);
+      expect(callOrder.indexOf("billing")).toBeGreaterThan(callOrder.indexOf("seats"));
+      expect(callOrder.indexOf("licensing")).toBeGreaterThan(callOrder.indexOf("billing"));
+    });
+
+    it("isolates a licensing failure: it is recorded as failed but does not roll back this enterprise's other successful results", async () => {
+      (syncLicenseHistoryForEnterprise as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("licensing exploded"));
+
+      const result = await fullSync();
+
+      expect(result.enterprises).toHaveLength(1);
+      const ent = result.enterprises[0];
+      // Non-licensing results remain intact — the licensing failure never
+      // rolled back the enterprise's otherwise-successful sync.
+      expect(ent.backfill.errors).toBe(0);
+      expect(ent.seats).toBeGreaterThan(0);
+      expect(ent.licensing?.status).toBe("failed");
+      expect(ent.licensing?.errorMessage).toContain("licensing exploded");
+      expect(result.licensing.enterprises[0].status).toBe("failed");
+    });
+
+    it("keeps the existing empty-result shape additive when no enterprises are configured", async () => {
+      (getConfiguredEnterprises as ReturnType<typeof vi.fn>).mockReturnValue([]);
+      const result = await fullSync();
+      expect(result.enterprises).toHaveLength(0);
+      expect(result.licensing).toEqual({ enabled: false, enterprises: [] });
+    });
+
+    it("sorts the licensing summary's enterprises stably by enterpriseSlug across multiple enterprises", async () => {
+      (getConfiguredEnterprises as ReturnType<typeof vi.fn>).mockReturnValue([
+        { slug: "zeta-ent", displayName: "Zeta" },
+        { slug: "alpha-ent", displayName: "Alpha" },
+      ]);
+      (getResolvedOrgsForEnterprise as ReturnType<typeof vi.fn>).mockReturnValue(["test-org"]);
+      (syncLicenseHistoryForEnterprise as ReturnType<typeof vi.fn>).mockImplementation(async (enterpriseSlug: string) => ({
+        enterpriseSlug,
+        status: "success",
+        runId: `run-${enterpriseSlug}`,
+        requestedPeriods: [],
+        materializedPeriods: [],
+        skippedPeriods: [],
+        warnings: [],
+        errorMessage: null,
+      }));
+
+      const result = await fullSync();
+      expect(result.licensing.enterprises.map((e) => e.enterpriseSlug)).toEqual(["alpha-ent", "zeta-ent"]);
+    });
   });
 
   it("fullSync triggers 28-day fallback when no enterprise data", async () => {

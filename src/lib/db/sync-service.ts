@@ -27,6 +27,13 @@ import { batchUpsertUserTeams } from "./user-teams-repo";
 import { datesBetween } from "@/lib/utils";
 import { syncBilling } from "./billing-sync-service";
 import {
+  syncLicenseHistoryForEnterprise,
+  createDefaultLicenseHistorySyncDeps,
+  type LicenseHistoryEnterpriseSyncResult,
+  type LicenseHistorySyncDeps,
+  type LicenseHistorySyncProgress,
+} from "./license-history-sync-service";
+import {
   getConfiguredEnterprises, getResolvedOrgsForEnterprise, getEnterpriseConfig,
   isCopilotSubEnabledForEnterprise, isCopilotSubEnabledForAnyEnterprise,
 } from "@/lib/config/enterprise-config";
@@ -93,6 +100,8 @@ export interface EnterpriseSyncResult {
   backfill: { daysSynced: number; daysSkipped: number; errors: number };
   seats: number;
   teams: number;
+  /** Additive — historical license reconciliation sync result for this enterprise. Absent when licensing history is disabled/not configured. */
+  licensing?: LicenseHistoryEnterpriseSyncResult;
 }
 
 export interface MultiEnterpriseSyncResult {
@@ -100,6 +109,8 @@ export interface MultiEnterpriseSyncResult {
   seats: number;
   teams: number;
   enterprises: EnterpriseSyncResult[];
+  /** Additive summary — never replaces or mutates any existing field above. */
+  licensing: { enabled: boolean; enterprises: LicenseHistoryEnterpriseSyncResult[] };
 }
 
 // ── Org auto-discovery ────────────────────────────────────────────────
@@ -688,10 +699,18 @@ export async function fullSync(
       seats: 0,
       teams: 0,
       enterprises: [],
+      licensing: { enabled: false, enterprises: [] },
     };
   }
 
   const enterpriseResults: EnterpriseSyncResult[] = [];
+  const licensingResults: LicenseHistoryEnterpriseSyncResult[] = [];
+  const licensingDeps: LicenseHistorySyncDeps = createDefaultLicenseHistorySyncDeps({
+    onProgress: (p: LicenseHistorySyncProgress) => {
+      onProgress?.({ phase: "licensing", current: p.current, total: p.total, message: p.message, enterpriseSlug: p.enterprise });
+    },
+  });
+  const licensingEnabled = licensingDeps.getConfig().history.enabled;
 
   for (const entConfig of enterprises) {
     const slug = entConfig.slug;
@@ -748,11 +767,35 @@ export async function fullSync(
       console.error("[Sync] [%s] Billing sync failed:", sanitizeForLog(slug), err);
     }
 
+    // Sync historical license reconciliation (Task 9) — only after existing
+    // live seats and billing inputs are available for this enterprise.
+    // A licensing failure is isolated here so it never rolls back this
+    // enterprise's otherwise-successful backfill/seats/teams/billing results.
+    onProgress?.({ phase: "licensing", current: 0, total: 1, message: `[${sanitizeForLog(slug)}] Syncing historical license reconciliation...`, enterpriseSlug: slug });
+    let entLicensing: LicenseHistoryEnterpriseSyncResult;
+    try {
+      entLicensing = await syncLicenseHistoryForEnterprise(slug, licensingDeps);
+    } catch (err) {
+      console.error("[Sync] [%s] Licensing history sync failed unexpectedly:", sanitizeForLog(slug), err);
+      entLicensing = {
+        enterpriseSlug: slug,
+        status: "failed",
+        runId: null,
+        requestedPeriods: [],
+        materializedPeriods: [],
+        skippedPeriods: [],
+        warnings: [],
+        errorMessage: err instanceof Error ? err.message : String(err),
+      };
+    }
+    licensingResults.push(entLicensing);
+
     enterpriseResults.push({
       enterpriseSlug: slug,
       backfill: bf,
       seats: entSeats,
       teams: entTeams,
+      licensing: entLicensing,
     });
     } catch (err) {
       console.error("[Sync] [%s] Enterprise sync failed, continuing with remaining enterprises:", sanitizeForLog(slug), err);
@@ -795,6 +838,10 @@ export async function fullSync(
     seats: enterpriseResults.reduce((sum, r) => sum + r.seats, 0),
     teams: enterpriseResults.reduce((sum, r) => sum + r.teams, 0),
     enterprises: enterpriseResults,
+    licensing: {
+      enabled: licensingEnabled,
+      enterprises: [...licensingResults].sort((a, b) => a.enterpriseSlug.localeCompare(b.enterpriseSlug)),
+    },
   };
 }
 
