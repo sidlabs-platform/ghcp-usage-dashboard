@@ -301,6 +301,20 @@ beforeAll(() => {
     }),
   );
 
+  // ── judy: malformed (non-JSON) totals_by_feature text on its own isolated
+  // day. Regression coverage for the json_each()/malformed-JSON guard: a
+  // bare IS NOT NULL / <> '[]' check does not stop SQLite's json_each()
+  // from throwing "malformed JSON" on non-JSON text, which would fail the
+  // whole KPI query for every user in the period, not just judy's row.
+  // judy carries no other App evidence, so once the guard is in place her
+  // row must be silently excluded (no throw, not counted as supported).
+  insertUser.run(
+    "2025-04-07", "ent1", "acme", 10, "judy",
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, null,
+    "[]", "not-valid-json{{{", "[]", "[]", "[]",
+    null,
+  );
+
   // ── Bulk synthetic adopters for pagination-clamp tests, isolated on
   // their own day (2025-05-01) so they never leak into the shared
   // START/END assertions above. 205 rows so a pageSize clamp to 200 is
@@ -369,6 +383,15 @@ beforeAll(() => {
       session_count: 0, request_count: 0, prompt_count: 0,
       token_usage: { prompt_tokens_sum: 0, output_tokens_sum: 0, avg_tokens_per_request: 0 },
     }),
+  );
+  // malformed-ent, day 2025-04-06 (isolated): no dedicated totals/flag, and
+  // totals_by_feature is non-JSON text. Regression coverage for
+  // AGGREGATE_ROW_SUPPORTED's json_each() guard — must not throw and must
+  // never be treated as App-supported evidence.
+  insertEnterprise.run(
+    "2025-04-06", "ent9", "malformed-ent", 10, null,
+    "not-valid-json{{{",
+    null,
   );
 
   // ── Organization aggregate rows ──
@@ -505,6 +528,18 @@ describe("getCopilotAppUserSummary", () => {
     expect(result.codeAcceptances).toBe(6);
     expect(result.locAdded).toBe(70);
     expect(result.locDeleted).toBe(8);
+  });
+
+  it("does not throw on malformed (non-JSON) totals_by_feature text and excludes it as unsupported", () => {
+    // judy's totals_by_feature is the literal text "not-valid-json{{{".
+    // Before the json_valid() guard, json_each(totals_by_feature) inside
+    // HAS_APP_EVIDENCE_ANY/HAS_APP_ACTIVITY would throw "malformed JSON" for
+    // this row, failing the whole query for the day. With the guard, the
+    // query must succeed and judy must not count as supported/App-active.
+    expect(() => getCopilotAppUserSummary("2025-04-07", "2025-04-07", ["judy"])).not.toThrow();
+    const result = getCopilotAppUserSummary("2025-04-07", "2025-04-07", ["judy"]);
+    expect(result.supportedRows).toBe(0);
+    expect(result.appActiveUsers).toBe(0);
   });
 });
 
@@ -678,6 +713,19 @@ describe("getEnterpriseCopilotAppDaily", () => {
   it("excludes an unsupported (legacy) enterprise entirely when scoped alone", () => {
     const rows = getEnterpriseCopilotAppDaily(START, END, ["gamma"]);
     expect(rows).toEqual([]);
+  });
+
+  it("does not throw on malformed (non-JSON) totals_by_feature text and excludes the enterprise as unsupported", () => {
+    // malformed-ent's totals_by_feature is non-JSON text with no dedicated
+    // totals/flag evidence. Before the json_valid() guard on
+    // AGGREGATE_ROW_SUPPORTED, json_each() would throw "malformed JSON" here.
+    expect(() =>
+      getEnterpriseCopilotAppDaily("2025-04-06", "2025-04-06", ["malformed-ent"]),
+    ).not.toThrow();
+    const rows = getEnterpriseCopilotAppDaily("2025-04-06", "2025-04-06", ["malformed-ent"]);
+    expect(rows).toEqual([]);
+    expect(() => countAggregateEnterprises("2025-04-06", "2025-04-06", ["malformed-ent"])).not.toThrow();
+    expect(countAggregateEnterprises("2025-04-06", "2025-04-06", ["malformed-ent"])).toBe(0);
   });
 
   it("excludes an unsupported enterprise's daily_active_users from sourceActiveUsers when mixed with supported enterprises on the same day", () => {

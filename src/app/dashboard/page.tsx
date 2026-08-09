@@ -99,8 +99,8 @@ export default function DashboardOverview() {
     return (
       <div>
         <PageHeader title="Executive Overview" description="Loading metrics..." />
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-8 mb-8">
-          {Array.from({ length: 9 }).map((_, i) => (
+        <div className={`grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4 mb-8 ${hasFilter ? "xl:grid-cols-9" : "xl:grid-cols-10"}`}>
+          {Array.from({ length: hasFilter ? 9 : 10 }).map((_, i) => (
             <KPISkeleton key={i} />
           ))}
         </div>

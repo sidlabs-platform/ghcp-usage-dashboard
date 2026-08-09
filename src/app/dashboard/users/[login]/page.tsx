@@ -68,6 +68,12 @@ interface UserSummary {
   totalLocSuggested: number;
   completionLocAccepted: number;
   completionLocDeleted: number;
+  // Strict completion-only counterpart to totalLocSuggestedDelete (top-level
+  // loc_suggested_to_delete_sum across ALL features) — used for the "LoC
+  // Deleted" card subtitle so it never mixes a completion-only headline
+  // value with a top-level (copilot_app/chat_inline/unknown/agent_edit
+  // inclusive) suggested-deletion count.
+  completionLocSuggestedDelete: number;
   completionAcceptanceRate: number;
   usedAgent: boolean;
   usedChat: boolean;
@@ -680,7 +686,7 @@ export default function UserDetailPage() {
               value={data.summary.completionLocDeleted}
               icon={<FileX className="h-4 w-4" />}
               accent="red"
-              subtitle={`${formatNumber(data.summary.totalLocSuggestedDelete)} suggested`}
+              subtitle={`${formatNumber(data.summary.completionLocSuggestedDelete)} suggested`}
             />
             {data.summary.agentLocAdded > 0 || data.summary.agentLocDeleted > 0 ? (
               <MetricCard

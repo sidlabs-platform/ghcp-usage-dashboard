@@ -43,10 +43,11 @@ vi.mock("@/components/ui/card", () => ({
 }));
 
 vi.mock("@/components/cards/MetricCard", () => ({
-  MetricCard: ({ title, value }: { title: string; value: React.ReactNode }) => (
+  MetricCard: ({ title, value, subtitle }: { title: string; value: React.ReactNode; subtitle?: React.ReactNode }) => (
     <section>
       <h3>{title}</h3>
       <span data-testid={`metric-${title}`}>{value}</span>
+      {subtitle && <span data-testid={`metric-${title}-subtitle`}>{subtitle}</span>}
     </section>
   ),
 }));
@@ -127,6 +128,11 @@ const apiResponse = {
     totalLocSuggested: 400,
     completionLocAccepted: 300,
     completionLocDeleted: 15,
+    // Strict completion-only suggested-delete (6), distinct from the top-level
+    // totalLocSuggestedDelete (10) which includes copilot_app/chat_inline/
+    // unknown/agent_edit suggested-deletion activity — the "LoC Deleted" card
+    // subtitle must use this field, not totalLocSuggestedDelete.
+    completionLocSuggestedDelete: 6,
     completionAcceptanceRate: 75,
     usedAgent: true,
     usedChat: false,
@@ -168,6 +174,11 @@ describe("user detail page — LoC chart/card consistency", () => {
     expect(screen.getByTestId("metric-LoC Suggested")).toHaveTextContent("400");
     expect(screen.getByTestId("metric-LoC Accepted")).toHaveTextContent("300");
     expect(screen.getByTestId("metric-LoC Deleted")).toHaveTextContent("15");
+
+    // Subtitle must show the completion-only suggested-delete value (6), not
+    // the top-level totalLocSuggestedDelete (10) which includes copilot_app/
+    // chat_inline/unknown/agent_edit suggested-deletion activity.
+    expect(screen.getByTestId("metric-LoC Deleted-subtitle")).toHaveTextContent("6 suggested");
 
     // Chart: must plot the SAME strict per-day values — not the top-level
     // locSuggested (500, which wrongly includes 100 LoC of copilot_app/

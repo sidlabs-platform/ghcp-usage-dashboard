@@ -19,9 +19,10 @@ interface CopilotAppCodeImpactChartProps {
   data: CopilotAppCodeImpactPoint[];
 }
 
-function formatDate(dateStr: string) {
-  const d = new Date(dateStr);
-  return `${d.getMonth() + 1}/${d.getDate()}`;
+/** Parse YYYY-MM-DD without Date constructor to avoid UTC→local timezone shift */
+export function formatDate(dateStr: string) {
+  const [, m, d] = dateStr.split("-").map(Number);
+  return `${m}/${d}`;
 }
 
 /**

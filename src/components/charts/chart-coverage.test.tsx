@@ -24,8 +24,12 @@ import { CohortTrendChart } from "@/components/charts/CohortTrendChart";
 import {
   CopilotAppAdoptionVolumeChart,
   AdoptionVolumeTooltip,
+  formatDate as formatAdoptionVolumeDate,
 } from "@/components/charts/CopilotAppAdoptionVolumeChart";
-import { CopilotAppCodeImpactChart } from "@/components/charts/CopilotAppCodeImpactChart";
+import {
+  CopilotAppCodeImpactChart,
+  formatDate as formatCodeImpactDate,
+} from "@/components/charts/CopilotAppCodeImpactChart";
 import { FeatureBreakdownChart } from "@/components/charts/FeatureBreakdownChart";
 import { FeatureUsageStackedChart } from "@/components/charts/FeatureUsageStackedChart";
 import { LanguageBarChart } from "@/components/charts/LanguageBarChart";
@@ -71,8 +75,8 @@ vi.mock("recharts", () => ({
   Pie: makeMock("Pie"),
   XAxis: () => null,
   YAxis: () => null,
-  Area: ({ dataKey, name, stroke, strokeDasharray }: { dataKey?: string; name?: string; stroke?: string; strokeDasharray?: string }) => (
-    <span data-testid={`Area-${dataKey}`} data-name={name} data-stroke={stroke} data-stroke-dasharray={strokeDasharray} />
+  Area: ({ dataKey, name, stroke, strokeDasharray, stackId }: { dataKey?: string; name?: string; stroke?: string; strokeDasharray?: string; stackId?: string }) => (
+    <span data-testid={`Area-${dataKey}`} data-name={name} data-stroke={stroke} data-stroke-dasharray={strokeDasharray} data-stack-id={stackId} />
   ),
   Line: () => null,
   Bar: () => null,
@@ -238,6 +242,37 @@ describe("chart component coverage", () => {
     expect(chart.getAttribute("data-json")).toContain("\"app\":12");
   });
 
+  it("FeatureUsageStackedChart does not stack Copilot App with the other feature series", () => {
+    // Regression test: a user can be counted in App and another feature
+    // (completions/chat/agent/cli) on the same day, so App must not share a
+    // stackId with them — stacking it there would double-count overlapping
+    // users and inflate the visible daily total. App gets its own stackId
+    // while the other four keep stacking together as before.
+    render(
+      <FeatureUsageStackedChart
+        data={[
+          { day: "2026-07-29", completions: 100, chat: 20, agent: 5, cli: 3, app: 12 },
+        ]}
+      />,
+    );
+
+    const completionsSeries = screen.getByTestId("Area-completions");
+    const chatSeries = screen.getByTestId("Area-chat");
+    const agentSeries = screen.getByTestId("Area-agent");
+    const cliSeries = screen.getByTestId("Area-cli");
+    const appSeries = screen.getByTestId("Area-app");
+
+    // Existing series behavior is unchanged: they all still share one stack.
+    expect(completionsSeries.getAttribute("data-stack-id")).toBe("1");
+    expect(chatSeries.getAttribute("data-stack-id")).toBe("1");
+    expect(agentSeries.getAttribute("data-stack-id")).toBe("1");
+    expect(cliSeries.getAttribute("data-stack-id")).toBe("1");
+
+    // App is unstacked from the rest.
+    expect(appSeries.getAttribute("data-stack-id")).not.toBe("1");
+    expect(appSeries.getAttribute("data-stack-id")).toBeTruthy();
+  });
+
   it("AdoptionVolumeTooltip renders nothing when inactive or the payload is empty", () => {
     const data = [{ day: "2026-07-29", activeUsers: 12, sessions: 40, requests: 90, prompts: 150 }];
 
@@ -265,6 +300,41 @@ describe("chart component coverage", () => {
     expect(plotted).toEqual([
       { day: "2026-07-29", generations: 30, acceptances: 18, locAdded: 200, locDeleted: 25 },
     ]);
+  });
+
+  describe("timezone-stable date-axis formatting", () => {
+    // Regression test: date-only strings like "2026-07-29" parse as UTC
+    // midnight. Formatting via `new Date(dateStr).getMonth()/getDate()` reads
+    // those back in the *local* timezone, which rolls back to the prior day
+    // for any timezone west of UTC (negative offset). Both Copilot App
+    // charts parse the Y/M/D components directly instead, so the displayed
+    // date never depends on the host machine's timezone. `process.env.TZ` is
+    // restored after each assertion so this doesn't leak into other tests.
+    const originalTz = process.env.TZ;
+
+    afterEach(() => {
+      process.env.TZ = originalTz;
+    });
+
+    it("CopilotAppAdoptionVolumeChart's formatDate is stable west of UTC", () => {
+      process.env.TZ = "Pacific/Niue"; // UTC-11
+      expect(formatAdoptionVolumeDate("2026-07-29")).toBe("7/29");
+    });
+
+    it("CopilotAppAdoptionVolumeChart's formatDate is stable east of UTC", () => {
+      process.env.TZ = "Pacific/Kiritimati"; // UTC+14
+      expect(formatAdoptionVolumeDate("2026-07-29")).toBe("7/29");
+    });
+
+    it("CopilotAppCodeImpactChart's formatDate is stable west of UTC", () => {
+      process.env.TZ = "Pacific/Niue"; // UTC-11
+      expect(formatCodeImpactDate("2026-07-29")).toBe("7/29");
+    });
+
+    it("CopilotAppCodeImpactChart's formatDate is stable east of UTC", () => {
+      process.env.TZ = "Pacific/Kiritimati"; // UTC+14
+      expect(formatCodeImpactDate("2026-07-29")).toBe("7/29");
+    });
   });
 
   it("renders AutofixInsightChart with computed chart data", () => {

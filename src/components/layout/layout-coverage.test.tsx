@@ -195,7 +195,7 @@ describe("layout coverage", () => {
     expect(screen.queryByText("AI Credits")).not.toBeInTheDocument();
   });
 
-  it("hides the Copilot App nav item and highlights it as active when visible on its own page", async () => {
+  it("hides the Copilot App nav item when pageVisibility.copilotApp is false", async () => {
     mockState.pathname = "/dashboard/copilot-app";
     const fetchMock = vi.fn((input: RequestInfo | URL) => {
       if (String(input) === "/api/config") {

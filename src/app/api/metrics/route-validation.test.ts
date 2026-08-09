@@ -119,6 +119,8 @@ vi.mock("@/lib/db/copilot-app-queries", () => ({
   getCopilotAppLanguageBreakdown: vi.fn(() => []),
   getEnterpriseCopilotAppDaily: vi.fn(() => []),
   getOrganizationCopilotAppDaily: vi.fn(() => []),
+  countAggregateEnterprises: vi.fn(() => 0),
+  countOrganizationCopilotAppEnterprises: vi.fn(() => 0),
   getCopilotAppAdopters: vi.fn(() => ({ adopters: [], total: 0 })),
 }));
 

@@ -39,9 +39,12 @@ import type {
 const HAS_APP_EVIDENCE_ANY = `(
   used_copilot_app IS NOT NULL
   OR totals_by_copilot_app IS NOT NULL
-  OR EXISTS (
-    SELECT 1 FROM json_each(totals_by_feature) f
-    WHERE json_extract(f.value, '$.feature') = 'copilot_app'
+  OR (
+    json_valid(totals_by_feature)
+    AND EXISTS (
+      SELECT 1 FROM json_each(totals_by_feature) f
+      WHERE json_extract(f.value, '$.feature') = 'copilot_app'
+    )
   )
 )`;
 
@@ -57,16 +60,19 @@ const HAS_APP_ACTIVITY = `(
       OR COALESCE(json_extract(totals_by_copilot_app, '$.prompt_count'), 0) > 0
     )
   )
-  OR EXISTS (
-    SELECT 1 FROM json_each(totals_by_feature) f
-    WHERE json_extract(f.value, '$.feature') = 'copilot_app'
-      AND (
-        COALESCE(json_extract(f.value, '$.user_initiated_interaction_count'), 0) > 0
-        OR COALESCE(json_extract(f.value, '$.code_generation_activity_count'), 0) > 0
-        OR COALESCE(json_extract(f.value, '$.code_acceptance_activity_count'), 0) > 0
-        OR COALESCE(json_extract(f.value, '$.loc_added_sum'), 0) > 0
-        OR COALESCE(json_extract(f.value, '$.loc_deleted_sum'), 0) > 0
-      )
+  OR (
+    json_valid(totals_by_feature)
+    AND EXISTS (
+      SELECT 1 FROM json_each(totals_by_feature) f
+      WHERE json_extract(f.value, '$.feature') = 'copilot_app'
+        AND (
+          COALESCE(json_extract(f.value, '$.user_initiated_interaction_count'), 0) > 0
+          OR COALESCE(json_extract(f.value, '$.code_generation_activity_count'), 0) > 0
+          OR COALESCE(json_extract(f.value, '$.code_acceptance_activity_count'), 0) > 0
+          OR COALESCE(json_extract(f.value, '$.loc_added_sum'), 0) > 0
+          OR COALESCE(json_extract(f.value, '$.loc_deleted_sum'), 0) > 0
+        )
+    )
   )
 )`;
 
@@ -191,6 +197,7 @@ export function getCopilotAppUserSummary(
         json_extract(j.value, '$.loc_deleted_sum') as locDeleted
       FROM user_daily_metrics u, json_each(u.totals_by_feature) j
       WHERE u.day >= ? AND u.day <= ? ${featureLogin.clause}${featureEnterprise.clause}
+        AND json_valid(u.totals_by_feature)
         AND json_extract(j.value, '$.feature') = 'copilot_app'
     ),
     per_user_day AS (
@@ -314,6 +321,7 @@ export function getCopilotAppDailyCodeImpact(
         json_extract(j.value, '$.loc_deleted_sum') as locDeleted
       FROM user_daily_metrics u, json_each(u.totals_by_feature) j
       WHERE u.day >= ? AND u.day <= ? ${login.clause}${enterprise.clause}
+        AND json_valid(u.totals_by_feature)
         AND json_extract(j.value, '$.feature') = 'copilot_app'
     ),
     per_user_day AS (
@@ -506,9 +514,12 @@ function mapAggregateDayRow(r: RawAggregateDayRow): CopilotAppAggregateDay {
 const AGGREGATE_ROW_SUPPORTED = `(
   daily_active_copilot_app_users IS NOT NULL
   OR totals_by_copilot_app IS NOT NULL
-  OR EXISTS (
-    SELECT 1 FROM json_each(totals_by_feature) f
-    WHERE json_extract(f.value, '$.feature') = 'copilot_app'
+  OR (
+    json_valid(totals_by_feature)
+    AND EXISTS (
+      SELECT 1 FROM json_each(totals_by_feature) f
+      WHERE json_extract(f.value, '$.feature') = 'copilot_app'
+    )
   )
 )`;
 
@@ -555,7 +566,8 @@ function aggregateDailySql(table: "enterprise_daily_metrics" | "org_daily_metric
         COALESCE(SUM(json_extract(j.value, '$.loc_added_sum')), 0) as locAdded,
         COALESCE(SUM(json_extract(j.value, '$.loc_deleted_sum')), 0) as locDeleted
       FROM base b, json_each(b.totals_by_feature) j
-      WHERE json_extract(j.value, '$.feature') = 'copilot_app'
+      WHERE json_valid(b.totals_by_feature)
+        AND json_extract(j.value, '$.feature') = 'copilot_app'
       GROUP BY b.day
     )
     SELECT
@@ -858,7 +870,8 @@ export function getCopilotAppAdopters(
         MAX(COALESCE(json_extract(j.value, '$.loc_added_sum'), 0)) as locAdded,
         MAX(COALESCE(json_extract(j.value, '$.loc_deleted_sum'), 0)) as locDeleted
       FROM app_rows ar, json_each(ar.totals_by_feature) j
-      WHERE json_extract(j.value, '$.feature') = 'copilot_app'
+      WHERE json_valid(ar.totals_by_feature)
+        AND json_extract(j.value, '$.feature') = 'copilot_app'
       GROUP BY ar.day, ar.user_login
     ),
     per_day AS (

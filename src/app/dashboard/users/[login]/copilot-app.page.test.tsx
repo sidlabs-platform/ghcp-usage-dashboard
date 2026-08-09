@@ -101,6 +101,7 @@ const baseSummary = {
   totalLocSuggested: 100,
   completionLocAccepted: 90,
   completionLocDeleted: 5,
+  completionLocSuggestedDelete: 2,
   completionAcceptanceRate: 80,
   usedAgent: false,
   usedChat: false,

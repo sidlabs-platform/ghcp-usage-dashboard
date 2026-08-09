@@ -70,6 +70,12 @@ interface UserSummary {
   totalLocSuggested: number;
   completionLocAccepted: number;
   completionLocDeleted: number;
+  // Strict completion-only counterpart to totalLocSuggestedDelete (top-level
+  // loc_suggested_to_delete_sum across ALL features). Used by the page's
+  // "LoC Deleted" card subtitle so it never mixes completion-only headline
+  // values with a top-level (copilot_app/chat_inline/unknown/agent_edit
+  // inclusive) suggested-deletion count.
+  completionLocSuggestedDelete: number;
   completionAcceptanceRate: number;
   usedAgent: boolean;
   usedChat: boolean;
@@ -287,6 +293,7 @@ async function handler(request: NextRequest) {
         COALESCE(SUM(json_extract(j.value, '$.loc_suggested_to_add_sum')), 0) AS compLocSuggested,
         COALESCE(SUM(json_extract(j.value, '$.loc_added_sum')), 0) AS compLocAccepted,
         COALESCE(SUM(json_extract(j.value, '$.loc_deleted_sum')), 0) AS compLocDeleted,
+        COALESCE(SUM(json_extract(j.value, '$.loc_suggested_to_delete_sum')), 0) AS compLocSuggestedDelete,
         COALESCE(SUM(json_extract(j.value, '$.code_generation_activity_count')), 0) AS compCodeGen,
         COALESCE(SUM(json_extract(j.value, '$.code_acceptance_activity_count')), 0) AS compCodeAccept
       FROM user_daily_metrics u, json_each(u.totals_by_feature) j
@@ -297,6 +304,7 @@ async function handler(request: NextRequest) {
       compLocSuggested: number;
       compLocAccepted: number;
       compLocDeleted: number;
+      compLocSuggestedDelete: number;
       compCodeGen: number;
       compCodeAccept: number;
     } | undefined;
@@ -338,6 +346,10 @@ async function handler(request: NextRequest) {
       const compDeleted = completionLocRow
         ? completionLocRow.compLocDeleted
         : Math.max(0, summaryRow.totalLocDeleted - agentDeleted);
+      // No agent/copilot_app suggested-deletion fallback subtraction is possible here
+      // (loc_suggested_to_delete_sum isn't tracked per-feature outside totals_by_feature),
+      // so when completionLocRow is unavailable this just falls back to the top-level total.
+      const compSuggestedDelete = completionLocRow?.compLocSuggestedDelete ?? summaryRow.totalLocSuggestedDelete;
       const compCodeGen = completionLocRow?.compCodeGen ?? summaryRow.totalCodeGen;
       const compCodeAccept = completionLocRow?.compCodeAccept ?? summaryRow.totalCodeAccept;
 
@@ -366,6 +378,7 @@ async function handler(request: NextRequest) {
         totalLocSuggested: compSuggested,
         completionLocAccepted: compAccepted,
         completionLocDeleted: compDeleted,
+        completionLocSuggestedDelete: compSuggestedDelete,
         completionAcceptanceRate: Math.round(compRate * 10) / 10,
         usedAgent: summaryRow.usedAgent === 1,
         usedChat: summaryRow.usedChat === 1,
