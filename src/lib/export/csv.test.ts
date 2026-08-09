@@ -1,5 +1,61 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { arrayToCSV, fetchAllPages, type CSVColumn, type ExportMetadata } from "./csv";
+import { arrayToCSV, escapeCSVValue, fetchAllPages, type CSVColumn, type ExportMetadata } from "./csv";
+
+// ── escapeCSVValue: numeric passthrough, string-only formula guard ────
+
+describe("escapeCSVValue: numeric values are never formula-guarded", () => {
+  it("round-trips a negative number unescaped and unquoted", () => {
+    expect(escapeCSVValue(-12.34)).toBe("-12.34");
+  });
+
+  it("round-trips a positive number unescaped and unquoted", () => {
+    expect(escapeCSVValue(42)).toBe("42");
+  });
+
+  it("round-trips zero unescaped", () => {
+    expect(escapeCSVValue(0)).toBe("0");
+  });
+
+  it("still guards a string that merely looks like a negative number", () => {
+    expect(escapeCSVValue("-12")).toBe(`"'-12"`);
+  });
+});
+
+describe("escapeCSVValue: dangerous prefixes hidden behind leading whitespace", () => {
+  it("detects a formula prefix after a leading space", () => {
+    expect(escapeCSVValue(" =SUM(A1)")).toBe(`"'` + " =SUM(A1)" + `"`);
+  });
+
+  it("detects a formula prefix after leading spaces and a tab", () => {
+    const input = "  \t=SUM(A1)";
+    expect(escapeCSVValue(input)).toBe(`"'${input}"`);
+  });
+
+  it("preserves the original text (including leading whitespace) after the apostrophe prefix", () => {
+    const input = "   -1+2";
+    expect(escapeCSVValue(input)).toBe(`"'${input}"`);
+  });
+});
+
+describe("escapeCSVValue: RFC4180 quoting for a bare CR", () => {
+  it("quotes (but does not formula-prefix) a value containing a mid-string bare CR", () => {
+    expect(escapeCSVValue("line1\rline2")).toBe(`"line1\rline2"`);
+  });
+
+  it("still formula-prefixes when CR is the leading character", () => {
+    expect(escapeCSVValue("\rcarriage")).toBe(`"'\rcarriage"`);
+  });
+});
+
+describe("escapeCSVValue: null/undefined", () => {
+  it("returns an empty string for null", () => {
+    expect(escapeCSVValue(null)).toBe("");
+  });
+
+  it("returns an empty string for undefined", () => {
+    expect(escapeCSVValue(undefined)).toBe("");
+  });
+});
 
 // ── escapeCSVValue (tested indirectly through arrayToCSV) ─────────────
 

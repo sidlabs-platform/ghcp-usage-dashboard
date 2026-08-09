@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { isBillingSubEnabledForAnyEnterprise } from "@/lib/config/enterprise-config";
+import { isBillingSubEnabledForAnyEnterprise, getEnterpriseSlugs } from "@/lib/config/enterprise-config";
 import { parseDateRangeParams } from "@/lib/utils";
 import { getLicensingConfig, LicensingConfigError, type LicensePlanKey } from "@/lib/config/dashboard-config";
 import { parseScopeFilter } from "@/lib/api/scope-filter";
@@ -90,6 +90,50 @@ function validateAllowlist<T extends string>(
   return values as T[];
 }
 
+/**
+ * Collects every enterprise slug the request references, whether via the
+ * plain `enterprises` CSV param or via composite `teams=entSlug:teamSlug`
+ * identifiers, so callers can validate all of them against the configured
+ * enterprise list in one place. Order-preserving, de-duplicated.
+ */
+function collectRequestedEnterpriseSlugs(params: URLSearchParams): string[] {
+  const slugs = new Set<string>();
+  for (const slug of splitCsvParam(params.get("enterprises")) ?? []) {
+    slugs.add(slug);
+  }
+  for (const t of splitCsvParam(params.get("teams")) ?? []) {
+    const colonIdx = t.indexOf(":");
+    if (colonIdx > 0) {
+      slugs.add(t.substring(0, colonIdx));
+    }
+  }
+  return Array.from(slugs);
+}
+
+/** Strictly parses a required-integer query param within `[min, max]`; returns a structured error otherwise. */
+function parseStrictIntParam(
+  raw: string | null,
+  paramName: string,
+  defaultValue: number,
+  min: number,
+  max: number,
+): number | { error: string } {
+  if (raw === null || raw === "") return defaultValue;
+  if (!/^-?\d+$/.test(raw.trim())) {
+    return { error: `Invalid ${paramName} value "${raw}". Expected an integer between ${min} and ${max}.` };
+  }
+  const parsed = Number(raw);
+  if (!Number.isInteger(parsed) || parsed < min || parsed > max) {
+    return { error: `Invalid ${paramName} value "${raw}". Expected an integer between ${min} and ${max}.` };
+  }
+  return parsed;
+}
+
+/** Documented upper bound for `page`; prevents unbounded/overflow-prone offsets. */
+const MAX_PAGE = 100_000;
+/** Aligned with the repository's historical-query pageSize cap so live and historical modes behave consistently. */
+const MAX_PAGE_SIZE = 200;
+
 /** Structured 400 error shape returned by {@link resolveReconciliationFilters}. */
 export interface ReconciliationQueryError {
   error: string;
@@ -177,6 +221,18 @@ export function resolveReconciliationFilters(
   const logins = splitCsvParam(params.get("login"));
   const search = params.get("search") || undefined;
 
+  const requestedEnterpriseSlugs = collectRequestedEnterpriseSlugs(params);
+  if (requestedEnterpriseSlugs.length > 0) {
+    const configuredSlugs = new Set(getEnterpriseSlugs());
+    const unknown = requestedEnterpriseSlugs.filter((slug) => !configuredSlugs.has(slug));
+    if (unknown.length > 0) {
+      return {
+        error: `Unknown enterprise slug(s): ${unknown.join(", ")}. Expected one of the configured enterprises.`,
+        status: 400,
+      };
+    }
+  }
+
   const scope = parseScopeFilter(params);
   // Fail-closed: `scope.allowedLogins` is a `Set` (possibly empty) when a
   // team/org filter was applied; convert to the array shape
@@ -230,13 +286,26 @@ async function handler(request: NextRequest) {
     }
     const { periods, legacyStart, legacyEnd, view, scope, filterQuery, baseFilterQuery } = resolved;
 
-    const rawPage = parseInt(params.get("page") || "1", 10);
-    const page = Math.max(1, Number.isNaN(rawPage) ? 1 : rawPage);
-    const rawPageSize = parseInt(params.get("pageSize") || "50", 10);
-    const pageSize = Math.min(Math.max(1, Number.isNaN(rawPageSize) ? 50 : rawPageSize), 500);
+    const pageResult = parseStrictIntParam(params.get("page"), "page", 1, 1, MAX_PAGE);
+    if (typeof pageResult === "object") {
+      return NextResponse.json({ error: pageResult.error }, { status: 400 });
+    }
+    const page = pageResult;
 
-    const sortParam = (params.get("sort") || "total_cost") as LicenseSortField;
-    const sort: LicenseSortField = SORT_FIELDS.includes(sortParam) ? sortParam : "total_cost";
+    const pageSizeResult = parseStrictIntParam(params.get("pageSize"), "pageSize", 50, 1, MAX_PAGE_SIZE);
+    if (typeof pageSizeResult === "object") {
+      return NextResponse.json({ error: pageSizeResult.error }, { status: 400 });
+    }
+    const pageSize = pageSizeResult;
+
+    const sortParam = params.get("sort");
+    if (sortParam !== null && !SORT_FIELDS.includes(sortParam as LicenseSortField)) {
+      return NextResponse.json(
+        { error: `Invalid sort value "${sortParam}". Expected one of: ${SORT_FIELDS.join(", ")}.` },
+        { status: 400 },
+      );
+    }
+    const sort: LicenseSortField = (sortParam as LicenseSortField) || "total_cost";
     const sortDir = params.get("sortDir") === "asc" ? "asc" : "desc";
 
     const cfg = getLicensingConfig();
@@ -311,14 +380,10 @@ async function handler(request: NextRequest) {
     // Historical mode: materialized rows exist for the requested base scope
     // (an empty result could still occur once narrow filters are applied —
     // that is expected and not a fallback trigger).
-    const paginated: PaginatedLicenseRows = queryLicensePeriodRows({
-      ...filterQuery,
-      view,
-      page,
-      pageSize,
-      sortField: sort,
-      sortDir,
-    } as Parameters<typeof queryLicensePeriodRows>[0]);
+    const paginated: PaginatedLicenseRows =
+      view === "rollup"
+        ? queryLicensePeriodRows({ ...filterQuery, view: "rollup", page, pageSize, sortField: sort, sortDir })
+        : queryLicensePeriodRows({ ...filterQuery, view: "detail", page, pageSize, sortField: sort, sortDir });
 
     const kpis = getMaterializedPeriodKPIs(filterQuery);
     const planBreakdown = getMaterializedPlanBreakdown(filterQuery);

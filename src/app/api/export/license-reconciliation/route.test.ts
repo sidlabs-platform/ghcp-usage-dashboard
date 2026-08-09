@@ -12,6 +12,7 @@ const repoState = vi.hoisted(() => ({
 
 const historyRepoState = vi.hoisted(() => ({
   queryLicensePeriodRows: vi.fn(),
+  queryLicensePeriodExport: vi.fn(),
   getMaterializedPeriodKPIs: vi.fn(),
   getMaterializedPlanBreakdown: vi.fn(),
   getMaterializedOrgBreakdown: vi.fn(),
@@ -21,19 +22,39 @@ const historyRepoState = vi.hoisted(() => ({
 const configState = vi.hoisted(() => ({
   isBillingSubEnabledForAnyEnterprise: vi.fn(),
   getLicensingConfig: vi.fn(),
+  getEnterpriseSlugs: vi.fn(),
 }));
 
 const scopeState = vi.hoisted(() => ({
   parseScopeFilter: vi.fn(),
 }));
 
-// These wrappers back both this route's own `withTimeout` usage AND the
-// re-imported `../route` module's top-level `withRateLimit`/`withTimeout`/
-// `withCache` wiring (importing `resolveReconciliationFilters` from `../route`
-// executes that module's top-level `export const GET = ...` construction too).
+// Tag the wrappers (rather than plain pass-through identity) so tests can
+// assert the exact composition order of the exported `GET` — proving
+// `withRateLimit(withTimeout(handler))` with no caching wrapper in between —
+// while still transparently forwarding every call through to the inner
+// handler. These wrappers also back the re-imported `../route` module's own
+// top-level `withRateLimit`/`withTimeout`/`withCache` wiring (importing
+// `resolveReconciliationFilters` from `../route` executes that module's
+// top-level `export const GET = ...` construction too), but that module's
+// composition is asserted separately by its own test file.
 vi.mock("@/lib/cache/with-cache", () => ({ withCache: (h: unknown) => h }));
-vi.mock("@/lib/api/timeout", () => ({ withTimeout: (h: unknown) => h }));
-vi.mock("@/lib/api/rate-limit/rate-limiter", () => ({ withRateLimit: (h: unknown) => h }));
+vi.mock("@/lib/api/timeout", () => ({
+  withTimeout: (h: (...args: unknown[]) => unknown) => {
+    const wrapped = (...args: unknown[]) => h(...args);
+    (wrapped as { __wrappedBy?: string }).__wrappedBy = "timeout";
+    (wrapped as { __inner?: unknown }).__inner = h;
+    return wrapped;
+  },
+}));
+vi.mock("@/lib/api/rate-limit/rate-limiter", () => ({
+  withRateLimit: (h: (...args: unknown[]) => unknown) => {
+    const wrapped = (...args: unknown[]) => h(...args);
+    (wrapped as { __wrappedBy?: string }).__wrappedBy = "rateLimit";
+    (wrapped as { __inner?: unknown }).__inner = h;
+    return wrapped;
+  },
+}));
 vi.mock("@/lib/cache/memory-cache", () => ({ CACHE_TTL: { MEDIUM: 300, SHORT: 120 } }));
 
 vi.mock("@/lib/utils", async () => {
@@ -44,6 +65,7 @@ vi.mock("@/lib/utils", async () => {
 vi.mock("@/lib/config/enterprise-config", () => ({
   isBillingSubEnabledForAnyEnterprise: (...args: unknown[]) =>
     configState.isBillingSubEnabledForAnyEnterprise(...args),
+  getEnterpriseSlugs: (...args: unknown[]) => configState.getEnterpriseSlugs(...args),
 }));
 
 vi.mock("@/lib/config/dashboard-config", async () => {
@@ -71,6 +93,7 @@ vi.mock("@/lib/db/license-repo", () => ({
 
 vi.mock("@/lib/db/license-history-repo", () => ({
   queryLicensePeriodRows: (...a: unknown[]) => historyRepoState.queryLicensePeriodRows(...a),
+  queryLicensePeriodExport: (...a: unknown[]) => historyRepoState.queryLicensePeriodExport(...a),
   getMaterializedPeriodKPIs: (...a: unknown[]) => historyRepoState.getMaterializedPeriodKPIs(...a),
   getMaterializedPlanBreakdown: (...a: unknown[]) => historyRepoState.getMaterializedPlanBreakdown(...a),
   getMaterializedOrgBreakdown: (...a: unknown[]) => historyRepoState.getMaterializedOrgBreakdown(...a),
@@ -152,8 +175,22 @@ function paginated(rows: unknown[], overrides: Partial<{ page: number; pageSize:
   };
 }
 
+function exportResult(
+  rows: unknown[],
+  overrides: Partial<{ view: "detail" | "rollup"; totalItems: number }> = {},
+) {
+  return {
+    tooLarge: false as const,
+    view: "detail" as const,
+    rows,
+    totalItems: rows.length,
+    ...overrides,
+  };
+}
+
 beforeEach(() => {
   configState.isBillingSubEnabledForAnyEnterprise.mockReturnValue(true);
+  configState.getEnterpriseSlugs.mockReturnValue(["acme", "other-ent"]);
   scopeState.parseScopeFilter.mockReturnValue({
     selectedTeams: [],
     selectedOrgs: [],
@@ -166,6 +203,7 @@ beforeEach(() => {
   repoState.getLicenseReconciliationRows.mockReturnValue([]);
   historyRepoState.hasMaterializedRows.mockReturnValue(false);
   historyRepoState.queryLicensePeriodRows.mockReturnValue(paginated([]));
+  historyRepoState.queryLicensePeriodExport.mockReturnValue(exportResult([]));
 });
 
 afterEach(() => {
@@ -173,6 +211,14 @@ afterEach(() => {
 });
 
 describe("license reconciliation CSV export route", () => {
+  it("composes GET as withRateLimit(withTimeout(handler)) — no caching wrapper", () => {
+    const outer = GET as unknown as { __wrappedBy?: string; __inner?: { __wrappedBy?: string; __inner?: unknown } };
+    expect(outer.__wrappedBy).toBe("rateLimit");
+    expect(outer.__inner?.__wrappedBy).toBe("timeout");
+    // The innermost layer is the raw handler — no cache wrapper tag present.
+    expect((outer.__inner?.__inner as { __wrappedBy?: string } | undefined)?.__wrappedBy).toBeUndefined();
+  });
+
   it("returns 404 when the licensing feature is not enabled", async () => {
     configState.isBillingSubEnabledForAnyEnterprise.mockReturnValue(false);
     const res = await GET(req(`${BASE_URL}?days=28`));
@@ -199,8 +245,8 @@ describe("license reconciliation CSV export route", () => {
 
   it("exports historical detail rows with the exact deterministic column order, RFC4180 quoting, and no externalIdentity/free-form data", async () => {
     historyRepoState.hasMaterializedRows.mockReturnValue(true);
-    historyRepoState.queryLicensePeriodRows.mockReturnValue(
-      paginated([
+    historyRepoState.queryLicensePeriodExport.mockReturnValue(
+      exportResult([
         makeDetailRow({
           orgLogin: 'org, with "quotes"\nand a newline',
           userLogin: null,
@@ -223,7 +269,8 @@ describe("license reconciliation CSV export route", () => {
     expect(text).not.toContain("externalIdentity");
     expect(text).not.toContain("free-form-note-should-not-appear");
 
-    const lines = text.trim().split("\n");
+    // Rows must be CRLF-separated per RFC4180.
+    const lines = text.trim().split("\r\n");
     const headerLine = lines.find((l) => l.startsWith("Enterprise,"));
     expect(headerLine).toBe(
       [
@@ -264,16 +311,14 @@ describe("license reconciliation CSV export route", () => {
 
   it("exports historical rollup rows with the rollup column order and aggregated fields", async () => {
     historyRepoState.hasMaterializedRows.mockReturnValue(true);
-    historyRepoState.queryLicensePeriodRows.mockReturnValue({
-      view: "rollup",
-      rows: [makeRollupRow()],
-      pagination: { page: 1, pageSize: 200, totalItems: 1, totalPages: 1 },
-    });
+    historyRepoState.queryLicensePeriodExport.mockReturnValue(
+      exportResult([makeRollupRow()], { view: "rollup" }),
+    );
 
     const res = await GET(req(`${BASE_URL}?periods=2026-01&view=rollup`));
     expect(res.status).toBe(200);
     const text = await res.text();
-    const lines = text.trim().split("\n");
+    const lines = text.trim().split("\r\n");
     const headerLine = lines.find((l) => l.startsWith("Enterprise,"));
     expect(headerLine).toBe(
       [
@@ -301,39 +346,31 @@ describe("license reconciliation CSV export route", () => {
     expect(lines[headerIdx + 1]).toContain("2026-01;2026-02");
   });
 
-  it("loops repository pages internally (bounded by the repo's own page cap) rather than requiring a client N-page loop, and returns the exact total row count", async () => {
+  it("calls the bounded export repository function exactly once for a historical export, never looping N pages against it", async () => {
     historyRepoState.hasMaterializedRows.mockReturnValue(true);
-    const page1Rows = Array.from({ length: 200 }, (_, i) => makeDetailRow({ holderKey: `k${i}`, resolvedUserLogin: `user${i}` }));
-    const page2Rows = Array.from({ length: 50 }, (_, i) => makeDetailRow({ holderKey: `k2-${i}`, resolvedUserLogin: `user2-${i}` }));
-    historyRepoState.queryLicensePeriodRows.mockImplementation((q: { page?: number }) => {
-      if (q.page === 2) {
-        return { view: "detail", rows: page2Rows, pagination: { page: 2, pageSize: 200, totalItems: 250, totalPages: 2 } };
-      }
-      return { view: "detail", rows: page1Rows, pagination: { page: 1, pageSize: 200, totalItems: 250, totalPages: 2 } };
-    });
+    const rows = Array.from({ length: 250 }, (_, i) => makeDetailRow({ holderKey: `k${i}`, resolvedUserLogin: `user${i}` }));
+    historyRepoState.queryLicensePeriodExport.mockReturnValue(exportResult(rows));
 
     const res = await GET(req(`${BASE_URL}?periods=2026-01`));
     expect(res.status).toBe(200);
-    expect(historyRepoState.queryLicensePeriodRows).toHaveBeenCalledTimes(2);
+    expect(historyRepoState.queryLicensePeriodExport).toHaveBeenCalledTimes(1);
+    expect(historyRepoState.queryLicensePeriodRows).not.toHaveBeenCalled();
     const text = await res.text();
-    const lines = text.trim().split("\n");
+    const lines = text.trim().split("\r\n");
     const headerIdx = lines.findIndex((l) => l.startsWith("Enterprise,"));
     const dataLines = lines.slice(headerIdx + 1);
     expect(dataLines).toHaveLength(250);
   });
 
-  it("rejects (before building output) when the historical result set exceeds the export row cap", async () => {
+  it("rejects (before building output) when the bounded export repository call reports the result too large, without a second call", async () => {
     historyRepoState.hasMaterializedRows.mockReturnValue(true);
-    historyRepoState.queryLicensePeriodRows.mockReturnValue(
-      paginated([], { totalItems: 999_999, totalPages: 5000 }),
-    );
+    historyRepoState.queryLicensePeriodExport.mockReturnValue({ tooLarge: true, totalItems: 999_999 });
 
     const res = await GET(req(`${BASE_URL}?periods=2026-01`));
     expect(res.status).toBe(400);
     const body = await res.json();
     expect(body.error).toMatch(/too large/i);
-    // Only the peek call (page 1) should have happened — never looped further.
-    expect(historyRepoState.queryLicensePeriodRows).toHaveBeenCalledTimes(1);
+    expect(historyRepoState.queryLicensePeriodExport).toHaveBeenCalledTimes(1);
   });
 
   it("falls back to the live snapshot query when no materialized history exists for the scope, mapping rows onto the same detail columns", async () => {
@@ -368,6 +405,7 @@ describe("license reconciliation CSV export route", () => {
     const res = await GET(req(`${BASE_URL}?days=28`));
     expect(res.status).toBe(200);
     expect(historyRepoState.queryLicensePeriodRows).not.toHaveBeenCalled();
+    expect(historyRepoState.queryLicensePeriodExport).not.toHaveBeenCalled();
     const text = await res.text();
     expect(text).toContain("bob");
     expect(text).toContain("live_snapshot_only");
@@ -410,7 +448,7 @@ describe("license reconciliation CSV export route", () => {
 
   it("includes Report/Period/View/Exported At metadata comment rows before the header, matching the sibling export pattern", async () => {
     historyRepoState.hasMaterializedRows.mockReturnValue(true);
-    historyRepoState.queryLicensePeriodRows.mockReturnValue(paginated([makeDetailRow()]));
+    historyRepoState.queryLicensePeriodExport.mockReturnValue(exportResult([makeDetailRow()]));
 
     const res = await GET(req(`${BASE_URL}?periods=2026-01&view=detail`));
     const text = await res.text();
@@ -418,5 +456,7 @@ describe("license reconciliation CSV export route", () => {
     expect(text).toContain("Period,2026-01");
     expect(text).toContain("View,detail");
     expect(text).toContain("Exported At,");
+    // Rows are CRLF-separated, matching the RFC4180 requirement.
+    expect(text).toContain("\r\n");
   });
 });

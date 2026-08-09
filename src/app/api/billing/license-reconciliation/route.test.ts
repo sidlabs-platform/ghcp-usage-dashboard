@@ -21,6 +21,7 @@ const historyRepoState = vi.hoisted(() => ({
 const configState = vi.hoisted(() => ({
   isBillingSubEnabledForAnyEnterprise: vi.fn(),
   getLicensingConfig: vi.fn(),
+  getEnterpriseSlugs: vi.fn(),
 }));
 
 const scopeState = vi.hoisted(() => ({
@@ -40,6 +41,7 @@ vi.mock("@/lib/utils", async () => {
 vi.mock("@/lib/config/enterprise-config", () => ({
   isBillingSubEnabledForAnyEnterprise: (...args: unknown[]) =>
     configState.isBillingSubEnabledForAnyEnterprise(...args),
+  getEnterpriseSlugs: (...args: unknown[]) => configState.getEnterpriseSlugs(...args),
 }));
 
 // Keep the real `LicensingConfigError` class (route.ts checks `instanceof`
@@ -84,6 +86,7 @@ function req(url = "http://localhost/api/billing/license-reconciliation?days=28"
 
 beforeEach(() => {
   configState.isBillingSubEnabledForAnyEnterprise.mockReturnValue(true);
+  configState.getEnterpriseSlugs.mockReturnValue(["acme", "other-ent"]);
   scopeState.parseScopeFilter.mockReturnValue({
     selectedTeams: [],
     selectedOrgs: [],
@@ -395,6 +398,117 @@ describe("license reconciliation route", () => {
       await GET(req());
       const baseQuery = historyRepoState.hasMaterializedRows.mock.calls[0][0];
       expect(baseQuery.allowedLogins).toBeUndefined();
+    });
+  });
+
+  describe("enterprise slug scope validation", () => {
+    it("rejects an unknown enterprise slug among otherwise-valid ones with a structured 400, without calling the repository", async () => {
+      scopeState.parseScopeFilter.mockReturnValue({
+        selectedTeams: [],
+        selectedOrgs: [],
+        selectedEnterprises: ["acme", "bogus-ent"],
+        hasFilter: true,
+        allowedLogins: undefined,
+        enterpriseSlugs: ["acme", "bogus-ent"],
+      });
+      const res = await GET(req("http://localhost/api/billing/license-reconciliation?enterprises=acme,bogus-ent"));
+      expect(res.status).toBe(400);
+      const body = await res.json();
+      expect(body.error).toMatch(/bogus-ent/);
+      expect(historyRepoState.hasMaterializedRows).not.toHaveBeenCalled();
+      expect(repoState.getLicenseReconciliationRows).not.toHaveBeenCalled();
+    });
+
+    it("rejects an unknown enterprise slug derived from a composite team scope param (entSlug:teamSlug)", async () => {
+      const res = await GET(
+        req("http://localhost/api/billing/license-reconciliation?teams=bogus-ent:teamA"),
+      );
+      expect(res.status).toBe(400);
+      const body = await res.json();
+      expect(body.error).toMatch(/bogus-ent/);
+      expect(historyRepoState.hasMaterializedRows).not.toHaveBeenCalled();
+    });
+
+    it("accepts a valid multi-enterprise scope (all configured), without rejection", async () => {
+      scopeState.parseScopeFilter.mockReturnValue({
+        selectedTeams: [],
+        selectedOrgs: [],
+        selectedEnterprises: ["acme", "other-ent"],
+        hasFilter: true,
+        allowedLogins: undefined,
+        enterpriseSlugs: ["acme", "other-ent"],
+      });
+      const res = await GET(
+        req("http://localhost/api/billing/license-reconciliation?enterprises=acme,other-ent"),
+      );
+      expect(res.status).toBe(200);
+    });
+
+    it("never rejects when no enterprises/teams scope param is supplied at all", async () => {
+      const res = await GET(req());
+      expect(res.status).toBe(200);
+    });
+  });
+
+  describe("strict numeric page/pageSize validation", () => {
+    beforeEach(() => {
+      historyRepoState.hasMaterializedRows.mockReturnValue(true);
+    });
+
+    it("rejects a fractional page value with a 400 instead of silently truncating", async () => {
+      const res = await GET(req("http://localhost/api/billing/license-reconciliation?page=1.5"));
+      expect(res.status).toBe(400);
+      const body = await res.json();
+      expect(body.error).toMatch(/page/i);
+      expect(historyRepoState.queryLicensePeriodRows).not.toHaveBeenCalled();
+    });
+
+    it("rejects a page value beyond the documented maximum with a 400", async () => {
+      const res = await GET(req("http://localhost/api/billing/license-reconciliation?page=100001"));
+      expect(res.status).toBe(400);
+      const body = await res.json();
+      expect(body.error).toMatch(/page/i);
+    });
+
+    it("rejects a fractional pageSize value with a 400 instead of silently truncating", async () => {
+      const res = await GET(req("http://localhost/api/billing/license-reconciliation?pageSize=10.5"));
+      expect(res.status).toBe(400);
+      const body = await res.json();
+      expect(body.error).toMatch(/pageSize/i);
+    });
+
+    it("rejects a pageSize above the aligned repo cap (200) with a 400 instead of silently clamping", async () => {
+      const res = await GET(req("http://localhost/api/billing/license-reconciliation?pageSize=500"));
+      expect(res.status).toBe(400);
+      const body = await res.json();
+      expect(body.error).toMatch(/pageSize/i);
+    });
+
+    it("accepts a valid pageSize at the 200 cap", async () => {
+      const res = await GET(req("http://localhost/api/billing/license-reconciliation?pageSize=200"));
+      expect(res.status).toBe(200);
+    });
+  });
+
+  describe("sort validation", () => {
+    beforeEach(() => {
+      historyRepoState.hasMaterializedRows.mockReturnValue(true);
+    });
+
+    it("rejects an unsupported sort field with a descriptive 400 instead of silently falling back", async () => {
+      const res = await GET(req("http://localhost/api/billing/license-reconciliation?sort=not_a_real_field"));
+      expect(res.status).toBe(400);
+      const body = await res.json();
+      expect(body.error).toMatch(/sort/i);
+      expect(historyRepoState.queryLicensePeriodRows).not.toHaveBeenCalled();
+    });
+
+    it("accepts sort=total_cost and forwards it to the historical query", async () => {
+      const res = await GET(req("http://localhost/api/billing/license-reconciliation?sort=total_cost"));
+      expect(res.status).toBe(200);
+      expect(historyRepoState.queryLicensePeriodRows).toHaveBeenCalledWith(
+        expect.objectContaining({ sortField: "total_cost" }),
+      );
     });
   });
 });

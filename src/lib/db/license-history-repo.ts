@@ -313,6 +313,7 @@ export const DETAIL_SORT_COLUMNS: string[] = [
   "aic_assigned_usd",
   "last_activity_at",
   "as_of_utc",
+  "total_cost",
 ];
 
 export const ROLLUP_SORT_COLUMNS: string[] = [
@@ -327,6 +328,7 @@ export const ROLLUP_SORT_COLUMNS: string[] = [
   "default_aic_usd",
   "aic_assigned_usd",
   "utilization_pct",
+  "total_cost",
 ];
 
 const DEFAULT_PAGE_SIZE = 50;
@@ -515,6 +517,21 @@ const UTILIZATION_PCT_SQL = `
   END
 `;
 
+// Hardcoded (never built from user input) expression backing `sort=total_cost`
+// for the detail grain, matching the live path's `total_cost = license_cost +
+// aic_consumed_usd` (see `license-repo.ts`'s `getLicenseReconciliationRows`).
+// Selected as a `total_cost` output alias so the existing, unmodified
+// `buildOrderBy` helper can reference it by name exactly like any other
+// allowlisted physical column — no bespoke ORDER BY construction needed.
+const DETAIL_TOTAL_COST_SQL = `(license_cost + aic_consumed_usd) AS total_cost`;
+
+// Rollup equivalent of `DETAIL_TOTAL_COST_SQL`. SQLite doesn't allow a SELECT
+// expression to reference another alias from the same SELECT list, so the
+// two underlying SUM(...) aggregates are repeated inline here (same
+// constraint documented above `UTILIZATION_PCT_SQL`) rather than adding
+// `license_cost + aic_consumed_usd` as a plain alias reference.
+const ROLLUP_TOTAL_COST_SQL = `(COALESCE(SUM(license_cost), 0) + COALESCE(SUM(aic_consumed_usd), 0)) AS total_cost`;
+
 function splitDistinct(value: string | null | undefined): string[] {
   if (!value) return [];
   // GROUP_CONCAT(DISTINCT ...) joins with a comma by default. Values stored
@@ -571,6 +588,76 @@ export function buildRollupOrderBy(pagination: PaginationParams): string {
   return tieBreakers.length ? `${base}, ${tieBreakers.map((column) => `${column} ASC`).join(", ")}` : base;
 }
 
+// ── Shared detail/rollup SQL builders ────────────────────────────────
+// Used by both `queryLicensePeriodRows` (paginated) and
+// `queryLicensePeriodExport` (bounded, single-snapshot) so the two never
+// drift out of sync on filtering, column selection, or row mapping.
+
+function detailCountSql(where: string): string {
+  return `SELECT COUNT(*) as total FROM license_period_rows${where}`;
+}
+
+function detailSelectSql(where: string): string {
+  return `SELECT *, ${DETAIL_TOTAL_COST_SQL} FROM license_period_rows${where}`;
+}
+
+const ROLLUP_GROUP_KEY_SQL = `COALESCE(NULLIF(resolved_user_login, ''), holder_key)`;
+
+function rollupCountSql(where: string): string {
+  return `SELECT COUNT(*) as total FROM (SELECT 1 FROM license_period_rows${where} GROUP BY enterprise_slug, ${ROLLUP_GROUP_KEY_SQL})`;
+}
+
+function rollupSelectSql(where: string): string {
+  return `
+    SELECT
+      enterprise_slug AS enterprise_slug,
+      ${ROLLUP_GROUP_KEY_SQL} AS resolved_user_login,
+      GROUP_CONCAT(DISTINCT billing_period) AS periods,
+      GROUP_CONCAT(DISTINCT org_login) AS org_logins,
+      GROUP_CONCAT(DISTINCT plan_type) AS plan_types,
+      COUNT(DISTINCT org_login || char(1) || holder_key) AS seat_count,
+      COUNT(DISTINCT org_login) AS org_count,
+      COUNT(DISTINCT billing_period) AS period_count,
+      COALESCE(SUM(license_cost), 0) AS license_cost,
+      COALESCE(SUM(default_aic_credits), 0) AS default_aic_credits,
+      COALESCE(SUM(default_aic_usd), 0) AS default_aic_usd,
+      COALESCE(SUM(aic_assigned_usd), 0) AS aic_assigned_usd,
+      COALESCE(SUM(aic_consumed_credits), 0) AS aic_consumed_credits,
+      COALESCE(SUM(aic_consumed_usd), 0) AS aic_consumed_usd,
+      MAX(currency) AS currency,
+      MIN(${CONFIDENCE_RANK_SQL}) AS confidence_rank,
+      ${UTILIZATION_PCT_SQL} AS utilization_pct,
+      ${ROLLUP_TOTAL_COST_SQL}
+    FROM license_period_rows${where}
+    GROUP BY enterprise_slug, ${ROLLUP_GROUP_KEY_SQL}
+  `;
+}
+
+function mapRollupRow(row: Record<string, unknown>): LicenseRollupRowRecord {
+  return {
+    enterpriseSlug: row.enterprise_slug as string,
+    resolvedUserLogin: row.resolved_user_login as string,
+    periods: splitDistinct(row.periods as string | null),
+    orgLogins: splitDistinct(row.org_logins as string | null),
+    planTypes: splitDistinct(row.plan_types as string | null),
+    seatCount: (row.seat_count as number) ?? 0,
+    orgCount: (row.org_count as number) ?? 0,
+    periodCount: (row.period_count as number) ?? 0,
+    licenseCost: (row.license_cost as number) ?? 0,
+    defaultAicCredits: (row.default_aic_credits as number) ?? 0,
+    defaultAicUsd: (row.default_aic_usd as number) ?? 0,
+    aicAssignedUsd: (row.aic_assigned_usd as number) ?? 0,
+    aicConsumedCredits: (row.aic_consumed_credits as number) ?? 0,
+    aicConsumedUsd: (row.aic_consumed_usd as number) ?? 0,
+    // Read directly from SQL (UTILIZATION_PCT_SQL) rather than recomputed
+    // in JS, so the value used for ORDER BY and the value returned here
+    // can never disagree.
+    utilizationPct: (row.utilization_pct as number) ?? 0,
+    currency: (row.currency as string) || "USD",
+    historyConfidence: RANK_TO_CONFIDENCE[(row.confidence_rank as number) ?? 0] ?? "unknown",
+  };
+}
+
 /**
  * Query `license_period_rows`, returning either the raw per-period detail
  * grain or a per-login rollup aggregated in SQL. Filtering, sorting, and
@@ -596,11 +683,9 @@ export function queryLicensePeriodRows(query: LicensePeriodQuery): PaginatedLice
 
   if (view === "detail") {
     const orderBy = buildDetailOrderBy(pagination);
-    const countRow = db
-      .prepare(`SELECT COUNT(*) as total FROM license_period_rows${where}`)
-      .get(...params) as { total: number };
+    const countRow = db.prepare(detailCountSql(where)).get(...params) as { total: number };
     const rows = db
-      .prepare(`SELECT * FROM license_period_rows${where} ${orderBy} ${limitClause}`)
+      .prepare(`${detailSelectSql(where)} ${orderBy} ${limitClause}`)
       .all(...params, ...limitValues) as Record<string, unknown>[];
     return {
       view,
@@ -618,66 +703,14 @@ export function queryLicensePeriodRows(query: LicensePeriodQuery): PaginatedLice
   // across the periods/orgs matched by the shared filters. All aggregation
   // happens in SQL — only the current page's grouped rows are materialized.
   const orderBy = buildRollupOrderBy(pagination);
-  const groupKey = `COALESCE(NULLIF(resolved_user_login, ''), holder_key)`;
-  const rollupSelect = `
-    SELECT
-      enterprise_slug AS enterprise_slug,
-      ${groupKey} AS resolved_user_login,
-      GROUP_CONCAT(DISTINCT billing_period) AS periods,
-      GROUP_CONCAT(DISTINCT org_login) AS org_logins,
-      GROUP_CONCAT(DISTINCT plan_type) AS plan_types,
-      COUNT(DISTINCT org_login || char(1) || holder_key) AS seat_count,
-      COUNT(DISTINCT org_login) AS org_count,
-      COUNT(DISTINCT billing_period) AS period_count,
-      COALESCE(SUM(license_cost), 0) AS license_cost,
-      COALESCE(SUM(default_aic_credits), 0) AS default_aic_credits,
-      COALESCE(SUM(default_aic_usd), 0) AS default_aic_usd,
-      COALESCE(SUM(aic_assigned_usd), 0) AS aic_assigned_usd,
-      COALESCE(SUM(aic_consumed_credits), 0) AS aic_consumed_credits,
-      COALESCE(SUM(aic_consumed_usd), 0) AS aic_consumed_usd,
-      MAX(currency) AS currency,
-      MIN(${CONFIDENCE_RANK_SQL}) AS confidence_rank,
-      ${UTILIZATION_PCT_SQL} AS utilization_pct
-    FROM license_period_rows${where}
-    GROUP BY enterprise_slug, ${groupKey}
-  `;
-
-  const countRow = db
-    .prepare(`SELECT COUNT(*) as total FROM (SELECT 1 FROM license_period_rows${where} GROUP BY enterprise_slug, ${groupKey})`)
-    .get(...params) as { total: number };
-
+  const countRow = db.prepare(rollupCountSql(where)).get(...params) as { total: number };
   const rows = db
-    .prepare(`${rollupSelect} ${orderBy} ${limitClause}`)
+    .prepare(`${rollupSelectSql(where)} ${orderBy} ${limitClause}`)
     .all(...params, ...limitValues) as Record<string, unknown>[];
-
-  const mapped: LicenseRollupRowRecord[] = rows.map((row) => {
-    return {
-      enterpriseSlug: row.enterprise_slug as string,
-      resolvedUserLogin: row.resolved_user_login as string,
-      periods: splitDistinct(row.periods as string | null),
-      orgLogins: splitDistinct(row.org_logins as string | null),
-      planTypes: splitDistinct(row.plan_types as string | null),
-      seatCount: (row.seat_count as number) ?? 0,
-      orgCount: (row.org_count as number) ?? 0,
-      periodCount: (row.period_count as number) ?? 0,
-      licenseCost: (row.license_cost as number) ?? 0,
-      defaultAicCredits: (row.default_aic_credits as number) ?? 0,
-      defaultAicUsd: (row.default_aic_usd as number) ?? 0,
-      aicAssignedUsd: (row.aic_assigned_usd as number) ?? 0,
-      aicConsumedCredits: (row.aic_consumed_credits as number) ?? 0,
-      aicConsumedUsd: (row.aic_consumed_usd as number) ?? 0,
-      // Read directly from SQL (UTILIZATION_PCT_SQL) rather than recomputed
-      // in JS, so the value used for ORDER BY and the value returned here
-      // can never disagree.
-      utilizationPct: (row.utilization_pct as number) ?? 0,
-      currency: (row.currency as string) || "USD",
-      historyConfidence: RANK_TO_CONFIDENCE[(row.confidence_rank as number) ?? 0] ?? "unknown",
-    };
-  });
 
   return {
     view,
-    rows: mapped,
+    rows: rows.map(mapRollupRow),
     pagination: {
       page: pagination.page,
       pageSize: pagination.pageSize,
@@ -685,6 +718,144 @@ export function queryLicensePeriodRows(query: LicensePeriodQuery): PaginatedLice
       totalPages: Math.ceil(countRow.total / pagination.pageSize),
     },
   };
+}
+
+// ── Bounded, single-snapshot export query ────────────────────────────
+
+/**
+ * Hard cap on rows a single {@link queryLicensePeriodExport} call will ever
+ * fetch/emit — independent of (and typically far larger than) any single
+ * page of `queryLicensePeriodRows`. Exported so callers (e.g. the CSV export
+ * route) reference the same source of truth instead of duplicating the
+ * number, and so tests can assert against it directly rather than a magic
+ * literal.
+ */
+export const EXPORT_MAX_ROWS = 5000;
+
+/**
+ * Query shape for {@link queryLicensePeriodExport}: the same shared filters
+ * as {@link LicensePeriodQuery} (minus its OFFSET-pagination fields, which
+ * don't apply to a single bounded full-scope fetch), plus an optional
+ * caller-supplied `maxRows` (validated/clamped by {@link resolveExportMaxRows}).
+ */
+export interface LicensePeriodExportQuery extends LicensePeriodFilterQuery {
+  view?: "detail" | "rollup";
+  sortField?: string;
+  sortDir?: "asc" | "desc";
+  /** Caller-supplied cap; must be a positive integer. Clamped down to {@link EXPORT_MAX_ROWS} if larger; never widens past the hard cap. */
+  maxRows?: number;
+}
+
+/** Returned when the true row count exceeds the resolved cap — no row SELECT is ever issued in this case. */
+export interface LicensePeriodExportTooLarge {
+  tooLarge: true;
+  totalItems: number;
+}
+
+export interface LicensePeriodExportDetail {
+  tooLarge: false;
+  view: "detail";
+  rows: LicensePeriodRowRecord[];
+  totalItems: number;
+}
+
+export interface LicensePeriodExportRollup {
+  tooLarge: false;
+  view: "rollup";
+  rows: LicenseRollupRowRecord[];
+  totalItems: number;
+}
+
+/** Discriminated first on `tooLarge`, then (when `false`) on `view` — mirrors {@link PaginatedLicenseRows}'s narrowing convention. */
+export type LicensePeriodExportResult =
+  | LicensePeriodExportTooLarge
+  | LicensePeriodExportDetail
+  | LicensePeriodExportRollup;
+
+/**
+ * Validate and clamp a caller-supplied `maxRows`. This is a programmer
+ * contract, not user input validation — callers (the export route) must
+ * already validate/derive any user-facing request parameters before calling
+ * this function, so a non-positive or non-integer value here is a bug at the
+ * call site, not a 400-worthy request error, and therefore throws rather
+ * than returning a soft error.
+ */
+function resolveExportMaxRows(maxRows: number | undefined): number {
+  if (maxRows === undefined) return EXPORT_MAX_ROWS;
+  if (!Number.isInteger(maxRows) || maxRows <= 0) {
+    throw new RangeError(`maxRows must be a positive integer, received ${maxRows}`);
+  }
+  return Math.min(maxRows, EXPORT_MAX_ROWS);
+}
+
+/**
+ * Bounded, transaction-consistent export query: runs the total-count guard
+ * and (only if the count is within bounds) the full bounded detail/rollup
+ * SELECT inside a single `db.transaction(...)` call, so both statements
+ * observe the exact same snapshot even if another writer commits between
+ * them — no possibility of a count/rows mismatch from an interleaved write.
+ *
+ * Reuses the same filter (`appendPeriodFilters`/`buildWhereClause`), sort
+ * (`buildDetailOrderBy`/`buildRollupOrderBy`), and SQL-building
+ * (`detailSelectSql`/`rollupSelectSql`) logic as {@link queryLicensePeriodRows}
+ * — no separate filter/sort implementation to drift out of sync.
+ *
+ * When the true row count exceeds the resolved cap (see
+ * {@link resolveExportMaxRows}), returns `{ tooLarge: true, totalItems }`
+ * WITHOUT ever issuing the row-fetch SELECT — callers must reject the
+ * request rather than attempt a partial/truncated export.
+ *
+ * No OFFSET/paging: this always fetches up to `maxRows` rows in one shot
+ * (`LIMIT ? `, no `OFFSET`), so a caller must never loop pages against this
+ * function — call it exactly once per export.
+ */
+export function queryLicensePeriodExport(
+  query: LicensePeriodExportQuery & { view: "rollup" },
+): LicensePeriodExportTooLarge | LicensePeriodExportRollup;
+export function queryLicensePeriodExport(
+  query: LicensePeriodExportQuery & { view?: "detail" },
+): LicensePeriodExportTooLarge | LicensePeriodExportDetail;
+export function queryLicensePeriodExport(query: LicensePeriodExportQuery): LicensePeriodExportResult {
+  const db = getDb();
+  const view = query.view === "rollup" ? "rollup" : "detail";
+  const maxRows = resolveExportMaxRows(query.maxRows);
+  const clauses: string[] = [];
+  const params: unknown[] = [];
+  appendPeriodFilters(clauses, params, query);
+  const where = buildWhereClause(clauses);
+  const pagination: PaginationParams = {
+    page: 1,
+    pageSize: maxRows,
+    sortField: query.sortField || "",
+    sortDir: query.sortDir === "asc" ? "asc" : "desc",
+    search: query.search,
+  };
+
+  const run = db.transaction((): LicensePeriodExportResult => {
+    if (view === "detail") {
+      const countRow = db.prepare(detailCountSql(where)).get(...params) as { total: number };
+      if (countRow.total > maxRows) {
+        return { tooLarge: true, totalItems: countRow.total };
+      }
+      const orderBy = buildDetailOrderBy(pagination);
+      const rows = db
+        .prepare(`${detailSelectSql(where)} ${orderBy} LIMIT ?`)
+        .all(...params, maxRows) as Record<string, unknown>[];
+      return { tooLarge: false, view: "detail", rows: rows.map(mapDetailRow), totalItems: countRow.total };
+    }
+
+    const countRow = db.prepare(rollupCountSql(where)).get(...params) as { total: number };
+    if (countRow.total > maxRows) {
+      return { tooLarge: true, totalItems: countRow.total };
+    }
+    const orderBy = buildRollupOrderBy(pagination);
+    const rows = db
+      .prepare(`${rollupSelectSql(where)} ${orderBy} LIMIT ?`)
+      .all(...params, maxRows) as Record<string, unknown>[];
+    return { tooLarge: false, view: "rollup", rows: rows.map(mapRollupRow), totalItems: countRow.total };
+  });
+
+  return run();
 }
 
 // ── Bulk writers ──────────────────────────────────────────────────────

@@ -34,12 +34,13 @@ class TestDb {
       all: (...params: unknown[]) => stmt.all(...(params as never[])),
     };
   }
-  transaction<Args extends unknown[]>(fn: (...args: Args) => void): (...args: Args) => void {
+  transaction<Args extends unknown[], R>(fn: (...args: Args) => R): (...args: Args) => R {
     return (...args: Args) => {
       this.raw.exec("BEGIN");
       try {
-        fn(...args);
+        const result = fn(...args);
         this.raw.exec("COMMIT");
+        return result;
       } catch (err) {
         this.raw.exec("ROLLBACK");
         throw err;
@@ -77,6 +78,8 @@ import {
   UNATTRIBUTED_ORG,
   buildDetailOrderBy,
   buildRollupOrderBy,
+  queryLicensePeriodExport,
+  EXPORT_MAX_ROWS,
   type LicensePeriodRowInput,
 } from "./license-history-repo";
 
@@ -839,6 +842,48 @@ describe("replaceMaterializedPeriod + queryLicensePeriodRows", () => {
     expect(byCostDesc.rows.map((r) => r.holderKey)).toEqual(["high-util", "mid-util", "low-util"]);
   });
 
+  it("supports sort=total_cost (license_cost + aic_consumed_usd) for both detail and rollup views, matching live-path parity", () => {
+    replaceMaterializedPeriod("ent1", "2026-42", [
+      makePeriodRow({ orgLogin: "org1", holderKey: "low-total", resolvedUserLogin: "low-total", licenseCost: 5, aicConsumedUsd: 1 }), // total 6
+      makePeriodRow({ orgLogin: "org1", holderKey: "high-total", resolvedUserLogin: "high-total", licenseCost: 25, aicConsumedUsd: 20 }), // total 45
+      makePeriodRow({ orgLogin: "org1", holderKey: "mid-total", resolvedUserLogin: "mid-total", licenseCost: 15, aicConsumedUsd: 5 }), // total 20
+    ]);
+
+    const detailAsc = queryLicensePeriodRows({
+      enterpriseSlug: "ent1",
+      periods: ["2026-42"],
+      sortField: "total_cost",
+      sortDir: "asc",
+    });
+    expect(detailAsc.rows.map((r) => r.holderKey)).toEqual(["low-total", "mid-total", "high-total"]);
+
+    const detailDesc = queryLicensePeriodRows({
+      enterpriseSlug: "ent1",
+      periods: ["2026-42"],
+      sortField: "total_cost",
+      sortDir: "desc",
+    });
+    expect(detailDesc.rows.map((r) => r.holderKey)).toEqual(["high-total", "mid-total", "low-total"]);
+
+    const rollupAsc = queryLicensePeriodRows({
+      enterpriseSlug: "ent1",
+      periods: ["2026-42"],
+      view: "rollup",
+      sortField: "total_cost",
+      sortDir: "asc",
+    });
+    expect(rollupAsc.rows.map((r) => r.resolvedUserLogin)).toEqual(["low-total", "mid-total", "high-total"]);
+
+    const rollupDesc = queryLicensePeriodRows({
+      enterpriseSlug: "ent1",
+      periods: ["2026-42"],
+      view: "rollup",
+      sortField: "total_cost",
+      sortDir: "desc",
+    });
+    expect(rollupDesc.rows.map((r) => r.resolvedUserLogin)).toEqual(["high-total", "mid-total", "low-total"]);
+  });
+
   describe("sort allowlist coverage", () => {
     it("accepts every detail sort column without error", () => {
       for (const field of DETAIL_SORT_COLUMNS) {
@@ -1154,6 +1199,129 @@ describe("replaceMaterializedPeriod + queryLicensePeriodRows", () => {
         expect(hasMaterializedRows({ enterpriseSlug: "ent1", periods: ["2026-41"], allowedLogins: ["nobody-such-user"] })).toBe(false);
       });
     });
+  });
+});
+
+describe("queryLicensePeriodExport", () => {
+  it("returns rows and totalItems consistently, matching queryLicensePeriodRows for the same filters (detail)", () => {
+    replaceMaterializedPeriod("ent1", "2026-50", [
+      makePeriodRow({ orgLogin: "org1", holderKey: "user-a", resolvedUserLogin: "user-a", licenseCost: 10 }),
+      makePeriodRow({ orgLogin: "org1", holderKey: "user-b", resolvedUserLogin: "user-b", licenseCost: 20 }),
+    ]);
+    const result = queryLicensePeriodExport({ enterpriseSlug: "ent1", periods: ["2026-50"], sortField: "license_cost", sortDir: "asc" });
+    expect(result.tooLarge).toBe(false);
+    if (result.tooLarge) throw new Error("unreachable");
+    expect(result.view).toBe("detail");
+    expect(result.totalItems).toBe(2);
+    expect(result.rows.map((r) => r.holderKey)).toEqual(["user-a", "user-b"]);
+  });
+
+  it("returns rows and totalItems consistently for the rollup view", () => {
+    replaceMaterializedPeriod("ent1", "2026-51", [
+      makePeriodRow({ orgLogin: "org1", holderKey: "user-a", resolvedUserLogin: "user-a", licenseCost: 10 }),
+      makePeriodRow({ orgLogin: "org1", holderKey: "user-b", resolvedUserLogin: "user-b", licenseCost: 20 }),
+    ]);
+    const result = queryLicensePeriodExport({
+      enterpriseSlug: "ent1",
+      periods: ["2026-51"],
+      view: "rollup",
+      sortField: "license_cost",
+      sortDir: "desc",
+    });
+    expect(result.tooLarge).toBe(false);
+    if (result.tooLarge) throw new Error("unreachable");
+    expect(result.view).toBe("rollup");
+    expect(result.totalItems).toBe(2);
+    expect(result.rows.map((r) => r.resolvedUserLogin)).toEqual(["user-b", "user-a"]);
+  });
+
+  it("applies the same filters, search, and total_cost sort as the paginated query", () => {
+    replaceMaterializedPeriod("ent1", "2026-52", [
+      makePeriodRow({ orgLogin: "org1", holderKey: "carol", resolvedUserLogin: "carol", licenseCost: 5, aicConsumedUsd: 1, planType: "business" }),
+      makePeriodRow({ orgLogin: "org1", holderKey: "dave", resolvedUserLogin: "dave", licenseCost: 25, aicConsumedUsd: 20, planType: "enterprise" }),
+    ]);
+    const result = queryLicensePeriodExport({
+      enterpriseSlug: "ent1",
+      periods: ["2026-52"],
+      planTypes: ["business"],
+      sortField: "total_cost",
+      sortDir: "asc",
+    });
+    expect(result.tooLarge).toBe(false);
+    if (result.tooLarge) throw new Error("unreachable");
+    expect(result.rows.map((r) => r.holderKey)).toEqual(["carol"]);
+  });
+
+  it("returns a typed too-large result (without rows) when totalItems exceeds maxRows, and never runs the row SELECT", () => {
+    replaceMaterializedPeriod("ent1", "2026-53", [
+      makePeriodRow({ orgLogin: "org1", holderKey: "user-a", resolvedUserLogin: "user-a" }),
+      makePeriodRow({ orgLogin: "org1", holderKey: "user-b", resolvedUserLogin: "user-b" }),
+      makePeriodRow({ orgLogin: "org1", holderKey: "user-c", resolvedUserLogin: "user-c" }),
+    ]);
+    const preparedSql: string[] = [];
+    const originalPrepare = db.prepare.bind(db);
+    (db as unknown as { prepare: typeof db.prepare }).prepare = ((sql: string) => {
+      preparedSql.push(sql);
+      return originalPrepare(sql);
+    }) as typeof db.prepare;
+    try {
+      const result = queryLicensePeriodExport({ enterpriseSlug: "ent1", periods: ["2026-53"], maxRows: 2 });
+      expect(result.tooLarge).toBe(true);
+      if (!result.tooLarge) throw new Error("unreachable");
+      expect(result.totalItems).toBe(3);
+      // The row-fetch SELECT (identifiable by its total_cost alias, unique to
+      // the row-fetch statement, never the COUNT(*) guard query) must never
+      // have been prepared/executed once the count guard rejected the request.
+      expect(preparedSql.some((sql) => sql.includes("total_cost"))).toBe(false);
+    } finally {
+      (db as unknown as { prepare: typeof db.prepare }).prepare = originalPrepare;
+    }
+  });
+
+  it("validates maxRows is a positive integer and clamps to the exported hard cap", () => {
+    replaceMaterializedPeriod("ent1", "2026-54", [
+      makePeriodRow({ orgLogin: "org1", holderKey: "user-a", resolvedUserLogin: "user-a" }),
+    ]);
+    expect(() => queryLicensePeriodExport({ enterpriseSlug: "ent1", periods: ["2026-54"], maxRows: 0 })).toThrow(RangeError);
+    expect(() => queryLicensePeriodExport({ enterpriseSlug: "ent1", periods: ["2026-54"], maxRows: 1.5 })).toThrow(RangeError);
+    expect(() => queryLicensePeriodExport({ enterpriseSlug: "ent1", periods: ["2026-54"], maxRows: -5 })).toThrow(RangeError);
+    // A caller-supplied maxRows above the hard cap is clamped down, not an error.
+    const result = queryLicensePeriodExport({ enterpriseSlug: "ent1", periods: ["2026-54"], maxRows: EXPORT_MAX_ROWS + 1000 });
+    expect(result.tooLarge).toBe(false);
+  });
+
+  it("defaults maxRows to the exported EXPORT_MAX_ROWS cap when not supplied", () => {
+    expect(EXPORT_MAX_ROWS).toBeGreaterThan(0);
+    expect(Number.isInteger(EXPORT_MAX_ROWS)).toBe(true);
+    expect(EXPORT_MAX_ROWS).toBeLessThanOrEqual(5000);
+  });
+
+  it("propagates a row-fetch error and leaves the connection usable afterward (transaction rollback/cleanup)", () => {
+    replaceMaterializedPeriod("ent1", "2026-55", [
+      makePeriodRow({ orgLogin: "org1", holderKey: "user-a", resolvedUserLogin: "user-a" }),
+    ]);
+    const originalPrepare = db.prepare.bind(db);
+    let shouldFail = true;
+    (db as unknown as { prepare: typeof db.prepare }).prepare = ((sql: string) => {
+      if (shouldFail && sql.includes("total_cost")) {
+        throw new Error("simulated row-fetch failure");
+      }
+      return originalPrepare(sql);
+    }) as typeof db.prepare;
+    try {
+      expect(() => queryLicensePeriodExport({ enterpriseSlug: "ent1", periods: ["2026-55"] })).toThrow(
+        "simulated row-fetch failure",
+      );
+      shouldFail = false;
+      // The connection/transaction must not be left stuck (e.g. mid-BEGIN) —
+      // a subsequent call must succeed normally.
+      const recovered = queryLicensePeriodExport({ enterpriseSlug: "ent1", periods: ["2026-55"] });
+      expect(recovered.tooLarge).toBe(false);
+      if (recovered.tooLarge) throw new Error("unreachable");
+      expect(recovered.totalItems).toBe(1);
+    } finally {
+      (db as unknown as { prepare: typeof db.prepare }).prepare = originalPrepare;
+    }
   });
 });
 

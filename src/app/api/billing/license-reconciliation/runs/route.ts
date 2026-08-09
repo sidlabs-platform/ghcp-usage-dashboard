@@ -38,13 +38,13 @@ async function handler(request: NextRequest) {
     let limit = DEFAULT_LIMIT;
     if (rawLimit != null) {
       const parsed = Number(rawLimit);
-      if (!Number.isFinite(parsed) || parsed < 1) {
+      if (!Number.isFinite(parsed) || !Number.isInteger(parsed) || parsed < 1) {
         return NextResponse.json(
           { error: `Invalid limit parameter: value must be a positive integer (got "${rawLimit}").` },
           { status: 400 },
         );
       }
-      limit = Math.min(Math.trunc(parsed), MAX_LIMIT);
+      limit = Math.min(parsed, MAX_LIMIT);
     }
 
     const runs = listLicenseRuns(enterprise, limit);

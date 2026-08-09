@@ -3,13 +3,14 @@ import { isBillingSubEnabledForAnyEnterprise } from "@/lib/config/enterprise-con
 import { getLicensingConfig, LicensingConfigError } from "@/lib/config/dashboard-config";
 import { getLicenseReconciliationRows } from "@/lib/db/license-repo";
 import {
-  queryLicensePeriodRows,
+  queryLicensePeriodExport,
   hasMaterializedRows,
   type LicensePeriodRowRecord,
   type LicenseRollupRowRecord,
 } from "@/lib/db/license-history-repo";
 import { escapeCSVValue } from "@/lib/export/csv";
 import { withTimeout } from "@/lib/api/timeout";
+import { withRateLimit } from "@/lib/api/rate-limit/rate-limiter";
 import { resolveReconciliationFilters } from "../../billing/license-reconciliation/route";
 
 // Bounds how many rows this endpoint will ever materialize/emit in one
@@ -17,12 +18,10 @@ import { resolveReconciliationFilters } from "../../billing/license-reconciliati
 // API's own page-size cap. Kept modest so a single bounded, all-at-once CSV
 // build can never OOM the server; if the true row count exceeds this, the
 // request is rejected before any row is fetched or any CSV text is built.
+// Mirrors `EXPORT_MAX_ROWS` in `license-history-repo.ts` (the repository's
+// own hard cap); passed through explicitly so this route's contract stays
+// self-documenting even though it currently matches the repo default.
 const EXPORT_MAX_ROWS = 5000;
-// Same value as `MAX_PAGE_SIZE` in license-history-repo.ts — that cap is
-// internal to the repo (not exported), so the largest page this route can
-// ever request per call is 200; looping is required to gather more than one
-// page, entirely server-side (never a client-side N-request loop).
-const REPO_PAGE_SIZE = 200;
 // Mirrors the legacy live-fallback guard already used by the JSON
 // reconciliation route (`route.ts`), so both endpoints reject an
 // unreasonably large live snapshot at the same threshold.
@@ -155,29 +154,10 @@ function buildCsv<T>(rows: T[], columns: CsvColumnDef<T>[], metadataLines: strin
   for (const row of rows) {
     lines.push(renderCsvLine(row, columns));
   }
-  return lines.join("\n");
-}
-
-/**
- * Gather every row across as many repository pages as needed (the repo caps
- * a single page at {@link REPO_PAGE_SIZE}), stopping — without fetching any
- * further page — the moment the true total exceeds {@link EXPORT_MAX_ROWS}.
- * This is the only place pages are looped; callers (the route handler, and
- * ultimately `useExport.ts`) never issue more than one HTTP request.
- */
-function collectAllRows<TRow>(
-  fetchPage: (page: number) => { rows: TRow[]; pagination: { totalItems: number; totalPages: number } },
-): { tooLarge: true; totalItems: number } | { tooLarge: false; rows: TRow[]; totalItems: number } {
-  const first = fetchPage(1);
-  const totalItems = first.pagination.totalItems;
-  if (totalItems > EXPORT_MAX_ROWS) {
-    return { tooLarge: true, totalItems };
-  }
-  let rows = [...first.rows];
-  for (let page = 2; page <= first.pagination.totalPages; page += 1) {
-    rows = rows.concat(fetchPage(page).rows);
-  }
-  return { tooLarge: false, rows, totalItems };
+  // CRLF row separator per RFC4180 (distinct from the shared `arrayToCSV`
+  // helper in `@/lib/export/csv`, which stays LF-separated for its other,
+  // out-of-scope consumers).
+  return lines.join("\r\n");
 }
 
 function buildMetadataLines(periodsLabel: string, view: string): string[] {
@@ -258,11 +238,15 @@ async function handler(request: NextRequest) {
     // Historical mode: branch on the requested (literal) view *before*
     // querying, so each call site matches a single `queryLicensePeriodRows`
     // overload exactly and gets a precisely-typed result — no post-call
-    // narrowing/casting is needed to pick the matching column set.
+    // narrowing/casting is needed to pick the matching column set. Calls the
+    // bounded, transaction-consistent export repository function exactly
+    // once per request — no N-page loop here or in the repository.
     if (view === "rollup") {
-      const result = collectAllRows((page) =>
-        queryLicensePeriodRows({ ...filterQuery, view: "rollup", page, pageSize: REPO_PAGE_SIZE }),
-      );
+      const result = queryLicensePeriodExport({
+        ...filterQuery,
+        view: "rollup",
+        maxRows: EXPORT_MAX_ROWS,
+      });
       if (result.tooLarge) {
         return NextResponse.json(
           { error: `Result set too large (${result.totalItems} rows). Narrow the scope, periods, or filters before exporting.` },
@@ -273,9 +257,11 @@ async function handler(request: NextRequest) {
       return csvResponse(csv, filenameBase);
     }
 
-    const result = collectAllRows((page) =>
-      queryLicensePeriodRows({ ...filterQuery, view: "detail", page, pageSize: REPO_PAGE_SIZE }),
-    );
+    const result = queryLicensePeriodExport({
+      ...filterQuery,
+      view: "detail",
+      maxRows: EXPORT_MAX_ROWS,
+    });
     if (result.tooLarge) {
       return NextResponse.json(
         { error: `Result set too large (${result.totalItems} rows). Narrow the scope, periods, or filters before exporting.` },
@@ -296,4 +282,4 @@ async function handler(request: NextRequest) {
   }
 }
 
-export const GET = withTimeout(handler);
+export const GET = withRateLimit(withTimeout(handler));

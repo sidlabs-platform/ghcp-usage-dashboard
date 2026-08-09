@@ -131,6 +131,15 @@ describe("license reconciliation runs list route", () => {
     expect(body.error).toMatch(/limit/i);
   });
 
+  it("rejects a fractional limit (e.g. 1.5) with a descriptive 400 rather than silently truncating", async () => {
+    const res = await GET(req(`${BASE_URL}?enterprise=acme&limit=1.5`));
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.error).toMatch(/limit/i);
+    expect(body.error).toMatch(/integer/i);
+    expect(runRepoState.listLicenseRuns).not.toHaveBeenCalled();
+  });
+
   it("sets a private, non-shared cache header", async () => {
     const res = await GET(req(`${BASE_URL}?enterprise=acme`));
     expect(res.headers.get("Cache-Control")).toMatch(/private/);
