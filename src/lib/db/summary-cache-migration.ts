@@ -50,7 +50,9 @@ function markApplied(db: Database.Database): void {
  * the row's own period bounds to re-join user_daily_metrics. Rows whose
  * period has no matching totals_by_feature data are left untouched (mirrors
  * refreshUserSummary's existing COALESCE(..., 0) behavior, which only ever
- * overrides rows for which a group actually exists).
+ * overrides rows for which a group actually exists). Source rows with
+ * malformed totals_by_feature JSON are excluded via json_valid(...) so a
+ * single corrupt legacy row can never throw and abort the whole migration.
  */
 function migrateUserPeriodSummary(db: Database.Database): void {
   if (!tableExists(db, "user_period_summary") || !tableExists(db, "user_daily_metrics")) return;
@@ -75,6 +77,7 @@ function migrateUserPeriodSummary(db: Database.Database): void {
         AND u.day <= s.period_end,
         json_each(u.totals_by_feature) j
       WHERE u.totals_by_feature IS NOT NULL AND u.totals_by_feature != '[]'
+        AND json_valid(u.totals_by_feature)
       GROUP BY u.enterprise_slug, u.user_login, s.period_start, s.period_end
     ) f
     WHERE user_period_summary.enterprise_slug = f.enterprise_slug
@@ -106,6 +109,7 @@ function migrateDailyAggregateCache(db: Database.Database): void {
           THEN json_extract(j.value, '$.loc_added_sum') ELSE 0 END) as ca
       FROM user_daily_metrics u, json_each(u.totals_by_feature) j
       WHERE u.totals_by_feature IS NOT NULL AND u.totals_by_feature != '[]'
+        AND json_valid(u.totals_by_feature)
       GROUP BY u.enterprise_slug, u.day
     ) f
     WHERE daily_aggregate_cache.enterprise_slug = f.enterprise_slug
@@ -152,6 +156,7 @@ function migrateTeamSummaryCache(db: Database.Database): void {
         AND u.day <= s.period_end,
         json_each(u.totals_by_feature) j
       WHERE u.totals_by_feature IS NOT NULL AND u.totals_by_feature != '[]'
+        AND json_valid(u.totals_by_feature)
       GROUP BY tm.enterprise_slug, tm.team_slug, tm.source, s.period_start, s.period_end
     ) f
     WHERE team_summary_cache.enterprise_slug = f.enterprise_slug

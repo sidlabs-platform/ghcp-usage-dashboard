@@ -299,6 +299,7 @@ async function handler(request: NextRequest) {
       FROM user_daily_metrics u, json_each(u.totals_by_feature) j
       WHERE u.user_login = ? AND u.day BETWEEN ? AND ?
         AND u.totals_by_feature IS NOT NULL AND u.totals_by_feature != '[]'
+        AND json_valid(u.totals_by_feature)
         AND ${IS_COMPLETION_SQL}${efClause}
     `).get(decodedLogin, start, end, ...efParams) as {
       compLocSuggested: number;
@@ -404,6 +405,8 @@ async function handler(request: NextRequest) {
         SUM(CAST(COALESCE(j.value->>'code_acceptance_activity_count', '0') AS INTEGER)) AS acceptances
       FROM user_daily_metrics u, json_each(u.totals_by_language_feature) j
       WHERE u.user_login = ? AND u.day BETWEEN ? AND ?
+        AND u.totals_by_language_feature IS NOT NULL AND u.totals_by_language_feature != '[]'
+        AND json_valid(u.totals_by_language_feature)
         AND ${NOT_AGENT_OR_APP_SQL}${efClause}
       GROUP BY language
       ORDER BY suggestions DESC
@@ -443,7 +446,8 @@ async function handler(request: NextRequest) {
         COALESCE(SUM(json_extract(j.value, '$.loc_added_sum')), 0) AS locAdded
       FROM user_daily_metrics u, json_each(u.totals_by_feature) j
       WHERE u.user_login = ? AND u.day BETWEEN ? AND ?
-        AND u.totals_by_feature IS NOT NULL AND u.totals_by_feature != '[]'${efClause}
+        AND u.totals_by_feature IS NOT NULL AND u.totals_by_feature != '[]'
+        AND json_valid(u.totals_by_feature)${efClause}
       GROUP BY feature
       ORDER BY interactions DESC
     `).all(decodedLogin, start, end, ...efParams) as FeatureUsageRow[];

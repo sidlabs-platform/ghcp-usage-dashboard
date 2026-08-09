@@ -290,6 +290,24 @@ describe("getCompletionTotals", () => {
     expect(totals.compGenCount).toBe(6);
     expect(totals.compAcceptCount).toBe(4);
   });
+
+  it("does not throw when totals_by_feature is malformed JSON on one row, and still sums the valid row", () => {
+    const validFeatures = JSON.stringify([
+      { feature: "code_completion", loc_suggested_to_add_sum: 100, loc_added_sum: 80, code_generation_activity_count: 50, code_acceptance_activity_count: 40 },
+    ]);
+    db.prepare(`INSERT INTO user_daily_metrics (day, enterprise_id, enterprise_slug, user_id, user_login, totals_by_feature)
+      VALUES ('2024-01-10', 'ent1', 'ent1', 1, 'user1', ?)`).run(validFeatures);
+    // Malformed JSON on a second user/day — without a json_valid guard this
+    // throws a "malformed JSON" SQLite error out of json_each() and propagates
+    // up through every caller (the users/[login] route included).
+    db.prepare(`INSERT INTO user_daily_metrics (day, enterprise_id, enterprise_slug, user_id, user_login, totals_by_feature)
+      VALUES ('2024-01-12', 'ent1', 'ent1', 2, 'user2', ?)`).run("{not valid json");
+
+    expect(() => getCompletionTotals("2024-01-01", "2024-01-31")).not.toThrow();
+    const totals = getCompletionTotals("2024-01-01", "2024-01-31");
+    expect(totals.completionSuggested).toBe(100);
+    expect(totals.completionAccepted).toBe(80);
+  });
 });
 
 describe("getUserSummariesPaginated", () => {
@@ -608,6 +626,28 @@ describe("getCompletionDailyTrend", () => {
     expect(row!.appDeleted).toBe(6);
     expect(row!.appGenCount).toBe(9);
     expect(row!.appAcceptCount).toBe(7);
+  });
+
+  it("does not throw when totals_by_feature is malformed JSON on one day, and still returns the valid day's trend row", () => {
+    const validFeatures = JSON.stringify([
+      { feature: "code_completion", loc_suggested_to_add_sum: 100, loc_added_sum: 80, loc_deleted_sum: 0, code_generation_activity_count: 20, code_acceptance_activity_count: 15 },
+    ]);
+    db.prepare(`INSERT INTO user_daily_metrics (day, enterprise_id, enterprise_slug, user_id, user_login, totals_by_feature)
+      VALUES ('2024-01-17', 'ent1', 'ent1', 1, 'user1', ?)`).run(validFeatures);
+    // Malformed JSON on a second day — this is the exact shape the users/[login]
+    // route depends on via getCompletionDailyTrend for its per-day completion
+    // trend; without json_valid, json_each() throws here and the route 500s.
+    db.prepare(`INSERT INTO user_daily_metrics (day, enterprise_id, enterprise_slug, user_id, user_login, totals_by_feature)
+      VALUES ('2024-01-18', 'ent1', 'ent1', 1, 'user1', ?)`).run("[{broken");
+
+    expect(() => getCompletionDailyTrend("2024-01-01", "2024-01-31")).not.toThrow();
+    const trend = getCompletionDailyTrend("2024-01-01", "2024-01-31");
+    const validRow = trend.find((r) => r.day === "2024-01-17");
+    expect(validRow!.completionSuggested).toBe(100);
+    expect(validRow!.completionAccepted).toBe(80);
+    // The malformed day contributes no joined json_each rows, so it never
+    // appears in the GROUP BY u.day output (same as an empty/'[]' day).
+    expect(trend.find((r) => r.day === "2024-01-18")).toBeUndefined();
   });
 });
 

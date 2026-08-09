@@ -282,3 +282,105 @@ describe("migrateSummaryCacheClassification — idempotency and ledger", () => {
     expect(row).toBeTruthy();
   });
 });
+
+describe("migrateSummaryCacheClassification — malformed totals_by_feature JSON", () => {
+  beforeEach(() => {
+    db = new Database(":memory:");
+    createSchema(db);
+  });
+
+  it("does not throw and still applies the ledger marker when a legacy row has malformed JSON (user_period_summary)", () => {
+    // Malformed row alongside a well-formed row for a different user.
+    db.prepare(
+      `INSERT INTO user_daily_metrics (day, enterprise_slug, user_login, totals_by_feature) VALUES (?, ?, ?, ?)`
+    ).run("2024-01-01", "ent1", "dev-bad", "{not valid json");
+    db.prepare(
+      `INSERT INTO user_daily_metrics (day, enterprise_slug, user_login, totals_by_feature) VALUES (?, ?, ?, ?)`
+    ).run("2024-01-01", "ent1", "dev1", legacyFeatureSet());
+
+    db.prepare(
+      `INSERT INTO user_period_summary (enterprise_slug, user_login, period_start, period_end, acceptance_rate, computed_at)
+       VALUES (?, ?, ?, ?, ?, ?)`
+    ).run("ent1", "dev-bad", "2024-01-01", "2024-01-01", 42, "2024-01-01T00:00:00.000Z");
+    db.prepare(
+      `INSERT INTO user_period_summary (enterprise_slug, user_login, period_start, period_end, acceptance_rate, computed_at)
+       VALUES (?, ?, ?, ?, ?, ?)`
+    ).run("ent1", "dev1", "2024-01-01", "2024-01-01", 99.9, "2024-01-01T00:00:00.000Z");
+
+    expect(() => migrateSummaryCacheClassification(db)).not.toThrow();
+
+    // Malformed row left untouched (treated as if it had no matching data).
+    const badRow = db.prepare(
+      `SELECT acceptance_rate FROM user_period_summary WHERE user_login = 'dev-bad'`
+    ).get() as { acceptance_rate: number };
+    expect(badRow.acceptance_rate).toBe(42);
+
+    // Well-formed row is still correctly recomputed.
+    const goodRow = db.prepare(
+      `SELECT acceptance_rate FROM user_period_summary WHERE user_login = 'dev1'`
+    ).get() as { acceptance_rate: number };
+    expect(goodRow.acceptance_rate).toBe(75);
+
+    const marker = db.prepare(
+      `SELECT name FROM summary_cache_migrations WHERE name = 'summary-cache-completion-classification-v1'`
+    ).get();
+    expect(marker).toBeTruthy();
+  });
+
+  it("does not throw and still recomputes valid rows when a legacy row has malformed JSON (daily_aggregate_cache)", () => {
+    db.prepare(
+      `INSERT INTO user_daily_metrics (day, enterprise_slug, user_login, totals_by_feature) VALUES (?, ?, ?, ?)`
+    ).run("2024-01-01", "ent1", "dev-bad", "[{broken");
+    db.prepare(
+      `INSERT INTO user_daily_metrics (day, enterprise_slug, user_login, totals_by_feature) VALUES (?, ?, ?, ?)`
+    ).run("2024-01-01", "ent1", "dev1", legacyFeatureSet());
+    db.prepare(
+      `INSERT INTO daily_aggregate_cache (enterprise_slug, day, total_users, loc_added, completion_loc_suggested, completion_loc_accepted, agent_loc_added, computed_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run("ent1", "2024-01-01", 2, 99999, 12100, 26279, 500, "2024-01-01T00:00:00.000Z");
+
+    expect(() => migrateSummaryCacheClassification(db)).not.toThrow();
+
+    const row = db.prepare(
+      `SELECT completion_loc_suggested, completion_loc_accepted FROM daily_aggregate_cache WHERE day = '2024-01-01'`
+    ).get() as Record<string, number>;
+    expect(row.completion_loc_suggested).toBe(100);
+    expect(row.completion_loc_accepted).toBe(80);
+
+    const marker = db.prepare(
+      `SELECT name FROM summary_cache_migrations WHERE name = 'summary-cache-completion-classification-v1'`
+    ).get();
+    expect(marker).toBeTruthy();
+  });
+
+  it("does not throw and still recomputes valid rows when a legacy row has malformed JSON (team_summary_cache)", () => {
+    db.prepare(
+      `INSERT INTO user_daily_metrics (day, enterprise_slug, user_login, totals_by_feature) VALUES (?, ?, ?, ?)`
+    ).run("2024-01-01", "ent1", "dev-bad", "totally not json");
+    db.prepare(
+      `INSERT INTO user_daily_metrics (day, enterprise_slug, user_login, totals_by_feature) VALUES (?, ?, ?, ?)`
+    ).run("2024-01-01", "ent1", "dev1", legacyFeatureSet());
+    db.prepare(
+      `INSERT INTO team_memberships (enterprise_slug, team_slug, source, org_slug, team_name, user_login) VALUES (?, ?, ?, ?, ?, ?)`
+    ).run("ent1", "team-a", "org", "my-org", "Team A", "dev-bad");
+    db.prepare(
+      `INSERT INTO team_memberships (enterprise_slug, team_slug, source, org_slug, team_name, user_login) VALUES (?, ?, ?, ?, ?, ?)`
+    ).run("ent1", "team-a", "org", "my-org", "Team A", "dev1");
+    db.prepare(
+      `INSERT INTO team_summary_cache (enterprise_slug, team_slug, source, org_slug, team_name, period_start, period_end, total_members, overall_acceptance_rate, computed_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run("ent1", "team-a", "org", "my-org", "Team A", "2024-01-01", "2024-01-01", 2, 99.9, "2024-01-01T00:00:00.000Z");
+
+    expect(() => migrateSummaryCacheClassification(db)).not.toThrow();
+
+    const row = db.prepare(
+      `SELECT overall_acceptance_rate FROM team_summary_cache WHERE team_slug = 'team-a'`
+    ).get() as { overall_acceptance_rate: number };
+    expect(row.overall_acceptance_rate).toBe(75);
+
+    const marker = db.prepare(
+      `SELECT name FROM summary_cache_migrations WHERE name = 'summary-cache-completion-classification-v1'`
+    ).get();
+    expect(marker).toBeTruthy();
+  });
+});

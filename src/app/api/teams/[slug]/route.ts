@@ -111,6 +111,7 @@ async function handler(request: NextRequest) {
         json_each(udm.totals_by_feature) j
         WHERE udm.day >= ? AND udm.day <= ?
           AND udm.totals_by_feature IS NOT NULL AND udm.totals_by_feature != '[]'
+          AND json_valid(udm.totals_by_feature)
           AND ${IS_COMPLETION_SQL}
         GROUP BY udm.user_login
       )

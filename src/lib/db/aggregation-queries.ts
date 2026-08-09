@@ -952,6 +952,7 @@ export function getCompletionDailyTrend(
     FROM user_daily_metrics u, json_each(u.totals_by_feature) j
     WHERE u.day >= ? AND u.day <= ?
       AND u.totals_by_feature IS NOT NULL AND u.totals_by_feature != '[]'
+      AND json_valid(u.totals_by_feature)
       ${filter.clause}${ef.clause}
     GROUP BY u.day
     ORDER BY u.day ASC
@@ -999,6 +1000,7 @@ export function getCompletionTotals(
     FROM user_daily_metrics u, json_each(u.totals_by_feature) j
     WHERE u.day >= ? AND u.day <= ?
       AND u.totals_by_feature IS NOT NULL AND u.totals_by_feature != '[]'
+      AND json_valid(u.totals_by_feature)
       ${filter.clause}${ef.clause}
   `;
   const row = db.prepare(sql).get(startDay, endDay, ...filter.params, ...ef.params) as CompletionDailyRow | undefined;
