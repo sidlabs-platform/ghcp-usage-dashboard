@@ -13,15 +13,21 @@
 //   (+ optional configured snapshot/report output).
 //
 // Design notes (disclosed explicitly — not literally specified upstream):
-//  - "Current snapshot saved before legacy seat replacement" is satisfied by
-//    data-lineage independence: this module fetches/normalizes its own live
-//    seats (`seatsClient.get*SeatsNormalized`, which never drops unresolved
-//    seats) and writes to `license_seat_snapshots` — a table entirely
-//    separate from the legacy `copilot_seats` table `sync-service.ts`
-//    replaces. The `onCurrentSnapshotPersisted` DI hook lets callers/tests
-//    assert this module's own internal ordering (snapshot write happens
-//    before anything else in this module could plausibly integrate with a
-//    legacy replacement), without coupling this module to `sync-service.ts`.
+//  - "Current snapshot saved before legacy seat replacement" is enforced for
+//    real by `sync-service.ts`: it calls the exported
+//    `captureCurrentLicenseSeatSnapshot` primitive (below) immediately
+//    before its legacy `replaceEnterpriseSeats`/`upsertSeats` calls, so the
+//    current-month snapshot is durably persisted before the legacy
+//    `copilot_seats` table is ever touched. This module's own per-enterprise
+//    sync (`syncLicenseHistoryForEnterprise`, which runs later, after
+//    billing) reuses the same primitive — idempotently re-persisting the
+//    same current-month snapshot is safe and expected. The
+//    `onCurrentSnapshotPersisted` hook remains solely as an internal test
+//    seam for asserting *this module's own* phase ordering (snapshot
+//    persisted before the audit/identity/etc. phases that follow it in this
+//    same function) — it is not what proves the legacy-replacement ordering
+//    guarantee; `sync-service.test.ts` proves that via real call-order
+//    assertions on the actual production wiring.
 //  - Historical-period skip/rerun fingerprints are persisted inside the
 //    existing free-form `license_reconciliation_runs.source_stats` JSON
 //    column (`sourceStats.periodFingerprints[period]`) rather than a new
@@ -31,6 +37,19 @@
 //    holder logins resolved from that period's live/seat-ledger rows,
 //    bounded by MAX_REPORT_MONTHS periods and the configured AIC
 //    concurrency — never all historical DB rows.
+//  - AI-Credit consumption is fetched enterprise-only first. A capability-
+//    wide enterprise failure (every requested holder gets the identical
+//    non-`not_found` classification — see `isCapabilityWideAicFailure`) is
+//    the only trigger for a per-org fallback (one call per real resolved
+//    org, each scoped to that org's own distinct assigned logins); an
+//    isolated `not_found` for one holder never triggers a fallback. Only
+//    successful results from whichever source actually served the batch are
+//    ever persisted/used — a failed enterprise attempt contributes nothing.
+//  - Configured snapshot/report output (`history.emitSnapshots`) is fully
+//    optional and behind injectable `resolveLicenseSnapshotFilePath`/
+//    `writeLicenseSnapshotFile` deps so tests never touch the real
+//    filesystem; a write failure degrades to a warning, never a whole-run
+//    failure, and nothing is written when disabled (the default).
 
 import {
   getLicensingConfig,
@@ -50,6 +69,8 @@ import {
   fetchAicConsumptionForUsers,
   type FetchAicConsumptionOptions,
   type FetchAicConsumptionResult,
+  type AicConsumptionUserResult,
+  type AicConsumptionSource,
 } from "@/lib/github/aic-consumption-client";
 import {
   importAuditArchive,
@@ -128,6 +149,8 @@ import {
   type LicenseRunStatus,
 } from "./license-run-repo";
 import type { LicensePeriodFilterQuery } from "@/lib/types/licensing";
+import { promises as fsPromises } from "node:fs";
+import * as nodePath from "node:path";
 
 // ── Public progress/result types ─────────────────────────────────────────
 
@@ -210,12 +233,29 @@ export interface LicenseHistorySyncDeps {
   recordLicenseRunDiagnostics: (input: LicenseRunDiagnosticsInput) => void;
 
   /**
+   * Resolve the on-disk path for one enterprise/period's configured
+   * snapshot output file, given the configured base directory
+   * (`history.snapshotDirectory`). Pure — never touches the filesystem.
+   * Must sanitize `enterpriseSlug`/`period` and reject (throw) a resolved
+   * path that would escape `baseDir` (path traversal defense-in-depth).
+   */
+  resolveLicenseSnapshotFilePath: (baseDir: string, enterpriseSlug: string, period: string) => string;
+  /**
+   * Durably write `contents` to `filePath`, atomically (temp-write then
+   * rename) so a crash mid-write never leaves a partial/corrupt file.
+   * Production default uses `node:fs/promises`; tests always inject a
+   * fake so no test ever touches the real filesystem.
+   */
+  writeLicenseSnapshotFile: (filePath: string, contents: string) => Promise<void>;
+
+  /**
    * Invoked immediately after this enterprise's current-month seat snapshot
    * has been durably persisted, and before any later phase in this module
-   * runs. Exists purely so tests (and, if ever needed, an external caller)
-   * can assert the "current snapshot before legacy seat replacement/
-   * integration callback" ordering guarantee documented in the module doc —
-   * see the design note above.
+   * runs. This is an internal test seam for asserting *this module's own*
+   * phase ordering only — see the module doc's design notes above for how
+   * the "current snapshot before legacy seat replacement" guarantee is
+   * actually enforced (via `captureCurrentLicenseSeatSnapshot` wired
+   * directly into `sync-service.ts`, proven by `sync-service.test.ts`).
    */
   onCurrentSnapshotPersisted?: (enterpriseSlug: string, period: string) => void;
 }
@@ -285,11 +325,59 @@ export function createDefaultLicenseHistorySyncDeps(
     listLicenseRuns,
     recordLicenseRunDiagnostics,
 
+    resolveLicenseSnapshotFilePath: resolveLicenseSnapshotFilePathDefault,
+    writeLicenseSnapshotFile: writeLicenseSnapshotFileDefault,
+
     ...overrides,
   };
 }
 
 // ── Small deterministic helpers ──────────────────────────────────────────
+
+/** Strips anything other than `[a-zA-Z0-9._-]` from a single path segment, so it can never itself carry a directory separator (defense-in-depth against path traversal — see {@link resolveLicenseSnapshotFilePathDefault}). */
+function sanitizeSnapshotPathSegment(segment: string): string {
+  return segment.replace(/[^a-zA-Z0-9._-]/g, "_");
+}
+
+/**
+ * Production default for `resolveLicenseSnapshotFilePath` — pure, no
+ * filesystem access. Builds a single flat filename (`{enterpriseSlug}_
+ * {period}.json`) from sanitized segments (each stripped of any path
+ * separator) and resolves it against the configured base directory.
+ * Defense-in-depth: also verifies the resolved path never escapes the
+ * resolved base directory, throwing rather than ever returning an
+ * out-of-bounds path.
+ */
+function resolveLicenseSnapshotFilePathDefault(baseDir: string, enterpriseSlug: string, period: string): string {
+  const safeEnterprise = sanitizeSnapshotPathSegment(enterpriseSlug);
+  const safePeriod = sanitizeSnapshotPathSegment(period);
+  const fileName = `${safeEnterprise}_${safePeriod}.json`;
+  const resolvedBase = nodePath.resolve(baseDir);
+  const resolvedPath = nodePath.resolve(resolvedBase, fileName);
+  const relative = nodePath.relative(resolvedBase, resolvedPath);
+  // Only a *directory-traversal* relative path (an actual ".." segment, or
+  // an absolute path) ever indicates escape — a sanitized filename that
+  // merely starts with literal dots (e.g. "..\_.._etc_...json", with no
+  // path separator) is not a traversal and must not be rejected.
+  const escapesBase = relative === ".." || relative.startsWith(`..${nodePath.sep}`) || nodePath.isAbsolute(relative);
+  if (escapesBase) {
+    throw new Error(`Resolved license snapshot path would escape the configured base directory for ${enterpriseSlug}/${period}`);
+  }
+  return resolvedPath;
+}
+
+/**
+ * Production default for `writeLicenseSnapshotFile` — atomic temp-write then
+ * rename, so a crash mid-write never leaves a partial/corrupt snapshot file.
+ * Creates the target directory (recursively) if it doesn't already exist.
+ */
+async function writeLicenseSnapshotFileDefault(filePath: string, contents: string): Promise<void> {
+  const dir = nodePath.dirname(filePath);
+  await fsPromises.mkdir(dir, { recursive: true });
+  const tempPath = `${filePath}.tmp-${process.pid}-${Date.now()}`;
+  await fsPromises.writeFile(tempPath, contents, "utf8");
+  await fsPromises.rename(tempPath, filePath);
+}
 
 function sanitizeForLog(s: string): string {
   return s.replace(/\n|\r/g, "");
@@ -297,6 +385,25 @@ function sanitizeForLog(s: string): string {
 
 function currentPeriodOf(now: Date): string {
   return now.toISOString().slice(0, 7);
+}
+
+/**
+ * Detects a capability-wide enterprise AI-Credit API failure from a batch of
+ * results returned by an enterprise-only `fetchAicConsumptionForUsers` call
+ * (no `orgLogin` passed). The client copies one shared non-`"not_found"`
+ * classification across the *entire* batch when the whole endpoint capability
+ * is unavailable — so this is true only when every result shares that same
+ * failure status. An isolated `"not_found"` for a single holder (mixed with
+ * `"ok"`/other results) is never capability-wide, and must never trigger an
+ * org fallback.
+ */
+function isCapabilityWideAicFailure(results: AicConsumptionUserResult[]): boolean {
+  if (results.length === 0) return false;
+  const failureStatuses = results
+    .filter((r) => r.status !== "ok" && r.status !== "not_found")
+    .map((r) => r.status);
+  if (failureStatuses.length !== results.length) return false;
+  return failureStatuses.every((status) => status === failureStatuses[0]);
 }
 
 /** Deterministic (order-independent) fingerprint over a set of source-derived string tokens for one period, so historical-period skip decisions never depend on array/iteration order. */
@@ -350,6 +457,79 @@ function toMaterializedRowLike(row: LicensePeriodRowLike, enterpriseSlug: string
     asOfUtc: "",
     generatedAtUtc: "",
   };
+}
+
+/** Result of {@link captureCurrentLicenseSeatSnapshot}. */
+export interface CaptureCurrentLicenseSeatSnapshotResult {
+  /** True whenever history is enabled and a capture was actually attempted (even if it ultimately failed). */
+  attempted: boolean;
+  /** True only when the snapshot was durably persisted via `replacePeriodSnapshots`. */
+  persisted: boolean;
+  /** The current billing period (`YYYY-MM`) this capture targeted. */
+  period: string;
+  /** The normalized live seats used for this capture (either freshly fetched or the caller-supplied `preFetchedSeats`), for reuse by the caller. Empty when disabled or on failure. */
+  seats: NormalizedCopilotSeat[];
+  /** Non-null only when the required seat fetch failed — no snapshot was persisted in that case. */
+  errorMessage: string | null;
+}
+
+/** Minimal dependency surface {@link captureCurrentLicenseSeatSnapshot} needs — a subset of {@link LicenseHistorySyncDeps}. */
+export type CaptureCurrentLicenseSeatSnapshotDeps = Pick<
+  LicenseHistorySyncDeps,
+  "getConfig" | "clock" | "getEnterpriseSeatsNormalized" | "replacePeriodSnapshots" | "heartbeatSyncLock"
+>;
+
+/**
+ * Capture and durably persist this enterprise's current-month authoritative
+ * seat snapshot — the primitive `sync-service.ts` calls immediately BEFORE
+ * its legacy `copilot_seats` replacement, so the current-month history
+ * snapshot is always saved before the legacy table is overwritten (Task 9
+ * spec-review fix #2). No-ops with zero side effects when
+ * `config.history.enabled` is false (so `fullSync()` calling this
+ * unconditionally stays safe/inert on default-disabled configs). Never
+ * persists a false/partial snapshot: if the required seat fetch fails, this
+ * returns `errorMessage` instead of throwing, so callers can treat this as
+ * best-effort. Accepts already-fetched `preFetchedSeats` to avoid an
+ * unnecessary extra network round-trip when the caller already has fresh
+ * normalized seats in hand (e.g. this module's own per-enterprise sync).
+ */
+export async function captureCurrentLicenseSeatSnapshot(
+  enterpriseSlug: string,
+  deps: CaptureCurrentLicenseSeatSnapshotDeps,
+  preFetchedSeats?: NormalizedCopilotSeat[],
+): Promise<CaptureCurrentLicenseSeatSnapshotResult> {
+  const config = deps.getConfig();
+  const now = deps.clock();
+  const period = currentPeriodOf(now);
+
+  if (!config.history.enabled) {
+    return { attempted: false, persisted: false, period, seats: [], errorMessage: null };
+  }
+
+  try {
+    const seats = preFetchedSeats ?? (await deps.getEnterpriseSeatsNormalized(enterpriseSlug)).seats;
+    // `seats` is never filtered/dropped here — unresolved seats (no
+    // resolvable login) are preserved so the snapshot stays authoritative.
+    const snapshotInputs: LicenseSeatSnapshotInput[] = seats.map((seat) => ({
+      orgLogin: seat.orgLogin,
+      holderKey: seat.holderKey,
+      githubUserId: seat.githubUserId,
+      observedLogin: seat.observedLogin,
+      planType: seat.planType,
+      assignedVia: seat.assignedVia,
+      lastActivityAt: seat.lastActivityAt,
+      pendingCancellationDate: seat.pendingCancellationDate,
+      snapshotAt: now.toISOString(),
+      source: "live_seats",
+      raw: seat.raw,
+    }));
+    deps.replacePeriodSnapshots(enterpriseSlug, period, snapshotInputs);
+    deps.heartbeatSyncLock?.();
+    return { attempted: true, persisted: true, period, seats, errorMessage: null };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return { attempted: true, persisted: false, period, seats: [], errorMessage: message };
+  }
 }
 
 // ── Per-enterprise sync ───────────────────────────────────────────────────
@@ -484,10 +664,21 @@ export async function syncLicenseHistoryForEnterprise(
       source: "live_seats",
       raw: seat.raw,
     }));
-    deps.replacePeriodSnapshots(enterpriseSlug, currentPeriod, currentSnapshotInputs);
+    // Reuse the already-fetched live seats — no extra fetch — while
+    // delegating the actual persistence to the shared primitive so
+    // `sync-service.ts` and this module both go through the exact same
+    // capture logic (Task 9 spec-review fix #2). Preserve this function's
+    // existing contract: a required live-seat/snapshot failure fails the
+    // whole enterprise run (never a false snapshot).
+    const captureResult = await captureCurrentLicenseSeatSnapshot(enterpriseSlug, deps, liveSeats);
+    if (captureResult.errorMessage) {
+      throw new Error(captureResult.errorMessage);
+    }
     sourceStates.push({ enterpriseSlug, source: "live_seats", billingPeriod: currentPeriod, lastSyncedAt: now.toISOString(), status: "ok" });
-    // Design note: satisfies "current snapshot saved before legacy seat
-    // replacement/integration callback" — see module doc.
+    // Design note: this hook is an internal test seam for this module's own
+    // phase ordering only — see the module doc for how the real
+    // "current snapshot before legacy seat replacement" guarantee is
+    // enforced (via `sync-service.ts` calling the exported primitive above).
     deps.onCurrentSnapshotPersisted?.(enterpriseSlug, currentPeriod);
     deps.heartbeatSyncLock();
 
@@ -728,21 +919,70 @@ export async function syncLicenseHistoryForEnterprise(
       if (currentLogins.length > 0) {
         try {
           const [year, month] = currentPeriod.split("-").map(Number);
-          const aicResult = await deps.fetchAicConsumptionForUsers({
+
+          // Enterprise-only first — dedupe distinct live/resolved logins
+          // case-insensitively so the batch call matches the client's own
+          // dedup contract (no double-count from casing differences).
+          const dedupedLogins = Array.from(new Map(currentLogins.map((login) => [login.toLowerCase(), login])).values());
+          const enterpriseResult = await deps.fetchAicConsumptionForUsers({
             enterpriseSlug,
             year,
             month,
-            users: currentLogins,
+            users: dedupedLogins,
             concurrency: config.aicConsumption.concurrency,
             creditToUsd: config.creditToUsd,
           });
-          enterpriseApiUnavailable = aicResult.fellBackToOrg;
+
+          // A capability-wide enterprise failure is the *only* trigger for
+          // an org fallback — the client (without `orgLogin`) copies one
+          // shared non-"not_found" classification across the whole batch
+          // when the whole endpoint is unavailable; an isolated per-holder
+          // `not_found` never triggers this.
+          const capabilityWideFailure = isCapabilityWideAicFailure(enterpriseResult.results);
+
+          let chosenResults: AicConsumptionUserResult[] = [];
+          let chosenSource: AicConsumptionSource = enterpriseResult.source;
+          let orgFallbackAttempted = false;
+          let orgFallbackHadAnySuccess = false;
+
+          if (!capabilityWideFailure) {
+            chosenResults = enterpriseResult.results;
+          } else {
+            enterpriseApiUnavailable = true;
+            // Per real resolved org, scoped to that org's own distinct
+            // assigned logins only — never re-consuming the enterprise-only
+            // batch, and never duplicating a multi-org user's consumption
+            // across orgs (each org call only carries its own holders).
+            for (const org of orgs) {
+              const orgLogins = Array.from(
+                new Map(
+                  liveSeats
+                    .filter((seat) => seat.orgLogin === org && seat.observedLogin)
+                    .map((seat) => [seat.observedLogin!.toLowerCase(), seat.observedLogin!] as const),
+                ).values(),
+              );
+              if (orgLogins.length === 0) continue;
+              orgFallbackAttempted = true;
+              const orgResult = await deps.fetchAicConsumptionForUsers({
+                orgLogin: org,
+                year,
+                month,
+                users: orgLogins,
+                concurrency: config.aicConsumption.concurrency,
+                creditToUsd: config.creditToUsd,
+              });
+              chosenSource = orgResult.source;
+              if (orgResult.results.some((r) => r.status === "ok")) orgFallbackHadAnySuccess = true;
+              chosenResults.push(...orgResult.results);
+            }
+          }
+
           const aicPersist: LicenseAicConsumptionInput[] = [];
-          for (const result of aicResult.results) {
+          for (const result of chosenResults) {
             if (result.status === "ok") {
               consumptionRecordsWithPeriod.push({
                 billingPeriod: result.record.billingPeriod,
-                source: aicResult.source,
+                source: chosenSource,
                 orgLogin: result.record.orgLogin,
                 holderKey: `login:${result.record.userLogin.toLowerCase()}`,
                 credits: result.record.credits,
@@ -756,22 +996,35 @@ export async function syncLicenseHistoryForEnterprise(
                 credits: result.record.credits,
                 grossUsd: result.record.grossUsd,
                 netUsd: result.record.netUsd,
-                source: aicResult.source,
+                source: chosenSource,
                 observedAt: now.toISOString(),
               });
-            } else if (result.status !== "not_found") {
+            } else if (result.status !== "not_found" && !capabilityWideFailure) {
+              // Only surface isolated per-holder issues as a warning when
+              // we're not already reporting the capability-wide failure
+              // below (avoids duplicate/noisy warnings for every holder).
               warnings.push(`AI-Credit consumption fetch issue for a holder: ${result.status}`);
             }
           }
           if (aicPersist.length > 0) deps.upsertAicConsumption(enterpriseSlug, aicPersist);
+
+          let aicErrorMessage: string | null = null;
+          if (enterpriseApiUnavailable) {
+            aicErrorMessage = orgFallbackAttempted && orgFallbackHadAnySuccess
+              ? "Enterprise AI-Credit API unavailable; fell back to per-org endpoint(s)."
+              : "Enterprise AI-Credit API unavailable and org fallback did not return any consumption.";
+          }
           sourceStates.push({
             enterpriseSlug,
             source: "aic_consumption",
             billingPeriod: currentPeriod,
             lastSyncedAt: now.toISOString(),
+            // Never a false "ok" while the enterprise API is unavailable —
+            // "warning" whether or not the org fallback itself succeeded.
             status: enterpriseApiUnavailable ? "warning" : "ok",
-            errorMessage: enterpriseApiUnavailable ? "Enterprise AI-Credit API unavailable; fell back to org endpoint." : null,
+            errorMessage: aicErrorMessage,
           });
+          if (aicErrorMessage) warnings.push(aicErrorMessage);
         } catch (err) {
           const message = `AI-Credit consumption fetch failed unexpectedly for ${enterpriseSlug}: ${err instanceof Error ? err.message : String(err)}`;
           warnings.push(message);
@@ -989,6 +1242,32 @@ export async function syncLicenseHistoryForEnterprise(
     ];
     const overallStatus = deriveOverallRunStatus(checkResults);
     const runStatus: LicenseRunStatus = overallStatus;
+
+    // ── optional configured snapshot output (Task 9 spec-review fix #4) ──
+    // Fully optional: no-op (no filesystem call at all) when
+    // `history.emitSnapshots` is false — the default. Deliberately placed
+    // after reconciliation checks so its warnings/source states make it
+    // into the same `recordLicenseRunDiagnostics` call below, and before
+    // "atomic run completion" per the module doc's documented ordering. A
+    // write failure is always an optional-source warning, never a
+    // whole-run failure.
+    if (config.history.emitSnapshots) {
+      for (const period of recoverablePeriods) {
+        try {
+          const rowsForPeriod = allMaterializedRows
+            .filter((row) => row.billingPeriod === period)
+            .slice()
+            .sort((a, b) => (a.orgLogin === b.orgLogin ? a.holderKey.localeCompare(b.holderKey) : a.orgLogin.localeCompare(b.orgLogin)));
+          const filePath = deps.resolveLicenseSnapshotFilePath(config.history.snapshotDirectory, enterpriseSlug, period);
+          const contents = JSON.stringify({ enterpriseSlug, billingPeriod: period, generatedAtUtc, rows: rowsForPeriod }, null, 2);
+          await deps.writeLicenseSnapshotFile(filePath, contents);
+        } catch (err) {
+          const message = `Configured snapshot output failed for ${sanitizeForLog(enterpriseSlug)} period ${period}: ${err instanceof Error ? err.message : String(err)}`;
+          warnings.push(message);
+          sourceStates.push({ enterpriseSlug, source: "snapshot_output", billingPeriod: period, lastSyncedAt: now.toISOString(), status: "warning", errorMessage: message });
+        }
+      }
+    }
 
     // ── atomic run completion + source state ─────────────────────────────
     deps.onProgress?.({ enterprise: enterpriseSlug, source: "finalize", current: 1, total: 1, message: `Finalizing licensing sync run for ${sanitizeForLog(enterpriseSlug)}...` });

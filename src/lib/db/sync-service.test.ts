@@ -69,6 +69,13 @@ vi.mock("./license-history-sync-service", () => ({
     getConfig: () => ({ history: { enabled: false } }),
     ...overrides,
   })),
+  captureCurrentLicenseSeatSnapshot: vi.fn(async () => ({
+    attempted: false,
+    persisted: false,
+    period: "2025-03",
+    seats: [],
+    errorMessage: null,
+  })),
 }));
 
 vi.mock("@/lib/config/enterprise-config", () => ({
@@ -93,7 +100,7 @@ vi.mock("./enterprise-context", () => ({
   updateEnterpriseRegistry: vi.fn(),
 }));
 
-import { syncDay, syncSeats, syncTeams, fullSync, backfill, incrementalSync, backfillEnterprise } from "./sync-service";
+import { syncDay, syncSeats, syncTeams, fullSync, backfill, incrementalSync, backfillEnterprise, getLicensingSyncStatusSummary } from "./sync-service";
 import { isSynced, getLatestSyncDay, hasEnterpriseDataForRange, hasOrgDataForRange, recordSync } from "./metrics-repo";
 import { metricsClient } from "@/lib/github/metrics-client";
 import { seatsClient } from "@/lib/github/seats-client";
@@ -104,7 +111,7 @@ import { upsertEnterpriseOrgs } from "./orgs-repo";
 import { replaceEnterpriseSeats, upsertSeats } from "./seats-repo";
 import { batchUpsertUserTeams } from "./user-teams-repo";
 import { datesBetween } from "@/lib/utils";
-import { syncLicenseHistoryForEnterprise } from "./license-history-sync-service";
+import { syncLicenseHistoryForEnterprise, captureCurrentLicenseSeatSnapshot, createDefaultLicenseHistorySyncDeps } from "./license-history-sync-service";
 
 function makeSeat(login: string, orgLogin: string | null) {
   return {
@@ -378,6 +385,26 @@ describe("sync-service", () => {
       expect(callOrder.indexOf("licensing")).toBeGreaterThan(callOrder.indexOf("billing"));
     });
 
+    it("captures the current-month licensing seat snapshot BEFORE the legacy copilot_seats replacement (Task 9 spec-review fix #2 — real DI-seam ordering proof)", async () => {
+      const { replaceEnterpriseSeats } = await import("./seats-repo");
+      const callOrder: string[] = [];
+      (captureCurrentLicenseSeatSnapshot as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+        callOrder.push("licensing-snapshot-capture");
+        return { attempted: true, persisted: true, period: "2025-03", seats: [], errorMessage: null };
+      });
+      (replaceEnterpriseSeats as ReturnType<typeof vi.fn>).mockImplementation((_slug: string, seatsByOrg: Map<string, unknown[]>) => {
+        callOrder.push("legacy-replace-enterprise-seats");
+        return Array.from(seatsByOrg.values()).reduce((sum, seats) => sum + seats.length, 0);
+      });
+
+      await fullSync();
+
+      expect(captureCurrentLicenseSeatSnapshot).toHaveBeenCalledWith("test-ent", expect.anything());
+      expect(callOrder).toContain("licensing-snapshot-capture");
+      expect(callOrder).toContain("legacy-replace-enterprise-seats");
+      expect(callOrder.indexOf("licensing-snapshot-capture")).toBeLessThan(callOrder.indexOf("legacy-replace-enterprise-seats"));
+    });
+
     it("isolates a licensing failure: it is recorded as failed but does not roll back this enterprise's other successful results", async () => {
       (syncLicenseHistoryForEnterprise as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("licensing exploded"));
 
@@ -420,6 +447,23 @@ describe("sync-service", () => {
 
       const result = await fullSync();
       expect(result.licensing.enterprises.map((e) => e.enterpriseSlug)).toEqual(["alpha-ent", "zeta-ent"]);
+    });
+  });
+
+  // ── Task 9 spec-review fix #3: additive route-consumable licensing status ─
+  describe("getLicensingSyncStatusSummary", () => {
+    it("derives enabled from the resolved server config, and echoes back the given status, for a 'started' response", () => {
+      (createDefaultLicenseHistorySyncDeps as ReturnType<typeof vi.fn>).mockReturnValueOnce({
+        getConfig: () => ({ history: { enabled: true } }),
+      });
+      expect(getLicensingSyncStatusSummary("started")).toEqual({ enabled: true, status: "started" });
+    });
+
+    it("derives enabled=false from the resolved server config for an 'in_progress' response", () => {
+      (createDefaultLicenseHistorySyncDeps as ReturnType<typeof vi.fn>).mockReturnValueOnce({
+        getConfig: () => ({ history: { enabled: false } }),
+      });
+      expect(getLicensingSyncStatusSummary("in_progress")).toEqual({ enabled: false, status: "in_progress" });
     });
   });
 

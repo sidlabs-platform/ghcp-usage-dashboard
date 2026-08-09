@@ -6,7 +6,7 @@ import type { AuditFetchResult, NormalizedCopilotAuditEvent } from "@/lib/github
 import type { IdentityFetchResult } from "@/lib/github/copilot-identity-client";
 import type { ScimFetchResult } from "@/lib/github/copilot-membership-client";
 import type { OrgBillingResult } from "@/lib/github/copilot-org-billing-client";
-import type { FetchAicConsumptionResult } from "@/lib/github/aic-consumption-client";
+import type { FetchAicConsumptionResult, FetchAicConsumptionOptions, AicConsumptionUserResult } from "@/lib/github/aic-consumption-client";
 import type { ResolvedIdentity } from "@/lib/licensing/identity-resolver";
 import type {
   SeatLedgerResult,
@@ -25,7 +25,12 @@ import type { NormalizedIdentityRecord as ImportedIdentityMapRecord } from "@/li
 import type { LicenseRunDiagnosticsInput, StartLicenseRunInput } from "./license-run-repo";
 import type { LicenseHistorySyncDeps, LicenseHistorySyncProgress, LicenseRunSummary } from "./license-history-sync-service";
 
-import { syncLicenseHistoryForEnterprise, syncLicenseHistory } from "./license-history-sync-service";
+import {
+  syncLicenseHistoryForEnterprise,
+  syncLicenseHistory,
+  captureCurrentLicenseSeatSnapshot,
+  createDefaultLicenseHistorySyncDeps,
+} from "./license-history-sync-service";
 
 // ── Fixture builders ──────────────────────────────────────────────────────
 
@@ -222,9 +227,36 @@ function makeDeps(overrides: Partial<LicenseHistorySyncDeps> = {}): LicenseHisto
     listLicenseRuns: vi.fn((): LicenseRunSummary[] => []),
     recordLicenseRunDiagnostics: vi.fn(),
 
+    resolveLicenseSnapshotFilePath: vi.fn((baseDir: string, enterpriseSlug: string, period: string) => `${baseDir}/${enterpriseSlug}_${period}.json`),
+    writeLicenseSnapshotFile: vi.fn(async () => {}),
+
     onCurrentSnapshotPersisted: vi.fn(),
   };
   return { ...base, ...overrides };
+}
+
+/** Builds an ok AIC result for the given user/period/source. */
+function makeAicOk(userLogin: string, overrides: Partial<Extract<AicConsumptionUserResult, { status: "ok" }>["record"]> = {}): Extract<AicConsumptionUserResult, { status: "ok" }> {
+  return {
+    status: "ok",
+    userLogin,
+    record: {
+      billingPeriod: "2025-03",
+      orgLogin: null,
+      userLogin,
+      credits: 10,
+      grossUsd: 0.1,
+      netUsd: 0.1,
+      source: "enterprise_api",
+      raw: {},
+      ...overrides,
+    },
+  };
+}
+
+/** Builds a failed AIC result for the given user/status. */
+function makeAicFailure(userLogin: string, status: Exclude<AicConsumptionUserResult["status"], "ok">): Extract<AicConsumptionUserResult, { status: typeof status }> {
+  return { status, userLogin, message: `failure for ${userLogin}: ${status}` } as Extract<AicConsumptionUserResult, { status: typeof status }>;
 }
 
 describe("license-history-sync-service", () => {
@@ -504,6 +536,146 @@ describe("license-history-sync-service", () => {
     });
   });
 
+  // ── real AIC enterprise→org fallback (Task 9 spec-review fix #1) ────
+  describe("AI-Credit enterprise-to-org fallback", () => {
+    it("does not fall back when an isolated not_found is mixed with successful results", async () => {
+      const calls: { enterpriseSlug?: string; orgLogin?: string; users: string[] }[] = [];
+      const seats = [
+        makeSeat({ holderKey: "login:alice", observedLogin: "alice", orgLogin: "acme-org" }),
+        makeSeat({ holderKey: "login:bob", githubUserId: 2, observedLogin: "bob", orgLogin: "acme-org" }),
+      ];
+      const deps = makeDeps({
+        getEnterpriseSeatsNormalized: vi.fn(async () => ({ totalSeats: 2, seats })),
+        fetchAicConsumptionForUsers: vi.fn(async (options: FetchAicConsumptionOptions): Promise<FetchAicConsumptionResult> => {
+          calls.push({ enterpriseSlug: options.enterpriseSlug, orgLogin: options.orgLogin, users: options.users });
+          return { results: [makeAicOk("alice"), makeAicFailure("bob", "not_found")], source: "enterprise_api", fellBackToOrg: false };
+        }),
+      });
+
+      const result = await syncLicenseHistoryForEnterprise("acme", deps);
+
+      // Only one call — enterprise-only — no org fallback triggered by an isolated 404.
+      expect(calls).toHaveLength(1);
+      expect(calls[0]).toEqual({ enterpriseSlug: "acme", orgLogin: undefined, users: ["alice", "bob"] });
+      expect(deps.materializeLicensePeriodRows).toHaveBeenCalledWith(expect.objectContaining({ enterpriseApiUnavailable: false }));
+      expect(result.status).not.toBe("failed");
+    });
+
+    it("detects a capability-wide enterprise failure and falls back to per-org calls with correct user partitions", async () => {
+      const seats = [
+        makeSeat({ holderKey: "login:alice", observedLogin: "alice", orgLogin: "acme-org" }),
+        makeSeat({ holderKey: "login:bob", githubUserId: 2, observedLogin: "bob", orgLogin: "other-org" }),
+      ];
+      const calls: { enterpriseSlug?: string; orgLogin?: string; users: string[] }[] = [];
+      const deps = makeDeps({
+        getResolvedOrgsForEnterprise: vi.fn(() => ["acme-org", "other-org"]),
+        getEnterpriseSeatsNormalized: vi.fn(async () => ({ totalSeats: 2, seats })),
+        fetchAicConsumptionForUsers: vi.fn(async (options: FetchAicConsumptionOptions): Promise<FetchAicConsumptionResult> => {
+          calls.push({ enterpriseSlug: options.enterpriseSlug, orgLogin: options.orgLogin, users: options.users });
+          if (!options.orgLogin) {
+            // Capability-wide failure: every user gets the identical non-not_found classification.
+            return {
+              results: options.users.map((u: string) => makeAicFailure(u, "forbidden")),
+              source: "enterprise_api",
+              fellBackToOrg: false,
+            };
+          }
+          return {
+            results: options.users.map((u: string) => makeAicOk(u, { orgLogin: options.orgLogin })),
+            source: "org_api",
+            fellBackToOrg: false,
+          };
+        }),
+      });
+
+      const result = await syncLicenseHistoryForEnterprise("acme", deps);
+
+      expect(calls).toHaveLength(3);
+      expect(calls[0]).toEqual({ enterpriseSlug: "acme", orgLogin: undefined, users: ["alice", "bob"] });
+      const orgCalls = calls.slice(1);
+      expect(orgCalls.find((c) => c.orgLogin === "acme-org")?.users).toEqual(["alice"]);
+      expect(orgCalls.find((c) => c.orgLogin === "other-org")?.users).toEqual(["bob"]);
+      orgCalls.forEach((c) => expect(c.enterpriseSlug).toBeUndefined());
+
+      expect(deps.materializeLicensePeriodRows).toHaveBeenCalledWith(expect.objectContaining({ enterpriseApiUnavailable: true }));
+      expect(result.status).not.toBe("failed");
+      expect(result.warnings.some((w) => w.includes("unavailable"))).toBe(true);
+    });
+
+    it("never retains a failed enterprise attempt's consumption, and never duplicates consumption across orgs", async () => {
+      const seats = [
+        makeSeat({ holderKey: "login:alice", observedLogin: "alice", orgLogin: "acme-org" }),
+        makeSeat({ holderKey: "login:bob", githubUserId: 2, observedLogin: "bob", orgLogin: "other-org" }),
+      ];
+      const persistedRecords: { holderKey: string; orgLogin?: string }[] = [];
+      const deps = makeDeps({
+        getResolvedOrgsForEnterprise: vi.fn(() => ["acme-org", "other-org"]),
+        getEnterpriseSeatsNormalized: vi.fn(async () => ({ totalSeats: 2, seats })),
+        fetchAicConsumptionForUsers: vi.fn(async (options: FetchAicConsumptionOptions): Promise<FetchAicConsumptionResult> => {
+          if (!options.orgLogin) {
+            // Capability-wide failure at the enterprise level.
+            return { results: options.users.map((u: string) => makeAicFailure(u, "unavailable")), source: "enterprise_api", fellBackToOrg: false };
+          }
+          return { results: options.users.map((u: string) => makeAicOk(u, { orgLogin: options.orgLogin })), source: "org_api", fellBackToOrg: false };
+        }),
+        upsertAicConsumption: vi.fn((_enterpriseSlug: string, records: { holderKey: string; orgLogin?: string }[]) => {
+          persistedRecords.push(...records);
+          return records.length;
+        }),
+      });
+
+      await syncLicenseHistoryForEnterprise("acme", deps);
+
+      // Exactly one consumption record per distinct holder — the failed enterprise attempt contributed nothing.
+      expect(persistedRecords).toHaveLength(2);
+      expect(persistedRecords.map((r) => r.holderKey).sort()).toEqual(["login:alice", "login:bob"]);
+    });
+
+    it("reports an honest warning source state — never a false ok — when the enterprise API is unavailable, even if org fallback succeeds", async () => {
+      const capturedSourceStates: { source: string; status: string }[] = [];
+      const seats = [makeSeat({ holderKey: "login:alice", observedLogin: "alice", orgLogin: "acme-org" })];
+      const deps = makeDeps({
+        getEnterpriseSeatsNormalized: vi.fn(async () => ({ totalSeats: 1, seats })),
+        fetchAicConsumptionForUsers: vi.fn(async (options: FetchAicConsumptionOptions): Promise<FetchAicConsumptionResult> => {
+          if (!options.orgLogin) {
+            return { results: options.users.map((u: string) => makeAicFailure(u, "unavailable")), source: "enterprise_api", fellBackToOrg: false };
+          }
+          return { results: options.users.map((u: string) => makeAicOk(u)), source: "org_api", fellBackToOrg: false };
+        }),
+        recordLicenseRunDiagnostics: vi.fn((input: LicenseRunDiagnosticsInput) => {
+          for (const s of input.sourceStates ?? []) capturedSourceStates.push({ source: s.source, status: s.status ?? "" });
+        }),
+      });
+
+      await syncLicenseHistoryForEnterprise("acme", deps);
+
+      const aicState = capturedSourceStates.find((s) => s.source === "aic_consumption");
+      expect(aicState?.status).toBe("warning");
+    });
+
+    it("reports a warning source state when the org fallback also fails to return any consumption", async () => {
+      const capturedSourceStates: { source: string; status: string; errorMessage?: string | null }[] = [];
+      const seats = [makeSeat({ holderKey: "login:alice", observedLogin: "alice", orgLogin: "acme-org" })];
+      const deps = makeDeps({
+        getEnterpriseSeatsNormalized: vi.fn(async () => ({ totalSeats: 1, seats })),
+        fetchAicConsumptionForUsers: vi.fn(async (options: FetchAicConsumptionOptions): Promise<FetchAicConsumptionResult> => ({
+          results: options.users.map((u: string) => makeAicFailure(u, options.orgLogin ? "forbidden" : "unavailable")),
+          source: options.orgLogin ? "org_api" : "enterprise_api",
+          fellBackToOrg: false,
+        })),
+        recordLicenseRunDiagnostics: vi.fn((input: LicenseRunDiagnosticsInput) => {
+          for (const s of input.sourceStates ?? []) capturedSourceStates.push({ source: s.source, status: s.status ?? "", errorMessage: s.errorMessage });
+        }),
+      });
+
+      const result = await syncLicenseHistoryForEnterprise("acme", deps);
+
+      const aicState = capturedSourceStates.find((s) => s.source === "aic_consumption");
+      expect(aicState?.status).toBe("warning");
+      expect(result.status).not.toBe("failed");
+    });
+  });
+
   // ── source precedence / no double count through materialized output ─
   describe("consumption source precedence and period scoping", () => {
     it("scopes CSV consumption rows to their own billingPeriod instead of applying them to every period", async () => {
@@ -671,6 +843,122 @@ describe("license-history-sync-service", () => {
       // legitimately reports "warning", never a false "success".
       expect(fine.status).toBe("warning");
     });
+
+    it("fails the whole enterprise run when the required live-seat fetch fails, and never persists a false snapshot", async () => {
+      const deps = makeDeps({
+        getEnterpriseSeatsNormalized: vi.fn(async () => {
+          throw new Error("seats API down");
+        }),
+      });
+      const result = await syncLicenseHistoryForEnterprise("acme", deps);
+      expect(result.status).toBe("failed");
+      expect(result.errorMessage).toContain("seats API down");
+      expect(deps.replacePeriodSnapshots).not.toHaveBeenCalled();
+    });
+  });
+
+  // ── extracted current-snapshot capture primitive (Task 9 spec-review fix #2) ─
+  describe("captureCurrentLicenseSeatSnapshot", () => {
+    it("no-ops with zero side effects when history is disabled", async () => {
+      const deps = makeDeps({ getConfig: vi.fn(() => makeConfig({ history: { ...makeConfig().history, enabled: false } })) });
+      const result = await captureCurrentLicenseSeatSnapshot("acme", deps);
+      expect(result.persisted).toBe(false);
+      expect(result.attempted).toBe(false);
+      expect(deps.getEnterpriseSeatsNormalized).not.toHaveBeenCalled();
+      expect(deps.replacePeriodSnapshots).not.toHaveBeenCalled();
+    });
+
+    it("fetches and persists the current-month seat snapshot when history is enabled", async () => {
+      const deps = makeDeps({ getEnterpriseSeatsNormalized: vi.fn(async () => ({ totalSeats: 1, seats: [makeSeat()] })) });
+      const result = await captureCurrentLicenseSeatSnapshot("acme", deps);
+      expect(result.persisted).toBe(true);
+      expect(result.period).toBe("2025-03");
+      expect(deps.replacePeriodSnapshots).toHaveBeenCalledWith(
+        "acme",
+        "2025-03",
+        expect.arrayContaining([expect.objectContaining({ holderKey: "login:alice" })]),
+      );
+    });
+
+    it("reuses pre-fetched seats instead of issuing an extra fetch when supplied", async () => {
+      const getEnterpriseSeatsNormalized = vi.fn(async () => ({ totalSeats: 1, seats: [makeSeat()] }));
+      const deps = makeDeps({ getEnterpriseSeatsNormalized });
+      const preFetched = [makeSeat({ holderKey: "login:carol", observedLogin: "carol" })];
+      const result = await captureCurrentLicenseSeatSnapshot("acme", deps, preFetched);
+      expect(getEnterpriseSeatsNormalized).not.toHaveBeenCalled();
+      expect(result.seats).toBe(preFetched);
+      expect(deps.replacePeriodSnapshots).toHaveBeenCalledWith(
+        "acme",
+        "2025-03",
+        expect.arrayContaining([expect.objectContaining({ holderKey: "login:carol" })]),
+      );
+    });
+
+    it("never persists a false snapshot when the required seat fetch fails", async () => {
+      const deps = makeDeps({
+        getEnterpriseSeatsNormalized: vi.fn(async () => {
+          throw new Error("transient seats failure");
+        }),
+      });
+      const result = await captureCurrentLicenseSeatSnapshot("acme", deps);
+      expect(result.persisted).toBe(false);
+      expect(result.errorMessage).toContain("transient seats failure");
+      expect(deps.replacePeriodSnapshots).not.toHaveBeenCalled();
+    });
+
+    it("never drops unresolved seats", async () => {
+      const unresolvedSeat = makeSeat({ holderKey: "internal:hash1", githubUserId: null, observedLogin: null, unresolved: true });
+      const deps = makeDeps({ getEnterpriseSeatsNormalized: vi.fn(async () => ({ totalSeats: 1, seats: [unresolvedSeat] })) });
+      await captureCurrentLicenseSeatSnapshot("acme", deps);
+      expect(deps.replacePeriodSnapshots).toHaveBeenCalledWith(
+        "acme",
+        "2025-03",
+        expect.arrayContaining([expect.objectContaining({ holderKey: "internal:hash1" })]),
+      );
+    });
+  });
+
+  // ── optional configured snapshot output (Task 9 spec-review fix #4) ──
+  describe("configured snapshot output", () => {
+    it("emits nothing when history.emitSnapshots is disabled (default)", async () => {
+      const deps = makeDeps();
+      await syncLicenseHistoryForEnterprise("acme", deps);
+      expect(deps.writeLicenseSnapshotFile).not.toHaveBeenCalled();
+    });
+
+    it("writes a deterministic JSON snapshot per period under the configured directory when enabled", async () => {
+      const written: { path: string; contents: string }[] = [];
+      const deps = makeDeps({
+        getConfig: vi.fn(() => makeConfig({ history: { ...makeConfig().history, emitSnapshots: true, snapshotDirectory: "data/license-snapshots" } })),
+        resolveLicenseSnapshotFilePath: vi.fn((baseDir: string, enterpriseSlug: string, period: string) => `${baseDir}/${enterpriseSlug}_${period}.json`),
+        writeLicenseSnapshotFile: vi.fn(async (path: string, contents: string) => {
+          written.push({ path, contents });
+        }),
+      });
+
+      await syncLicenseHistoryForEnterprise("acme", deps);
+
+      expect(written.length).toBeGreaterThan(0);
+      expect(written.every((w) => w.path.startsWith("data/license-snapshots/acme_"))).toBe(true);
+      expect(written.every((w) => w.path.endsWith(".json"))).toBe(true);
+      // Content is valid, stable JSON.
+      for (const w of written) {
+        expect(() => JSON.parse(w.contents)).not.toThrow();
+      }
+    });
+
+    it("degrades to an optional-source warning (never a whole-run failure) when the file write fails", async () => {
+      const deps = makeDeps({
+        getConfig: vi.fn(() => makeConfig({ history: { ...makeConfig().history, emitSnapshots: true, snapshotDirectory: "data/license-snapshots" } })),
+        writeLicenseSnapshotFile: vi.fn(async () => {
+          throw new Error("disk full");
+        }),
+      });
+
+      const result = await syncLicenseHistoryForEnterprise("acme", deps);
+      expect(result.status).not.toBe("failed");
+      expect(result.warnings.some((w) => w.includes("disk full"))).toBe(true);
+    });
   });
 
   // ── cache invalidation categories ───────────────────────────────────
@@ -711,6 +999,55 @@ describe("license-history-sync-service", () => {
       expect(flaky.status).not.toBe("failed"); // optional source failure, not fatal
       expect(flaky.warnings.some((w) => w.includes("billing hiccup"))).toBe(true);
       expect(clean.warnings.some((w) => w.includes("billing hiccup"))).toBe(false);
+    });
+  });
+
+  // ── production wiring smoke test (Task 9 spec-review fix #5) ────────
+  describe("createDefaultLicenseHistorySyncDeps wiring", () => {
+    it("wires every dependency as a real function, including the new snapshot-output primitives — no network call needed", () => {
+      const deps = createDefaultLicenseHistorySyncDeps();
+
+      // Task 1-8 functions must be the real, already-completed implementations, not test-only placeholders.
+      expect(typeof deps.getConfig).toBe("function");
+      expect(typeof deps.getResolvedOrgsForEnterprise).toBe("function");
+      expect(typeof deps.preflightEnterpriseAuth).toBe("function");
+      expect(typeof deps.importAuditArchive).toBe("function");
+      expect(typeof deps.importIdentityMap).toBe("function");
+      expect(typeof deps.importAicConsumptionCsv).toBe("function");
+      expect(typeof deps.getEnterpriseSeatsNormalized).toBe("function");
+      expect(typeof deps.getEnterpriseAuditEvents).toBe("function");
+      expect(typeof deps.getEnterpriseIdentities).toBe("function");
+      expect(typeof deps.getOrgIdentities).toBe("function");
+      expect(typeof deps.getEnterpriseScimUsers).toBe("function");
+      expect(typeof deps.getOrgBilling).toBe("function");
+      expect(typeof deps.fetchAicConsumptionForUsers).toBe("function");
+      expect(typeof deps.resolveIdentity).toBe("function");
+      expect(typeof deps.buildSeatLedger).toBe("function");
+      expect(typeof deps.materializeLicensePeriodRows).toBe("function");
+      expect(typeof deps.replacePeriodSnapshots).toBe("function");
+      expect(typeof deps.upsertAuditEvents).toBe("function");
+      expect(typeof deps.upsertIdentityRecords).toBe("function");
+      expect(typeof deps.upsertOrgBillingSnapshots).toBe("function");
+      expect(typeof deps.upsertAicConsumption).toBe("function");
+      expect(typeof deps.replaceMaterializedPeriod).toBe("function");
+      expect(typeof deps.queryLicensePeriodRows).toBe("function");
+      expect(typeof deps.hasMaterializedRows).toBe("function");
+      expect(typeof deps.startLicenseRun).toBe("function");
+      expect(typeof deps.listLicenseRuns).toBe("function");
+      expect(typeof deps.recordLicenseRunDiagnostics).toBe("function");
+
+      // New snapshot/file deps wired for real — not test-only placeholders.
+      expect(typeof deps.resolveLicenseSnapshotFilePath).toBe("function");
+      expect(typeof deps.writeLicenseSnapshotFile).toBe("function");
+
+      // Pure path resolution is safe to call directly — no disk I/O, no network.
+      const path = deps.resolveLicenseSnapshotFilePath("data/license-snapshots", "acme", "2025-03");
+      expect(path.replace(/\\/g, "/")).toMatch(/data\/license-snapshots\/acme_2025-03\.json$/);
+
+      // Path traversal in enterpriseSlug/period segments must never escape the configured base directory.
+      const traversalPath = deps.resolveLicenseSnapshotFilePath("data/license-snapshots", "../../etc", "..%2F..");
+      expect(traversalPath.replace(/\\/g, "/")).toContain("data/license-snapshots/");
+      expect(traversalPath.replace(/\\/g, "/")).not.toContain("../");
     });
   });
 });

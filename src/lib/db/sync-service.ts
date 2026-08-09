@@ -29,6 +29,7 @@ import { syncBilling } from "./billing-sync-service";
 import {
   syncLicenseHistoryForEnterprise,
   createDefaultLicenseHistorySyncDeps,
+  captureCurrentLicenseSeatSnapshot,
   type LicenseHistoryEnterpriseSyncResult,
   type LicenseHistorySyncDeps,
   type LicenseHistorySyncProgress,
@@ -111,6 +112,27 @@ export interface MultiEnterpriseSyncResult {
   enterprises: EnterpriseSyncResult[];
   /** Additive summary — never replaces or mutates any existing field above. */
   licensing: { enabled: boolean; enterprises: LicenseHistoryEnterpriseSyncResult[] };
+}
+
+/** Additive licensing summary status the sync API route reports back before the full sync's per-enterprise licensing results are available (Task 9 spec-review fix #3). */
+export interface LicensingSyncStatusSummary {
+  /** Whether historical licensing sync is enabled by the resolved server config — never derived from completion data that isn't available yet. */
+  enabled: boolean;
+  status: "started" | "in_progress";
+}
+
+/**
+ * Build the additive `licensing` field for the sync API route's immediate
+ * ("started") and already-in-progress responses. Derives `enabled` safely
+ * from the resolved server licensing config only — never from completion
+ * data (the completed per-enterprise summary isn't available yet at this
+ * point in the request lifecycle; it remains durable/logged via
+ * `recordLicenseRunDiagnostics` and is exposed by the separate diagnostics
+ * API).
+ */
+export function getLicensingSyncStatusSummary(status: "started" | "in_progress"): LicensingSyncStatusSummary {
+  const enabled = createDefaultLicenseHistorySyncDeps().getConfig().history.enabled;
+  return { enabled, status };
 }
 
 // ── Org auto-discovery ────────────────────────────────────────────────
@@ -741,6 +763,20 @@ export async function fullSync(
     let entSeats = 0;
     if (isCopilotSubEnabledForEnterprise(slug, "seats")) {
       onProgress?.({ phase: "seats", current: 0, total: 1, message: `[${sanitizeForLog(slug)}] Syncing seat data...`, enterpriseSlug: slug });
+      // Task 9 spec-review fix #2: capture the current-month authoritative
+      // license-history seat snapshot BEFORE the legacy `copilot_seats`
+      // table below is replaced (`replaceEnterpriseSeats`) or upserted via
+      // the org fallback (`upsertSeats`) — this is what actually enforces
+      // "current snapshot saved before legacy seat replacement" in
+      // production (see `syncSeatsForEnterprise` below and the module doc
+      // in `license-history-sync-service.ts`). Best-effort: never blocks
+      // or fails the legacy seat sync, and no-ops with zero side effects
+      // when licensing history is disabled.
+      try {
+        await captureCurrentLicenseSeatSnapshot(slug, licensingDeps);
+      } catch (err) {
+        console.error("[Sync] [%s] Pre-seat-replace licensing snapshot capture failed unexpectedly:", sanitizeForLog(slug), err);
+      }
       entSeats = await syncSeatsForEnterprise(slug);
       cache.invalidateByPrefix("/api/seats");
     }
