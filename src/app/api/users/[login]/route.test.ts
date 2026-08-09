@@ -10,6 +10,9 @@ const mockState = vi.hoisted(() => ({
     enterpriseSlugs: ["ent-a"],
   },
   prepare: vi.fn(),
+  copilotAppScalar: { periodActiveUsers: 1, appActiveUsers: 1, supportedRows: 2 },
+  copilotAppDedicated: { sessions: 3, requests: 6, prompts: 9, promptTokens: 240, outputTokens: 120 },
+  copilotAppFeature: { codeGenerations: 5, codeAcceptances: 4, locAdded: 30, locDeleted: 6 },
 }));
 
 vi.mock("@/lib/cache/with-cache", () => ({
@@ -50,7 +53,18 @@ beforeEach(() => {
     allowedLogins: new Set(["octocat"]),
     enterpriseSlugs: ["ent-a"],
   };
+  mockState.copilotAppScalar = { periodActiveUsers: 1, appActiveUsers: 1, supportedRows: 2 };
+  mockState.copilotAppDedicated = { sessions: 3, requests: 6, prompts: 9, promptTokens: 240, outputTokens: 120 };
+  mockState.copilotAppFeature = { codeGenerations: 5, codeAcceptances: 4, locAdded: 30, locDeleted: 6 };
   mockState.prepare.mockImplementation((sql: string) => {
+    if (sql.includes("as completionAccepted")) {
+      return {
+        all: vi.fn(() => [
+          { day: "2024-01-01", completionSuggested: 55, completionAccepted: 65, completionDeleted: 3, completionSuggestedDelete: 2, agentAdded: 20, agentDeleted: 2, compGenCount: 9, compAcceptCount: 3, appAdded: 3, appDeleted: 1, appGenCount: 1, appAcceptCount: 1 },
+          { day: "2024-01-02", completionSuggested: 58, completionAccepted: 75, completionDeleted: 4, completionSuggestedDelete: 3, agentAdded: 20, agentDeleted: 3, compGenCount: 9, compAcceptCount: 3, appAdded: 2, appDeleted: 0, appGenCount: 0, appAcceptCount: 0 },
+        ]),
+      };
+    }
     if (sql.includes("SELECT day,")) {
       return {
         all: vi.fn(() => [
@@ -118,6 +132,7 @@ beforeEach(() => {
           compLocSuggested: 120,
           compLocAccepted: 110,
           compLocDeleted: 5,
+          compLocSuggestedDelete: 2,
           compCodeGen: 18,
           compCodeAccept: 9,
         })),
@@ -178,6 +193,25 @@ beforeEach(() => {
         })),
       };
     }
+    // Copilot App — getCopilotAppUserSummary issues three independent
+    // queries (scalar counts, dedicated totals_by_copilot_app sums, and
+    // copilot_app feature-code sums). Match each by a substring unique to
+    // that query's SELECT list.
+    if (sql.includes("as periodActiveUsers")) {
+      return {
+        get: vi.fn(() => mockState.copilotAppScalar),
+      };
+    }
+    if (sql.includes("as promptTokens")) {
+      return {
+        get: vi.fn(() => mockState.copilotAppDedicated),
+      };
+    }
+    if (sql.includes("as codeGenerations")) {
+      return {
+        get: vi.fn(() => mockState.copilotAppFeature),
+      };
+    }
     throw new Error(`Unexpected SQL: ${sql}`);
   });
 });
@@ -192,7 +226,15 @@ describe("user detail route", { timeout: 10000 }, () => {
     const response = await GET(new NextRequest("http://localhost/api/users/octocat?days=7"));
 
     expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toEqual({
+    const body = await response.json();
+    // completionLocSuggested (55/58, from getCompletionDailyTrend's strict
+    // IS_COMPLETION_SQL allowlist) must be strictly less than the top-level
+    // locSuggested (60/60, loc_suggested_to_add_sum across ALL features) in
+    // this fixture — proving copilot_app/chat_inline/unknown suggested LoC
+    // that inflates the top-level field never leaks into completionLocSuggested.
+    expect(body.dailyActivity[0].completionLocSuggested).toBeLessThan(body.dailyActivity[0].locSuggested);
+    expect(body.dailyActivity[1].completionLocSuggested).toBeLessThan(body.dailyActivity[1].locSuggested);
+    expect(body).toEqual({
       user: "octocat",
       dailyActivity: [
         {
@@ -207,6 +249,12 @@ describe("user detail route", { timeout: 10000 }, () => {
           aiCreditsUsed: 1,
           agentLocAdded: 20,
           agentLocDeleted: 2,
+          completionLocSuggested: 55,
+          completionLocAccepted: 65,
+          completionLocDeleted: 3,
+          completionLocSuggestedDelete: 2,
+          appLocAdded: 3,
+          appLocDeleted: 1,
         },
         {
           day: "2024-01-02",
@@ -220,6 +268,12 @@ describe("user detail route", { timeout: 10000 }, () => {
           aiCreditsUsed: 0.5,
           agentLocAdded: 20,
           agentLocDeleted: 3,
+          completionLocSuggested: 58,
+          completionLocAccepted: 75,
+          completionLocDeleted: 4,
+          completionLocSuggestedDelete: 3,
+          appLocAdded: 2,
+          appLocDeleted: 0,
         },
       ],
       summary: {
@@ -238,6 +292,7 @@ describe("user detail route", { timeout: 10000 }, () => {
         totalLocSuggested: 120,
         completionLocAccepted: 110,
         completionLocDeleted: 5,
+        completionLocSuggestedDelete: 2,
         completionAcceptanceRate: 50,
         usedAgent: true,
         usedChat: true,
@@ -245,6 +300,7 @@ describe("user detail route", { timeout: 10000 }, () => {
         usedCodeReview: false,
         usedCodingAgent: true,
         usedCodeReviewPassive: false,
+        usedCopilotApp: true,
       },
       topLanguages: [
         { language: "TypeScript", suggestions: 12, acceptances: 6 },
@@ -276,6 +332,18 @@ describe("user detail route", { timeout: 10000 }, () => {
         prompts: 7,
         promptTokens: 100,
         outputTokens: 200,
+      },
+      copilotAppStats: {
+        sessions: 3,
+        requests: 6,
+        prompts: 9,
+        promptTokens: 240,
+        outputTokens: 120,
+        avgTokensPerRequest: 60, // (240 + 120) / 6
+        codeGenerations: 5,
+        codeAcceptances: 4,
+        locAdded: 30,
+        locDeleted: 6,
       },
     });
   });

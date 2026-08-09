@@ -102,6 +102,25 @@ describe("shared UI surfaces", () => {
     });
   });
 
+  it("finds and navigates to Copilot App Analytics by label and by keyword", async () => {
+    render(<CommandPalette />);
+
+    fireEvent.keyDown(document, { key: "k", ctrlKey: true });
+    const dialog = await screen.findByRole("dialog", { name: "Search dashboard pages" });
+    const input = screen.getByPlaceholderText(/Search pages/i);
+
+    fireEvent.change(input, { target: { value: "Copilot App" } });
+    expect(screen.getByText("Copilot App Analytics")).toBeInTheDocument();
+    expect(screen.getByText("App adoption, sessions, prompts, tokens, and code impact")).toBeInTheDocument();
+
+    // Also matches via a distinctive keyword, not just the label text.
+    fireEvent.change(input, { target: { value: "adopters" } });
+    expect(screen.getByText("Copilot App Analytics")).toBeInTheDocument();
+
+    fireEvent.keyDown(dialog, { key: "Enter" });
+    expect(pushMock).toHaveBeenCalledWith("/dashboard/copilot-app");
+  });
+
   it("renders direct export buttons and dropdown exports", async () => {
     const exportCSV = vi.fn().mockResolvedValue(undefined);
     const exportPDF = vi.fn().mockResolvedValue(undefined);

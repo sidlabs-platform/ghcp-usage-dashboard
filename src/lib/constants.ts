@@ -39,11 +39,24 @@ export const CHART_COLORS = {
   human: "#3b82f6",
   copilot: "#8b5cf6",
   copilotReviewed: "#f59e0b",  // amber-500 — Copilot-reviewed PRs
+
+  // Copilot App surface (distinct from completion/agent, per code-generation classification)
+  copilotApp: "#f97316",  // orange-500
+  // App "Deleted" series — a distinct, accessible/differentiable named color
+  // (not a lightened tint of copilotApp) so it doesn't read as a washed-out
+  // duplicate of the "added" series; paired with a dashed stroke in charts.
+  copilotAppDeleted: "#c2410c", // orange-800
 } as const;
 
 export const FEATURE_LABELS: Record<string, string> = {
   code_completion: "Code Completions",
   inline_chat: "Inline Chat",
+  // Legacy/alternate feature name for inline chat, distinct from `inline_chat`.
+  // Kept here only so this broad display label renders correctly wherever raw
+  // feature usage is shown; it is intentionally excluded from IS_COMPLETION_SQL/
+  // isCompletionFeature() completion-acceptance classification — it is not part
+  // of this codebase's explicit completion allowlist, so it must never be
+  // added to that allowlist.
   chat_inline: "Inline Chat",
   chat_panel: "Chat Panel",
   chat_panel_ask_mode: "Chat – Ask",
@@ -53,6 +66,7 @@ export const FEATURE_LABELS: Record<string, string> = {
   chat_panel_custom_mode: "Chat – Custom",
   chat_panel_unknown_mode: "Chat – Unknown",
   agent_edit: "Agent Edit",
+  copilot_app: "Copilot App",
 };
 
 export const CHAT_MODE_LABELS: Record<string, string> = {
@@ -106,4 +120,18 @@ export const AI_CREDIT_COVERAGE_NOTE = {
   effectiveDate: "2026-07-02",
   message:
     "AI-credit coverage improved on 2026-07-02 (org-less and server-side-only usage now counted); totals for earlier periods may undercount.",
+} as const;
+
+/**
+ * Data-quality caveat surfaced on the Copilot App Analytics page. GitHub's
+ * July 28, 2026 usage-metrics expansion attributes Copilot App activity to
+ * individual users and adds `copilot_app` to feature, model, and language
+ * rollups. Date ranges predating this rollout will have no per-user App
+ * attribution, so the page must not silently present that gap as zero usage.
+ * @see https://github.blog/changelog/2026-07-28-github-copilot-app-usage-metrics-now-expand-across-report-rollups/
+ */
+export const COPILOT_APP_ROLLUP_NOTE = {
+  effectiveDate: "2026-07-28",
+  message:
+    "User attribution and feature, model, language, and code rollups for Copilot App activity are available from 2026-07-28 onward.",
 } as const;

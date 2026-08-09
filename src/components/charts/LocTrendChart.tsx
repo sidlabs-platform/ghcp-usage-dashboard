@@ -14,15 +14,27 @@ import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/com
 import { CHART_COLORS } from "@/lib/constants";
 
 interface LocTrendChartProps {
-  data: { day: string; completionSuggested: number; completionAccepted: number; agentAdded: number; agentDeleted: number }[];
+  data: {
+    day: string;
+    completionSuggested: number;
+    completionAccepted: number;
+    agentAdded: number;
+    agentDeleted: number;
+    appAdded?: number;
+    appDeleted?: number;
+  }[];
 }
 
 export function LocTrendChart({ data }: LocTrendChartProps) {
+  const hasAppData = data.some(
+    (point) => point.appAdded !== undefined || point.appDeleted !== undefined,
+  );
+
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Lines of Code — Completion vs Agent</CardTitle>
-        <CardDescription>Code completions (suggested/accepted) shown separately from agent-written code</CardDescription>
+        <CardTitle>Lines of Code by Surface</CardTitle>
+        <CardDescription>Code completions (suggested/accepted), agent-written code, and Copilot App code shown separately</CardDescription>
       </CardHeader>
       <CardContent>
         <div className="h-80">
@@ -77,6 +89,32 @@ export function LocTrendChart({ data }: LocTrendChartProps) {
                 fill={CHART_COLORS.danger}
                 fillOpacity={0.1}
               />
+              {hasAppData && (
+                <>
+                  <Area
+                    type="monotone"
+                    dataKey="appAdded"
+                    name="App Added"
+                    stroke={CHART_COLORS.copilotApp}
+                    fill={CHART_COLORS.copilotApp}
+                    fillOpacity={0.15}
+                  />
+                  {/* Related-but-distinct shade (orange-500/orange-800) for the App "Deleted"
+                      series, so it reads as part of the same App surface family as
+                      CHART_COLORS.copilotApp above without being a washed-out duplicate;
+                      paired with strokeDasharray to further differentiate it at a glance.
+                      See CHART_COLORS.copilotAppDeleted in constants.ts for the full rationale. */}
+                  <Area
+                    type="monotone"
+                    dataKey="appDeleted"
+                    name="App Deleted"
+                    stroke={CHART_COLORS.copilotAppDeleted}
+                    fill={CHART_COLORS.copilotAppDeleted}
+                    strokeDasharray="5 5"
+                    fillOpacity={0.1}
+                  />
+                </>
+              )}
             </AreaChart>
           </ResponsiveContainer>
         </div>

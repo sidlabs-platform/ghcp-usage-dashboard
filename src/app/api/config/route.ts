@@ -58,6 +58,11 @@ export async function GET() {
       ? isCopilotSubEnabledForAnyEnterprise("seats")
       : isCopilotSubEnabled("seats")),
     ideLanguages: userMetrics,
+    // Copilot App analytics has an enterprise/org aggregate fallback (KPIs and
+    // trends only) that works without user-level metrics — gate on the base
+    // copilot metric, not `userMetrics`, so the page stays visible when only
+    // aggregate data is available.
+    copilotApp: copilotEnabled,
     security: securityEnabled,
     billing: billingEnabled,
     billingUsage: billingEnabled && (multiEnt

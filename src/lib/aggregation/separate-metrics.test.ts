@@ -2,12 +2,14 @@ import { describe, it, expect } from "vitest";
 import {
   extractCompletionMetrics,
   extractAgentMetrics,
+  extractCopilotAppMetrics,
   separateMetrics,
   aggregateSeparatedMetrics,
   isCompletionFeature,
   isAgentFeature,
+  isCopilotAppFeature,
 } from "./separate-metrics";
-import type { TotalsByFeature } from "@/lib/types/metrics";
+import type { TotalsByFeature, UserDayRecord } from "@/lib/types/metrics";
 
 // ── Helpers ───────────────────────────────────────────────────────────
 
@@ -50,6 +52,10 @@ describe("isCompletionFeature", () => {
     expect(isCompletionFeature("agent_edit")).toBe(false);
     expect(isCompletionFeature("unknown_feature")).toBe(false);
   });
+
+  it("rejects copilot_app — App activity is not a completion feature", () => {
+    expect(isCompletionFeature("copilot_app")).toBe(false);
+  });
 });
 
 describe("isAgentFeature", () => {
@@ -60,6 +66,23 @@ describe("isAgentFeature", () => {
   it("rejects completion features", () => {
     expect(isAgentFeature("code_completion")).toBe(false);
     expect(isAgentFeature("chat_panel_agent_mode")).toBe(false);
+  });
+
+  it("rejects copilot_app", () => {
+    expect(isAgentFeature("copilot_app")).toBe(false);
+  });
+});
+
+describe("isCopilotAppFeature", () => {
+  it("matches only copilot_app", () => {
+    expect(isCopilotAppFeature("copilot_app")).toBe(true);
+  });
+
+  it("rejects completion and agent features", () => {
+    expect(isCopilotAppFeature("code_completion")).toBe(false);
+    expect(isCopilotAppFeature("chat_panel_agent_mode")).toBe(false);
+    expect(isCopilotAppFeature("agent_edit")).toBe(false);
+    expect(isCopilotAppFeature("unknown_feature")).toBe(false);
   });
 });
 
@@ -174,6 +197,54 @@ describe("extractAgentMetrics", () => {
   });
 });
 
+// ── extractCopilotAppMetrics ──────────────────────────────────────────
+
+describe("extractCopilotAppMetrics", () => {
+  it("returns zeros for empty array", () => {
+    expect(extractCopilotAppMetrics([])).toEqual({
+      locAdded: 0,
+      locDeleted: 0,
+      codeGenCount: 0,
+      codeAcceptCount: 0,
+    });
+  });
+
+  it("extracts only copilot_app features", () => {
+    const features = [
+      makeFeature("code_completion", { loc_added_sum: 100, code_generation_activity_count: 50, code_acceptance_activity_count: 40 }),
+      makeFeature("agent_edit", { loc_added_sum: 300, loc_deleted_sum: 50 }),
+      makeFeature("copilot_app", {
+        loc_added_sum: 75,
+        loc_deleted_sum: 12,
+        code_generation_activity_count: 9,
+        code_acceptance_activity_count: 6,
+      }),
+    ];
+    const result = extractCopilotAppMetrics(features);
+    expect(result.locAdded).toBe(75);
+    expect(result.locDeleted).toBe(12);
+    expect(result.codeGenCount).toBe(9);
+    expect(result.codeAcceptCount).toBe(6);
+  });
+
+  it("handles null fields via || 0", () => {
+    const features = [
+      makeFeature("copilot_app", {
+        loc_added_sum: null as unknown as number,
+        loc_deleted_sum: undefined as unknown as number,
+        code_generation_activity_count: null as unknown as number,
+        code_acceptance_activity_count: undefined as unknown as number,
+      }),
+    ];
+    expect(extractCopilotAppMetrics(features)).toEqual({
+      locAdded: 0,
+      locDeleted: 0,
+      codeGenCount: 0,
+      codeAcceptCount: 0,
+    });
+  });
+});
+
 // ── separateMetrics ───────────────────────────────────────────────────
 
 describe("separateMetrics", () => {
@@ -186,6 +257,26 @@ describe("separateMetrics", () => {
     expect(result.totalLocAdded).toBe(250);
     expect(result.completion.locAccepted).toBe(50);
     expect(result.agent.locAdded).toBe(200);
+    expect(result.copilotApp).toEqual({ locAdded: 0, locDeleted: 0, codeGenCount: 0, codeAcceptCount: 0 });
+  });
+
+  it("includes copilot_app loc in totalLocAdded and keeps it out of completion/agent", () => {
+    const features = [
+      makeFeature("code_completion", { loc_added_sum: 50, code_generation_activity_count: 10, code_acceptance_activity_count: 8 }),
+      makeFeature("agent_edit", { loc_added_sum: 200, loc_deleted_sum: 30 }),
+      makeFeature("copilot_app", { loc_added_sum: 40, loc_deleted_sum: 5, code_generation_activity_count: 4, code_acceptance_activity_count: 3 }),
+    ];
+    const result = separateMetrics(features);
+    expect(result.copilotApp.locAdded).toBe(40);
+    expect(result.copilotApp.locDeleted).toBe(5);
+    expect(result.copilotApp.codeGenCount).toBe(4);
+    expect(result.copilotApp.codeAcceptCount).toBe(3);
+    // copilot_app must not leak into completion or agent metrics
+    expect(result.completion.locAccepted).toBe(50);
+    expect(result.completion.codeGenCount).toBe(10);
+    expect(result.agent.locAdded).toBe(200);
+    // total includes App LoC added
+    expect(result.totalLocAdded).toBe(290); // 50 + 200 + 40
   });
 });
 
@@ -196,6 +287,7 @@ describe("aggregateSeparatedMetrics", () => {
     const result = aggregateSeparatedMetrics([]);
     expect(result.completion.locAccepted).toBe(0);
     expect(result.agent.locAdded).toBe(0);
+    expect(result.copilotApp.locAdded).toBe(0);
     expect(result.totalLocAdded).toBe(0);
   });
 
@@ -278,5 +370,37 @@ describe("aggregateSeparatedMetrics", () => {
     expect(result.completion.codeGenCount).toBe(0);
     expect(result.agent.locAdded).toBe(0);
     expect(result.agent.locDeleted).toBe(0);
+  });
+
+  it("aggregates copilot_app metrics across records and keeps them isolated from completion/agent", () => {
+    const records = [
+      {
+        totals_by_feature: [
+          makeFeature("code_completion", { loc_added_sum: 10, code_generation_activity_count: 5, code_acceptance_activity_count: 3 }),
+          makeFeature("agent_edit", { loc_added_sum: 20, loc_deleted_sum: 5 }),
+          makeFeature("copilot_app", { loc_added_sum: 8, loc_deleted_sum: 1, code_generation_activity_count: 2, code_acceptance_activity_count: 1 }),
+        ],
+      },
+      {
+        totals_by_feature: [
+          makeFeature("code_completion", { loc_added_sum: 30, code_generation_activity_count: 15, code_acceptance_activity_count: 12 }),
+          makeFeature("copilot_app", { loc_added_sum: 12, loc_deleted_sum: 3, code_generation_activity_count: 4, code_acceptance_activity_count: 2 }),
+        ],
+      },
+    ] as unknown as UserDayRecord[];
+
+    const result = aggregateSeparatedMetrics(records);
+    expect(result.copilotApp.locAdded).toBe(20); // 8 + 12
+    expect(result.copilotApp.locDeleted).toBe(4); // 1 + 3
+    expect(result.copilotApp.codeGenCount).toBe(6); // 2 + 4
+    expect(result.copilotApp.codeAcceptCount).toBe(3); // 1 + 2
+    // App activity must not affect completion counts
+    expect(result.completion.locAccepted).toBe(40); // 10 + 30, App excluded
+    expect(result.completion.codeGenCount).toBe(20); // 5 + 15, App excluded
+    expect(result.completion.acceptanceRate).toBe(75); // 15/20 * 100, unaffected by App
+    // Agent stays isolated too
+    expect(result.agent.locAdded).toBe(20);
+    // Total includes completion + agent + App added
+    expect(result.totalLocAdded).toBe(80); // 40 (completion) + 20 (agent) + 20 (app)
   });
 });

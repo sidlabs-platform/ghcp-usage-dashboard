@@ -80,6 +80,22 @@ describe("core UI coverage", () => {
     expect(screen.getByText("icon")).toBeInTheDocument();
   });
 
+  it("renders format=\"raw\" numeric values as exact locale-formatted integers, not abbreviated", () => {
+    // Regression test: format="raw" must show the exact value (e.g. 3456 ->
+    // "3,456"), never an abbreviated form (e.g. "3.5K") — abbreviation is
+    // only correct for the default "number" format.
+    render(<MetricCard title="Weighted Tokens / Request" value={3456} format="raw" />);
+
+    expect(screen.getByText("3,456")).toBeInTheDocument();
+    expect(screen.queryByText("3.5K")).not.toBeInTheDocument();
+  });
+
+  it("still abbreviates large values for the default \"number\" format", () => {
+    render(<MetricCard title="Requests" value={3456} />);
+
+    expect(screen.getByText("3.5K")).toBeInTheDocument();
+  });
+
   it("renders chart tooltips only when active and formats labels and values", () => {
     const inactive = render(
       <ChartTooltip

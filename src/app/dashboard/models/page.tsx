@@ -204,6 +204,10 @@ export default function ModelsPage() {
           <Link href="/dashboard/chat-modes" className="text-sm text-[hsl(var(--primary))] hover:underline">
             Copilot Features →
           </Link>
+          <span className="text-[hsl(var(--border))]">·</span>
+          <Link href="/dashboard/copilot-app" className="text-sm text-[hsl(var(--primary))] hover:underline">
+            Copilot App Analytics →
+          </Link>
         </div>
       </section>
     </div>
