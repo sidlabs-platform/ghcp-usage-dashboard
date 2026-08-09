@@ -48,6 +48,13 @@ const SEARCH_INDEX: SearchEntry[] = [
     section: "Dashboard",
   },
   {
+    href: "/dashboard/copilot-app",
+    label: "Copilot App Analytics",
+    description: "App adoption, sessions, prompts, tokens, and code impact",
+    keywords: ["Copilot App", "app", "sessions", "prompts", "tokens", "adopters"],
+    section: "Dashboard",
+  },
+  {
     href: "/dashboard/cli",
     label: "CLI Analytics",
     description: "Command-line Copilot sessions and token usage",

@@ -22,6 +22,7 @@ import {
   Zap,
   TrendingUp,
   ScrollText,
+  AppWindow,
 } from "lucide-react";
 import { useState, useEffect } from "react";
 
@@ -46,6 +47,7 @@ const navGroups: NavGroup[] = [
       { href: "/dashboard/chat-modes", label: "Copilot Features", icon: Sparkles, visKey: "chatModes" },
       { href: "/dashboard/adoption-cohorts", label: "AI Adoption", icon: TrendingUp, visKey: "adoptionCohorts" },
       { href: "/dashboard/models", label: "Model Statistics", icon: Brain, visKey: "models" },
+      { href: "/dashboard/copilot-app", label: "Copilot App", icon: AppWindow, visKey: "copilotApp" },
     ],
   },
   {

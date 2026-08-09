@@ -170,6 +170,7 @@ describe("layout coverage", () => {
             billingUsage: false,
             billingPremium: false,
             cli: true,
+            copilotApp: true,
           },
         });
       }
@@ -187,11 +188,53 @@ describe("layout coverage", () => {
     await screen.findByText("Enterprise A");
     expect(screen.getByText("Usage Analytics")).toBeInTheDocument();
     expect(screen.getByText("CLI Analytics").closest("a")).toHaveAttribute("href", "/dashboard/cli");
+    expect(screen.getByText("Copilot App").closest("a")).toHaveAttribute("href", "/dashboard/copilot-app");
     expect(screen.getByText("AI Credits by User").closest("a")).toHaveAttribute("href", "/dashboard/ai-credits-users");
     expect(screen.getByText("AI Credits by User").closest("a")).toHaveClass("border-l-2");
     expect(screen.queryByText("Billing")).not.toBeInTheDocument();
     expect(screen.queryByText("AI Credits")).not.toBeInTheDocument();
   });
+
+  it("hides the Copilot App nav item and highlights it as active when visible on its own page", async () => {
+    mockState.pathname = "/dashboard/copilot-app";
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      if (String(input) === "/api/config") {
+        return mockJsonResponse({ pageVisibility: { copilotApp: false } });
+      }
+      if (String(input) === "/api/filters") {
+        return mockJsonResponse({ enterprises: [] });
+      }
+      throw new Error(`Unexpected fetch: ${String(input)}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<Sidebar />);
+
+    await waitFor(() => {
+      expect(screen.queryByText("Copilot App")).not.toBeInTheDocument();
+    });
+  });
+
+  it("marks the Copilot App nav item active while on its detail page", async () => {
+    mockState.pathname = "/dashboard/copilot-app";
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      if (String(input) === "/api/config") {
+        return mockJsonResponse({ pageVisibility: { copilotApp: true } });
+      }
+      if (String(input) === "/api/filters") {
+        return mockJsonResponse({ enterprises: [] });
+      }
+      throw new Error(`Unexpected fetch: ${String(input)}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<Sidebar />);
+
+    const link = await screen.findByText("Copilot App");
+    expect(link.closest("a")).toHaveAttribute("href", "/dashboard/copilot-app");
+    expect(link.closest("a")).toHaveClass("border-l-2");
+  });
+
 
   it("supports collapsed sidebar mode and multi-enterprise labels", async () => {
     const fetchMock = vi.fn((input: RequestInfo | URL) => {
