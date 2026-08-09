@@ -1,6 +1,15 @@
 "use client";
 
+// Historical License & AI Credits reconciliation dashboard — a 3-tab
+// (Overview / Period Detail / Data Quality) refinement of the original
+// single-view page. This file owns all query state (active tab, view,
+// pagination/sort/search/filters, fetch/retry, the raw API response, refs,
+// and export params) and composes the presentational
+// `src/components/licensing/*` components, which own row/filter/quality/run
+// rendering.
+
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { KeyboardEvent } from "react";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { MetricCard } from "@/components/cards/MetricCard";
 import { Card } from "@/components/ui/card";
@@ -9,6 +18,10 @@ import { ExportMenu } from "@/components/ui/ExportMenu";
 import { useDateRange } from "@/contexts/DateRangeContext";
 import { useScope } from "@/contexts/ScopeContext";
 import { safeNum } from "@/lib/utils";
+import { LicensePeriodFilters } from "@/components/licensing/LicensePeriodFilters";
+import { LicenseReconciliationTable, type TablePagination } from "@/components/licensing/LicenseReconciliationTable";
+import { LicenseDataQualityPanel, type DataQualityCoverage } from "@/components/licensing/LicenseDataQualityPanel";
+import { LicenseRunHistory } from "@/components/licensing/LicenseRunHistory";
 import {
   CreditCard,
   Users,
@@ -16,7 +29,6 @@ import {
   Zap,
   Gauge,
   AlertTriangle,
-  Search,
   Building2,
   BadgeCheck,
 } from "lucide-react";
@@ -26,72 +38,78 @@ import type {
   LicenseGroupBreakdown,
   UtilizationBucket,
 } from "@/lib/types/licensing";
-
-interface PaginationInfo {
-  page: number;
-  pageSize: number;
-  totalItems: number;
-  totalPages: number;
-}
+import type { LicensePeriodRowRecord, LicenseRollupRowRecord } from "@/lib/db/license-history-repo";
+import type { LicenseRunReportObject } from "@/lib/db/license-run-repo";
 
 const PAGE_SIZE = 50;
 
-interface SortHeaderProps {
-  col: string;
-  label: string;
-  align?: "left" | "right";
-  sort: string;
-  sortDir: "asc" | "desc";
-  onSort: (col: string) => void;
+type TabId = "overview" | "detail" | "quality";
+
+const TABS: { id: TabId; label: string }[] = [
+  { id: "overview", label: "Overview" },
+  { id: "detail", label: "Period Detail" },
+  { id: "quality", label: "Data Quality" },
+];
+
+interface Coverage {
+  mode: string;
+  periods: string[];
+  view: string;
 }
 
-function SortHeader({ col, label, align = "left", sort, sortDir, onSort }: SortHeaderProps) {
-  const isSorted = sort === col;
-  const alignClass = align === "right" ? "text-right" : "text-left";
-
-  return (
-    <th
-      className={alignClass}
-      aria-sort={isSorted ? (sortDir === "asc" ? "ascending" : "descending") : "none"}
-    >
-      <button
-        type="button"
-        className={`w-full px-3 py-3 flex items-center gap-1 ${align === "right" ? "justify-end" : ""} text-xs font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wider cursor-pointer hover:text-[hsl(var(--foreground))] select-none`}
-        onClick={() => onSort(col)}
-      >
-        {label}
-        {isSorted && <span>{sortDir === "asc" ? "↑" : "↓"}</span>}
-      </button>
-    </th>
-  );
-}
+/** Discriminated union of the row shapes `LicenseReconciliationTable` accepts, keyed on the resolved view. */
+type ReconciliationTableRows =
+  | { view: "detail"; rows: LicensePeriodRowRecord[] }
+  | { view: "rollup"; rows: LicenseRollupRowRecord[] }
+  | { view: "legacy"; rows: LicenseReconciliationRow[] };
 
 export default function LicenseReconciliationPage() {
-  const { days } = useDateRange();
-  const { hasFilter, buildScopeParams, selectedEntTeams, selectedOrgTeams, selectedOrgs } = useScope();
+  const { mode: dateMode, days, startDate, endDate } = useDateRange();
+  const { hasFilter, buildScopeParams, selectedEntTeams, selectedOrgTeams, selectedOrgs, selectedEnterprises, filterOptions } =
+    useScope();
 
-  const [kpis, setKpis] = useState<LicenseReconciliationKPIs | null>(null);
-  const [rows, setRows] = useState<LicenseReconciliationRow[]>([]);
-  const [planBreakdown, setPlanBreakdown] = useState<LicenseGroupBreakdown[]>([]);
-  const [orgBreakdown, setOrgBreakdown] = useState<LicenseGroupBreakdown[]>([]);
-  const [utilizationBuckets, setUtilizationBuckets] = useState<UtilizationBucket[]>([]);
-  const [pagination, setPagination] = useState<PaginationInfo>({ page: 1, pageSize: PAGE_SIZE, totalItems: 0, totalPages: 0 });
-  const [currency, setCurrency] = useState("USD");
-  const [loading, setLoading] = useState(true);
-  const [enabled, setEnabled] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  // ── Tab state ────────────────────────────────────────────────────────
+  const [activeTab, setActiveTab] = useState<TabId>("overview");
+  const tabRefs = useRef<(HTMLButtonElement | null)[]>([]);
 
+  // ── Query state (owned by the page; components are fully controlled) ──
+  const [view, setView] = useState<"detail" | "rollup">("detail");
+  const [periods, setPeriods] = useState<string[]>([]);
   const [search, setSearch] = useState("");
-  const [searchInput, setSearchInput] = useState("");
+  const [planTypes, setPlanTypes] = useState<string[]>([]);
+  const [accountStates, setAccountStates] = useState<string[]>([]);
+  const [seatStatuses, setSeatStatuses] = useState<string[]>([]);
+  const [historyConfidence, setHistoryConfidence] = useState<string[]>([]);
   const [sort, setSort] = useState("total_cost");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
   const [page, setPage] = useState(1);
 
-  const kpiRef = useRef<HTMLDivElement>(null);
-  const chartsRef = useRef<HTMLDivElement>(null);
-  const tableRef = useRef<HTMLDivElement>(null);
+  // ── Fetched response state ──────────────────────────────────────────
+  const [kpis, setKpis] = useState<LicenseReconciliationKPIs | null>(null);
+  const [rows, setRows] = useState<(LicensePeriodRowRecord | LicenseRollupRowRecord | LicenseReconciliationRow)[]>([]);
+  const [planBreakdown, setPlanBreakdown] = useState<LicenseGroupBreakdown[]>([]);
+  const [orgBreakdown, setOrgBreakdown] = useState<LicenseGroupBreakdown[]>([]);
+  const [utilizationBuckets, setUtilizationBuckets] = useState<UtilizationBucket[]>([]);
+  const [pagination, setPagination] = useState<TablePagination>({ page: 1, pageSize: PAGE_SIZE, totalItems: 0, totalPages: 0 });
+  const [currency, setCurrency] = useState("USD");
+  const [coverage, setCoverage] = useState<Coverage | null>(null);
+  const [dataSource, setDataSource] = useState<string>("historical");
+  const [warnings, setWarnings] = useState<string[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [enabled, setEnabled] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  // ── Data quality / run drilldown state ──────────────────────────────
+  const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
+  const [selectedRunReport, setSelectedRunReport] = useState<LicenseRunReportObject | null>(null);
+  const [runReportLoading, setRunReportLoading] = useState(false);
+
+  const overviewRef = useRef<HTMLDivElement>(null);
+  const qualityRef = useRef<HTMLDivElement>(null);
   const pageRef = useRef(page);
   const skipNextFetch = useRef(false);
+
+  const activeEnterprise = selectedEnterprises[0] ?? filterOptions.enterprises[0]?.slug ?? null;
 
   const fmtMoney = useCallback(
     (v: number) => {
@@ -111,16 +129,44 @@ export default function LicenseReconciliationPage() {
 
   const buildParams = useCallback(() => {
     const p = new URLSearchParams();
-    p.set("days", String(days));
+    if (periods.length > 0) {
+      p.set("periods", periods.join(","));
+    } else if (dateMode === "custom") {
+      p.set("startDate", startDate);
+      p.set("endDate", endDate);
+    } else {
+      p.set("days", String(days));
+    }
+    p.set("view", view);
     p.set("page", String(page));
     p.set("pageSize", String(PAGE_SIZE));
     p.set("sort", sort);
     p.set("sortDir", sortDir);
     if (search) p.set("search", search);
+    if (planTypes.length > 0) p.set("plan", planTypes.join(","));
+    if (accountStates.length > 0) p.set("accountState", accountStates.join(","));
+    if (seatStatuses.length > 0) p.set("seatStatus", seatStatuses.join(","));
+    if (historyConfidence.length > 0) p.set("historyConfidence", historyConfidence.join(","));
     const scopeParams = buildScopeParams();
     scopeParams.forEach((v, k) => p.set(k, v));
     return p;
-  }, [days, page, sort, sortDir, search, buildScopeParams]);
+  }, [
+    periods,
+    dateMode,
+    startDate,
+    endDate,
+    days,
+    view,
+    page,
+    sort,
+    sortDir,
+    search,
+    planTypes,
+    accountStates,
+    seatStatuses,
+    historyConfidence,
+    buildScopeParams,
+  ]);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -143,9 +189,11 @@ export default function LicenseReconciliationPage() {
       setOrgBreakdown(data.orgBreakdown || []);
       setUtilizationBuckets(data.utilizationBuckets || []);
       setPagination(data.pagination || { page: 1, pageSize: PAGE_SIZE, totalItems: 0, totalPages: 0 });
+      setCoverage(data.coverage || null);
+      setDataSource(data.dataSource || "historical");
+      setWarnings(data.warnings || []);
       if (data.config?.currency) setCurrency(data.config.currency);
-    } catch (err) {
-      console.error("Failed to load license reconciliation:", err);
+    } catch {
       setError("Failed to load reconciliation data");
     } finally {
       setLoading(false);
@@ -159,7 +207,24 @@ export default function LicenseReconciliationPage() {
       skipNextFetch.current = true;
       setPage(1);
     }
-  }, [search, sort, sortDir, days, hasFilter, selectedEntTeams, selectedOrgTeams, selectedOrgs]);
+  }, [
+    search,
+    sort,
+    sortDir,
+    days,
+    startDate,
+    endDate,
+    periods,
+    view,
+    planTypes,
+    accountStates,
+    seatStatuses,
+    historyConfidence,
+    hasFilter,
+    selectedEntTeams,
+    selectedOrgTeams,
+    selectedOrgs,
+  ]);
   useEffect(() => {
     if (skipNextFetch.current) {
       skipNextFetch.current = false;
@@ -171,6 +236,40 @@ export default function LicenseReconciliationPage() {
   const handleSort = (col: string) => {
     if (sort === col) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
     else { setSort(col); setSortDir("desc"); }
+  };
+
+  const handleClearFilters = () => {
+    setSearch("");
+    setPlanTypes([]);
+    setAccountStates([]);
+    setSeatStatuses([]);
+    setHistoryConfidence([]);
+    setPeriods([]);
+  };
+
+  const handleSelectRun = (runId: string) => {
+    setSelectedRunId(runId);
+    setRunReportLoading(true);
+  };
+
+  const handleReportChange = (report: LicenseRunReportObject | null) => {
+    setSelectedRunReport(report);
+    setRunReportLoading(false);
+  };
+
+  // ── Tab keyboard navigation (ArrowLeft/ArrowRight/Home/End, wraparound) ──
+  const handleTabKeyDown = (event: KeyboardEvent<HTMLButtonElement>, index: number) => {
+    let nextIndex: number | null = null;
+    if (event.key === "ArrowRight") nextIndex = (index + 1) % TABS.length;
+    else if (event.key === "ArrowLeft") nextIndex = (index - 1 + TABS.length) % TABS.length;
+    else if (event.key === "Home") nextIndex = 0;
+    else if (event.key === "End") nextIndex = TABS.length - 1;
+
+    if (nextIndex !== null) {
+      event.preventDefault();
+      tabRefs.current[nextIndex]?.focus();
+      setActiveTab(TABS[nextIndex].id);
+    }
   };
 
   const csvColumns = useMemo(
@@ -205,6 +304,13 @@ export default function LicenseReconciliationPage() {
         <div className="text-center py-16 text-[hsl(var(--muted-foreground))]">
           <AlertTriangle className="h-16 w-16 mx-auto mb-4 opacity-40" />
           <p className="text-sm">{error}</p>
+          <button
+            type="button"
+            onClick={() => fetchData()}
+            className="mt-4 rounded-md border px-4 py-1.5 text-sm font-medium hover:bg-[hsl(var(--accent))]"
+          >
+            Retry
+          </button>
         </div>
       </div>
     );
@@ -236,7 +342,7 @@ export default function LicenseReconciliationPage() {
     );
   }
 
-  const hasData = !!kpis && kpis.totalUsers > 0;
+  const hasData = !!kpis && (kpis.totalUsers > 0 || pagination.totalItems > 0);
   const maxPlanCredits = Math.max(1, ...planBreakdown.map((p) => Math.max(p.allowanceCredits, p.consumedCredits)));
   const maxBucket = Math.max(1, ...utilizationBuckets.map((b) => b.count));
 
@@ -248,9 +354,21 @@ export default function LicenseReconciliationPage() {
 
   const exportMeta = {
     reportName: "License & AI Credits Reconciliation",
-    dateRange: `Last ${days} days`,
+    dateRange: periods.length > 0 ? `Periods: ${periods.join(", ")}` : `Last ${days} days`,
+    view,
     ...(hasFilter && { teams: [...selectedEntTeams, ...selectedOrgTeams].join(", "), orgs: selectedOrgs.join(", ") }),
   };
+
+  const effectiveView: "detail" | "rollup" | "legacy" =
+    dataSource === "live_snapshot_only" ? "legacy" : ((coverage?.view as "detail" | "rollup") ?? view);
+  const tableRowsProps: ReconciliationTableRows =
+    effectiveView === "rollup"
+      ? { view: "rollup", rows: rows as LicenseRollupRowRecord[] }
+      : effectiveView === "legacy"
+        ? { view: "legacy", rows: rows as LicenseReconciliationRow[] }
+        : { view: "detail", rows: rows as LicensePeriodRowRecord[] };
+
+  const qualityCoverage: DataQualityCoverage | null = coverage;
 
   return (
     <div className="space-y-8">
@@ -273,7 +391,7 @@ export default function LicenseReconciliationPage() {
             metadata: exportMeta,
           }}
           pdf={{
-            sectionRefs: [kpiRef, chartsRef, tableRef],
+            sectionRefs: [overviewRef, qualityRef],
             title: "License & AI Credits Reconciliation",
             filename: `license-ai-credits-${days}d`,
             metadata: exportMeta,
@@ -282,228 +400,231 @@ export default function LicenseReconciliationPage() {
         />
       </PageHeader>
 
-      {hasFilter && (
-        <div className="rounded-lg border border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-950/30 px-4 py-2 text-sm text-blue-700 dark:text-blue-400">
-          📊 Showing filtered results: <strong>{[...selectedEntTeams, ...selectedOrgTeams, ...selectedOrgs].join(", ")}</strong>
+      {/* ── Tabs ──────────────────────────────────────────────────────── */}
+      <div role="tablist" aria-label="License reconciliation views" className="flex gap-1 border-b">
+        {TABS.map((tab, index) => (
+          <button
+            key={tab.id}
+            ref={(el) => { tabRefs.current[index] = el; }}
+            role="tab"
+            id={`license-tab-${tab.id}`}
+            aria-selected={activeTab === tab.id}
+            aria-controls={`license-panel-${tab.id}`}
+            tabIndex={activeTab === tab.id ? 0 : -1}
+            onClick={() => setActiveTab(tab.id)}
+            onKeyDown={(e) => handleTabKeyDown(e, index)}
+            className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px focus-visible:outline focus-visible:outline-2 focus-visible:outline-[hsl(var(--ring))] ${
+              activeTab === tab.id
+                ? "border-[hsl(var(--primary))] text-[hsl(var(--foreground))]"
+                : "border-transparent text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))]"
+            }`}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </div>
+
+      {/* ── Coverage / status rail ───────────────────────────────────── */}
+      {coverage && (
+        <div
+          className={`rounded-lg border px-4 py-2 text-sm ${
+            coverage.mode === "live_snapshot_only"
+              ? "border-amber-300 bg-amber-50 text-amber-800 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-300"
+              : "border-[hsl(var(--border))] bg-[hsl(var(--muted))]/30 text-[hsl(var(--muted-foreground))]"
+          }`}
+          role={coverage.mode === "live_snapshot_only" ? "alert" : "status"}
+        >
+          {coverage.mode === "live_snapshot_only" ? (
+            <span>
+              Showing live snapshot only — historical periods unavailable until sync completes. This is not a substitute
+              for full history.
+            </span>
+          ) : (
+            <span>
+              Historical coverage: periods <span className="tabular-nums font-medium">{coverage.periods.join(", ")}</span>{" "}
+              · {coverage.view} view · mode: {coverage.mode}
+              {warnings.length > 0 && (
+                <span className="ml-2 text-amber-700 dark:text-amber-400">⚠ {warnings.join("; ")}</span>
+              )}
+            </span>
+          )}
         </div>
       )}
 
-      {!hasData ? (
+      {!hasData && (
         <div className="text-center py-16 text-[hsl(var(--muted-foreground))]">
           <CreditCard className="h-16 w-16 mx-auto mb-4 opacity-40" />
-          <p className="text-sm">No licensed seats found for the selected scope.</p>
-          <p className="text-xs mt-1">Seat and AI-credit data are populated during sync.</p>
+          <p className="text-sm">No matching license history for the current selection.</p>
+          <p className="text-xs mt-1">Run sync to populate data, change periods, or clear filters to broaden your search.</p>
         </div>
-      ) : (
-        <>
-          {/* KPIs */}
-          <div ref={kpiRef} className="space-y-4">
-            <div className="grid gap-4 grid-cols-2 lg:grid-cols-4">
-              <MetricCard title="Licensed Users" value={kpis!.totalUsers} accent="blue" icon={<Users className="h-5 w-5" />} subtitle={`${fmtNum(kpis!.activeUsers)} active`} />
-              <MetricCard title="Monthly License Cost" value={fmtMoney(kpis!.totalLicenseCost)} format="raw" accent="teal" icon={<CreditCard className="h-5 w-5" />} subtitle="Negotiated seat pricing" />
-              <MetricCard title="AI Credits Consumed" value={fmtNum(kpis!.totalConsumedCredits)} accent="violet" icon={<Zap className="h-5 w-5" />} subtitle={`${fmtMoney(kpis!.totalConsumedUsd)} spend`} />
-              <MetricCard title="Credit Utilization" value={`${safeNum(kpis!.overallUtilizationPct).toFixed(1)}%`} format="raw" accent="amber" icon={<Gauge className="h-5 w-5" />} subtitle={`${fmtNum(kpis!.totalConsumedCredits)} of ${fmtNum(kpis!.totalAllowanceCredits)} allocated`} />
-            </div>
-            <div className="grid gap-4 grid-cols-2 lg:grid-cols-4">
-              <MetricCard title="Total Cost of Ownership" value={fmtMoney(kpis!.totalCostOfOwnership)} format="raw" accent="green" icon={<Wallet className="h-5 w-5" />} subtitle="License + credit spend" />
-              <MetricCard title="AIC Assigned Budget" value={fmtMoney(kpis!.totalAssignedUsd)} format="raw" accent="blue" icon={<BadgeCheck className="h-5 w-5" />} subtitle="Allocated allowance value" />
-              <MetricCard title="Over-Budget Users" value={kpis!.overBudgetUsers} accent="red" icon={<AlertTriangle className="h-5 w-5" />} subtitle="Consumption exceeds budget" />
-              <MetricCard title="Zero-Consumption Seats" value={kpis!.zeroConsumptionSeats} accent="amber" icon={<AlertTriangle className="h-5 w-5" />} subtitle={`${fmtNum(kpis!.pendingCancellation)} pending cancellation`} />
-            </div>
-          </div>
+      )}
 
-          {/* Charts */}
-          <div ref={chartsRef} className="grid gap-6 lg:grid-cols-2">
-            {/* Allocation vs consumption by plan */}
-            <Card className="p-6">
-              <h3 className="text-sm font-semibold mb-1">Allocation vs. Consumption by Plan</h3>
-              <p className="text-xs text-[hsl(var(--muted-foreground))] mb-4">AI-credit allowance and actual consumption per license plan.</p>
-              <div className="space-y-4">
-                {planBreakdown.length === 0 && <p className="text-sm text-[hsl(var(--muted-foreground))]">No data.</p>}
-                {planBreakdown.map((p) => (
-                  <div key={p.key}>
-                    <div className="flex items-center justify-between text-xs mb-1">
-                      <span className="font-medium capitalize">{p.key}</span>
-                      <span className="text-[hsl(var(--muted-foreground))]">
-                        {fmtNum(p.consumedCredits)} / {fmtNum(p.allowanceCredits)} cr · {p.utilizationPct.toFixed(0)}% · {p.seats} seats
-                      </span>
-                    </div>
-                    <div className="relative h-3 w-full rounded-full bg-[hsl(var(--accent))] overflow-hidden">
-                      <div className="absolute inset-y-0 left-0 rounded-full opacity-30" style={{ width: `${(p.allowanceCredits / maxPlanCredits) * 100}%`, background: planColor[p.key] || "#3b82f6" }} />
-                      <div className="absolute inset-y-0 left-0 rounded-full" style={{ width: `${(p.consumedCredits / maxPlanCredits) * 100}%`, background: planColor[p.key] || "#3b82f6" }} />
-                    </div>
-                  </div>
-                ))}
+      {/* ── Overview panel ────────────────────────────────────────────── */}
+      <div
+        id="license-panel-overview"
+        role="tabpanel"
+        aria-labelledby="license-tab-overview"
+        hidden={activeTab !== "overview"}
+        ref={overviewRef}
+        className="space-y-8"
+      >
+        {hasData && kpis && (
+          <>
+            <div className="space-y-4">
+              <div className="grid gap-4 grid-cols-2 lg:grid-cols-4">
+                <MetricCard title="Licensed Users" value={kpis.totalUsers} accent="blue" icon={<Users className="h-5 w-5" />} subtitle={`${fmtNum(kpis.activeUsers)} active`} />
+                <MetricCard title="Monthly License Cost" value={fmtMoney(kpis.totalLicenseCost)} format="raw" accent="teal" icon={<CreditCard className="h-5 w-5" />} subtitle="Negotiated seat pricing" />
+                <MetricCard title="AI Credits Consumed" value={fmtNum(kpis.totalConsumedCredits)} accent="violet" icon={<Zap className="h-5 w-5" />} subtitle={`${fmtMoney(kpis.totalConsumedUsd)} spend`} />
+                <MetricCard title="Credit Utilization" value={`${safeNum(kpis.overallUtilizationPct).toFixed(1)}%`} format="raw" accent="amber" icon={<Gauge className="h-5 w-5" />} subtitle={`${fmtNum(kpis.totalConsumedCredits)} of ${fmtNum(kpis.totalAllowanceCredits)} allocated`} />
               </div>
-            </Card>
+              <div className="grid gap-4 grid-cols-2 lg:grid-cols-4">
+                <MetricCard title="Total Cost of Ownership" value={fmtMoney(kpis.totalCostOfOwnership)} format="raw" accent="green" icon={<Wallet className="h-5 w-5" />} subtitle="License + credit spend" />
+                <MetricCard title="AIC Assigned Budget" value={fmtMoney(kpis.totalAssignedUsd)} format="raw" accent="blue" icon={<BadgeCheck className="h-5 w-5" />} subtitle="Allocated allowance value" />
+                <MetricCard title="Over-Budget Users" value={kpis.overBudgetUsers} accent="red" icon={<AlertTriangle className="h-5 w-5" />} subtitle="Consumption exceeds budget" />
+                <MetricCard title="Zero-Consumption Seats" value={kpis.zeroConsumptionSeats} accent="amber" icon={<AlertTriangle className="h-5 w-5" />} subtitle={`${fmtNum(kpis.pendingCancellation)} pending cancellation`} />
+              </div>
+            </div>
 
-            {/* Utilization distribution */}
-            <Card className="p-6">
-              <h3 className="text-sm font-semibold mb-1">Credit Utilization Distribution</h3>
-              <p className="text-xs text-[hsl(var(--muted-foreground))] mb-4">How many users fall into each allowance-utilization band.</p>
-              <div className="space-y-3">
-                {utilizationBuckets.map((b) => (
-                  <div key={b.label} className="flex items-center gap-3">
-                    <span className="w-16 text-xs text-[hsl(var(--muted-foreground))] text-right">{b.label}</span>
-                    <div className="flex-1 h-5 rounded bg-[hsl(var(--accent))] overflow-hidden">
-                      <div
-                        className="h-full rounded bg-amber-500/80 flex items-center justify-end pr-2"
-                        style={{ width: `${Math.max((b.count / maxBucket) * 100, b.count > 0 ? 6 : 0)}%` }}
-                      >
-                        {b.count > 0 && <span className="text-[10px] font-semibold text-white">{b.count}</span>}
+            <div className="grid gap-6 lg:grid-cols-2">
+              <Card className="p-6">
+                <h3 className="text-sm font-semibold mb-1">Allocation vs. Consumption by Plan</h3>
+                <p className="text-xs text-[hsl(var(--muted-foreground))] mb-4">AI-credit allowance and actual consumption per license plan.</p>
+                <div className="space-y-4">
+                  {planBreakdown.length === 0 && <p className="text-sm text-[hsl(var(--muted-foreground))]">No data.</p>}
+                  {planBreakdown.map((p) => (
+                    <div key={p.key}>
+                      <div className="flex items-center justify-between text-xs mb-1">
+                        <span className="font-medium capitalize">{p.key}</span>
+                        <span className="text-[hsl(var(--muted-foreground))]">
+                          {fmtNum(p.consumedCredits)} / {fmtNum(p.allowanceCredits)} cr · {p.utilizationPct.toFixed(0)}% · {p.seats} seats
+                        </span>
+                      </div>
+                      <div className="relative h-3 w-full rounded-full bg-[hsl(var(--accent))] overflow-hidden">
+                        <div className="absolute inset-y-0 left-0 rounded-full opacity-30" style={{ width: `${(p.allowanceCredits / maxPlanCredits) * 100}%`, background: planColor[p.key] || "#3b82f6" }} />
+                        <div className="absolute inset-y-0 left-0 rounded-full" style={{ width: `${(p.consumedCredits / maxPlanCredits) * 100}%`, background: planColor[p.key] || "#3b82f6" }} />
                       </div>
                     </div>
-                  </div>
-                ))}
-              </div>
-            </Card>
-          </div>
-
-          {/* Org breakdown */}
-          {orgBreakdown.length > 0 && (
-            <Card className="p-6">
-              <h3 className="text-sm font-semibold mb-4 flex items-center gap-2">
-                <Building2 className="h-4 w-4" /> Cost & Consumption by Organization
-              </h3>
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="border-b">
-                      <th className="px-3 py-2 text-left text-xs font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wider">Organization</th>
-                      <th className="px-3 py-2 text-right text-xs font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wider">Seats</th>
-                      <th className="px-3 py-2 text-right text-xs font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wider">License Cost</th>
-                      <th className="px-3 py-2 text-right text-xs font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wider">Consumed (cr)</th>
-                      <th className="px-3 py-2 text-right text-xs font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wider">Consumed</th>
-                      <th className="px-3 py-2 text-right text-xs font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wider">Utilization</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {orgBreakdown.slice(0, 15).map((o) => (
-                      <tr key={o.key} className="border-b border-[hsl(var(--border))]/50 hover:bg-[hsl(var(--accent))]/40">
-                        <td className="px-3 py-2 font-medium">{o.key || "(none)"}</td>
-                        <td className="px-3 py-2 text-right tabular-nums">{fmtNum(o.seats)}</td>
-                        <td className="px-3 py-2 text-right tabular-nums">{fmtMoney(o.licenseCost)}</td>
-                        <td className="px-3 py-2 text-right tabular-nums">{fmtNum(o.consumedCredits)}</td>
-                        <td className="px-3 py-2 text-right tabular-nums">{fmtMoney(o.consumedUsd)}</td>
-                        <td className="px-3 py-2 text-right tabular-nums">{o.utilizationPct.toFixed(0)}%</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </Card>
-          )}
-
-          {/* Per-user reconciliation table */}
-          <Card ref={tableRef} className="p-0 overflow-hidden">
-            <div className="flex flex-wrap items-center justify-between gap-3 p-4 border-b">
-              <h3 className="text-sm font-semibold">Per-User Reconciliation</h3>
-              <div className="relative">
-                <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-[hsl(var(--muted-foreground))]" />
-                <input
-                  type="text"
-                  value={searchInput}
-                  onChange={(e) => setSearchInput(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === "Enter") setSearch(searchInput.trim()); }}
-                  onBlur={() => setSearch(searchInput.trim())}
-                  placeholder="Search user or org…"
-                  aria-label="Search users or organizations"
-                  className="pl-8 pr-3 py-1.5 text-sm rounded-md border bg-[hsl(var(--background))] w-56"
-                />
-              </div>
-            </div>
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead className="bg-[hsl(var(--accent))]/30">
-                  <tr className="border-b">
-                    <SortHeader col="user_login" label="User" sort={sort} sortDir={sortDir} onSort={handleSort} />
-                    <th className="px-3 py-3 text-left text-xs font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wider">Orgs</th>
-                    <SortHeader col="plan_type" label="Plan" sort={sort} sortDir={sortDir} onSort={handleSort} />
-                    <SortHeader col="license_assigned_date" label="Assigned" sort={sort} sortDir={sortDir} onSort={handleSort} />
-                    <th className="px-3 py-3 text-left text-xs font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wider">Status</th>
-                    <SortHeader col="license_cost" label="License $" align="right" sort={sort} sortDir={sortDir} onSort={handleSort} />
-                    <SortHeader col="aic_consumed_credits" label="Consumed cr" align="right" sort={sort} sortDir={sortDir} onSort={handleSort} />
-                    <SortHeader col="utilization_pct" label="Util %" align="right" sort={sort} sortDir={sortDir} onSort={handleSort} />
-                    <SortHeader col="total_cost" label="Total $" align="right" sort={sort} sortDir={sortDir} onSort={handleSort} />
-                  </tr>
-                </thead>
-                <tbody>
-                  {rows.map((r) => (
-                    <tr key={r.user_login} className="border-b border-[hsl(var(--border))]/50 hover:bg-[hsl(var(--accent))]/40">
-                      <td className="px-3 py-2">
-                        <div className="font-medium">{r.user_login}</div>
-                        <div className="text-[10px] text-[hsl(var(--muted-foreground))]">{r.assigned_via}</div>
-                      </td>
-                      <td className="px-3 py-2 max-w-[180px] truncate" title={r.orgs.join(", ")}>
-                        {r.orgs.length > 1 ? `${r.orgs[0]} +${r.orgs.length - 1}` : r.orgs[0] || "—"}
-                      </td>
-                      <td className="px-3 py-2 capitalize">{r.plan_type}</td>
-                      <td className="px-3 py-2 tabular-nums text-xs">{r.license_assigned_date || "—"}</td>
-                      <td className="px-3 py-2">
-                        <span
-                          className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold ${
-                            r.seat_status === "pending_cancellation"
-                              ? "bg-red-500/10 text-red-600 dark:text-red-400"
-                              : r.activity_status === "active_30d"
-                                ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
-                                : "bg-amber-500/10 text-amber-600 dark:text-amber-400"
-                          }`}
-                        >
-                          {r.seat_status === "pending_cancellation"
-                            ? "pending cancel"
-                            : r.activity_status === "active_30d"
-                              ? "active"
-                              : r.activity_status === "never"
-                                ? "never active"
-                                : "inactive 30d"}
-                        </span>
-                      </td>
-                      <td className="px-3 py-2 text-right tabular-nums">{fmtMoney(r.license_cost)}</td>
-                      <td className="px-3 py-2 text-right tabular-nums">{fmtNum(r.aic_consumed_credits)}</td>
-                      <td className="px-3 py-2 text-right tabular-nums">
-                        <span className={r.over_budget ? "text-red-600 dark:text-red-400 font-semibold" : ""}>
-                          {r.utilization_pct.toFixed(0)}%
-                        </span>
-                      </td>
-                      <td className="px-3 py-2 text-right tabular-nums font-medium">{fmtMoney(r.total_cost)}</td>
-                    </tr>
                   ))}
-                  {rows.length === 0 && (
-                    <tr>
-                      <td colSpan={9} className="px-3 py-8 text-center text-[hsl(var(--muted-foreground))]">No matching users.</td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
+                </div>
+              </Card>
+
+              <Card className="p-6">
+                <h3 className="text-sm font-semibold mb-1">Credit Utilization Distribution</h3>
+                <p className="text-xs text-[hsl(var(--muted-foreground))] mb-4">How many users fall into each allowance-utilization band.</p>
+                <div className="space-y-3">
+                  {utilizationBuckets.map((b) => (
+                    <div key={b.label} className="flex items-center gap-3">
+                      <span className="w-16 text-xs text-[hsl(var(--muted-foreground))] text-right">{b.label}</span>
+                      <div className="flex-1 h-5 rounded bg-[hsl(var(--accent))] overflow-hidden">
+                        <div
+                          className="h-full rounded bg-amber-500/80 flex items-center justify-end pr-2"
+                          style={{ width: `${Math.max((b.count / maxBucket) * 100, b.count > 0 ? 6 : 0)}%` }}
+                        >
+                          {b.count > 0 && <span className="text-[10px] font-semibold text-white">{b.count}</span>}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </Card>
             </div>
 
-            {/* Pagination */}
-            {pagination.totalPages > 1 && (
-              <div className="flex items-center justify-between p-4 border-t text-sm">
-                <span className="text-[hsl(var(--muted-foreground))]">
-                  Page {pagination.page} of {pagination.totalPages} · {fmtNum(pagination.totalItems)} users
-                </span>
-                <div className="flex gap-2">
-                  <button
-                    className="px-3 py-1 rounded border disabled:opacity-40 hover:bg-[hsl(var(--accent))]"
-                    disabled={pagination.page <= 1}
-                    onClick={() => setPage((p) => Math.max(1, p - 1))}
-                  >
-                    Previous
-                  </button>
-                  <button
-                    className="px-3 py-1 rounded border disabled:opacity-40 hover:bg-[hsl(var(--accent))]"
-                    disabled={pagination.page >= pagination.totalPages}
-                    onClick={() => setPage((p) => p + 1)}
-                  >
-                    Next
-                  </button>
+            {orgBreakdown.length > 0 && (
+              <Card className="p-6">
+                <h3 className="text-sm font-semibold mb-4 flex items-center gap-2">
+                  <Building2 className="h-4 w-4" /> Cost & Consumption by Organization
+                </h3>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b">
+                        <th className="px-3 py-2 text-left text-xs font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wider">Organization</th>
+                        <th className="px-3 py-2 text-right text-xs font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wider">Seats</th>
+                        <th className="px-3 py-2 text-right text-xs font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wider">License Cost</th>
+                        <th className="px-3 py-2 text-right text-xs font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wider">Consumed (cr)</th>
+                        <th className="px-3 py-2 text-right text-xs font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wider">Consumed</th>
+                        <th className="px-3 py-2 text-right text-xs font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wider">Utilization</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {orgBreakdown.slice(0, 15).map((o) => (
+                        <tr key={o.key} className="border-b border-[hsl(var(--border))]/50 hover:bg-[hsl(var(--accent))]/40">
+                          <td className="px-3 py-2 font-medium">{o.key || "(none)"}</td>
+                          <td className="px-3 py-2 text-right tabular-nums">{fmtNum(o.seats)}</td>
+                          <td className="px-3 py-2 text-right tabular-nums">{fmtMoney(o.licenseCost)}</td>
+                          <td className="px-3 py-2 text-right tabular-nums">{fmtNum(o.consumedCredits)}</td>
+                          <td className="px-3 py-2 text-right tabular-nums">{fmtMoney(o.consumedUsd)}</td>
+                          <td className="px-3 py-2 text-right tabular-nums">{o.utilizationPct.toFixed(0)}%</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
                 </div>
-              </div>
+              </Card>
             )}
-          </Card>
-        </>
-      )}
+          </>
+        )}
+      </div>
+
+      {/* ── Period Detail panel ──────────────────────────────────────── */}
+      <div
+        id="license-panel-detail"
+        role="tabpanel"
+        aria-labelledby="license-tab-detail"
+        hidden={activeTab !== "detail"}
+        className="space-y-4"
+      >
+        <LicensePeriodFilters
+          view={view}
+          onViewChange={setView}
+          periods={periods}
+          onPeriodsChange={setPeriods}
+          search={search}
+          onSearchChange={setSearch}
+          planTypes={planTypes}
+          onPlanTypesChange={setPlanTypes}
+          accountStates={accountStates}
+          onAccountStatesChange={setAccountStates}
+          seatStatuses={seatStatuses}
+          onSeatStatusesChange={setSeatStatuses}
+          historyConfidence={historyConfidence}
+          onHistoryConfidenceChange={setHistoryConfidence}
+          onClearFilters={handleClearFilters}
+        />
+        <LicenseReconciliationTable
+          {...tableRowsProps}
+          currency={currency}
+          sort={sort}
+          sortDir={sortDir}
+          onSort={handleSort}
+          pagination={pagination}
+          onPageChange={setPage}
+        />
+      </div>
+
+      {/* ── Data Quality panel ───────────────────────────────────────── */}
+      <div
+        id="license-panel-quality"
+        role="tabpanel"
+        aria-labelledby="license-tab-quality"
+        hidden={activeTab !== "quality"}
+        ref={qualityRef}
+        className="space-y-6"
+      >
+        <LicenseRunHistory
+          enterpriseSlug={activeEnterprise}
+          selectedRunId={selectedRunId}
+          onSelectRun={handleSelectRun}
+          onReportChange={handleReportChange}
+        />
+        <LicenseDataQualityPanel
+          coverage={qualityCoverage}
+          warnings={warnings}
+          report={selectedRunReport}
+          reportLoading={runReportLoading}
+          reportError={null}
+        />
+      </div>
     </div>
   );
 }
