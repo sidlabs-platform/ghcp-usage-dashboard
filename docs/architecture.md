@@ -11,6 +11,10 @@ graph TB
         GH_TEAMS["Teams API<br/>(org/teams, enterprise/teams)"]
         GH_GHAS["GHAS APIs<br/>(code-scanning, dependabot,<br/>secret-scanning)"]
         GH_BILLING["Billing API<br/>(metered usage, premium requests)"]
+        GH_AUDIT["Audit Log API<br/>(enterprise audit-log)"]
+        GH_IDENTITY["Enterprise/Org SAML identity<br/>+ SCIM membership APIs"]
+        GH_ORGBILL["Org Copilot billing summary API"]
+        GH_AIC["Per-user AI-Credit usage API<br/>(enterprise + org)"]
     end
 
     %% ── Auth ──────────────────────────────────────────────────────────
@@ -32,9 +36,14 @@ graph TB
         DC["dependabot-client.ts"]
         SEC["secret-scanning-client.ts"]
         BC["billing-client.ts"]
+        AUDC["copilot-audit-client.ts"]
+        IDC["copilot-identity-client.ts<br/>copilot-membership-client.ts"]
+        OBC["copilot-org-billing-client.ts"]
+        AICC["aic-consumption-client.ts"]
+        PRE["auth-preflight.ts<br/>preflightEnterpriseAuth()"]
     end
 
-    AUTH_RESOLVE --> MC & SC & TC & CC & DC & SEC & BC
+    AUTH_RESOLVE --> MC & SC & TC & CC & DC & SEC & BC & AUDC & IDC & OBC & AICC & PRE
     MC --> GH_ENT & GH_ORG
     SC --> GH_SEATS
     TC --> GH_TEAMS
@@ -42,6 +51,10 @@ graph TB
     DC --> GH_GHAS
     SEC --> GH_GHAS
     BC --> GH_BILLING
+    AUDC --> GH_AUDIT
+    IDC --> GH_IDENTITY
+    OBC --> GH_ORGBILL
+    AICC --> GH_AIC
 
     %% ── Sync Services ─────────────────────────────────────────────────
     subgraph SyncLayer["Sync Services (src/lib/db/)"]
@@ -50,6 +63,7 @@ graph TB
         GS["ghas-sync-service.ts<br/>fullGhasSync / incremental<br/>code-scanning, dependabot, secret-scanning"]
         BIS["billing-sync-service.ts<br/>syncBilling"]
         SCHED["auto-sync-scheduler.ts<br/>(cron-based background sync)"]
+        LHS["license-history-sync-service.ts<br/>syncLicenseHistory / syncLicenseHistoryForEnterprise<br/>runs after seats+billing, per enterprise, isolated failures"]
     end
 
     MC --> SS
@@ -59,6 +73,8 @@ graph TB
     DC --> GS
     SEC --> GS
     BC --> BIS
+    AUDC & IDC & OBC & AICC & PRE --> LHS
+    SS -->|after seats+billing| LHS
     SCHED -->|triggers| SS & GS
 
     %% ── Database Layer ────────────────────────────────────────────────
@@ -84,7 +100,15 @@ graph TB
             ST3["team_summary_cache"]
         end
 
+        subgraph LicensingTables["Licensing History Tables (licensing-schema.sql, additive)"]
+            LT1["license_seat_snapshots<br/>license_audit_events"]
+            LT2["license_period_rows<br/>(canonical enterprise/period/org/holder grain)"]
+            LT3["license_identity_records<br/>license_aic_consumption<br/>license_org_billing_snapshots"]
+            LT4["license_reconciliation_runs<br/>license_reconciliation_checks<br/>license_source_sync_state"]
+        end
+
         REPO["metrics-repo.ts / seats-repo.ts<br/>teams-repo.ts / ghas-repo.ts<br/>billing-repo.ts"]
+        LREPO["license-repo.ts (legacy live view)<br/>license-history-repo.ts (materialized query/export)<br/>license-run-repo.ts (runs/checks/diagnostics)"]
         SUMM["summary-tables.ts<br/>refreshAllSummaries()<br/>(called after every sync)"]
         GETDB["getDb() singleton<br/>database.ts"]
     end
@@ -92,16 +116,32 @@ graph TB
     SS --> REPO
     GS --> REPO
     BIS --> REPO
+    LHS --> LREPO
     REPO --> GETDB
+    LREPO --> GETDB
     GETDB --> SQLITE
     SQLITE --- Tables
+    SQLITE --- LicensingTables
     SUMM --> SummaryTables
     SS -->|after sync| SUMM
 
+    %% ── Licensing Pure Logic (src/lib/licensing/) ─────────────────────
+    subgraph LicensingLib["Licensing Pure Logic (src/lib/licensing/)"]
+        direction TB
+        PERIODS["periods.ts<br/>report-month parsing, recoverable-range calc"]
+        IDRES["identity-resolver.ts<br/>resolveIdentity() — 6-tier precedence"]
+        LEDGER["seat-ledger.ts<br/>buildSeatLedger() — interval reconstruction"]
+        MATER["materialize-license-period.ts<br/>materializeLicensePeriodRows()"]
+        CHECKS["reconciliation-checks.ts<br/>seat_count, real_login_coverage,<br/>external_identity_leak, status_agreement,<br/>aic_gross_vs_net, consumption_attribution,<br/>history_coverage"]
+        IMPORTS["audit-archive-import.ts<br/>identity-map-import.ts<br/>aic-csv-import.ts (import-shared.ts)"]
+    end
+
+    LHS --> PERIODS & IDRES & LEDGER & MATER & CHECKS & IMPORTS
+
     %% ── Config ────────────────────────────────────────────────────────
     subgraph Config["Configuration (src/lib/config/)"]
-        ECFG["enterprise-config.ts<br/>getConfiguredEnterprises()<br/>getResolvedOrgsForEnterprise()"]
-        DCFG["dashboard-config.ts<br/>dashboard-config.json<br/>feature toggles"]
+        ECFG["enterprise-config.ts<br/>getConfiguredEnterprises()<br/>getResolvedOrgsForEnterprise()<br/>isLicensingHistoryEnabledFor(Any)Enterprise()"]
+        DCFG["dashboard-config.ts<br/>dashboard-config.json<br/>feature toggles<br/>getLicensingConfig() (metrics.billing.licensing)"]
     end
 
     SS --> ECFG & DCFG
@@ -125,10 +165,15 @@ graph TB
         R_BILLING["/api/billing, billing-usage<br/>billing-premium"]
         R_SYNC["/api/sync<br/>POST: start sync<br/>GET: status + progress"]
         R_FILTERS["/api/filters<br/>teams, orgs, enterprises"]
+        R_CONFIG["/api/config<br/>pageVisibility, licensingHistoryEnabled<br/>(never raw licensing config/paths)"]
+        R_LICENSE["/api/billing/license-reconciliation<br/>(+/runs, /runs/[id], /preflight)"]
+        R_LICENSE_EXPORT["/api/export/license-reconciliation<br/>server-side bounded CSV"]
     end
 
-    CACHE --> R_METRICS & R_USERS & R_TEAMS & R_SEATS & R_SECURITY & R_BILLING & R_FILTERS
+    CACHE --> R_METRICS & R_USERS & R_TEAMS & R_SEATS & R_SECURITY & R_BILLING & R_FILTERS & R_LICENSE
     GETDB --> R_METRICS & R_USERS & R_TEAMS & R_SEATS & R_SECURITY & R_BILLING & R_FILTERS
+    LREPO --> R_LICENSE & R_LICENSE_EXPORT
+    ECFG --> R_CONFIG
     R_SYNC -->|triggers| SS & GS
 
     %% ── Scope Filtering ───────────────────────────────────────────────
@@ -136,7 +181,7 @@ graph TB
         SF["parseScopeFilter()<br/>filterByScope()<br/>buildLoginFilter()<br/>buildEnterpriseFilter()"]
     end
 
-    R_METRICS & R_USERS & R_TEAMS --> SF
+    R_METRICS & R_USERS & R_TEAMS & R_LICENSE & R_LICENSE_EXPORT --> SF
 
     %% ── Aggregation ───────────────────────────────────────────────────
     subgraph Agg["Aggregation (src/lib/aggregation/)"]
@@ -156,6 +201,7 @@ graph TB
             P4["Security (GHAS)"]
             P5["Billing / Usage / Premium"]
             P6["CLI / Pull Requests / Chat Modes"]
+            P7["License & AI Credits<br/>(Overview / Period Detail / Data Quality)"]
         end
 
         subgraph UIComponents["UI Components (src/components/)"]
@@ -163,6 +209,7 @@ graph TB
             CARDS["Metric Cards"]
             FILTER_UI["Scope Filter UI<br/>(teams, orgs, enterprises)"]
             TABLES["Sortable / Paginated Tables"]
+            LICENSING_UI["licensing/ components<br/>LicensePeriodFilters, LicenseReconciliationTable,<br/>LicenseDataQualityPanel, LicenseRunHistory"]
         end
 
         subgraph State["Client State"]
@@ -176,11 +223,12 @@ graph TB
         end
     end
 
-    R_METRICS & R_USERS & R_TEAMS & R_SEATS & R_SECURITY & R_BILLING & R_FILTERS -->|JSON responses| RQ
+    R_METRICS & R_USERS & R_TEAMS & R_SEATS & R_SECURITY & R_BILLING & R_FILTERS & R_CONFIG & R_LICENSE -->|JSON responses| RQ
     RQ --> Pages
     CTX --> Pages
     Pages --> UIComponents
     Pages --> Export
+    P7 --> LICENSING_UI
 
     %% ── Styles ────────────────────────────────────────────────────────
     classDef github fill:#24292e,color:#fff,stroke:#444
@@ -191,29 +239,32 @@ graph TB
     classDef api fill:#1a2e4a,color:#fff,stroke:#2d5fa3
     classDef frontend fill:#1a1a3b,color:#fff,stroke:#5353c6
     classDef config fill:#2e2e1a,color:#fff,stroke:#8c8c00
+    classDef licensing fill:#4a1a2e,color:#fff,stroke:#a3306b
 
-    class GH_ENT,GH_ORG,GH_SEATS,GH_TEAMS,GH_GHAS,GH_BILLING github
+    class GH_ENT,GH_ORG,GH_SEATS,GH_TEAMS,GH_GHAS,GH_BILLING,GH_AUDIT,GH_IDENTITY,GH_ORGBILL,GH_AIC github
     class PAT,APP,AUTH_RESOLVE auth
     class SS,GS,BIS,SCHED sync
     class SQLITE,REPO,SUMM,GETDB,T1,T2,T3,T4,T5,T6,T7,T8,T9,ST1,ST2,ST3 db
     class CACHE cache
-    class R_METRICS,R_USERS,R_TEAMS,R_SEATS,R_SECURITY,R_BILLING,R_SYNC,R_FILTERS,SF,AGG api
+    class R_METRICS,R_USERS,R_TEAMS,R_SEATS,R_SECURITY,R_BILLING,R_SYNC,R_FILTERS,R_CONFIG,SF,AGG api
     class P1,P2,P3,P4,P5,P6,CHARTS,CARDS,FILTER_UI,TABLES,RQ,CTX,PDF,CSV frontend
     class ECFG,DCFG config
+    class AUDC,IDC,OBC,AICC,PRE,LHS,LT1,LT2,LT3,LT4,LREPO,PERIODS,IDRES,LEDGER,MATER,CHECKS,IMPORTS,R_LICENSE,R_LICENSE_EXPORT,P7,LICENSING_UI licensing
 ```
 
 ## Layer Summary
 
 | Layer | Location | Purpose |
 |---|---|---|
-| **GitHub APIs** | External | Source of Copilot, GHAS, Billing, Teams, and Seats data |
+| **GitHub APIs** | External | Source of Copilot, GHAS, Billing, Teams, Seats, audit-log, identity, and AI-Credit data |
 | **Authentication** | `src/lib/github/` | PAT (enterprise endpoints) + GitHub App JWT (org endpoints) |
-| **GitHub Clients** | `src/lib/github/` | Typed wrappers for every GitHub API endpoint |
-| **Sync Services** | `src/lib/db/sync-*.ts` | Orchestrate day-by-day backfill and incremental syncs |
-| **Database** | `src/lib/db/`, `data/*.db` | SQLite with WAL; raw tables + pre-aggregated summary tables |
+| **GitHub Clients** | `src/lib/github/` | Typed wrappers for every GitHub API endpoint, including licensing-history sources (audit log, enterprise/org identity, SCIM membership, org billing, per-user AI-Credit usage) and capability preflight |
+| **Sync Services** | `src/lib/db/sync-*.ts` | Orchestrate day-by-day backfill and incremental syncs; `license-history-sync-service.ts` runs the historical licensing sync per enterprise, after seats/billing, with isolated per-enterprise failure |
+| **Database** | `src/lib/db/`, `data/*.db` | SQLite with WAL; raw tables + pre-aggregated summary tables + additive licensing-history tables (`licensing-schema.sql`) |
 | **In-Memory Cache** | `src/lib/cache/` | LRU + TTL cache wrapping all API route responses |
-| **API Routes** | `src/app/api/` | Next.js route handlers; serve JSON with scope filtering & pagination |
+| **API Routes** | `src/app/api/` | Next.js route handlers; serve JSON with scope filtering & pagination, including the licensing reconciliation/runs/preflight JSON APIs and the server-side historical CSV export |
 | **Aggregation** | `src/lib/aggregation/` | SQL `json_each()` aggregation for feature/model/language breakdowns |
-| **Configuration** | `src/lib/config/` | Enterprise list, org mapping, dashboard feature toggles |
-| **Frontend** | `src/app/dashboard/`, `src/components/` | React pages + Recharts charts + TanStack Query client state |
+| **Configuration** | `src/lib/config/` | Enterprise list, org mapping, dashboard feature toggles, and licensing config resolution/validation (`getLicensingConfig()`) |
+| **Licensing Pure Logic** | `src/lib/licensing/` | Side-effect-free identity resolution, seat-ledger reconstruction, period materialization, reconciliation checks, and file-based import parsers — independently unit-tested and reused by the sync orchestrator |
+| **Frontend** | `src/app/dashboard/`, `src/components/` | React pages + Recharts charts + TanStack Query client state, including the License & AI Credits page and its dedicated `components/licensing/` components |
 | **Export** | `src/lib/export/` | PDF (jspdf) and CSV export from any paginated dataset |

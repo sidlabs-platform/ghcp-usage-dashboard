@@ -1,6 +1,6 @@
 // Multi-enterprise configuration — server-only + client-safe types & helpers
 
-import { getDashboardConfig, getResolvedOrgs, type MetricCategory } from "./dashboard-config";
+import { getDashboardConfig, getResolvedOrgs, getLicensingConfig, type MetricCategory } from "./dashboard-config";
 import { getDiscoveredOrgsFromDb } from "./orgs-resolver";
 
 // ── Types ─────────────────────────────────────────────────────────────
@@ -32,7 +32,24 @@ export interface EnterpriseMetricOverrides {
   codeScanning?: { enabled?: boolean; autofix?: boolean };
   dependabot?: { enabled?: boolean };
   secretScanning?: { enabled?: boolean };
-  billing?: { enabled?: boolean; meteredUsage?: boolean; premiumRequests?: boolean; aiCredits?: boolean };
+  billing?: {
+    enabled?: boolean;
+    meteredUsage?: boolean;
+    premiumRequests?: boolean;
+    aiCredits?: boolean;
+    /**
+     * Per-enterprise override for whether historical license reconciliation
+     * sync is considered enabled for THIS enterprise, layered on top of the
+     * global `metrics.billing.licensing.history.enabled` flag (see
+     * {@link isLicensingHistoryEnabledForEnterprise}). Deliberately a narrow
+     * boolean — never the full `LicensingConfig` shape — so no server
+     * filesystem path or secret can ever be introduced at the per-enterprise
+     * override layer. When omitted, the enterprise falls back to the
+     * resolved global flag unchanged (fully backward-compatible with every
+     * pre-existing enterprise config entry).
+     */
+    licensingHistoryEnabled?: boolean;
+  };
 }
 
 /** Client-safe enterprise info (no auth details). */
@@ -478,6 +495,51 @@ export function isBillingSubEnabledForAnyEnterprise(
     return typeof rawVal === "boolean" ? rawVal : true;
   }
   return enterprises.some((e) => isBillingSubEnabledForEnterprise(e.slug, sub));
+}
+
+/**
+ * Check if historical license reconciliation sync is considered enabled for
+ * a specific enterprise: an explicit per-enterprise
+ * `metrics.billing.licensingHistoryEnabled` override always wins; otherwise
+ * this falls back to the single, global `metrics.billing.licensing.history.enabled`
+ * flag resolved by {@link getLicensingConfig}. Billing must also be enabled
+ * for this enterprise (mirrors {@link isBillingSubEnabledForEnterprise}) —
+ * licensing history is a billing capability, never available with billing off.
+ *
+ * This governs page-visibility/config-exposure signals only (e.g. what
+ * `/api/config` safely reports for navigation/UI). The historical sync
+ * orchestrator itself (`license-history-sync-service.ts`) currently reads
+ * the single resolved global config for every configured enterprise it
+ * runs — see `docs/multi-enterprise-setup.md` for the precise, current
+ * scope of this per-enterprise override.
+ */
+export function isLicensingHistoryEnabledForEnterprise(slug: string): boolean {
+  if (!isBillingEnabledForEnterprise(slug)) return false;
+
+  const entConfig = getEnterpriseConfig(slug);
+  const override = entConfig.metrics?.billing?.licensingHistoryEnabled;
+  if (typeof override === "boolean") return override;
+
+  return getLicensingConfig().history.enabled;
+}
+
+/**
+ * Returns true if historical license reconciliation is enabled for ANY
+ * configured enterprise (or, in legacy single-enterprise/org-only mode,
+ * for the implicit single scope). Falls back to the global resolved
+ * `getLicensingConfig().history.enabled` flag when no enterprises are
+ * configured. Used for safe, browser-facing navigation/UI state — never
+ * exposes the underlying `LicensingConfig` (paths, CSV sources, etc.)
+ * itself; see {@link isLicensingHistoryEnabledForEnterprise}.
+ */
+export function isLicensingHistoryEnabledForAnyEnterprise(): boolean {
+  const enterprises = getConfiguredEnterprises();
+  if (enterprises.length === 0) {
+    const config = getDashboardConfig();
+    if (!config.metrics.billing?.enabled) return false;
+    return getLicensingConfig().history.enabled;
+  }
+  return enterprises.some((e) => isLicensingHistoryEnabledForEnterprise(e.slug));
 }
 
 /**

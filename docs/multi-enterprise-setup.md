@@ -131,9 +131,45 @@ Available override fields:
 | `codeScanning` | `enabled`, `autofix` |
 | `dependabot` | `enabled` |
 | `secretScanning` | `enabled` |
-| `billing` | `enabled`, `meteredUsage`, `premiumRequests` |
+| `billing` | `enabled`, `meteredUsage`, `premiumRequests`, `aiCredits`, `licensingHistoryEnabled` |
 
-**Page visibility**: A dashboard page is shown if the metric is enabled for **any** configured enterprise. For example, if code scanning is disabled globally but enabled for one enterprise, the security pages will still appear.
+**Page visibility**: A dashboard page is shown if the metric is enabled for **any** configured enterprise. For example, if code scanning is disabled globally but enabled for one enterprise, the security pages will still appear. The **License & AI Credits** page follows the same rule as **AI Credits**: visible when `billing.premiumRequests` or `billing.aiCredits` is enabled globally, or for any configured enterprise.
+
+### Per-enterprise historical licensing visibility (`licensingHistoryEnabled`)
+
+`metrics.billing.licensing` (see the [README's Historical License Reconciliation section](../README.md#historical-license-reconciliation) for the full field reference) is a single **global** configuration block — every configured enterprise's historical sync currently reads the exact same resolved `licensing.history.*`, `identity.*`, `aicConsumption.*`, `validation.*`, `datedAllowances`, and pricing settings. There is presently no way to give two enterprises different report-month ranges, different allowance schedules, different import file paths, or a different AI-Credit consumption mode.
+
+What **is** per-enterprise today is the narrow `billing.licensingHistoryEnabled` override — a safe boolean (never the underlying `LicensingConfig` shape, so no server path/secret can be introduced at this layer) that controls the *page-visibility / config-exposure* signal `isLicensingHistoryEnabledForEnterprise()`/`isLicensingHistoryEnabledForAnyEnterprise()` compute for `/api/config`'s `licensingHistoryEnabled` field:
+
+```json
+{
+  "enterprises": [
+    {
+      "slug": "enterprise-one",
+      "displayName": "Enterprise One",
+      "tokenEnvVar": "GITHUB_TOKEN_ENT1",
+      "metrics": {
+        "billing": { "aiCredits": true, "licensingHistoryEnabled": true }
+      }
+    },
+    {
+      "slug": "enterprise-two",
+      "displayName": "Enterprise Two",
+      "tokenEnvVar": "GITHUB_TOKEN_ENT2",
+      "metrics": {
+        "billing": { "aiCredits": true, "licensingHistoryEnabled": false }
+      }
+    }
+  ],
+  "metrics": {
+    "billing": { "enabled": true, "aiCredits": true, "licensing": { "history": { "enabled": true } } }
+  }
+}
+```
+
+When omitted (every pre-existing enterprise entry), an enterprise falls back to the global `licensing.history.enabled` flag unchanged — fully backward-compatible, no migration required. Billing must also be enabled for that enterprise (mirrors every other `billing.*` sub-toggle); if it isn't, `licensingHistoryEnabled` reports `false` for that enterprise regardless of the override.
+
+> **Important:** this override does not (yet) change *whether the historical sync itself runs* for an enterprise — `license-history-sync-service.ts` still reads the single global `licensing.history.enabled` flag for every configured enterprise's actual sync. Setting `licensingHistoryEnabled: false` for one enterprise hides/adjusts the safe visibility signal exposed to the browser; it does not skip that enterprise's sync. Full per-enterprise sync-level control (distinct report months, allowances, or import paths per enterprise) is not implemented.
 
 ### Authentication per enterprise
 
@@ -181,12 +217,14 @@ Each enterprise's data is stored with its `enterprise_slug` as part of the prima
 - Metrics, seats, teams, GHAS alerts, and billing data are scoped per enterprise
 - Summary tables aggregate within each enterprise
 - The UI's scope filter lets users select which enterprise(s) to view
+- Historical licensing data (`license_seat_snapshots`, `license_period_rows`, `license_reconciliation_runs`, etc.) is likewise keyed by `enterprise_slug` and fully isolated per enterprise — one enterprise's licensing sync failure never affects another's, and each enterprise gets its own run history/diagnostics
 
 ### Sync behavior
 
 - `fullSync()` iterates over all configured enterprises sequentially
 - **Organization auto-discovery**: If `organizations.include` is empty (or omitted), the sync fetches all orgs from `GET /enterprises/{slug}/organizations` and caches them in the `enterprise_orgs` DB table. The `exclude` array is still applied to filter out unwanted orgs.
 - Each enterprise's metrics, seats, teams, GHAS, and billing are synced independently
+- When `billing.licensing.history.enabled` is `true`, historical license reconciliation also runs per enterprise (after that enterprise's seats/billing sync), isolated the same way — see the [README's Historical License Reconciliation section](../README.md#historical-license-reconciliation) for the full sync/config contract, and [above](#per-enterprise-historical-licensing-visibility-licensinghistoryenabled) for exactly what is/isn't configurable per enterprise today
 - Summary tables are refreshed once after all enterprises complete
 - Incremental sync also loops over all enterprises and refreshes the org list
 
@@ -252,3 +290,5 @@ When security pages don't specify an explicit enterprise scope, the dashboard de
 | Old data missing after switching slugs | Enterprise slug changed from legacy value | Use the same slug as the old `GITHUB_ENTERPRISE` value |
 | Security page shows wrong enterprise | Default scope picks first configured enterprise | Use scope filter in UI, or pass `?scope=enterprise&scopeId=<slug>` |
 | Orgs not showing in dashboard | `organizations.include` is empty and sync hasn't run yet | Run a full sync — orgs will be auto-discovered from the enterprise API |
+| One enterprise's license history looks disabled/enabled unexpectedly | Per-enterprise `billing.licensingHistoryEnabled` override takes precedence over the global `licensing.history.enabled` flag for that enterprise's page-visibility signal | Check that enterprise's `metrics.billing.licensingHistoryEnabled` in `dashboard-config.json`; remove the override to fall back to the global flag |
+| Historical licensing sync still runs for an enterprise after setting `licensingHistoryEnabled: false` | Expected today — that override only affects the safe visibility signal exposed via `/api/config`, not the sync itself (see [above](#per-enterprise-historical-licensing-visibility-licensinghistoryenabled)) | Disable `metrics.billing.licensing.history.enabled` globally if you need to stop the sync for every enterprise |

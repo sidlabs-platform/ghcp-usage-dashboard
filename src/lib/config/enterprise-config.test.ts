@@ -17,10 +17,12 @@ import {
   isMetricEnabledForAnyEnterprise,
   isCopilotSubEnabledForAnyEnterprise,
   isBillingSubEnabledForAnyEnterprise,
+  isLicensingHistoryEnabledForEnterprise,
+  isLicensingHistoryEnabledForAnyEnterprise,
   getClientEnterpriseMetrics,
   isOrgOnlyEnterprise,
 } from "./enterprise-config";
-import { getDashboardConfig, getResolvedOrgs, DashboardConfig } from "./dashboard-config";
+import { getDashboardConfig, getResolvedOrgs, getLicensingConfig, DashboardConfig, ResolvedLicensingConfig } from "./dashboard-config";
 
 // Mock the dashboard-config module
 vi.mock("./dashboard-config", () => ({
@@ -44,7 +46,59 @@ vi.mock("./dashboard-config", () => ({
     ],
   })),
   getResolvedOrgs: vi.fn(() => []),
+  // Default: licensing history disabled, matching the real DEFAULT_LICENSING
+  // fallback used when no `metrics.billing.licensing` block is configured.
+  // Individual tests override this via `mockGetLicensingConfig.mockReturnValue(...)`.
+  getLicensingConfig: vi.fn(() => ({
+    creditToUsd: 0.01,
+    currency: "USD",
+    licenseCost: { business: 19, enterprise: 39, unknown: 0 },
+    aicAllowance: { business: 0, enterprise: 0, unknown: 0 },
+    perUserBudgetUsd: {},
+    datedAllowances: [],
+    history: {
+      enabled: false,
+      reportMonths: [],
+      auditRetentionDays: 400,
+      emitSnapshots: false,
+      snapshotDirectory: "data/licensing-snapshots",
+      auditArchivePath: "data/licensing-audit",
+      identityMapPath: "data/identity-map.json",
+    },
+    identity: { fetchMembership: false, fetchEnterpriseIdentities: false, fetchOrgIdentities: false },
+    aicConsumption: { mode: "auto", concurrency: 4 },
+    validation: { enabled: true, aicTolerancePct: 5 },
+  })),
 }));
+
+const mockGetLicensingConfig = vi.mocked(getLicensingConfig);
+
+/** Builds a full ResolvedLicensingConfig fixture, deep-overriding only `history` for readability (the field every test in this file cares about). */
+function makeResolvedLicensingConfig(
+  overrides: { history?: Partial<ResolvedLicensingConfig["history"]> } = {},
+): ResolvedLicensingConfig {
+  return {
+    creditToUsd: 0.01,
+    currency: "USD",
+    licenseCost: { business: 19, enterprise: 39, unknown: 0 },
+    aicAllowance: { business: 0, enterprise: 0, unknown: 0 },
+    perUserBudgetUsd: {},
+    datedAllowances: [],
+    history: {
+      enabled: false,
+      reportMonths: [],
+      auditRetentionDays: 400,
+      emitSnapshots: false,
+      snapshotDirectory: "data/licensing-snapshots",
+      auditArchivePath: "data/licensing-audit",
+      identityMapPath: "data/identity-map.json",
+      ...overrides.history,
+    },
+    identity: { fetchMembership: false, fetchEnterpriseIdentities: false, fetchOrgIdentities: false },
+    aicConsumption: { mode: "auto", concurrency: 4 },
+    validation: { enabled: true, aicTolerancePct: 5 },
+  };
+}
 
 vi.mock("./orgs-resolver", () => ({
   getDiscoveredOrgsFromDb: vi.fn((slug: string) => [`mocked-${slug}`]),
@@ -71,6 +125,7 @@ describe("enterprise-config", () => {
     delete process.env.GITHUB_ENTERPRISE;
     delete process.env.GITHUB_TOKEN;
     delete process.env.GITHUB_ORGS;
+    mockGetLicensingConfig.mockReturnValue(makeResolvedLicensingConfig());
   });
 
   describe("getConfiguredEnterprises", () => {
@@ -790,6 +845,181 @@ describe("enterprise-config", () => {
       setMockConfig(makeConfig({ enterprises: [] }));
       delete process.env.GITHUB_ENTERPRISE;
       expect(getClientEnterpriseMetrics()).toEqual({});
+    });
+  });
+
+  // ── Task 12: per-enterprise historical licensing visibility ───────────
+  //
+  // Historical licensing configuration (`metrics.billing.licensing.history`)
+  // is resolved once, globally, by `getLicensingConfig()` — these helpers
+  // let an individual enterprise override just the `enabled` flag (via a
+  // narrow `licensingHistoryEnabled` boolean override, never the full
+  // sensitive `LicensingConfig` shape) without needing a new schema/config
+  // migration, and without ever invalidating the global resolved config.
+
+  describe("isLicensingHistoryEnabledForEnterprise", () => {
+    afterEach(() => resetEnterpriseConfigCache());
+
+    it("returns false when billing is disabled for the enterprise", () => {
+      setMockConfig(makeConfig({
+        globalMetrics: {
+          copilot: { enabled: true, enterprise: true },
+          billing: { enabled: false },
+        },
+        enterprises: [{ slug: "ent-a" }],
+      }));
+      mockGetLicensingConfig.mockReturnValue(makeResolvedLicensingConfig({ history: { enabled: true } }));
+      expect(isLicensingHistoryEnabledForEnterprise("ent-a")).toBe(false);
+    });
+
+    it("falls back to the resolved global history.enabled flag when no per-enterprise override is set", () => {
+      setMockConfig(makeConfig({
+        globalMetrics: {
+          copilot: { enabled: true, enterprise: true },
+          billing: { enabled: true },
+        },
+        enterprises: [{ slug: "ent-a" }],
+      }));
+
+      mockGetLicensingConfig.mockReturnValue(makeResolvedLicensingConfig({ history: { enabled: true } }));
+      expect(isLicensingHistoryEnabledForEnterprise("ent-a")).toBe(true);
+
+      mockGetLicensingConfig.mockReturnValue(makeResolvedLicensingConfig({ history: { enabled: false } }));
+      expect(isLicensingHistoryEnabledForEnterprise("ent-a")).toBe(false);
+    });
+
+    it("a per-enterprise licensingHistoryEnabled override takes precedence over the global flag", () => {
+      setMockConfig(makeConfig({
+        globalMetrics: {
+          copilot: { enabled: true, enterprise: true },
+          billing: { enabled: true },
+        },
+        enterprises: [{ slug: "ent-a", metrics: { billing: { licensingHistoryEnabled: false } } }],
+      }));
+      mockGetLicensingConfig.mockReturnValue(makeResolvedLicensingConfig({ history: { enabled: true } }));
+      expect(isLicensingHistoryEnabledForEnterprise("ent-a")).toBe(false);
+    });
+
+    it("an override of true re-enables licensing history for one enterprise when the global flag is off", () => {
+      setMockConfig(makeConfig({
+        globalMetrics: {
+          copilot: { enabled: true, enterprise: true },
+          billing: { enabled: true },
+        },
+        enterprises: [{ slug: "ent-a", metrics: { billing: { licensingHistoryEnabled: true } } }],
+      }));
+      mockGetLicensingConfig.mockReturnValue(makeResolvedLicensingConfig({ history: { enabled: false } }));
+      expect(isLicensingHistoryEnabledForEnterprise("ent-a")).toBe(true);
+    });
+
+    it("existing enterprise configs without any licensing override keep resolving from the global flag unchanged", () => {
+      // Backward compatibility: a pre-Task-12 enterprise entry has no
+      // `licensingHistoryEnabled` field at all — this must never throw and
+      // must never require a config migration.
+      setMockConfig(makeConfig({
+        globalMetrics: {
+          copilot: { enabled: true, enterprise: true },
+          billing: { enabled: true, meteredUsage: true, premiumRequests: true },
+        },
+        enterprises: [{ slug: "ent-a" }, { slug: "ent-b" }],
+      }));
+      mockGetLicensingConfig.mockReturnValue(makeResolvedLicensingConfig({ history: { enabled: true } }));
+      expect(isLicensingHistoryEnabledForEnterprise("ent-a")).toBe(true);
+      expect(isLicensingHistoryEnabledForEnterprise("ent-b")).toBe(true);
+    });
+  });
+
+  describe("isLicensingHistoryEnabledForAnyEnterprise", () => {
+    afterEach(() => resetEnterpriseConfigCache());
+
+    it("returns true when at least one enterprise overrides licensing history on", () => {
+      setMockConfig(makeConfig({
+        globalMetrics: {
+          copilot: { enabled: true, enterprise: true },
+          billing: { enabled: true },
+        },
+        enterprises: [
+          { slug: "ent-a", metrics: { billing: { licensingHistoryEnabled: false } } },
+          { slug: "ent-b", metrics: { billing: { licensingHistoryEnabled: true } } },
+        ],
+      }));
+      mockGetLicensingConfig.mockReturnValue(makeResolvedLicensingConfig({ history: { enabled: false } }));
+      expect(isLicensingHistoryEnabledForAnyEnterprise()).toBe(true);
+    });
+
+    it("returns false when every enterprise has licensing history disabled", () => {
+      setMockConfig(makeConfig({
+        globalMetrics: {
+          copilot: { enabled: true, enterprise: true },
+          billing: { enabled: true },
+        },
+        enterprises: [
+          { slug: "ent-a", metrics: { billing: { licensingHistoryEnabled: false } } },
+          { slug: "ent-b", metrics: { billing: { licensingHistoryEnabled: false } } },
+        ],
+      }));
+      mockGetLicensingConfig.mockReturnValue(makeResolvedLicensingConfig({ history: { enabled: true } }));
+      expect(isLicensingHistoryEnabledForAnyEnterprise()).toBe(false);
+    });
+
+    it("legacy single-enterprise mode falls back to the global resolved flag", () => {
+      setMockConfig(makeConfig({
+        globalMetrics: {
+          copilot: { enabled: true, enterprise: true },
+          billing: { enabled: true },
+        },
+        enterprises: [],
+      }));
+      delete process.env.GITHUB_ENTERPRISE;
+      mockGetLicensingConfig.mockReturnValue(makeResolvedLicensingConfig({ history: { enabled: true } }));
+      expect(isLicensingHistoryEnabledForAnyEnterprise()).toBe(true);
+    });
+
+    it("legacy mode returns false when billing is globally disabled, without invalidating the resolved licensing config", () => {
+      setMockConfig(makeConfig({
+        globalMetrics: {
+          copilot: { enabled: true, enterprise: true },
+          billing: { enabled: false },
+        },
+        enterprises: [],
+      }));
+      delete process.env.GITHUB_ENTERPRISE;
+      mockGetLicensingConfig.mockReturnValue(makeResolvedLicensingConfig({ history: { enabled: true } }));
+      expect(isLicensingHistoryEnabledForAnyEnterprise()).toBe(false);
+      // The global licensing config itself must still resolve intact —
+      // billing being force-disabled at the visibility layer never mutates
+      // or invalidates the already-resolved config object.
+      expect(getLicensingConfig()).toMatchObject({ history: { enabled: true } });
+    });
+  });
+
+  describe("per-enterprise licensing config isolation (backward compatibility)", () => {
+    afterEach(() => resetEnterpriseConfigCache());
+
+    it("arbitrary per-enterprise metric overrides never affect the global resolved licensing config", () => {
+      setMockConfig(makeConfig({
+        globalMetrics: {
+          copilot: { enabled: true, enterprise: true },
+          billing: { enabled: true, meteredUsage: false },
+        },
+        enterprises: [
+          { slug: "ent-a", metrics: { billing: { licensingHistoryEnabled: false, aiCredits: false }, codeScanning: { enabled: false } } },
+          { slug: "ent-b", metrics: { billing: { licensingHistoryEnabled: true } } },
+        ],
+      }));
+      const resolved = makeResolvedLicensingConfig({ history: { enabled: true, reportMonths: ["2026-01"] } });
+      mockGetLicensingConfig.mockReturnValue(resolved);
+
+      // Exercising every per-enterprise helper must not mutate or invalidate
+      // the single global resolved config object — existing config remains
+      // fully backward-compatible regardless of per-enterprise overrides.
+      expect(isLicensingHistoryEnabledForEnterprise("ent-a")).toBe(false);
+      expect(isLicensingHistoryEnabledForEnterprise("ent-b")).toBe(true);
+      expect(isBillingSubEnabledForEnterprise("ent-a", "aiCredits")).toBe(false);
+
+      expect(getLicensingConfig()).toBe(resolved);
+      expect(resolved.history.enabled).toBe(true);
+      expect(resolved.history.reportMonths).toEqual(["2026-01"]);
     });
   });
 

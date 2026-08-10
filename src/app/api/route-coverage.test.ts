@@ -401,4 +401,200 @@ describe("additional API route coverage", { timeout: 15000 }, () => {
       expect(releaseSyncLock).toHaveBeenCalledTimes(1);
     });
   });
+
+  // ── Task 10 licensing endpoints (Task 12: consolidated route coverage) ──
+  //
+  // Each of these five routes already has an exhaustive dedicated
+  // `route.test.ts` covering its own validation/branch logic. The tests
+  // below exercise real route modules end-to-end (no source-string
+  // assertions) for one representative scenario each, so this shared
+  // "additional API route coverage" sweep — which already covers every
+  // other otherwise-scattered route in this file — also reflects the
+  // licensing surface introduced in Task 10.
+
+  it("license reconciliation: returns the resolved currency/creditToUsd config alongside a live-snapshot fallback", async () => {
+    vi.doMock("@/lib/config/enterprise-config", () => ({
+      isBillingSubEnabledForAnyEnterprise: vi.fn(() => true),
+      getEnterpriseSlugs: vi.fn(() => ["acme"]),
+    }));
+    vi.doMock("@/lib/config/dashboard-config", async () => {
+      const actual = await vi.importActual<typeof import("@/lib/config/dashboard-config")>(
+        "@/lib/config/dashboard-config",
+      );
+      return { ...actual, getLicensingConfig: vi.fn(() => ({ currency: "EUR", creditToUsd: 0.02 })) };
+    });
+    vi.doMock("@/lib/api/scope-filter", () => ({
+      parseScopeFilter: vi.fn(() => ({ allowedLogins: undefined, enterpriseSlugs: undefined })),
+    }));
+    vi.doMock("@/lib/db/license-repo", () => ({
+      getLicenseReconciliationRows: vi.fn(() => []),
+      computeLicenseKPIs: vi.fn(() => ({ totalUsers: 0 })),
+      computePlanBreakdown: vi.fn(() => []),
+      computeOrgBreakdown: vi.fn(() => []),
+      computeUtilizationBuckets: vi.fn(() => []),
+      sortLicenseRows: vi.fn(() => []),
+    }));
+    vi.doMock("@/lib/db/license-history-repo", async () => {
+      const actual = await vi.importActual<typeof import("@/lib/db/license-history-repo")>(
+        "@/lib/db/license-history-repo",
+      );
+      return {
+        ...actual,
+        queryLicensePeriodRows: vi.fn(),
+        getMaterializedPeriodKPIs: vi.fn(),
+        getMaterializedPlanBreakdown: vi.fn(),
+        getMaterializedOrgBreakdown: vi.fn(),
+        hasMaterializedRows: vi.fn(() => false),
+      };
+    });
+
+    const { GET } = await import("./billing/license-reconciliation/route");
+    const response = await GET(new NextRequest("http://localhost/api/billing/license-reconciliation?days=28"));
+
+    expect(response.status).toBe(200);
+    const payload = await response.json();
+    expect(payload.enabled).toBe(true);
+    expect(payload.coverage).toMatchObject({ mode: "live_snapshot_only" });
+    expect(payload.config).toEqual({ currency: "EUR", creditToUsd: 0.02 });
+  });
+
+  it("license reconciliation runs list: returns a sanitized per-run summary for a known enterprise", async () => {
+    vi.doMock("@/lib/config/enterprise-config", () => ({
+      getEnterpriseSlugs: vi.fn(() => ["acme"]),
+    }));
+    vi.doMock("@/lib/db/license-run-repo", async () => {
+      const actual = await vi.importActual<typeof import("@/lib/db/license-run-repo")>("@/lib/db/license-run-repo");
+      return {
+        ...actual,
+        listLicenseRuns: vi.fn(() => [
+          {
+            id: "run-1",
+            enterpriseSlug: "acme",
+            startedAt: "2026-06-01T00:00:00.000Z",
+            completedAt: "2026-06-01T00:05:00.000Z",
+            status: "success",
+            requestedPeriods: ["2026-06"],
+            sourceStats: { secretToken: "hunter2" },
+            unresolvedIdentities: [],
+            warnings: [],
+            errorMessage: null,
+          },
+        ]),
+        listLicenseChecks: vi.fn(() => []),
+        listLicenseSourceState: vi.fn(() => []),
+      };
+    });
+
+    const { GET } = await import("./billing/license-reconciliation/runs/route");
+    const response = await GET(new NextRequest("http://localhost/api/billing/license-reconciliation/runs?enterprise=acme"));
+
+    expect(response.status).toBe(200);
+    const payload = await response.json();
+    expect(payload.enterprise).toBe("acme");
+    expect(payload.runs).toHaveLength(1);
+    expect(payload.runs[0]).toMatchObject({ id: "run-1", enterpriseSlug: "acme", status: "success" });
+    // Never the raw run record's sourceStats/unresolvedIdentities.
+    expect(JSON.stringify(payload)).not.toContain("hunter2");
+  });
+
+  it("license reconciliation run detail: returns the sanitized JSON report for a known run", async () => {
+    vi.doMock("@/lib/config/enterprise-config", () => ({
+      getEnterpriseSlugs: vi.fn(() => ["acme"]),
+    }));
+    vi.doMock("@/lib/db/license-run-repo", async () => {
+      const actual = await vi.importActual<typeof import("@/lib/db/license-run-repo")>("@/lib/db/license-run-repo");
+      return {
+        ...actual,
+        getLicenseRun: vi.fn(() => ({
+          id: "run-1",
+          enterpriseSlug: "acme",
+          startedAt: "2026-06-01T00:00:00.000Z",
+          completedAt: "2026-06-01T00:05:00.000Z",
+          status: "success",
+          requestedPeriods: ["2026-06"],
+          sourceStats: {},
+          unresolvedIdentities: [],
+          warnings: [],
+          errorMessage: null,
+        })),
+        listLicenseChecks: vi.fn(() => []),
+        listLicenseSourceState: vi.fn(() => []),
+      };
+    });
+
+    const { GET } = await import("./billing/license-reconciliation/runs/[id]/route");
+    const response = await GET(
+      new NextRequest("http://localhost/api/billing/license-reconciliation/runs/run-1?enterprise=acme"),
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Content-Type")).toContain("application/json");
+    const payload = await response.json();
+    expect(payload).toMatchObject({ id: "run-1", enterpriseSlug: "acme", status: "success" });
+  });
+
+  it("license reconciliation preflight: returns capability results for a known enterprise", async () => {
+    vi.doMock("@/lib/config/enterprise-config", () => ({
+      getEnterpriseSlugs: vi.fn(() => ["acme"]),
+    }));
+    vi.doMock("@/lib/github/auth-preflight", async () => {
+      const actual = await vi.importActual<typeof import("@/lib/github/auth-preflight")>("@/lib/github/auth-preflight");
+      return {
+        ...actual,
+        preflightEnterpriseAuth: vi.fn(async () => ({
+          enterpriseSlug: "acme",
+          ok: true,
+          capabilities: actual.ALL_CAPABILITIES.map((capability) => ({
+            capability,
+            label: capability,
+            status: "supported" as const,
+            required: capability === "copilot_seats",
+            message: `${capability}: access confirmed.`,
+          })),
+        })),
+      };
+    });
+
+    const { GET } = await import("./billing/license-reconciliation/preflight/route");
+    const response = await GET(new NextRequest("http://localhost/api/billing/license-reconciliation/preflight?enterprise=acme"));
+
+    expect(response.status).toBe(200);
+    const payload = await response.json();
+    expect(payload).toMatchObject({ enterpriseSlug: "acme", ok: true });
+    expect(payload.capabilities).toHaveLength(6);
+  });
+
+  it("license reconciliation CSV export: streams a live-snapshot detail export with the documented column header", async () => {
+    vi.doMock("@/lib/config/enterprise-config", () => ({
+      isBillingSubEnabledForAnyEnterprise: vi.fn(() => true),
+      getEnterpriseSlugs: vi.fn(() => ["acme"]),
+    }));
+    vi.doMock("@/lib/config/dashboard-config", async () => {
+      const actual = await vi.importActual<typeof import("@/lib/config/dashboard-config")>(
+        "@/lib/config/dashboard-config",
+      );
+      return { ...actual, getLicensingConfig: vi.fn(() => ({ currency: "USD", creditToUsd: 0.01 })) };
+    });
+    vi.doMock("@/lib/api/scope-filter", () => ({
+      parseScopeFilter: vi.fn(() => ({ allowedLogins: undefined, enterpriseSlugs: undefined })),
+    }));
+    vi.doMock("@/lib/db/license-repo", () => ({
+      getLicenseReconciliationRows: vi.fn(() => []),
+    }));
+    vi.doMock("@/lib/db/license-history-repo", async () => {
+      const actual = await vi.importActual<typeof import("@/lib/db/license-history-repo")>(
+        "@/lib/db/license-history-repo",
+      );
+      return { ...actual, queryLicensePeriodExport: vi.fn(), hasMaterializedRows: vi.fn(() => false) };
+    });
+
+    const { GET } = await import("./export/license-reconciliation/route");
+    const response = await GET(new NextRequest("http://localhost/api/export/license-reconciliation?days=28&view=detail"));
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Content-Type")).toContain("text/csv");
+    expect(response.headers.get("Content-Disposition")).toContain("attachment");
+    const csv = await response.text();
+    expect(csv).toContain("Enterprise,Period,Org,Login,Holder Key,Plan Type");
+  });
 });

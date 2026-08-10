@@ -6,6 +6,7 @@ import {
   isBillingSubEnabled,
   isCopilotSubEnabled,
   getResolvedOrgs,
+  type BillingMetricConfig,
 } from "@/lib/config/dashboard-config";
 import {
   getClientEnterpriseList,
@@ -13,6 +14,7 @@ import {
   isMetricEnabledForAnyEnterprise,
   isCopilotSubEnabledForAnyEnterprise,
   isBillingSubEnabledForAnyEnterprise,
+  isLicensingHistoryEnabledForAnyEnterprise,
   getClientEnterpriseMetrics,
 } from "@/lib/config/enterprise-config";
 
@@ -72,13 +74,30 @@ export async function GET() {
     aiCreditsUsers: userMetrics,
   };
 
+  // `metrics.billing.licensing` is a server-only configuration block (audit
+  // archive/identity-map/snapshot directory paths, AI-Credit CSV import
+  // path, report-month ranges, etc.) — it must never reach the browser.
+  // Nothing on the client reads it (only `metrics.<category>.enabled` and
+  // `pageVisibility` are consumed — see `src/app/dashboard/page.tsx` and
+  // `src/components/layout/Sidebar.tsx`), so it is stripped entirely here
+  // rather than relying on an incomplete per-field denylist. Every other
+  // billing sub-toggle (`enabled`/`meteredUsage`/`premiumRequests`/
+  // `aiCredits`) is preserved unchanged for backward compatibility.
+  const { licensing: _licensing, ...safeBilling } = config.metrics.billing as BillingMetricConfig;
+  const safeMetrics = { ...config.metrics, billing: safeBilling };
+
   return NextResponse.json({
     ...config,
+    metrics: safeMetrics,
     enterpriseMode,
     multiEnterprise: multiEnt,
     enterprises: getClientEnterpriseList(),
     enterpriseMetrics: getClientEnterpriseMetrics(),
     effectiveBilling: billingEnabled,
+    // Safe, computed summary of whether historical license reconciliation
+    // is enabled anywhere (globally, or overridden on for at least one
+    // enterprise) — never the underlying `LicensingConfig` itself.
+    licensingHistoryEnabled: isLicensingHistoryEnabledForAnyEnterprise(),
     resolvedOrgs: getResolvedOrgs(),
     pageVisibility,
   });
