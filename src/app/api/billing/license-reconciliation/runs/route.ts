@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getEnterpriseSlugs } from "@/lib/config/enterprise-config";
-import { listLicenseRuns, listLicenseChecks, listLicenseSourceState, buildLicenseRunReport } from "@/lib/db/license-run-repo";
+import { getLicenseCheckCountsByRunIds, listLicenseRuns } from "@/lib/db/license-run-repo";
 import { withCache } from "@/lib/cache/with-cache";
 import { withTimeout } from "@/lib/api/timeout";
 import { withRateLimit } from "@/lib/api/rate-limit/rate-limiter";
@@ -21,6 +21,15 @@ interface LicenseRunSummary {
   checkCounts: { pass: number; warning: number; fail: number };
   warningCount: number;
   hasError: boolean;
+}
+
+function computeElapsedMs(startedAt: string, completedAt: string | null): number | null {
+  if (completedAt == null) return null;
+  const started = Date.parse(startedAt);
+  const completed = Date.parse(completedAt);
+  if (!Number.isFinite(started) || !Number.isFinite(completed)) return null;
+  const elapsed = completed - started;
+  return elapsed >= 0 ? elapsed : null;
 }
 
 async function handler(request: NextRequest) {
@@ -48,31 +57,20 @@ async function handler(request: NextRequest) {
     }
 
     const runs = listLicenseRuns(enterprise, limit);
-    // Source sync state doesn't vary per run for a given enterprise — fetch
-    // once and reuse it for every run's sanitized report, rather than
-    // re-querying it per run.
-    const sourceStates = listLicenseSourceState(enterprise);
+    const checkCountsByRunId = getLicenseCheckCountsByRunIds(runs.map((run) => run.id));
 
-    const summaries: LicenseRunSummary[] = runs.map((run) => {
-      const checks = listLicenseChecks(run.id);
-      // Reuse the single sanitized entry point (`buildLicenseRunReport`)
-      // rather than re-deriving redaction logic here, then project only the
-      // lean, safe summary fields — never the raw sourceStats/checks/
-      // sources/unresolvedIdentities from the full report.
-      const report = buildLicenseRunReport(run, checks, sourceStates);
-      return {
-        id: report.id,
-        enterpriseSlug: report.enterpriseSlug,
-        status: report.status,
-        startedAt: report.startedAt,
-        completedAt: report.completedAt,
-        elapsedMs: report.elapsedMs,
-        requestedPeriods: report.requestedPeriods,
-        checkCounts: report.checkCounts,
-        warningCount: report.warnings.length,
-        hasError: report.errorMessage != null,
-      };
-    });
+    const summaries: LicenseRunSummary[] = runs.map((run) => ({
+      id: run.id,
+      enterpriseSlug: run.enterpriseSlug,
+      status: run.status,
+      startedAt: run.startedAt,
+      completedAt: run.completedAt,
+      elapsedMs: computeElapsedMs(run.startedAt, run.completedAt),
+      requestedPeriods: [...run.requestedPeriods].sort(),
+      checkCounts: checkCountsByRunId.get(run.id) ?? { pass: 0, warning: 0, fail: 0 },
+      warningCount: run.warnings.length,
+      hasError: run.errorMessage != null,
+    }));
 
     return NextResponse.json(
       { enterprise, runs: summaries },

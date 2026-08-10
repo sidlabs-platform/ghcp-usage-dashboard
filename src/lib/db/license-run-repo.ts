@@ -105,6 +105,12 @@ export interface LicenseCheckRecord {
   details: Record<string, unknown>;
 }
 
+export interface LicenseRunReportCheckCounts {
+  pass: number;
+  warning: number;
+  fail: number;
+}
+
 export interface LicenseSourceStateInput {
   enterpriseSlug: string;
   source: string;
@@ -313,6 +319,34 @@ export function listLicenseChecks(runId: string): LicenseCheckRecord[] {
     .prepare(`SELECT * FROM license_reconciliation_checks WHERE run_id = ? ORDER BY check_name, billing_period, org_login`)
     .all(runId) as Record<string, unknown>[];
   return rows.map(mapCheckRow);
+}
+
+/**
+ * Aggregate pass/warning/fail check counts for multiple reconciliation runs in
+ * one query. Runs without checks are omitted from the returned map.
+ */
+export function getLicenseCheckCountsByRunIds(runIds: string[]): Map<string, LicenseRunReportCheckCounts> {
+  const uniqueRunIds = [...new Set(runIds)];
+  if (uniqueRunIds.length === 0) return new Map();
+
+  const placeholders = uniqueRunIds.map(() => "?").join(", ");
+  const rows = getDb()
+    .prepare(`
+      SELECT run_id, status, COUNT(*) AS count
+      FROM license_reconciliation_checks
+      WHERE run_id IN (${placeholders})
+        AND status IN ('pass', 'warning', 'fail')
+      GROUP BY run_id, status
+    `)
+    .all(...uniqueRunIds) as Array<{ run_id: string; status: LicenseCheckStatus; count: number }>;
+
+  const countsByRunId = new Map<string, LicenseRunReportCheckCounts>();
+  for (const row of rows) {
+    const counts = countsByRunId.get(row.run_id) ?? { pass: 0, warning: 0, fail: 0 };
+    counts[row.status] = Number(row.count);
+    countsByRunId.set(row.run_id, counts);
+  }
+  return countsByRunId;
 }
 
 // ── Source sync state ────────────────────────────────────────────────
@@ -928,12 +962,6 @@ export interface LicenseRunReportCheckEntry {
   expectedValue: number | null;
   actualValue: number | null;
   details: Record<string, unknown>;
-}
-
-export interface LicenseRunReportCheckCounts {
-  pass: number;
-  warning: number;
-  fail: number;
 }
 
 export interface LicenseRunReportObject {

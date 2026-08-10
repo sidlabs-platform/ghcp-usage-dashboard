@@ -181,8 +181,9 @@ export class SeatsClient {
   /**
    * Enterprise-scoped seats, normalized for the historical seat ledger.
    * Each seat's `orgLogin` is taken from its own `organization.login` (an
-   * enterprise-level seat listing spans multiple orgs), falling back to an
-   * empty string when the API didn't attribute the seat to an org.
+   * enterprise-level seat listing spans multiple orgs). An unattributed seat
+   * uses an empty staging value here; `buildSeatLedger` owns canonical org
+   * normalization and converts it to `UNATTRIBUTED_ORG` before emitting rows.
    */
   async getEnterpriseSeatsNormalized(enterprise: string, enterpriseSlug?: string): Promise<{ totalSeats: number; seats: NormalizedCopilotSeat[] }> {
     const { totalSeats, seats } = await this.getEnterpriseSeats(enterprise, enterpriseSlug);

@@ -187,6 +187,42 @@ describe("config route", { timeout: 15000 }, () => {
     expect(payload.licensingHistoryEnabled).toBe(true);
   });
 
+  it("fails licensing history visibility closed when licensing config is invalid", async () => {
+    delete process.env.GITHUB_ENTERPRISE;
+    delete process.env.GITHUB_ORGS;
+
+    vi.doMock("@/lib/config/dashboard-config", () => ({
+      getDashboardConfig: () => ({
+        enterprises: [],
+        metrics: {
+          copilot: { enabled: true },
+          billing: { enabled: true, aiCredits: true },
+          codeScanning: { enabled: false },
+          dependabot: { enabled: false },
+          secretScanning: { enabled: false },
+        },
+      }),
+      getLicensingConfig: () => {
+        throw new Error("invalid licensing config");
+      },
+      isEnterpriseEnabled: () => false,
+      getEffectiveBillingEnabled: () => true,
+      isBillingSubEnabled: (key: string) => key === "aiCredits",
+      isCopilotSubEnabled: () => true,
+      getResolvedOrgs: () => [],
+    }));
+    vi.doUnmock("@/lib/config/enterprise-config");
+
+    const { GET } = await loadRoute();
+    const response = await GET();
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      licensingHistoryEnabled: false,
+      pageVisibility: { licenseReconciliation: true },
+    });
+  });
+
   it("uses enterprise-aware visibility checks in multi-enterprise mode", async () => {
     const isMetricEnabled = vi.fn(() => {
       throw new Error("single-enterprise metric gating should not be used");

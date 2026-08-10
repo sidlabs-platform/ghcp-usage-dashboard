@@ -154,6 +154,8 @@ import {
   type PersistedLicenseOrgBillingSnapshot,
   type PersistedLicenseAicConsumption,
   type LicensePeriodRowInput,
+  type LicensePeriodQuery,
+  type LicenseRowsPagination,
 } from "./license-history-repo";
 import {
   startLicenseRun,
@@ -248,7 +250,9 @@ export interface LicenseHistorySyncDeps {
   listPersistedOrgBillingSnapshots: (enterpriseSlug: string, periods: string[]) => PersistedLicenseOrgBillingSnapshot[];
   listPersistedAicConsumption: (enterpriseSlug: string, periods: string[]) => PersistedLicenseAicConsumption[];
   replaceMaterializedPeriod: (enterpriseSlug: string, period: string, rows: LicensePeriodRowInput[]) => number;
-  queryLicensePeriodRows: (query: LicensePeriodFilterQuery & { view?: "detail" }) => { rows: LicensePeriodRowLike[] };
+  queryLicensePeriodRows: (
+    query: LicensePeriodQuery & { view?: "detail" },
+  ) => { rows: LicensePeriodRowLike[]; pagination?: LicenseRowsPagination };
   hasMaterializedRows: (query: LicensePeriodFilterQuery) => boolean;
 
   startLicenseRun: (input: StartLicenseRunInput) => string;
@@ -496,6 +500,101 @@ type PeriodConsumptionRecord = ConsumptionRecordInput & {
   billingPeriod: string;
   netUsd?: number | null;
 };
+
+function canonicalizeConsumptionHolderKeys(
+  records: PeriodConsumptionRecord[],
+  seatRows: SeatLedgerResult["rows"],
+  warnings: string[],
+): PeriodConsumptionRecord[] {
+  const exactMatches = new Map<string, Map<string, string>>();
+  const periodMatches = new Map<string, Set<string>>();
+
+  const addPeriodMatch = (key: string, holderKey: string) => {
+    const matches = periodMatches.get(key) ?? new Set<string>();
+    matches.add(holderKey);
+    periodMatches.set(key, matches);
+  };
+  const addExactMatch = (key: string, holderKey: string, orgLogin: string) => {
+    const matches = exactMatches.get(key) ?? new Map<string, string>();
+    matches.set(holderKey, orgLogin);
+    exactMatches.set(key, matches);
+  };
+
+  for (const row of seatRows) {
+    const login = row.observedLogin?.trim().toLowerCase();
+    if (!login) continue;
+    const orgLogin = row.orgLogin.trim() || LEDGER_UNATTRIBUTED_ORG;
+    addExactMatch(`${row.billingPeriod}\u0000${orgLogin.toLowerCase()}\u0000${login}`, row.holderKey, orgLogin);
+    addPeriodMatch(`${row.billingPeriod}\u0000${login}`, row.holderKey);
+  }
+
+  let ambiguousCount = 0;
+  const canonicalized = records.map((record) => {
+    if (!record.holderKey.startsWith("login:")) return record;
+    const login = record.holderKey.slice("login:".length).trim().toLowerCase();
+    if (!login) return record;
+
+    const orgLogin = record.orgLogin?.trim() || LEDGER_UNATTRIBUTED_ORG;
+    const exact = exactMatches.get(`${record.billingPeriod}\u0000${orgLogin.toLowerCase()}\u0000${login}`);
+    if (exact && exact.size > 0) {
+      if (exact.size > 1) {
+        ambiguousCount++;
+        return record;
+      }
+      const [holderKey, canonicalOrgLogin] = [...exact.entries()][0];
+      return { ...record, holderKey, orgLogin: canonicalOrgLogin };
+    }
+
+    let matches: Set<string> | undefined;
+    if (orgLogin === LEDGER_UNATTRIBUTED_ORG) {
+      matches = periodMatches.get(`${record.billingPeriod}\u0000${login}`);
+    }
+    if (!matches || matches.size === 0) return record;
+    if (matches.size > 1) {
+      ambiguousCount++;
+      return record;
+    }
+
+    return { ...record, holderKey: [...matches][0] };
+  });
+
+  if (ambiguousCount > 0) {
+    warnings.push(
+      `AI-Credit holder canonicalization skipped ${ambiguousCount} record(s) because seat evidence mapped a consumed login to multiple holders.`,
+    );
+  }
+
+  return canonicalized;
+}
+
+const MATERIALIZED_ROWS_PAGE_SIZE = 200;
+
+function listAllMaterializedPeriodRows(
+  deps: LicenseHistorySyncDeps,
+  enterpriseSlug: string,
+  period: string,
+): LicensePeriodRowLike[] {
+  const rows: LicensePeriodRowLike[] = [];
+  let page = 1;
+
+  while (true) {
+    const result = deps.queryLicensePeriodRows({
+      enterpriseSlug,
+      periods: [period],
+      page,
+      pageSize: MATERIALIZED_ROWS_PAGE_SIZE,
+    });
+    rows.push(...result.rows);
+    if (
+      result.rows.length === 0 ||
+      !result.pagination ||
+      page >= result.pagination.totalPages
+    ) {
+      return rows;
+    }
+    page++;
+  }
+}
 
 const ACCOUNT_STATE_RANK: Record<AccountState, number> = {
   unknown: 0,
@@ -755,7 +854,14 @@ function datedAllowanceAffectsPeriod(allowance: DatedAllowance, period: string):
 
 /** Adapt a persisted, already-materialized period row (reused for a skipped historical period) into the shape reconciliation checks expect — reusing every real, persisted field verbatim (see `LicensePeriodRowLike`) rather than inventing zero/"unknown" placeholders. Only the four cost/utilization fields that are genuinely never persisted (`utilizationPct`, `overageCredits`, `overageUsd`, `totalCost`) are re-derived here, using the exact same formula `materialize-license-period.ts` uses to produce them the first time, from the row's own real persisted cost/consumption fields. */
 function toMaterializedRowLike(row: LicensePeriodRowLike, enterpriseSlug: string): MaterializedLicensePeriodRow {
-  const effectiveBudgetUsd = row.aicAssignedUsd > 0 ? row.aicAssignedUsd : row.defaultAicUsd > 0 ? row.defaultAicUsd : 0;
+  const effectiveBudgetUsd =
+    row.aicAssignedRule === "per_user_budget"
+      ? row.aicAssignedUsd
+      : row.aicAssignedUsd > 0
+        ? row.aicAssignedUsd
+        : row.defaultAicUsd > 0
+          ? row.defaultAicUsd
+          : 0;
   const utilizationPct = effectiveBudgetUsd > 0 ? round2((row.aicConsumedUsd / effectiveBudgetUsd) * 100) : 0;
   const overageUsd = Math.max(round2(row.aicConsumedUsd - effectiveBudgetUsd), 0);
   const overageCredits = Math.max(round2(row.aicConsumedCredits - row.defaultAicCredits), 0);
@@ -1774,6 +1880,11 @@ export async function syncLicenseHistoryForEnterprise(
       currentPeriod,
     });
     warnings.push(...ledger.warnings);
+    consumptionRecordsWithPeriod = canonicalizeConsumptionHolderKeys(
+      consumptionRecordsWithPeriod,
+      ledger.rows,
+      warnings,
+    );
 
     // Build identity resolution input per holderKey, from every source
     // gathered above (audit observations, enterprise/org identity mapping,
@@ -1929,8 +2040,8 @@ export async function syncLicenseHistoryForEnterprise(
       if (canSkip) {
         skippedPeriods.push(period);
         nextPeriodFingerprints[period] = fingerprint;
-        const existing = deps.queryLicensePeriodRows({ enterpriseSlug, periods: [period] });
-        for (const row of existing.rows) {
+        const existingRows = listAllMaterializedPeriodRows(deps, enterpriseSlug, period);
+        for (const row of existingRows) {
           allMaterializedRows.push(toMaterializedRowLike(row, enterpriseSlug));
         }
         continue;
@@ -1998,12 +2109,12 @@ export async function syncLicenseHistoryForEnterprise(
         degradedPeriod &&
         deps.hasMaterializedRows({ enterpriseSlug, periods: [period] })
       ) {
-        const existing = deps.queryLicensePeriodRows({ enterpriseSlug, periods: [period] });
-        if (existing.rows.length > 0) {
+        const existingRows = listAllMaterializedPeriodRows(deps, enterpriseSlug, period);
+        if (existingRows.length > 0) {
           const retainedWarning = `Retained the existing ${period} materialization because the current run produced no replacement rows.`;
           warnings.push(retainedWarning);
           skippedPeriods.push(period);
-          for (const row of existing.rows) {
+          for (const row of existingRows) {
             allMaterializedRows.push(toMaterializedRowLike(row, enterpriseSlug));
           }
           continue;

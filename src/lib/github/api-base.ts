@@ -82,28 +82,58 @@ function lookupConfiguredSlug(slug?: string): string | undefined {
 // ── Validated URL construction ────────────────────────────────────────
 
 /**
- * Construct a validated URL from a path or absolute URL.
- * Ensures the URL's origin is in the allowed set (unless authMode is "none").
- * For relative paths, enforces root-relative format and constructs against GITHUB_API_BASE.
+ * Construct a validated URL from a root-relative GitHub API path.
+ * Absolute and protocol-relative URLs are rejected so caller-controlled input
+ * cannot replace the configured API origin.
  */
-function buildValidatedUrl(pathOrUrl: string, mode: AuthMode): string {
-  if (pathOrUrl.startsWith("http")) {
-    let parsed: URL;
-    try {
-      parsed = new URL(pathOrUrl);
-    } catch {
-      throw new Error(`Invalid URL: ${pathOrUrl.slice(0, 120).replace(/\n|\r/g, "")}`);
-    }
-    if (mode !== "none" && !ALLOWED_ORIGINS.has(parsed.origin)) {
-      throw new Error(`Blocked request to disallowed origin: ${parsed.origin.replace(/\n|\r/g, "")}`);
-    }
-    return parsed.href;
+function assertRootRelativePath(path: string): void {
+  if (!path.startsWith("/") || path.startsWith("//")) {
+    throw new Error(`GitHub API path must be root-relative (start with /): ${path.slice(0, 120).replace(/\n|\r/g, "")}`);
+  }
+}
+
+/**
+ * Convert a GitHub API pagination link to the root-relative path accepted by
+ * the authenticated transport, rejecting links that escape the API allowlist.
+ */
+export function toRootRelativeGitHubApiPath(pathOrUrl: string): string {
+  if (pathOrUrl.startsWith("/") && !pathOrUrl.startsWith("//")) {
+    return pathOrUrl;
   }
 
-  if (!pathOrUrl.startsWith("/") || pathOrUrl.startsWith("//")) {
-    throw new Error(`GitHub API path must be root-relative (start with /): ${pathOrUrl.slice(0, 120).replace(/\n|\r/g, "")}`);
+  let parsed: URL;
+  try {
+    parsed = new URL(pathOrUrl);
+  } catch {
+    throw new Error("GitHub API pagination link is not a valid URL.");
+  }
+  if (!ALLOWED_ORIGINS.has(parsed.origin)) {
+    throw new Error(`GitHub API pagination link uses a disallowed origin: ${parsed.origin.replace(/\n|\r/g, "")}`);
   }
 
+  let pathname = parsed.pathname;
+  try {
+    const configuredBase = new URL(GITHUB_API_BASE);
+    const basePath = configuredBase.pathname.replace(/\/+$/, "");
+    if (
+      parsed.origin === configuredBase.origin &&
+      basePath &&
+      basePath !== "/" &&
+      (pathname === basePath || pathname.startsWith(`${basePath}/`))
+    ) {
+      pathname = pathname.slice(basePath.length) || "/";
+    }
+  } catch {
+    // buildValidatedUrl reports a sanitized configuration error at request time.
+  }
+
+  const path = `${pathname}${parsed.search}`;
+  assertRootRelativePath(path);
+  return path;
+}
+
+function buildValidatedUrl(pathOrUrl: string): string {
+  assertRootRelativePath(pathOrUrl);
   // Use string concatenation to preserve GHES path prefixes (e.g., /api/v3),
   // then parse to normalize and validate the result.
   const fullUrl = `${GITHUB_API_BASE}${pathOrUrl}`;
@@ -133,17 +163,6 @@ interface AuthContext {
  * are based on server-controlled data, not raw user input.
  */
 function resolveAuthContext(path: string, enterpriseSlug?: string): AuthContext {
-  // Absolute non-GitHub URLs (e.g., pre-signed download links) need no auth
-  if (path.startsWith("http")) {
-    try {
-      const parsed = new URL(path);
-      if (!ALLOWED_ORIGINS.has(parsed.origin)) return { mode: "none" };
-      path = parsed.pathname;
-    } catch {
-      // If URL parsing fails, fall through to path-based detection
-    }
-  }
-
   // Look up enterprise slug in server config (returns server-owned string or undefined)
   const configuredSlug = lookupConfiguredSlug(enterpriseSlug);
 
@@ -170,12 +189,13 @@ function resolveAuthContext(path: string, enterpriseSlug?: string): AuthContext 
 }
 
 /**
- * Resolve auth mode from a URL path.
- * - Non-GitHub absolute URLs (pre-signed Azure/S3) → "none"
+ * Resolve auth mode from a root-relative GitHub API path.
+ * - Absolute and protocol-relative URLs are rejected
  * - Paths starting with `/enterprises/` → "pat" (always)
  * - All other GitHub API paths → "app" if configured, else "pat"
  */
 export function resolveAuthMode(path: string, enterpriseSlug?: string): AuthMode {
+  assertRootRelativePath(path);
   return resolveAuthContext(path, enterpriseSlug).mode;
 }
 
@@ -559,9 +579,9 @@ export async function githubFetchWithMeta<T>(
   options: GithubFetchMetaOptions = {},
 ): Promise<GithubFetchMetaResult<T>> {
   const { method = "GET", body, retries = 3, authMode, enterpriseSlug, extraHeaders } = options;
+  const url = buildValidatedUrl(path);
   const ctx = resolveOrOverrideContext(path, authMode, enterpriseSlug);
   await ensureAuthReady(ctx.mode);
-  const url = buildValidatedUrl(path, ctx.mode);
 
   let lastStatus = TRANSPORT_FAILURE_STATUS;
   let lastBody = "";
@@ -601,7 +621,14 @@ export async function githubFetchWithMeta<T>(
     // no real-world case where a 204 arrives with `ok === false`, so only
     // this branch (nested under `resp.ok`) is ever reachable for it.
     if (resp.ok) {
-      const data: T | null = resp.status === 204 ? null : ((await resp.json()) as T);
+      let data: T | null = null;
+      if (resp.status !== 204) {
+        try {
+          data = (await resp.json()) as T;
+        } catch {
+          throw new GitHubApiError(resp.status, path, "Response body was not valid JSON.", false);
+        }
+      }
       return { data, status: resp.status, headers: selectResponseHeaders(resp) };
     }
 
@@ -661,7 +688,7 @@ export async function githubFetchPaginated<T>(path: string, perPage = 100, authM
   while (true) {
     const separator = path.includes("?") ? "&" : "?";
     const pageUrl = `${path}${separator}per_page=${perPage}&page=${page}`;
-    const fullUrl = buildValidatedUrl(pageUrl, ctx.mode);
+    const fullUrl = buildValidatedUrl(pageUrl);
     await adaptiveRateDelay(ctx.mode, ctx.enterpriseSlug);
     const hdrs = await headersForAuth(ctx.mode, ctx.enterpriseSlug);
     const resp = await fetch(fullUrl, { headers: hdrs, cache: "no-store" });
@@ -757,7 +784,7 @@ export async function githubFetchPaginatedWithCutoff<
   while (page <= MAX_PAGES) {
     const separator = path.includes("?") ? "&" : "?";
     const pageUrl = `${path}${separator}per_page=${perPage}&page=${page}`;
-    const fullUrl = buildValidatedUrl(pageUrl, ctx.mode);
+    const fullUrl = buildValidatedUrl(pageUrl);
     await adaptiveRateDelay(ctx.mode, ctx.enterpriseSlug);
     const hdrs = await headersForAuth(ctx.mode, ctx.enterpriseSlug);
     const resp = await fetch(fullUrl, { headers: hdrs, cache: "no-store" });
@@ -822,7 +849,7 @@ export async function githubFetchCursorPaginatedWithCutoff<
     const separator: string = path.includes("?") ? "&" : "?";
     const cursorParam: string = after ? `&after=${after}` : "";
     const pageUrl: string = `${path}${separator}per_page=${perPage}${cursorParam}`;
-    const fullUrl: string = buildValidatedUrl(pageUrl, ctx.mode);
+    const fullUrl: string = buildValidatedUrl(pageUrl);
     await adaptiveRateDelay(ctx.mode, ctx.enterpriseSlug);
     const hdrs = await headersForAuth(ctx.mode, ctx.enterpriseSlug);
     const resp: Response = await fetch(fullUrl, { headers: hdrs, cache: "no-store" });

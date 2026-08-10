@@ -372,6 +372,12 @@ function clampPagination(query: LicensePeriodQuery): PaginationParams {
  * this module — the paginated detail/rollup query, KPI totals, plan/org
  * breakdowns, and the existence check — guaranteeing they all filter
  * identically.
+ *
+ * This remains repository-specific rather than using similarly named helpers
+ * in other repositories: those helpers are module-private and match only
+ * `user_login`, while historical identity recovery must match `user_login`,
+ * `resolved_user_login`, or `holder_key`. It also intentionally treats an
+ * explicit empty `allowedLogins` array as deny-all rather than unrestricted.
  */
 function appendPeriodFilters(clauses: string[], params: unknown[], query: LicensePeriodFilterQuery): void {
   const enterpriseSlugs = query.enterpriseSlugs?.length
@@ -524,18 +530,28 @@ const RANK_TO_CONFIDENCE: Record<number, SeatLedgerConfidence | "unknown"> = {
   [-1]: "unknown",
 };
 
-// Same "assigned budget, falling back to the plan default" semantics as the
-// rollup's JS mapping (`aicAssignedUsd || defaultAicUsd`): SQLite doesn't
-// allow referencing a SELECT-list alias from another expression in the same
-// SELECT, so the SUM(...) aggregates are repeated inline here rather than
-// reused via alias. Kept as a single source of truth so the value used for
-// ORDER BY and the value returned to callers can never drift apart.
+/**
+ * Per-row effective budget: the assigned AI-credit budget when set, else the
+ * plan's default allowance, else 0. Mirrors `materialize-license-period.ts`'s
+ * `finalizeRow` so overage/utilization computed here from persisted columns
+ * always agrees with the materializer's own (pre-persistence) calculation.
+ */
+const EFFECTIVE_BUDGET_SQL = `
+  CASE
+    WHEN aic_assigned_rule = 'per_user_budget' THEN aic_assigned_usd
+    WHEN aic_assigned_usd > 0 THEN aic_assigned_usd
+    WHEN default_aic_usd > 0 THEN default_aic_usd
+    ELSE 0
+  END
+`;
+
+// Sum each row's assigned-or-default effective budget. Choosing one budget
+// column for the whole group would drop default budgets from mixed groups and
+// make utilization disagree with the per-row overage and bucket calculations.
 const UTILIZATION_PCT_SQL = `
   CASE
-    WHEN COALESCE(SUM(aic_assigned_usd), 0) > 0
-      THEN (COALESCE(SUM(aic_consumed_usd), 0) / COALESCE(SUM(aic_assigned_usd), 0)) * 100
-    WHEN COALESCE(SUM(default_aic_usd), 0) > 0
-      THEN (COALESCE(SUM(aic_consumed_usd), 0) / COALESCE(SUM(default_aic_usd), 0)) * 100
+    WHEN COALESCE(SUM(${EFFECTIVE_BUDGET_SQL}), 0) > 0
+      THEN (COALESCE(SUM(aic_consumed_usd), 0) / SUM(${EFFECTIVE_BUDGET_SQL})) * 100
     ELSE 0
   END
 `;
@@ -1060,7 +1076,12 @@ function buildPeriodInClause(periods: string[], column: string): { sql: string; 
   };
 }
 
-/** Read durable normalized audit events for the requested periods. */
+/**
+ * Read durable normalized audit events through the latest requested period,
+ * including all earlier retained events. Earlier assignments are required to
+ * reconstruct intervals that opened before the requested period, so no lower
+ * bound or row cap can be applied without losing durable recoverability.
+ */
 export function listPersistedAuditEvents(
   enterpriseSlug: string,
   periods: string[],
@@ -1291,20 +1312,6 @@ function round2(value: number): number {
   if (!Number.isFinite(value)) return 0;
   return Math.round((value + Number.EPSILON) * 100) / 100;
 }
-
-/**
- * Per-row effective budget: the assigned AI-credit budget when set, else the
- * plan's default allowance, else 0. Mirrors `materialize-license-period.ts`'s
- * `finalizeRow` so overage/utilization computed here from persisted columns
- * always agrees with the materializer's own (pre-persistence) calculation.
- */
-const EFFECTIVE_BUDGET_SQL = `
-  CASE
-    WHEN aic_assigned_usd > 0 THEN aic_assigned_usd
-    WHEN default_aic_usd > 0 THEN default_aic_usd
-    ELSE 0
-  END
-`;
 
 /**
  * Per-row overage in USD: `MAX(consumed - effective budget, 0)` — the 2+

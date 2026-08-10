@@ -183,6 +183,56 @@ describe("importIdentityMap — malformed entries and file errors", () => {
     );
     expect(() => importIdentityMap(p, { maxBytes: 50 })).toThrow(ImportFileError);
   });
+
+  it("never includes raw external identities in malformed-entry warnings", () => {
+    const listSecret = "sensitive-list-identity@example.com";
+    const mappingSecrets = [
+      "sensitive-string-identity@example.com",
+      "sensitive-object-identity@example.com",
+      "sensitive-value-identity@example.com",
+    ];
+    const listPath = writeFixture(
+      "redacted-list-warning.json",
+      JSON.stringify([{ externalIdentity: listSecret, resolvedLogin: "" }]),
+    );
+    const mappingPath = writeFixture(
+      "redacted-mapping-warnings.json",
+      JSON.stringify({
+        [mappingSecrets[0]]: "",
+        [mappingSecrets[1]]: {},
+        [mappingSecrets[2]]: 42,
+      }),
+    );
+
+    const warnings = [
+      ...importIdentityMap(listPath).warnings,
+      ...importIdentityMap(mappingPath).warnings,
+    ].join("\n");
+
+    for (const rawIdentity of [listSecret, ...mappingSecrets]) {
+      expect(warnings).not.toContain(rawIdentity);
+    }
+  });
+
+  it("redacts external identities and resolved logins from conflict warnings", () => {
+    const externalIdentity = "sensitive-conflict-identity@example.com";
+    const resolvedLogins = ["private-login-one", "private-login-two"];
+    const p = writeFixture(
+      "redacted-conflict-warning.json",
+      JSON.stringify([
+        { externalIdentity, resolvedLogin: resolvedLogins[0] },
+        { externalIdentity, resolvedLogin: resolvedLogins[1] },
+      ]),
+    );
+
+    const warning = importIdentityMap(p).warnings.find((value) => /conflict/i.test(value));
+
+    expect(warning).toBeDefined();
+    expect(warning).not.toContain(externalIdentity);
+    for (const login of resolvedLogins) {
+      expect(warning).not.toContain(login);
+    }
+  });
 });
 
 describe("importIdentityMap — fingerprint", () => {

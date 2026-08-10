@@ -497,6 +497,15 @@ export function isBillingSubEnabledForAnyEnterprise(
   return enterprises.some((e) => isBillingSubEnabledForEnterprise(e.slug, sub));
 }
 
+function isGlobalLicensingHistoryEnabled(): boolean {
+  try {
+    return getLicensingConfig().history.enabled;
+  } catch {
+    console.warn("[Config] Invalid licensing history configuration; reporting it as disabled.");
+    return false;
+  }
+}
+
 /**
  * Check if historical license reconciliation sync is considered enabled for
  * a specific enterprise: an explicit per-enterprise
@@ -520,7 +529,7 @@ export function isLicensingHistoryEnabledForEnterprise(slug: string): boolean {
   const override = entConfig.metrics?.billing?.licensingHistoryEnabled;
   if (typeof override === "boolean") return override;
 
-  return getLicensingConfig().history.enabled;
+  return isGlobalLicensingHistoryEnabled();
 }
 
 /**
@@ -537,7 +546,7 @@ export function isLicensingHistoryEnabledForAnyEnterprise(): boolean {
   if (enterprises.length === 0) {
     const config = getDashboardConfig();
     if (!config.metrics.billing?.enabled) return false;
-    return getLicensingConfig().history.enabled;
+    return isGlobalLicensingHistoryEnabled();
   }
   return enterprises.some((e) => isLicensingHistoryEnabledForEnterprise(e.slug));
 }

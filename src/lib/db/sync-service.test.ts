@@ -543,6 +543,25 @@ describe("sync-service", () => {
       });
       expect(getLicensingSyncStatusSummary("in_progress")).toEqual({ enabled: false, status: "in_progress" });
     });
+
+    it.each(["started", "in_progress"] as const)(
+      "fails licensing status closed for the '%s' response when config resolution throws",
+      (status) => {
+        const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+        (createDefaultLicenseHistorySyncDeps as ReturnType<typeof vi.fn>).mockReturnValueOnce({
+          getConfig: () => {
+            throw new Error("invalid licensing config");
+          },
+        });
+
+        expect(getLicensingSyncStatusSummary(status)).toEqual({ enabled: false, status });
+        expect(warnSpy).toHaveBeenCalledWith(
+          "[Sync] Invalid licensing history configuration; reporting it as disabled.",
+        );
+        expect(String(warnSpy.mock.calls[0]?.[0])).not.toContain("invalid licensing config");
+        warnSpy.mockRestore();
+      },
+    );
   });
 
   it("fullSync triggers 28-day fallback when no enterprise data", async () => {

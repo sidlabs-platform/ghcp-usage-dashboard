@@ -489,6 +489,21 @@ describe("materializeLicensePeriodRows: duplicate aggregation and org attributio
 });
 
 describe("materializeLicensePeriodRows: utilization / overage / total cost", () => {
+  it("treats all consumption as overage when a per-user budget is explicitly zero", () => {
+    const result = materializeLicensePeriodRows(
+      baseInput({
+        config: baseConfig({ perUserBudgetUsd: { user1: 0 } }),
+        consumption: [{ source: "billing_report", orgLogin: "org1", holderKey: "user1", credits: 500, grossUsd: 5 }],
+      })
+    );
+    const row = result.rows[0];
+    expect(row.aicAssignedUsd).toBe(0);
+    expect(row.aicAssignedRule).toBe("per_user_budget");
+    expect(row.utilizationPct).toBe(0);
+    expect(row.overageUsd).toBe(5);
+    expect(row.totalCost).toBe(24);
+  });
+
   it("computes utilization percentage against the assigned budget", () => {
     const result = materializeLicensePeriodRows(
       baseInput({ consumption: [{ source: "billing_report", orgLogin: "org1", holderKey: "user1", credits: 950, grossUsd: 9.5 }] })

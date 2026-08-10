@@ -11,6 +11,7 @@ import {
 import { escapeCSVValue } from "@/lib/export/csv";
 import { withTimeout } from "@/lib/api/timeout";
 import { withRateLimit } from "@/lib/api/rate-limit/rate-limiter";
+import type { LicenseReconciliationRow } from "@/lib/types/licensing";
 import { resolveReconciliationFilters } from "../../billing/license-reconciliation/route";
 
 // Bounds how many rows this endpoint will ever materialize/emit in one
@@ -115,9 +116,6 @@ const ROLLUP_COLUMNS: CsvColumnDef<LicenseRollupRowRecord>[] = [
   { label: "Currency", value: (r) => r.currency },
 ];
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-type LegacyReconciliationRow = any;
-
 /**
  * Adapt a legacy live-snapshot row (from `getLicenseReconciliationRows`,
  * which has no per-row enterprise/period/holder-key concept) onto the same
@@ -130,7 +128,7 @@ type LegacyReconciliationRow = any;
  * route uses for this fallback mode.
  */
 function mapLegacyRowToDetailRecord(
-  row: LegacyReconciliationRow,
+  row: LicenseReconciliationRow,
   enterpriseSlugs: string[] | undefined,
   currency: string,
   nowIso: string,
@@ -138,14 +136,14 @@ function mapLegacyRowToDetailRecord(
   return {
     enterpriseSlug: enterpriseSlugs?.join(";") ?? "",
     billingPeriod: "live",
-    orgLogin: Array.isArray(row.orgs) ? row.orgs.join(";") : "",
-    holderKey: row.holder_key ?? row.user_login,
-    githubUserId: row.github_user_id ?? null,
+    orgLogin: row.orgs.join(";"),
+    holderKey: row.user_login,
+    githubUserId: null,
     userLogin: row.user_login,
-    resolvedUserLogin: row.resolved_user_login ?? row.user_login,
-    externalIdentity: row.external_identity ?? null,
-    identityResolutionSource: row.identity_resolution_source ?? "live_snapshot_only",
-    accountState: row.account_state ?? "",
+    resolvedUserLogin: row.user_login,
+    externalIdentity: null,
+    identityResolutionSource: "live_snapshot_only",
+    accountState: "",
     licenseAssignedDate: row.license_assigned_date ?? null,
     userRevokedDate: row.user_revoked_date ?? null,
     planType: row.plan_type,
@@ -163,11 +161,11 @@ function mapLegacyRowToDetailRecord(
     rowSource: "live_snapshot_only",
     consumptionSource: "",
     historyConfidence: "live_snapshot_only",
-    dataQualityNotes: Array.isArray(row.data_quality_notes) ? row.data_quality_notes : [],
+    dataQualityNotes: [],
     asOfUtc: nowIso,
     generatedAtUtc: nowIso,
-    userStatus: row.user_status ?? "",
-    loginRecoverySource: row.login_recovery_source ?? "live_snapshot_only",
+    userStatus: row.user_status,
+    loginRecoverySource: "live_snapshot_only",
   };
 }
 

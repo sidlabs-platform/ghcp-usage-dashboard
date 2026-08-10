@@ -132,7 +132,12 @@ export interface LicensingSyncStatusSummary {
  * API).
  */
 export function getLicensingSyncStatusSummary(status: "started" | "in_progress"): LicensingSyncStatusSummary {
-  const enabled = createDefaultLicenseHistorySyncDeps().getConfig().history.enabled;
+  let enabled = false;
+  try {
+    enabled = createDefaultLicenseHistorySyncDeps().getConfig().history.enabled;
+  } catch {
+    console.warn("[Sync] Invalid licensing history configuration; reporting it as disabled.");
+  }
   return { enabled, status };
 }
 

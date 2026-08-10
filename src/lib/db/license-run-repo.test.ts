@@ -66,6 +66,7 @@ import {
   deleteLicenseRun,
   replaceLicenseChecks,
   listLicenseChecks,
+  getLicenseCheckCountsByRunIds,
   updateLicenseSourceState,
   listLicenseSourceState,
   recordLicenseRunDiagnostics,
@@ -276,6 +277,26 @@ describe("replaceLicenseChecks / listLicenseChecks", () => {
   it("returns an empty array for a run with no checks", () => {
     const runId = startLicenseRun({ enterpriseSlug: "ent1", requestedPeriods: ["2026-01"] });
     expect(listLicenseChecks(runId)).toEqual([]);
+  });
+
+  it("aggregates status counts for a set of run ids", () => {
+    const run1 = startLicenseRun({ enterpriseSlug: "ent1", requestedPeriods: ["2026-01"] });
+    const run2 = startLicenseRun({ enterpriseSlug: "ent1", requestedPeriods: ["2026-01"] });
+    const runWithoutChecks = startLicenseRun({ enterpriseSlug: "ent1", requestedPeriods: ["2026-01"] });
+    replaceLicenseChecks(run1, [
+      { checkName: "a", status: "pass", message: "ok" },
+      { checkName: "b", status: "pass", message: "ok" },
+      { checkName: "c", status: "warning", message: "warning" },
+    ]);
+    replaceLicenseChecks(run2, [
+      { checkName: "a", status: "fail", message: "failed" },
+    ]);
+
+    expect(getLicenseCheckCountsByRunIds([run1, run2, runWithoutChecks])).toEqual(new Map([
+      [run1, { pass: 2, warning: 1, fail: 0 }],
+      [run2, { pass: 0, warning: 0, fail: 1 }],
+    ]));
+    expect(getLicenseCheckCountsByRunIds([])).toEqual(new Map());
   });
 });
 
@@ -671,11 +692,11 @@ describe("buildLicenseRunReport / serializeLicenseRunReport / renderLicenseRunRe
 
     const serialized = serializeLicenseRunReport(report);
     expect(serialized).not.toMatch(/attacker/);
-    expect(serialized).not.toMatch(/evil\.com/i);
+    expect(serialized.toLowerCase()).not.toContain("evil.com");
     expect(serialized).not.toMatch(/script/);
     const rendered = renderLicenseRunReportText(report);
     expect(rendered).not.toMatch(/attacker/);
-    expect(rendered).not.toMatch(/evil\.com/i);
+    expect(rendered.toLowerCase()).not.toContain("evil.com");
   });
 
   it("omits a non-finite/negative/non-integer or string githubUserId rather than surfacing an invalid value", () => {

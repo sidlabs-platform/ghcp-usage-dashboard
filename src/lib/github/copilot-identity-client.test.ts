@@ -124,6 +124,30 @@ describe("CopilotIdentityClient", () => {
       expect(result.identities[0].resolvedLogin).toBeNull();
     });
 
+    it("derives distinct deterministic internal keys when guid, login, and external identity are absent", async () => {
+      const nodes = [
+        { user: { login: null, databaseId: 101 }, samlIdentity: null, scimIdentity: null },
+        { user: { login: null, databaseId: 202 }, samlIdentity: null, scimIdentity: null },
+      ];
+      mockPaginated
+        .mockResolvedValueOnce({ nodes, warnings: [] })
+        .mockResolvedValueOnce({ nodes, warnings: [] });
+
+      const first = await client.getEnterpriseIdentities("my-ent");
+      const second = await client.getEnterpriseIdentities("my-ent");
+
+      expect(first.identities.map((identity) => identity.identityKey)).toEqual(
+        expect.arrayContaining([
+          expect.stringMatching(/^internal:[0-9a-f]{64}$/),
+          expect.stringMatching(/^internal:[0-9a-f]{64}$/),
+        ]),
+      );
+      expect(first.identities[0].identityKey).not.toBe(first.identities[1].identityKey);
+      expect(second.identities.map((identity) => identity.identityKey)).toEqual(
+        first.identities.map((identity) => identity.identityKey),
+      );
+    });
+
     it("extracts the connection through the enterprise/ownerInfo/samlIdentityProvider chain", async () => {
       mockPaginated.mockResolvedValueOnce({ nodes: [], warnings: [] });
       await client.getEnterpriseIdentities("my-ent");

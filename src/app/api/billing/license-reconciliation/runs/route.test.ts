@@ -5,6 +5,8 @@ const runRepoState = vi.hoisted(() => ({
   listLicenseRuns: vi.fn(),
   listLicenseChecks: vi.fn(),
   listLicenseSourceState: vi.fn(),
+  getLicenseCheckCountsByRunIds: vi.fn(),
+  buildLicenseRunReport: vi.fn(),
 }));
 
 const enterpriseConfigState = vi.hoisted(() => ({
@@ -27,6 +29,8 @@ vi.mock("@/lib/db/license-run-repo", async () => {
     listLicenseRuns: (...a: unknown[]) => runRepoState.listLicenseRuns(...a),
     listLicenseChecks: (...a: unknown[]) => runRepoState.listLicenseChecks(...a),
     listLicenseSourceState: (...a: unknown[]) => runRepoState.listLicenseSourceState(...a),
+    getLicenseCheckCountsByRunIds: (...a: unknown[]) => runRepoState.getLicenseCheckCountsByRunIds(...a),
+    buildLicenseRunReport: (...a: unknown[]) => runRepoState.buildLicenseRunReport(...a),
   };
 });
 
@@ -59,6 +63,7 @@ beforeEach(() => {
   runRepoState.listLicenseRuns.mockReturnValue([]);
   runRepoState.listLicenseChecks.mockReturnValue([]);
   runRepoState.listLicenseSourceState.mockReturnValue([]);
+  runRepoState.getLicenseCheckCountsByRunIds.mockReturnValue(new Map());
 });
 
 afterEach(() => {
@@ -92,6 +97,9 @@ describe("license reconciliation runs list route", () => {
     runRepoState.listLicenseChecks.mockReturnValue([
       { runId: "run-1", checkName: "seat-count", billingPeriod: "2026-06", orgLogin: "acme-org", status: "pass", expectedValue: 1, actualValue: 1, message: "ok", details: {} },
     ]);
+    runRepoState.getLicenseCheckCountsByRunIds.mockReturnValue(new Map([
+      ["run-1", { pass: 1, warning: 0, fail: 0 }],
+    ]));
     const res = await GET(req(`${BASE_URL}?enterprise=acme`));
     expect(res.status).toBe(200);
     const body = await res.json();
@@ -113,6 +121,11 @@ describe("license reconciliation runs list route", () => {
     expect(run.sources).toBeUndefined();
     expect(run.unresolvedIdentities).toBeUndefined();
     expect(JSON.stringify(body)).not.toContain("hunter2");
+    expect(runRepoState.getLicenseCheckCountsByRunIds).toHaveBeenCalledOnce();
+    expect(runRepoState.getLicenseCheckCountsByRunIds).toHaveBeenCalledWith(["run-1"]);
+    expect(runRepoState.listLicenseChecks).not.toHaveBeenCalled();
+    expect(runRepoState.listLicenseSourceState).not.toHaveBeenCalled();
+    expect(runRepoState.buildLicenseRunReport).not.toHaveBeenCalled();
   });
 
   it("validates and clamps the limit parameter", async () => {

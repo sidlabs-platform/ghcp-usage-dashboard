@@ -14,6 +14,7 @@
 // tolerance (null intermediate nodes, per-page GraphQL `errors`) rather
 // than reimplementing any of it.
 
+import { createHash } from "node:crypto";
 import { githubGraphQLPaginated, type GraphQLConnection } from "./graphql-client";
 
 // ── Raw GraphQL shapes (partial — only fields this client reads) ───────
@@ -48,7 +49,7 @@ interface OrgIdentitiesQueryData {
 export type CopilotIdentitySource = "enterprise_identity" | "org_identity";
 
 export interface NormalizedIdentityRecord {
-  /** Stable per-identity key: the SAML/SCIM `guid` when present, else a login-based fallback. */
+  /** Stable per-identity key: GUID, login, external identity, or a deterministic raw-node hash in that order. */
   identityKey: string;
   githubUserId: number | null;
   resolvedLogin: string | null;
@@ -66,10 +67,34 @@ export interface IdentityFetchResult {
   warnings: string[];
 }
 
+function stableNodeString(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map(stableNodeString).join(",")}]`;
+  }
+  if (value !== null && typeof value === "object") {
+    return `{${Object.entries(value as Record<string, unknown>)
+      .filter(([, entryValue]) => entryValue !== undefined)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, entryValue]) => `${JSON.stringify(key)}:${stableNodeString(entryValue)}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "null";
+}
+
+function hashRawIdentityNode(node: RawExternalIdentityNode): string {
+  return createHash("sha256").update(stableNodeString(node)).digest("hex");
+}
+
 function normalizeIdentity(node: RawExternalIdentityNode, source: CopilotIdentitySource, now: string): NormalizedIdentityRecord {
   const externalIdentity = node.samlIdentity?.nameId ?? node.scimIdentity?.username ?? node.samlIdentity?.username ?? null;
   const login = node.user?.login ?? null;
-  const identityKey = node.guid ? `guid:${node.guid}` : login ? `login:${login.toLowerCase()}` : `external:${externalIdentity ?? "unknown"}`;
+  const identityKey = node.guid
+    ? `guid:${node.guid}`
+    : login
+      ? `login:${login.toLowerCase()}`
+      : externalIdentity
+        ? `external:${externalIdentity}`
+        : `internal:${hashRawIdentityNode(node)}`;
 
   return {
     identityKey,

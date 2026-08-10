@@ -261,24 +261,39 @@ export function resolveIdentity(input: IdentityResolutionInput): ResolvedIdentit
   }
 
   // Tier 3: enterprise SAML/SCIM identity mapping (verified login field only).
-  if (!resolvedUserLogin && input.enterpriseIdentity?.resolvedLogin) {
-    resolvedUserLogin = normalizeLogin(input.enterpriseIdentity.resolvedLogin);
-    source = "enterprise_identity";
-    notes.push(`Resolved login "${resolvedUserLogin}" from enterprise SAML/SCIM identity mapping (verified GitHub login field).`);
+  const enterpriseCandidate = input.enterpriseIdentity?.resolvedLogin?.trim() || null;
+  if (!resolvedUserLogin && enterpriseCandidate) {
+    if (looksLikeRealGitHubLogin(enterpriseCandidate)) {
+      resolvedUserLogin = normalizeLogin(enterpriseCandidate);
+      source = "enterprise_identity";
+      notes.push(`Resolved login "${resolvedUserLogin}" from enterprise SAML/SCIM identity mapping (verified GitHub login field).`);
+    } else {
+      notes.push("Enterprise SAML/SCIM identity mapping supplied a value that is not a valid GitHub login; ignored.");
+    }
   }
 
   // Tier 4: organization SAML identity mapping (verified login field only).
-  if (!resolvedUserLogin && input.orgIdentity?.resolvedLogin) {
-    resolvedUserLogin = normalizeLogin(input.orgIdentity.resolvedLogin);
-    source = "org_identity";
-    notes.push(`Resolved login "${resolvedUserLogin}" from organization SAML identity mapping (verified GitHub login field).`);
+  const orgCandidate = input.orgIdentity?.resolvedLogin?.trim() || null;
+  if (!resolvedUserLogin && orgCandidate) {
+    if (looksLikeRealGitHubLogin(orgCandidate)) {
+      resolvedUserLogin = normalizeLogin(orgCandidate);
+      source = "org_identity";
+      notes.push(`Resolved login "${resolvedUserLogin}" from organization SAML identity mapping (verified GitHub login field).`);
+    } else {
+      notes.push("Organization SAML identity mapping supplied a value that is not a valid GitHub login; ignored.");
+    }
   }
 
   // Tier 5: configured identity-map import (verified login field only).
-  if (!resolvedUserLogin && input.identityMap?.resolvedLogin) {
-    resolvedUserLogin = normalizeLogin(input.identityMap.resolvedLogin);
-    source = "identity_map";
-    notes.push(`Resolved login "${resolvedUserLogin}" from configured identity-map import (verified GitHub login field).`);
+  const identityMapCandidate = input.identityMap?.resolvedLogin?.trim() || null;
+  if (!resolvedUserLogin && identityMapCandidate) {
+    if (looksLikeRealGitHubLogin(identityMapCandidate)) {
+      resolvedUserLogin = normalizeLogin(identityMapCandidate);
+      source = "identity_map";
+      notes.push(`Resolved login "${resolvedUserLogin}" from configured identity-map import (verified GitHub login field).`);
+    } else {
+      notes.push("Configured identity-map import supplied a value that is not a valid GitHub login; ignored.");
+    }
   }
 
   // Tier 6: stable internal unresolved holder identity.

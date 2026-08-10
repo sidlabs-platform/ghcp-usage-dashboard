@@ -358,7 +358,7 @@ function finalizeRow(
   asOfUtc: string,
   generatedAtUtc: string
 ): MaterializedLicensePeriodRow {
-  const effectiveBudgetUsd = builder.aicAssignedUsd > 0 ? builder.aicAssignedUsd : builder.defaultAicUsd > 0 ? builder.defaultAicUsd : 0;
+  const effectiveBudgetUsd = builder.aicAssignedRule === "per_user_budget" ? builder.aicAssignedUsd : builder.defaultAicUsd;
   const utilizationPct = effectiveBudgetUsd > 0 ? round2((builder.aicConsumedUsd / effectiveBudgetUsd) * 100) : 0;
   const overageUsd = Math.max(round2(builder.aicConsumedUsd - effectiveBudgetUsd), 0);
   const overageCredits = Math.max(round2(builder.aicConsumedCredits - builder.defaultAicCredits), 0);

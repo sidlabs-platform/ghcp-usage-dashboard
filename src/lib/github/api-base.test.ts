@@ -41,9 +41,9 @@ afterAll(() => {
 });
 
 describe("resolveAuthMode", () => {
-  it("returns 'none' for non-GitHub absolute URLs", () => {
-    expect(resolveAuthMode("https://storage.azure.com/some-presigned-url")).toBe("none");
-    expect(resolveAuthMode("https://s3.amazonaws.com/bucket/key")).toBe("none");
+  it("rejects absolute URLs instead of classifying paths the transport cannot fetch", () => {
+    expect(() => resolveAuthMode("https://storage.azure.com/some-presigned-url")).toThrow("root-relative");
+    expect(() => resolveAuthMode("https://api.github.com/orgs/my-org/info")).toThrow("root-relative");
   });
 
   it("returns 'pat' for enterprise endpoints", () => {
@@ -70,13 +70,6 @@ describe("resolveAuthMode", () => {
     expect(resolveAuthMode("/orgs/my-org/metrics", "ent1")).toBe("pat");
   });
 
-  it("returns 'pat' for absolute GitHub API enterprise URLs", () => {
-    expect(resolveAuthMode("https://api.github.com/enterprises/my-ent/copilot/usage")).toBe("pat");
-  });
-
-  it("returns 'none' for non-GitHub absolute URLs regardless of path content", () => {
-    expect(resolveAuthMode("https://example.com/enterprises/foo")).toBe("none");
-  });
 });
 
 describe("githubFetch", () => {
@@ -418,28 +411,6 @@ describe("githubFetchCursorPaginatedWithCutoff", () => {
   });
 });
 
-describe("resolveAuthMode (absolute GitHub URL)", () => {
-  it("extracts path from absolute GitHub API URL", () => {
-    expect(resolveAuthMode("https://api.github.com/enterprises/ent/copilot")).toBe("pat");
-  });
-
-  it("returns app for org path in absolute GitHub URL", () => {
-    mockIsApp.mockReturnValue(true);
-    expect(resolveAuthMode("https://api.github.com/orgs/my-org/copilot")).toBe("app");
-  });
-
-  it("falls through on unparseable GitHub URL", () => {
-    // A URL that starts with the GitHub API base but cannot be parsed by new URL()
-    // The URL constructor throws on truly malformed inputs. Let's use a URL that's
-    // GitHub-like but test the catch path by temporarily overriding URL constructor.
-    // Instead, test the "path.startsWith('http')" + isGitHub + catch scenario
-    // by using a URL that starts with GITHUB_API_BASE prefix but is malformed.
-    // Actually the catch path is nearly unreachable because URL() is forgiving.
-    // Let's test resolveAuthMode with a custom GITHUB_API_BASE env:
-    expect(resolveAuthMode("https://api.github.com/orgs/my-org/teams")).toBe("pat");
-  });
-});
-
 describe("adaptiveRateDelay", () => {
   it("returns immediately for mode='none'", async () => {
     const { adaptiveRateDelay } = await import("./api-base");
@@ -553,41 +524,35 @@ describe("URL validation (SSRF protection)", () => {
   });
 
   it("rejects disallowed absolute URLs via githubFetch", async () => {
-    // With explicit auth mode "pat" to force origin check (not "none")
-    await expect(githubFetch("https://evil.com/api/data", 1, "pat")).rejects.toThrow("disallowed origin");
+    await expect(githubFetch("https://evil.com/api/data", 1, "pat")).rejects.toThrow("root-relative");
   });
 
-  it("allows GitHub API absolute URLs via githubFetch", async () => {
-    mockIsApp.mockReturnValue(true);
-    (getInstallationToken as ReturnType<typeof vi.fn>).mockResolvedValue("app-token");
-    (validateAppAuth as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+  it("rejects absolute URLs even when they use the configured GitHub API origin", async () => {
     const mockFetch = fetch as unknown as ReturnType<typeof vi.fn>;
-    mockFetch.mockResolvedValue({
-      ok: true,
-      json: () => Promise.resolve({ ok: true }),
-      headers: new Map(),
-    });
-    // Uses "app" mode (avoiding rate limit state from prior "pat" tests)
-    const result = await githubFetch<{ ok: boolean }>("https://api.github.com/orgs/my-org/info");
-    expect(result.ok).toBe(true);
+    await expect(
+      githubFetch("https://api.github.com/orgs/my-org/info", 1, "pat"),
+    ).rejects.toThrow("root-relative");
+    expect(mockFetch).not.toHaveBeenCalled();
   });
 
-  it("allows pre-signed download URLs with mode=none", async () => {
+  it("rejects absolute URLs before requiring authentication", async () => {
     const mockFetch = fetch as unknown as ReturnType<typeof vi.fn>;
-    mockFetch.mockResolvedValue({
-      ok: true,
-      json: () => Promise.resolve({ data: "blob" }),
-      headers: new Map(),
-    });
-    // Pre-signed URLs resolve to "none" auth mode and bypass origin check
-    const result = await githubFetch<{ data: string }>(
-      "https://storage.azure.com/some-presigned-url",
-      1, "none"
-    );
-    expect(result.data).toBe("blob");
+    delete process.env.GITHUB_TOKEN;
+    await expect(
+      githubFetch("https://api.github.com/orgs/my-org/info"),
+    ).rejects.toThrow("root-relative");
+    expect(mockFetch).not.toHaveBeenCalled();
   });
-  it("rejects malformed absolute URLs with contextual error", async () => {
-    await expect(githubFetch("http://", 1, "pat")).rejects.toThrow("Invalid URL");
+
+  it("rejects absolute URLs when auth mode is none", async () => {
+    const mockFetch = fetch as unknown as ReturnType<typeof vi.fn>;
+    await expect(
+      githubFetch("https://storage.azure.com/some-presigned-url", 1, "none"),
+    ).rejects.toThrow("root-relative");
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+  it("rejects malformed absolute URLs as non-root-relative input", async () => {
+    await expect(githubFetch("http://", 1, "pat")).rejects.toThrow("root-relative");
   });
 });
 
@@ -650,6 +615,25 @@ describe("githubFetchWithMeta", () => {
     expect(result.status).toBe(200);
     expect(result.headers["x-oauth-scopes"]).toBe("read:org, repo");
     expect(result.headers["x-ratelimit-remaining"]).toBe("4999");
+  });
+
+  it("wraps malformed JSON from a successful response in GitHubApiError without retrying", async () => {
+    const mockFetch = fetch as unknown as ReturnType<typeof vi.fn>;
+    mockFetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: () => Promise.reject(new SyntaxError("Unexpected token '<'")),
+      headers: new Map(),
+    });
+
+    await expect(
+      githubFetchWithMeta("/orgs/my-org/info", { retries: 3 }),
+    ).rejects.toMatchObject({
+      name: "GitHubApiError",
+      status: 200,
+      retryable: false,
+    });
+    expect(mockFetch).toHaveBeenCalledTimes(1);
   });
 
   it("never includes an authorization header in the returned selected headers", async () => {
@@ -914,10 +898,10 @@ describe("githubFetchWithMeta", () => {
     expect(sentHeaders.get("x-custom-header")).toBe("custom-value");
   });
 
-  it("reuses validated URL construction — rejects disallowed origins", async () => {
+  it("reuses validated URL construction — rejects absolute URLs", async () => {
     await expect(
       githubFetchWithMeta("https://evil.com/api/data", { authMode: "pat" }),
-    ).rejects.toThrow("disallowed origin");
+    ).rejects.toThrow("root-relative");
   });
 
   it("reuses enterprise token selection for App auth mode", async () => {

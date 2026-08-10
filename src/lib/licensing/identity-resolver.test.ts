@@ -116,6 +116,45 @@ describe("resolveIdentity — GUID/opaque login detection", () => {
     expect(result.source).toBe("unresolved");
     expect(result.resolvedUserLogin).toBeNull();
   });
+
+  it("rejects invalid enterprise and org mapped logins before falling back to a valid configured mapping", () => {
+    const invalidEnterpriseLogin = "enterprise_identity@example.com";
+    const invalidOrgLogin = "org_identity_with_underscores";
+    const result = resolveIdentity({
+      holderKey: "id:mapped-validation",
+      githubUserId: 70,
+      enterpriseIdentity: { resolvedLogin: invalidEnterpriseLogin },
+      orgIdentity: { resolvedLogin: invalidOrgLogin },
+      identityMap: { resolvedLogin: "valid-mapped-login" },
+    });
+
+    expect(result.source).toBe("identity_map");
+    expect(result.resolvedUserLogin).toBe("valid-mapped-login");
+    expect(result.notes.some((note) => /ignored/i.test(note))).toBe(true);
+    expect(result.notes.join("\n")).not.toContain(invalidEnterpriseLogin);
+    expect(result.notes.join("\n")).not.toContain(invalidOrgLogin);
+  });
+
+  it("rejects invalid mapped logins at every mapped-identity tier without leaking them into notes", () => {
+    const invalidLogins = [
+      "enterprise_identity@example.com",
+      "org_identity_with_underscores",
+      "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+    ];
+    const result = resolveIdentity({
+      holderKey: "id:invalid-mapped-logins",
+      githubUserId: 71,
+      enterpriseIdentity: { resolvedLogin: invalidLogins[0] },
+      orgIdentity: { resolvedLogin: invalidLogins[1] },
+      identityMap: { resolvedLogin: invalidLogins[2] },
+    });
+
+    expect(result.source).toBe("unresolved");
+    expect(result.resolvedUserLogin).toBeNull();
+    for (const invalidLogin of invalidLogins) {
+      expect(result.notes.join("\n")).not.toContain(invalidLogin);
+    }
+  });
 });
 
 describe("resolveIdentity — hardened opaque-login detection (Task 6 spec-review)", () => {

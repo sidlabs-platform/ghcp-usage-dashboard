@@ -174,9 +174,7 @@ function buildErrorMessage(kind: AicConsumptionErrorKind, userLogin: string, det
         ? `Malformed AI credit usage response for user "${userLogin}": ${detail}`
         : `Malformed AI credit usage response for user "${userLogin}"`;
     case "internal_error":
-      return detail
-        ? `Unexpected internal error fetching AI credit usage for user "${userLogin}": ${detail}`
-        : `Unexpected internal error fetching AI credit usage for user "${userLogin}"`;
+      return `Unexpected internal error fetching AI credit usage for user "${userLogin}"`;
   }
 }
 
@@ -207,8 +205,7 @@ function classifyError(err: unknown, userLogin: string): AicConsumptionError {
   // user's unexpected failure never aborts the other concurrent fetches —
   // while still keeping it clearly distinguishable from both a genuine
   // malformed API response and a false "ok".
-  const detail = err instanceof Error ? err.message : String(err);
-  return { status: "internal_error", userLogin, message: buildErrorMessage("internal_error", userLogin, detail), detail };
+  return { status: "internal_error", userLogin, message: buildErrorMessage("internal_error", userLogin) };
 }
 
 /**

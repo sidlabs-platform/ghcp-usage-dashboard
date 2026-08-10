@@ -1170,6 +1170,65 @@ describe("license-history-sync-service", () => {
       expect(feb?.consumptionCredits).toEqual([200]);
       expect(mar?.consumptionCredits).toEqual([]); // no March consumption row configured — never double-counted from Jan/Feb
     });
+
+    it("rekeys CSV and API consumption logins to the matching canonical seat holder", async () => {
+      const csvRecord: AicCsvConsumptionRecord = {
+        billingPeriod: "2025-01",
+        orgLogin: "Acme-Org",
+        userLogin: "carol",
+        credits: 30,
+        grossUsd: 0.3,
+        netUsd: 0.29,
+        source: "csv_import",
+        raw: {},
+      };
+      const consumedRecords = new Map<string, Array<{ holderKey: string; orgLogin: string }>>();
+      const deps = makeDeps({
+        getConfig: vi.fn(() => makeConfig({
+          aicConsumption: { mode: "auto", csvPath: "/configured/aic.csv", concurrency: 4 },
+        })),
+        importAicConsumptionCsv: vi.fn(() => ({
+          records: [csvRecord],
+          warnings: [],
+          skippedRows: 0,
+          sourceFingerprint: "fp-csv",
+        })),
+        getEnterpriseSeatsNormalized: vi.fn(async () => ({
+          totalSeats: 1,
+          seats: [makeSeat({ holderKey: "id:103", githubUserId: 103, observedLogin: "carol" })],
+        })),
+        fetchAicConsumptionForUsers: vi.fn(async (): Promise<FetchAicConsumptionResult> => ({
+          results: [makeAicOk("carol", { orgLogin: "acme-org", credits: 40, grossUsd: 0.4 })],
+          source: "enterprise_api",
+          fellBackToOrg: false,
+        })),
+        buildSeatLedger: vi.fn((options): SeatLedgerResult => ({
+          rows: options.periods.map((period: string) => makeLedgerRow(period, {
+            enterpriseSlug: options.enterpriseSlug,
+            holderKey: "id:103",
+            githubUserId: 103,
+            observedLogin: "carol",
+          })),
+          coverage: [],
+          warnings: [],
+        })),
+        materializeLicensePeriodRows: vi.fn((input: MaterializeLicensePeriodInput) => {
+          consumedRecords.set(
+            input.billingPeriod,
+            (input.consumption ?? []).map((record) => ({
+              holderKey: record.holderKey,
+              orgLogin: record.orgLogin ?? "",
+            })),
+          );
+          return { rows: [makeMaterializedRow(input.billingPeriod)], warnings: [] };
+        }),
+      });
+
+      await syncLicenseHistoryForEnterprise("acme", deps);
+
+      expect(consumedRecords.get("2025-01")).toEqual([{ holderKey: "id:103", orgLogin: "acme-org" }]);
+      expect(consumedRecords.get("2025-03")).toEqual([{ holderKey: "id:103", orgLogin: "acme-org" }]);
+    });
   });
 
   // ── current month always refreshes ──────────────────────────────────
@@ -1329,6 +1388,104 @@ describe("license-history-sync-service", () => {
       expect(janRow!.currency).toBe("EUR");
       expect(janRow!.licenseCost).toBe(39);
       expect(janRow!.aicConsumedUsd).toBe(42);
+    });
+
+    it("preserves an explicit zero per-user budget when rehydrating a skipped period", async () => {
+      const emitSnapshotsConfig = () => makeConfig({
+        history: { ...makeConfig().history, emitSnapshots: true, snapshotDirectory: "/snap" },
+      });
+      const probeDiagnostics: LicenseRunDiagnosticsInput[] = [];
+      await syncLicenseHistoryForEnterprise("acme", makeDeps({
+        getConfig: vi.fn(emitSnapshotsConfig),
+        recordLicenseRunDiagnostics: vi.fn((input: LicenseRunDiagnosticsInput) => probeDiagnostics.push(input)),
+      }));
+      const fingerprints = probeDiagnostics[0]!.finish.sourceStats!.periodFingerprints as Record<string, string>;
+      const writtenContentsByPath: Record<string, string> = {};
+      const persistedRow = makeMaterializedRow("2025-01", {
+        defaultAicUsd: 39,
+        aicAssignedUsd: 0,
+        aicAssignedRule: "per_user_budget",
+        aicConsumedUsd: 42,
+      });
+      const deps = makeDeps({
+        getConfig: vi.fn(emitSnapshotsConfig),
+        listLicenseRuns: vi.fn(() => [{ status: "success", sourceStats: { periodFingerprints: fingerprints } }]),
+        hasMaterializedRows: vi.fn((query) => query.periods?.includes("2025-01") ?? false),
+        queryLicensePeriodRows: vi.fn(() => ({ rows: [persistedRow] })),
+        writeLicenseSnapshotFile: vi.fn(async (path: string, contents: string) => {
+          writtenContentsByPath[path] = contents;
+        }),
+      });
+
+      const result = await syncLicenseHistoryForEnterprise("acme", deps);
+
+      expect(result.skippedPeriods).toContain("2025-01");
+      const snapshot = JSON.parse(
+        writtenContentsByPath[deps.resolveLicenseSnapshotFilePath("/snap", "acme", "2025-01")]!,
+      ) as { rows: MaterializedLicensePeriodRow[] };
+      const row = snapshot.rows.find((candidate) => candidate.billingPeriod === "2025-01");
+      expect(row).toMatchObject({
+        utilizationPct: 0,
+        overageUsd: 42,
+        totalCost: 61,
+      });
+    });
+
+    it("rehydrates every page of a skipped period with more than 200 rows", async () => {
+      const config = () => makeConfig({
+        history: { ...makeConfig().history, emitSnapshots: true, snapshotDirectory: "/snap" },
+      });
+      const probeDiagnostics: LicenseRunDiagnosticsInput[] = [];
+      await syncLicenseHistoryForEnterprise("acme", makeDeps({
+        getConfig: vi.fn(config),
+        recordLicenseRunDiagnostics: vi.fn((input: LicenseRunDiagnosticsInput) => probeDiagnostics.push(input)),
+      }));
+      const fingerprints = probeDiagnostics[0]!.finish.sourceStats!.periodFingerprints as Record<string, string>;
+      const rows = Array.from({ length: 201 }, (_, index) => makeMaterializedRow("2025-01", {
+        holderKey: `id:${index + 1}`,
+        githubUserId: index + 1,
+        userLogin: `user-${index + 1}`,
+        resolvedUserLogin: `user-${index + 1}`,
+      }));
+      const queryRows = vi.fn((query) => {
+        if (!query.periods?.includes("2025-01")) {
+          return {
+            rows: [],
+            pagination: { page: 1, pageSize: 200, totalItems: 0, totalPages: 0 },
+          };
+        }
+        const { page = 1, pageSize = 50 } = query as typeof query & { page?: number; pageSize?: number };
+        const start = (page - 1) * pageSize;
+        return {
+          rows: rows.slice(start, start + pageSize),
+          pagination: {
+            page,
+            pageSize,
+            totalItems: rows.length,
+            totalPages: Math.ceil(rows.length / pageSize),
+          },
+        };
+      });
+      const writtenContentsByPath: Record<string, string> = {};
+      const deps = makeDeps({
+        getConfig: vi.fn(config),
+        listLicenseRuns: vi.fn(() => [{ status: "success", sourceStats: { periodFingerprints: fingerprints } }]),
+        hasMaterializedRows: vi.fn((query) => query.periods?.includes("2025-01") ?? false),
+        queryLicensePeriodRows: queryRows,
+        writeLicenseSnapshotFile: vi.fn(async (path: string, contents: string) => {
+          writtenContentsByPath[path] = contents;
+        }),
+      });
+
+      await syncLicenseHistoryForEnterprise("acme", deps);
+
+      const snapshot = JSON.parse(
+        writtenContentsByPath[deps.resolveLicenseSnapshotFilePath("/snap", "acme", "2025-01")]!,
+      ) as { rows: MaterializedLicensePeriodRow[] };
+      expect(snapshot.rows).toHaveLength(201);
+      expect(queryRows).toHaveBeenCalledTimes(2);
+      expect(queryRows).toHaveBeenNthCalledWith(1, expect.objectContaining({ page: 1, pageSize: 200 }));
+      expect(queryRows).toHaveBeenNthCalledWith(2, expect.objectContaining({ page: 2, pageSize: 200 }));
     });
 
     it("reruns a historical period when a new audit event changes its fingerprint", async () => {
@@ -1719,6 +1876,64 @@ describe("license-history-sync-service", () => {
       expect(result.warnings).toContain(
         "Retained the existing 2025-01 materialization because the current run produced no replacement rows.",
       );
+    });
+
+    it("rehydrates every page when a degraded run retains more than 200 existing rows", async () => {
+      const rows = Array.from({ length: 201 }, (_, index) => makeMaterializedRow("2025-01", {
+        holderKey: `id:${index + 1}`,
+        githubUserId: index + 1,
+        userLogin: `user-${index + 1}`,
+        resolvedUserLogin: `user-${index + 1}`,
+      }));
+      const queryRows = vi.fn((query) => {
+        if (!query.periods?.includes("2025-01")) {
+          return {
+            rows: [],
+            pagination: { page: 1, pageSize: 200, totalItems: 0, totalPages: 0 },
+          };
+        }
+        const { page = 1, pageSize = 50 } = query as typeof query & { page?: number; pageSize?: number };
+        const start = (page - 1) * pageSize;
+        return {
+          rows: rows.slice(start, start + pageSize),
+          pagination: {
+            page,
+            pageSize,
+            totalItems: rows.length,
+            totalPages: Math.ceil(rows.length / pageSize),
+          },
+        };
+      });
+      const writtenContentsByPath: Record<string, string> = {};
+      const config = () => makeConfig({
+        history: {
+          ...makeConfig().history,
+          reportMonths: ["2025-01"],
+          emitSnapshots: true,
+          snapshotDirectory: "/snap",
+        },
+      });
+      const deps = makeDeps({
+        getConfig: vi.fn(config),
+        buildSeatLedger: vi.fn(() => ({ rows: [], coverage: [], warnings: [] })),
+        materializeLicensePeriodRows: vi.fn(() => ({ rows: [], warnings: ["optional source unavailable"] })),
+        hasMaterializedRows: vi.fn(() => true),
+        queryLicensePeriodRows: queryRows,
+        writeLicenseSnapshotFile: vi.fn(async (path: string, contents: string) => {
+          writtenContentsByPath[path] = contents;
+        }),
+      });
+
+      const result = await syncLicenseHistoryForEnterprise("acme", deps);
+
+      expect(result.skippedPeriods).toContain("2025-01");
+      const snapshot = JSON.parse(
+        writtenContentsByPath[deps.resolveLicenseSnapshotFilePath("/snap", "acme", "2025-01")]!,
+      ) as { rows: MaterializedLicensePeriodRow[] };
+      expect(snapshot.rows).toHaveLength(201);
+      expect(
+        queryRows.mock.calls.filter(([query]) => query.periods?.includes("2025-01")),
+      ).toHaveLength(2);
     });
 
     it("does not classify the stored current live capture as an exact historical snapshot", async () => {

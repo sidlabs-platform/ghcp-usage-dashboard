@@ -268,7 +268,19 @@ describe("CopilotAuditClient", () => {
       const result = await client.getOrgAuditEvents("acme");
       expectOk(result);
       expect(result.events).toHaveLength(2);
-      expect(mockFetchWithMeta).toHaveBeenNthCalledWith(2, "https://api.github.com/orgs/acme/audit-log?after=c1", expect.anything());
+      expect(mockFetchWithMeta).toHaveBeenNthCalledWith(2, "/orgs/acme/audit-log?after=c1", expect.anything());
+    });
+
+    it("rejects a next-page link from an untrusted origin before another request", async () => {
+      mockFetchWithMeta.mockResolvedValueOnce(
+        page(
+          [{ action: "cfb_seat_added", user: "a", user_id: 1, "@timestamp": 1, _document_id: "a" }],
+          "https://evil.example/orgs/acme/audit-log?after=c1",
+        ),
+      );
+
+      await expect(client.getOrgAuditEvents("acme")).rejects.toThrow(/origin/i);
+      expect(mockFetchWithMeta).toHaveBeenCalledTimes(1);
     });
 
     it("stops when a page returns no events", async () => {
@@ -329,7 +341,7 @@ describe("CopilotAuditClient", () => {
       const result = await client.getEnterpriseAuditEvents("my-ent");
       expectOk(result);
       expect(result.events).toHaveLength(2);
-      expect(mockFetchWithMeta).toHaveBeenNthCalledWith(2, "https://api.github.com/enterprises/my-ent/audit-log?after=c1", expect.anything());
+      expect(mockFetchWithMeta).toHaveBeenNthCalledWith(2, "/enterprises/my-ent/audit-log?after=c1", expect.anything());
     });
 
     it("respects the maxPages safety guard for enterprise pagination and surfaces truncation", async () => {

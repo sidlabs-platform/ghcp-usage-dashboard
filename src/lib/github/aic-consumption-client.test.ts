@@ -427,7 +427,8 @@ describe("fetchAicConsumptionForUsers — error classification", () => {
   });
 
   it("classifies an unexpected programmer error (e.g. TypeError) as internal_error — never mislabeled as malformed or ok", async () => {
-    mockFetchWithMeta.mockRejectedValue(new TypeError("Cannot read properties of undefined (reading 'foo')"));
+    const rawDetail = "Cannot read properties of undefined (reading 'sensitiveValue')";
+    mockFetchWithMeta.mockRejectedValue(new TypeError(rawDetail));
 
     const result = await fetchAicConsumptionForUsers({
       enterpriseSlug: "acme",
@@ -441,6 +442,8 @@ describe("fetchAicConsumptionForUsers — error classification", () => {
     expect(result.results[0].status).toBe("internal_error");
     if ("message" in result.results[0]) {
       expect(result.results[0].message).toContain("alice");
+      expect(result.results[0].message).not.toContain(rawDetail);
+      expect(result.results[0].detail).toBeUndefined();
     }
   });
 

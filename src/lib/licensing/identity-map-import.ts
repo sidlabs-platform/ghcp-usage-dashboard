@@ -10,6 +10,7 @@
 // No DB writes happen here — repository persistence is a later
 // orchestration concern.
 
+import { createHash } from "node:crypto";
 import { readImportFile, computeFingerprint, emptyImportResult, ImportFileError, type ImportResult } from "./import-shared";
 
 // ── Types ────────────────────────────────────────────────────────────────
@@ -52,6 +53,14 @@ const EXTERNAL_IDENTITY_KEYS = ["externalIdentity", "external_identity", "extern
 const RESOLVED_LOGIN_KEYS = ["resolvedLogin", "resolved_login", "login"];
 const ACCOUNT_STATE_KEYS = ["accountState", "account_state"];
 
+function redactedIdentityRef(externalIdentity: string): string {
+  return `[identity:${createHash("sha256").update(externalIdentity).digest("hex").slice(0, 12)}]`;
+}
+
+function safeEntryLabel(index: number, externalIdentity?: string): string {
+  return externalIdentity ? `Entry ${index} ${redactedIdentityRef(externalIdentity)}` : `Entry ${index}`;
+}
+
 // ── Per-entry normalization ────────────────────────────────────────────────
 
 type EntryOutcome =
@@ -77,7 +86,7 @@ function normalizeListEntry(entry: unknown, index: number): EntryOutcome {
   if (!resolvedLoginRaw) {
     return {
       kind: "malformed",
-      warning: `Entry ${index} (externalIdentity="${externalIdentity}"): malformed — missing or blank "resolvedLogin"`,
+      warning: `${safeEntryLabel(index, externalIdentity)}: malformed — missing or blank "resolvedLogin"`,
     };
   }
 
@@ -107,7 +116,7 @@ function normalizeMappingEntry(key: string, value: unknown, index: number): Entr
     if (!resolvedLogin) {
       return {
         kind: "malformed",
-        warning: `Entry ${index} (externalIdentity="${externalIdentity}"): malformed — missing or blank resolvedLogin`,
+        warning: `${safeEntryLabel(index, externalIdentity)}: malformed — missing or blank resolvedLogin`,
       };
     }
     return {
@@ -128,7 +137,7 @@ function normalizeMappingEntry(key: string, value: unknown, index: number): Entr
     if (!resolvedLoginRaw) {
       return {
         kind: "malformed",
-        warning: `Entry ${index} (externalIdentity="${externalIdentity}"): malformed — missing or blank resolvedLogin`,
+        warning: `${safeEntryLabel(index, externalIdentity)}: malformed — missing or blank resolvedLogin`,
       };
     }
     const accountState = firstNonEmptyString(obj, ACCOUNT_STATE_KEYS) ?? null;
@@ -146,7 +155,7 @@ function normalizeMappingEntry(key: string, value: unknown, index: number): Entr
 
   return {
     kind: "malformed",
-    warning: `Entry ${index} (externalIdentity="${externalIdentity}"): malformed — mapping value must be a string login or an object with resolvedLogin`,
+    warning: `${safeEntryLabel(index, externalIdentity)}: malformed — mapping value must be a string login or an object with resolvedLogin`,
   };
 }
 
@@ -171,7 +180,7 @@ function detectConflicts(records: NormalizedIdentityRecord[]): string[] {
   for (const [externalIdentity, logins] of byExternalIdentity) {
     if (logins.size > 1) {
       warnings.push(
-        `Conflicting identity mapping for external identity "${externalIdentity}": maps to ${logins.size} different resolved logins (${[...logins].join(", ")})`,
+        `Conflicting identity mapping for external identity ${redactedIdentityRef(externalIdentity)}: maps to ${logins.size} different resolved logins.`,
       );
     }
   }

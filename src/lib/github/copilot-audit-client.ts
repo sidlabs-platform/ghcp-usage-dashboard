@@ -18,7 +18,7 @@
 // throwing or silently returning an empty (success-shaped) array — see the
 // "Result contract" section below.
 
-import { githubFetchWithMeta, GitHubApiError } from "./api-base";
+import { githubFetchWithMeta, GitHubApiError, toRootRelativeGitHubApiPath } from "./api-base";
 import { createHash } from "node:crypto";
 
 // ── Raw audit log event (partial — the real payload varies significantly
@@ -180,7 +180,7 @@ export interface CopilotAuditFetchOptions {
 function extractNextLink(linkHeader: string | undefined): string | null {
   if (!linkHeader) return null;
   const match = /<([^>]+)>;\s*rel="next"/.exec(linkHeader);
-  return match ? match[1] : null;
+  return match ? toRootRelativeGitHubApiPath(match[1]) : null;
 }
 
 // ── Result contract ───────────────────────────────────────────────────

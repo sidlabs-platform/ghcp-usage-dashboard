@@ -497,6 +497,9 @@ describe("additional API route coverage", { timeout: 15000 }, () => {
             errorMessage: null,
           },
         ]),
+        getLicenseCheckCountsByRunIds: vi.fn(() => new Map([
+          ["run-1", { pass: 0, warning: 0, fail: 0 }],
+        ])),
         listLicenseChecks: vi.fn(() => []),
         listLicenseSourceState: vi.fn(() => []),
       };

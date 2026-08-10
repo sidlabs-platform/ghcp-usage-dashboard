@@ -912,6 +912,27 @@ describe("enterprise-config", () => {
       expect(isLicensingHistoryEnabledForEnterprise("ent-a")).toBe(true);
     });
 
+    it("fails closed when the global licensing config is invalid and no override is set", () => {
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      setMockConfig(makeConfig({
+        globalMetrics: {
+          copilot: { enabled: true, enterprise: true },
+          billing: { enabled: true },
+        },
+        enterprises: [{ slug: "ent-a" }],
+      }));
+      mockGetLicensingConfig.mockImplementation(() => {
+        throw new Error("invalid licensing config");
+      });
+
+      expect(isLicensingHistoryEnabledForEnterprise("ent-a")).toBe(false);
+      expect(warnSpy).toHaveBeenCalledWith(
+        "[Config] Invalid licensing history configuration; reporting it as disabled.",
+      );
+      expect(String(warnSpy.mock.calls[0]?.[0])).not.toContain("invalid licensing config");
+      warnSpy.mockRestore();
+    });
+
     it("existing enterprise configs without any licensing override keep resolving from the global flag unchanged", () => {
       // Backward compatibility: a pre-Task-12 enterprise entry has no
       // `licensingHistoryEnabled` field at all — this must never throw and
@@ -962,6 +983,24 @@ describe("enterprise-config", () => {
       expect(isLicensingHistoryEnabledForAnyEnterprise()).toBe(false);
     });
 
+    it("preserves an explicit true override when another enterprise falls back to invalid global config", () => {
+      setMockConfig(makeConfig({
+        globalMetrics: {
+          copilot: { enabled: true, enterprise: true },
+          billing: { enabled: true },
+        },
+        enterprises: [
+          { slug: "ent-a" },
+          { slug: "ent-b", metrics: { billing: { licensingHistoryEnabled: true } } },
+        ],
+      }));
+      mockGetLicensingConfig.mockImplementation(() => {
+        throw new Error("invalid licensing config");
+      });
+
+      expect(isLicensingHistoryEnabledForAnyEnterprise()).toBe(true);
+    });
+
     it("legacy single-enterprise mode falls back to the global resolved flag", () => {
       setMockConfig(makeConfig({
         globalMetrics: {
@@ -973,6 +1012,22 @@ describe("enterprise-config", () => {
       delete process.env.GITHUB_ENTERPRISE;
       mockGetLicensingConfig.mockReturnValue(makeResolvedLicensingConfig({ history: { enabled: true } }));
       expect(isLicensingHistoryEnabledForAnyEnterprise()).toBe(true);
+    });
+
+    it("legacy mode fails closed when the global licensing config is invalid", () => {
+      setMockConfig(makeConfig({
+        globalMetrics: {
+          copilot: { enabled: true, enterprise: true },
+          billing: { enabled: true },
+        },
+        enterprises: [],
+      }));
+      delete process.env.GITHUB_ENTERPRISE;
+      mockGetLicensingConfig.mockImplementation(() => {
+        throw new Error("invalid licensing config");
+      });
+
+      expect(isLicensingHistoryEnabledForAnyEnterprise()).toBe(false);
     });
 
     it("legacy mode returns false when billing is globally disabled, without invalidating the resolved licensing config", () => {

@@ -916,6 +916,64 @@ describe("replaceMaterializedPeriod + queryLicensePeriodRows", () => {
       const row = rollup.rows.find((r) => r.resolvedUserLogin === "zero-branch");
       expect(row?.utilizationPct).toBe(0);
     });
+
+    it("sums each row's effective budget when a rollup mixes assigned and default budgets", () => {
+      replaceMaterializedPeriod("ent1", "2026-66", [
+        makePeriodRow({
+          orgLogin: "org1",
+          holderKey: "mixed-budget",
+          resolvedUserLogin: "mixed-budget",
+          aicAssignedUsd: 20,
+          defaultAicUsd: 19,
+          aicConsumedUsd: 10,
+        }),
+        makePeriodRow({
+          orgLogin: "org2",
+          holderKey: "mixed-budget",
+          resolvedUserLogin: "mixed-budget",
+          aicAssignedUsd: 0,
+          defaultAicUsd: 30,
+          aicConsumedUsd: 15,
+        }),
+      ]);
+
+      const filter = { enterpriseSlug: "ent1", periods: ["2026-66"] };
+      const rollup = queryLicensePeriodRows({ ...filter, view: "rollup" });
+      const kpis = getMaterializedPeriodKPIs(filter);
+      const plan = getMaterializedPlanBreakdown(filter);
+      const buckets = getMaterializedUtilizationBuckets(filter);
+
+      expect(rollup.rows[0]?.utilizationPct).toBeCloseTo(50, 5);
+      expect(kpis.overallUtilizationPct).toBe(50);
+      expect(plan[0]?.utilizationPct).toBe(50);
+      expect(kpis.totalOverageUsd).toBe(0);
+      expect(buckets.find((bucket) => bucket.label === "26–50%")?.count).toBe(1);
+      expect(buckets.find((bucket) => bucket.label === ">100%")?.count).toBe(0);
+    });
+
+    it("preserves an explicit zero per-user budget in SQL aggregates", () => {
+      replaceMaterializedPeriod("ent1", "2026-67", [
+        makePeriodRow({
+          holderKey: "zero-budget",
+          resolvedUserLogin: "zero-budget",
+          aicAssignedUsd: 0,
+          aicAssignedRule: "per_user_budget",
+          defaultAicUsd: 19,
+          aicConsumedUsd: 5,
+        }),
+      ]);
+
+      const filter = { enterpriseSlug: "ent1", periods: ["2026-67"] };
+      const kpis = getMaterializedPeriodKPIs(filter);
+      const plan = getMaterializedPlanBreakdown(filter);
+      const rollup = queryLicensePeriodRows({ ...filter, view: "rollup" });
+
+      expect(kpis.overallUtilizationPct).toBe(0);
+      expect(kpis.overBudgetRows).toBe(1);
+      expect(kpis.totalOverageUsd).toBe(5);
+      expect(plan[0]?.overageUsd).toBe(5);
+      expect(rollup.rows[0]?.utilizationPct).toBe(0);
+    });
   });
 
   it("actually orders rows by utilization_pct and by license_cost, not just accepting the sort field", () => {
