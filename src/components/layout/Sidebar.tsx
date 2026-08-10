@@ -21,7 +21,9 @@ import {
   DollarSign,
   Zap,
   TrendingUp,
+  Activity,
   ScrollText,
+  AppWindow,
 } from "lucide-react";
 import { useState, useEffect } from "react";
 
@@ -42,10 +44,12 @@ const navGroups: NavGroup[] = [
     label: "Usage Analytics",
     items: [
       { href: "/dashboard", label: "Overview", icon: LayoutDashboard, visKey: "overview" },
+      { href: "/dashboard/ai-usage", label: "AI Usage", icon: Activity, visKey: "aiUsage" },
       { href: "/dashboard/code-generation", label: "Code Generation", icon: Code2, visKey: "codeGeneration" },
       { href: "/dashboard/chat-modes", label: "Copilot Features", icon: Sparkles, visKey: "chatModes" },
       { href: "/dashboard/adoption-cohorts", label: "AI Adoption", icon: TrendingUp, visKey: "adoptionCohorts" },
       { href: "/dashboard/models", label: "Model Statistics", icon: Brain, visKey: "models" },
+      { href: "/dashboard/copilot-app", label: "Copilot App", icon: AppWindow, visKey: "copilotApp" },
     ],
   },
   {

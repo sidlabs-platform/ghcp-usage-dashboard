@@ -86,6 +86,9 @@ function insertMetric(overrides: Partial<Record<string, unknown>> = {}) {
     used_copilot_code_review_active: 0,
     used_copilot_code_review_passive: 0,
     used_copilot_coding_agent: 0,
+    // NULL (unsupported/legacy) by default, matching the schema default —
+    // callers that care about App adoption pass an explicit 0/1 override.
+    used_copilot_app: null,
   };
   const m = { ...defaults, ...overrides };
   db.prepare(`
@@ -94,8 +97,9 @@ function insertMetric(overrides: Partial<Record<string, unknown>> = {}) {
       ai_credits_used, loc_suggested_to_add_sum, loc_added_sum, loc_deleted_sum,
       chat_panel_agent_mode, chat_panel_ask_mode, chat_panel_edit_mode, chat_panel_plan_mode,
       chat_panel_custom_mode, chat_panel_unknown_mode,
-      used_agent, used_chat, used_cli, used_copilot_code_review_active, used_copilot_code_review_passive, used_copilot_coding_agent)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      used_agent, used_chat, used_cli, used_copilot_code_review_active, used_copilot_code_review_passive, used_copilot_coding_agent,
+      used_copilot_app)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     m.day, m.enterprise_id, m.enterprise_slug, m.user_id, m.user_login,
     m.code_generation_activity_count, m.code_acceptance_activity_count, m.user_initiated_interaction_count,
@@ -103,6 +107,7 @@ function insertMetric(overrides: Partial<Record<string, unknown>> = {}) {
     m.chat_panel_agent_mode, m.chat_panel_ask_mode, m.chat_panel_edit_mode, m.chat_panel_plan_mode,
     m.chat_panel_custom_mode, m.chat_panel_unknown_mode,
     m.used_agent, m.used_chat, m.used_cli, m.used_copilot_code_review_active, m.used_copilot_code_review_passive, m.used_copilot_coding_agent,
+    m.used_copilot_app,
   );
 }
 
@@ -143,6 +148,29 @@ describe("getAdoptionStats", () => {
     expect(stats.totalUsers).toBe(2);
     expect(stats.agentUsers).toBe(1);
     expect(stats.cliUsers).toBe(1);
+  });
+
+  it("counts distinct appUsers from used_copilot_app=1, treating NULL as unsupported/zero", () => {
+    insertMetric({ user_login: "user1", used_copilot_app: 1 });
+    insertMetric({ day: "2024-01-11", user_login: "user2", user_id: 2, used_copilot_app: 0 });
+    insertMetric({ day: "2024-01-12", user_login: "user3", user_id: 3, used_copilot_app: null });
+    const stats = getAdoptionStats("2024-01-01", "2024-01-31");
+    expect(stats.totalUsers).toBe(3);
+    expect(stats.appUsers).toBe(1);
+  });
+
+  it("dedupes appUsers across multiple enterprise rows for the same user/day", () => {
+    insertMetric({ user_login: "user1", enterprise_id: "ent-a", enterprise_slug: "ent-a", used_copilot_app: 1 });
+    insertMetric({ user_login: "user1", user_id: 1, enterprise_id: "ent-b", enterprise_slug: "ent-b", used_copilot_app: 1 });
+    const stats = getAdoptionStats("2024-01-01", "2024-01-31");
+    expect(stats.appUsers).toBe(1);
+  });
+
+  it("respects allowedLogins scoping for appUsers", () => {
+    insertMetric({ user_login: "user1", used_copilot_app: 1 });
+    insertMetric({ day: "2024-01-11", user_login: "user2", user_id: 2, used_copilot_app: 1 });
+    const stats = getAdoptionStats("2024-01-01", "2024-01-31", ["user1"]);
+    expect(stats.appUsers).toBe(1);
   });
 });
 
@@ -218,6 +246,67 @@ describe("getCompletionTotals", () => {
     expect(totals.completionAccepted).toBe(80);
     expect(totals.compGenCount).toBe(50);
     expect(totals.compAcceptCount).toBe(40);
+  });
+
+  it("isolates copilot_app activity from completion sums and reports it separately", () => {
+    const features = JSON.stringify([
+      { feature: "code_completion", loc_suggested_to_add_sum: 100, loc_added_sum: 80, loc_deleted_sum: 0, code_generation_activity_count: 50, code_acceptance_activity_count: 40 },
+      { feature: "agent_edit", loc_suggested_to_add_sum: 0, loc_added_sum: 500, loc_deleted_sum: 200, code_generation_activity_count: 10, code_acceptance_activity_count: 0 },
+      { feature: "copilot_app", loc_suggested_to_add_sum: 0, loc_added_sum: 60, loc_deleted_sum: 8, code_generation_activity_count: 7, code_acceptance_activity_count: 5 },
+    ]);
+    db.prepare(`INSERT INTO user_daily_metrics (day, enterprise_id, enterprise_slug, user_id, user_login, totals_by_feature)
+      VALUES ('2024-01-10', 'ent1', 'ent1', 1, 'user1', ?)`).run(features);
+    const totals = getCompletionTotals("2024-01-01", "2024-01-31");
+    // copilot_app must not leak into completion sums
+    expect(totals.completionAccepted).toBe(80);
+    expect(totals.compGenCount).toBe(50);
+    expect(totals.compAcceptCount).toBe(40);
+    // agent stays isolated
+    expect(totals.agentAdded).toBe(500);
+    expect(totals.agentDeleted).toBe(200);
+    // App activity reported separately
+    expect(totals.appAdded).toBe(60);
+    expect(totals.appDeleted).toBe(8);
+    expect(totals.appGenCount).toBe(7);
+    expect(totals.appAcceptCount).toBe(5);
+  });
+
+  it("excludes chat_inline and unrecognized/unknown feature names from completion sums", () => {
+    // Authoritative semantics: completion features are exactly code_completion,
+    // inline_chat, chat_panel, and chat_panel_*. `chat_inline` (a distinct legacy
+    // name from `inline_chat`) and any unknown feature must NOT be folded in,
+    // even though they may still appear in broad/unfiltered feature views.
+    const features = JSON.stringify([
+      { feature: "inline_chat", loc_suggested_to_add_sum: 30, loc_added_sum: 25, code_generation_activity_count: 6, code_acceptance_activity_count: 4 },
+      { feature: "chat_inline", loc_suggested_to_add_sum: 1000, loc_added_sum: 1000, code_generation_activity_count: 1000, code_acceptance_activity_count: 1000 },
+      { feature: "some_future_unknown_feature", loc_suggested_to_add_sum: 2000, loc_added_sum: 2000, code_generation_activity_count: 2000, code_acceptance_activity_count: 2000 },
+    ]);
+    db.prepare(`INSERT INTO user_daily_metrics (day, enterprise_id, enterprise_slug, user_id, user_login, totals_by_feature)
+      VALUES ('2024-01-11', 'ent1', 'ent1', 1, 'user1', ?)`).run(features);
+    const totals = getCompletionTotals("2024-01-01", "2024-01-31");
+    // Only inline_chat counts; chat_inline and the unknown feature must be excluded
+    expect(totals.completionSuggested).toBe(30);
+    expect(totals.completionAccepted).toBe(25);
+    expect(totals.compGenCount).toBe(6);
+    expect(totals.compAcceptCount).toBe(4);
+  });
+
+  it("does not throw when totals_by_feature is malformed JSON on one row, and still sums the valid row", () => {
+    const validFeatures = JSON.stringify([
+      { feature: "code_completion", loc_suggested_to_add_sum: 100, loc_added_sum: 80, code_generation_activity_count: 50, code_acceptance_activity_count: 40 },
+    ]);
+    db.prepare(`INSERT INTO user_daily_metrics (day, enterprise_id, enterprise_slug, user_id, user_login, totals_by_feature)
+      VALUES ('2024-01-10', 'ent1', 'ent1', 1, 'user1', ?)`).run(validFeatures);
+    // Malformed JSON on a second user/day — without a json_valid guard this
+    // throws a "malformed JSON" SQLite error out of json_each() and propagates
+    // up through every caller (the users/[login] route included).
+    db.prepare(`INSERT INTO user_daily_metrics (day, enterprise_id, enterprise_slug, user_id, user_login, totals_by_feature)
+      VALUES ('2024-01-12', 'ent1', 'ent1', 2, 'user2', ?)`).run("{not valid json");
+
+    expect(() => getCompletionTotals("2024-01-01", "2024-01-31")).not.toThrow();
+    const totals = getCompletionTotals("2024-01-01", "2024-01-31");
+    expect(totals.completionSuggested).toBe(100);
+    expect(totals.completionAccepted).toBe(80);
   });
 });
 
@@ -446,6 +535,19 @@ describe("getLanguageBreakdown", () => {
     const ts = breakdown.find((r) => r.language === "TypeScript");
     expect(ts!.locAdded).toBe(100);
   });
+
+  it("excludes copilot_app rows from the language breakdown", () => {
+    const langFeature = JSON.stringify([
+      { language: "TypeScript", feature: "code_completion", loc_added_sum: 100, loc_suggested_to_add_sum: 120, code_generation_activity_count: 10, code_acceptance_activity_count: 8 },
+      { language: "TypeScript", feature: "copilot_app", loc_added_sum: 500, loc_suggested_to_add_sum: 0, code_generation_activity_count: 50, code_acceptance_activity_count: 40 },
+    ]);
+    db.prepare(`INSERT INTO user_daily_metrics (day, enterprise_id, enterprise_slug, user_id, user_login, totals_by_language_feature)
+      VALUES ('2024-01-12', 'ent1', 'ent1', 1, 'user1', ?)`).run(langFeature);
+    const breakdown = getLanguageBreakdown("2024-01-01", "2024-01-31");
+    const ts = breakdown.find((r) => r.language === "TypeScript");
+    // copilot_app's 500 loc_added must not be included
+    expect(ts!.locAdded).toBe(100);
+  });
 });
 
 describe("getLanguageByFeatureBreakdown", () => {
@@ -457,6 +559,20 @@ describe("getLanguageByFeatureBreakdown", () => {
       VALUES ('2024-01-13', 'ent1', 'ent1', 1, 'user1', ?)`).run(langFeature);
     const breakdown = getLanguageByFeatureBreakdown("2024-01-01", "2024-01-31");
     const go = breakdown.find((r) => r.language === "Go");
+    expect(go!.generations).toBe(7);
+    expect(go!.acceptances).toBe(4);
+  });
+
+  it("excludes copilot_app rows from language x feature breakdown", () => {
+    const langFeature = JSON.stringify([
+      { language: "Go", feature: "code_completion", loc_added_sum: 30, loc_deleted_sum: 5, code_generation_activity_count: 7, code_acceptance_activity_count: 4 },
+      { language: "Go", feature: "copilot_app", loc_added_sum: 300, loc_deleted_sum: 40, code_generation_activity_count: 70, code_acceptance_activity_count: 60 },
+    ]);
+    db.prepare(`INSERT INTO user_daily_metrics (day, enterprise_id, enterprise_slug, user_id, user_login, totals_by_language_feature)
+      VALUES ('2024-01-13', 'ent1', 'ent1', 1, 'user1', ?)`).run(langFeature);
+    const breakdown = getLanguageByFeatureBreakdown("2024-01-01", "2024-01-31");
+    const go = breakdown.find((r) => r.language === "Go");
+    expect(go!.locAdded).toBe(30);
     expect(go!.generations).toBe(7);
     expect(go!.acceptances).toBe(4);
   });
@@ -490,6 +606,48 @@ describe("getCompletionDailyTrend", () => {
     expect(row!.completionAccepted).toBe(80);
     expect(row!.agentAdded).toBe(30);
     expect(row!.agentDeleted).toBe(10);
+  });
+
+  it("reports copilot_app LoC/gen/accept separately without affecting completion or agent", () => {
+    const features = JSON.stringify([
+      { feature: "code_completion", loc_suggested_to_add_sum: 100, loc_added_sum: 80, loc_deleted_sum: 0, code_generation_activity_count: 20, code_acceptance_activity_count: 15 },
+      { feature: "agent_edit", loc_suggested_to_add_sum: 0, loc_added_sum: 30, loc_deleted_sum: 10, code_generation_activity_count: 5, code_acceptance_activity_count: 5 },
+      { feature: "copilot_app", loc_suggested_to_add_sum: 0, loc_added_sum: 45, loc_deleted_sum: 6, code_generation_activity_count: 9, code_acceptance_activity_count: 7 },
+    ]);
+    db.prepare(`INSERT INTO user_daily_metrics (day, enterprise_id, enterprise_slug, user_id, user_login, totals_by_feature)
+      VALUES ('2024-01-16', 'ent1', 'ent1', 1, 'user1', ?)`).run(features);
+    const trend = getCompletionDailyTrend("2024-01-01", "2024-01-31");
+    const row = trend.find((r) => r.day === "2024-01-16");
+    expect(row!.completionSuggested).toBe(100);
+    expect(row!.completionAccepted).toBe(80);
+    expect(row!.agentAdded).toBe(30);
+    expect(row!.agentDeleted).toBe(10);
+    expect(row!.appAdded).toBe(45);
+    expect(row!.appDeleted).toBe(6);
+    expect(row!.appGenCount).toBe(9);
+    expect(row!.appAcceptCount).toBe(7);
+  });
+
+  it("does not throw when totals_by_feature is malformed JSON on one day, and still returns the valid day's trend row", () => {
+    const validFeatures = JSON.stringify([
+      { feature: "code_completion", loc_suggested_to_add_sum: 100, loc_added_sum: 80, loc_deleted_sum: 0, code_generation_activity_count: 20, code_acceptance_activity_count: 15 },
+    ]);
+    db.prepare(`INSERT INTO user_daily_metrics (day, enterprise_id, enterprise_slug, user_id, user_login, totals_by_feature)
+      VALUES ('2024-01-17', 'ent1', 'ent1', 1, 'user1', ?)`).run(validFeatures);
+    // Malformed JSON on a second day — this is the exact shape the users/[login]
+    // route depends on via getCompletionDailyTrend for its per-day completion
+    // trend; without json_valid, json_each() throws here and the route 500s.
+    db.prepare(`INSERT INTO user_daily_metrics (day, enterprise_id, enterprise_slug, user_id, user_login, totals_by_feature)
+      VALUES ('2024-01-18', 'ent1', 'ent1', 1, 'user1', ?)`).run("[{broken");
+
+    expect(() => getCompletionDailyTrend("2024-01-01", "2024-01-31")).not.toThrow();
+    const trend = getCompletionDailyTrend("2024-01-01", "2024-01-31");
+    const validRow = trend.find((r) => r.day === "2024-01-17");
+    expect(validRow!.completionSuggested).toBe(100);
+    expect(validRow!.completionAccepted).toBe(80);
+    // The malformed day contributes no joined json_each rows, so it never
+    // appears in the GROUP BY u.day output (same as an empty/'[]' day).
+    expect(trend.find((r) => r.day === "2024-01-18")).toBeUndefined();
   });
 });
 
@@ -801,6 +959,36 @@ describe("getFeatureUsageDaily", () => {
     const row = daily.find((r) => r.day === "2024-01-18");
     expect(row!.completions).toBeGreaterThanOrEqual(15);
     expect(row!.chatUsers).toBeGreaterThanOrEqual(1);
+  });
+
+  it("counts distinct appUsers per day, treating NULL used_copilot_app as unsupported/zero", () => {
+    db.prepare(`INSERT INTO user_daily_metrics (day, enterprise_id, enterprise_slug, user_id, user_login, used_copilot_app)
+      VALUES ('2024-01-22', 'ent1', 'ent1', 1, 'app-user-1', 1)`).run();
+    db.prepare(`INSERT INTO user_daily_metrics (day, enterprise_id, enterprise_slug, user_id, user_login, used_copilot_app)
+      VALUES ('2024-01-22', 'ent1', 'ent1', 2, 'app-user-2', 0)`).run();
+    db.prepare(`INSERT INTO user_daily_metrics (day, enterprise_id, enterprise_slug, user_id, user_login, used_copilot_app)
+      VALUES ('2024-01-22', 'ent1', 'ent1', 3, 'legacy-user', NULL)`).run();
+    const daily = getFeatureUsageDaily("2024-01-01", "2024-01-31");
+    const row = daily.find((r) => r.day === "2024-01-22");
+    expect(row!.appUsers).toBe(1);
+  });
+
+  it("dedupes appUsers per day across multiple enterprise rows for the same user", () => {
+    db.prepare(`INSERT INTO user_daily_metrics (day, enterprise_id, enterprise_slug, user_id, user_login, used_copilot_app)
+      VALUES ('2024-01-23', 'ent-a', 'ent-a', 1, 'multi-ent-user', 1)`).run();
+    db.prepare(`INSERT INTO user_daily_metrics (day, enterprise_id, enterprise_slug, user_id, user_login, used_copilot_app)
+      VALUES ('2024-01-23', 'ent-b', 'ent-b', 1, 'multi-ent-user', 1)`).run();
+    const daily = getFeatureUsageDaily("2024-01-01", "2024-01-31");
+    const row = daily.find((r) => r.day === "2024-01-23");
+    expect(row!.appUsers).toBe(1);
+  });
+
+  it("counts all appUsers when empty allowedLogins means no filter", () => {
+    db.prepare(`INSERT INTO user_daily_metrics (day, enterprise_id, enterprise_slug, user_id, user_login, used_copilot_app)
+      VALUES ('2024-01-24', 'ent1', 'ent1', 1, 'app-user', 1)`).run();
+    const daily = getFeatureUsageDaily("2024-01-01", "2024-01-31", []);
+    const row = daily.find((r) => r.day === "2024-01-24");
+    expect(row!.appUsers).toBe(1);
   });
 });
 

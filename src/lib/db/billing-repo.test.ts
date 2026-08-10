@@ -48,7 +48,7 @@ function makePremiumRecord(overrides: Partial<BillingPremiumRequestRecord> = {})
   };
   
   // If aic_quantity wasn't explicitly set and quantity was, derive aic_quantity from quantity
-  if (!overrides.aic_quantity && overrides.quantity !== undefined) {
+  if (overrides.aic_quantity === undefined && overrides.quantity !== undefined) {
     merged.aic_quantity = overrides.quantity;
   }
   
@@ -110,7 +110,7 @@ describe("upsertPremiumRequests", () => {
 
 describe("getOverviewKPIs", () => {
   it("returns zeros with no data", () => {
-    const kpis = getOverviewKPIs("2026-06-01", "2026-06-31");
+    const kpis = getOverviewKPIs("2026-06-01", "2026-06-30");
     expect(kpis.totalNet).toBe(0);
     expect(kpis.totalGross).toBe(0);
   });
@@ -122,7 +122,7 @@ describe("getOverviewKPIs", () => {
     upsertPremiumRequests("ent1", [
       makePremiumRecord({ sku: "p1", quantity: 50, applied_cost_per_quantity: 0.1, gross_amount: 5, net_amount: 5, username: "u1", total_monthly_quota: 200 }),
     ]);
-    const kpis = getOverviewKPIs("2026-06-01", "2026-06-31");
+    const kpis = getOverviewKPIs("2026-06-01", "2026-06-30");
     expect(kpis.totalNet).toBe(13); // 8 + 5
     expect(kpis.totalGross).toBe(15); // 10 + 5
   });
@@ -164,7 +164,7 @@ describe("getDailyAggregates", () => {
       { date: "2026-06-10", product: "copilot", sku: "s1", quantity: 1, unit_type: "seat", applied_cost_per_quantity: 10, gross_amount: 10, discount_amount: 0, net_amount: 10, organization: "", repository: "", username: "", workflow_path: "", cost_center_name: "", charge_scope: "user" },
       { date: "2026-06-10", product: "copilot", sku: "s2", quantity: 2, unit_type: "seat", applied_cost_per_quantity: 5, gross_amount: 10, discount_amount: 0, net_amount: 10, organization: "o2", repository: "", username: "u2", workflow_path: "", cost_center_name: "", charge_scope: "user" },
     ]);
-    const aggs = getDailyAggregates("2026-06-01", "2026-06-31");
+    const aggs = getDailyAggregates("2026-06-01", "2026-06-30");
     expect(aggs).toHaveLength(1);
     expect(aggs[0].total_net).toBe(20);
     expect(aggs[0].record_count).toBe(2);
@@ -199,7 +199,7 @@ describe("getUsageFilterOptions", () => {
       { date: "2026-06-10", product: "copilot", sku: "s1", quantity: 1, unit_type: "seat", applied_cost_per_quantity: 10, gross_amount: 10, discount_amount: 0, net_amount: 10, organization: "org1", repository: "", username: "", workflow_path: "", cost_center_name: "cc1", charge_scope: "user" },
       { date: "2026-06-10", product: "actions", sku: "s2", quantity: 2, unit_type: "min", applied_cost_per_quantity: 1, gross_amount: 2, discount_amount: 0, net_amount: 2, organization: "org2", repository: "", username: "", workflow_path: "", cost_center_name: "cc2", charge_scope: "org" },
     ]);
-    const opts = getUsageFilterOptions("2026-06-01", "2026-06-31");
+    const opts = getUsageFilterOptions("2026-06-01", "2026-06-30");
     expect(opts.products).toEqual(["actions", "copilot"]);
     expect(opts.organizations).toEqual(["org1", "org2"]);
     expect(opts.costCenters).toEqual(["cc1", "cc2"]);
@@ -212,7 +212,7 @@ describe("getPremiumFilterOptions", () => {
       makePremiumRecord({ sku: "p1" }),
       makePremiumRecord({ sku: "p2", quantity: 50, applied_cost_per_quantity: 0.02, username: "dev2", organization: "org2", model: "claude-3", total_monthly_quota: 300 }),
     ]);
-    const opts = getPremiumFilterOptions("2026-06-01", "2026-06-31");
+    const opts = getPremiumFilterOptions("2026-06-01", "2026-06-30");
     expect(opts.models).toEqual(["claude-3", "gpt-4"]);
     expect(opts.organizations).toEqual(["org1", "org2"]);
     expect(opts.users).toEqual(["dev1", "dev2"]);
@@ -225,7 +225,7 @@ describe("getProductBreakdown", () => {
       { date: "2026-06-10", product: "copilot", sku: "s1", quantity: 1, unit_type: "seat", applied_cost_per_quantity: 10, gross_amount: 10, discount_amount: 0, net_amount: 10, organization: "org1", repository: "", username: "", workflow_path: "", cost_center_name: "", charge_scope: "user" },
       { date: "2026-06-10", product: "actions", sku: "s2", quantity: 5, unit_type: "min", applied_cost_per_quantity: 1, gross_amount: 5, discount_amount: 0, net_amount: 5, organization: "org1", repository: "", username: "", workflow_path: "", cost_center_name: "", charge_scope: "org" },
     ]);
-    const breakdown = getProductBreakdown("2026-06-01", "2026-06-31");
+    const breakdown = getProductBreakdown("2026-06-01", "2026-06-30");
     expect(breakdown).toHaveLength(2);
     expect(breakdown[0].total_net).toBe(10); // copilot has higher net, sorted DESC
   });
@@ -237,7 +237,7 @@ describe("getOrgBreakdown", () => {
       { date: "2026-06-10", product: "copilot", sku: "s1", quantity: 1, unit_type: "seat", applied_cost_per_quantity: 10, gross_amount: 10, discount_amount: 0, net_amount: 10, organization: "org1", repository: "", username: "", workflow_path: "", cost_center_name: "", charge_scope: "user" },
       { date: "2026-06-10", product: "copilot", sku: "s2", quantity: 1, unit_type: "seat", applied_cost_per_quantity: 5, gross_amount: 5, discount_amount: 0, net_amount: 5, organization: "org2", repository: "", username: "u2", workflow_path: "", cost_center_name: "", charge_scope: "user" },
     ]);
-    const breakdown = getOrgBreakdown("2026-06-01", "2026-06-31");
+    const breakdown = getOrgBreakdown("2026-06-01", "2026-06-30");
     expect(breakdown).toHaveLength(2);
     expect(breakdown[0].organization).toBe("org1");
   });
@@ -248,7 +248,7 @@ describe("getUserBreakdown", () => {
     upsertUsageRecords("ent1", [
       { date: "2026-06-10", product: "copilot", sku: "s1", quantity: 1, unit_type: "seat", applied_cost_per_quantity: 10, gross_amount: 10, discount_amount: 0, net_amount: 10, organization: "org1", repository: "", username: "dev1", workflow_path: "", cost_center_name: "", charge_scope: "user" },
     ]);
-    const breakdown = getUserBreakdown("2026-06-01", "2026-06-31");
+    const breakdown = getUserBreakdown("2026-06-01", "2026-06-30");
     expect(breakdown).toHaveLength(1);
     expect(breakdown[0].username).toBe("dev1");
     expect(breakdown[0].total_net).toBe(10);
@@ -261,7 +261,7 @@ describe("getUsageRecordsPaginated", () => {
       { date: "2026-06-10", product: "copilot", sku: "s1", quantity: 1, unit_type: "seat", applied_cost_per_quantity: 10, gross_amount: 10, discount_amount: 0, net_amount: 10, organization: "org1", repository: "", username: "u1", workflow_path: "", cost_center_name: "", charge_scope: "user" },
       { date: "2026-06-11", product: "copilot", sku: "s2", quantity: 1, unit_type: "seat", applied_cost_per_quantity: 5, gross_amount: 5, discount_amount: 0, net_amount: 5, organization: "org1", repository: "", username: "u2", workflow_path: "", cost_center_name: "", charge_scope: "user" },
     ]);
-    const page1 = getUsageRecordsPaginated("2026-06-01", "2026-06-31", 1, 1, "date", "asc");
+    const page1 = getUsageRecordsPaginated("2026-06-01", "2026-06-30", 1, 1, "date", "asc");
     expect(page1.total).toBe(2);
     expect(page1.records).toHaveLength(1);
   });
@@ -271,7 +271,7 @@ describe("getUsageRecordsPaginated", () => {
       { date: "2026-06-10", product: "copilot", sku: "s1", quantity: 1, unit_type: "seat", applied_cost_per_quantity: 10, gross_amount: 10, discount_amount: 0, net_amount: 10, organization: "org1", repository: "", username: "alice", workflow_path: "", cost_center_name: "", charge_scope: "user" },
       { date: "2026-06-10", product: "actions", sku: "s2", quantity: 1, unit_type: "min", applied_cost_per_quantity: 1, gross_amount: 1, discount_amount: 0, net_amount: 1, organization: "org1", repository: "", username: "bob", workflow_path: "", cost_center_name: "", charge_scope: "org" },
     ]);
-    const result = getUsageRecordsPaginated("2026-06-01", "2026-06-31", 1, 10, "date", "asc", "alice");
+    const result = getUsageRecordsPaginated("2026-06-01", "2026-06-30", 1, 10, "date", "asc", "alice");
     expect(result.total).toBe(1);
     expect(result.records[0].username).toBe("alice");
   });
@@ -281,7 +281,7 @@ describe("getUsageRecordsPaginated", () => {
       { date: "2026-06-13", product: "copilot", sku: "s1", quantity: 1, unit_type: "seat", applied_cost_per_quantity: 10, gross_amount: 10, discount_amount: 0, net_amount: 10, organization: "org1", repository: "", username: "filteruser", workflow_path: "", cost_center_name: "", charge_scope: "user" },
       { date: "2026-06-13", product: "actions", sku: "s2", quantity: 2, unit_type: "min", applied_cost_per_quantity: 1, gross_amount: 2, discount_amount: 0, net_amount: 2, organization: "org1", repository: "", username: "filteruser", workflow_path: "", cost_center_name: "", charge_scope: "org" },
     ]);
-    const result = getUsageRecordsPaginated("2026-06-01", "2026-06-31", 1, 10, "date", "asc", undefined, { product: ["copilot"], chargeScope: "user" });
+    const result = getUsageRecordsPaginated("2026-06-01", "2026-06-30", 1, 10, "date", "asc", undefined, { product: ["copilot"], chargeScope: "user" });
     expect(result.records.every(r => r.product === "copilot")).toBe(true);
   });
 
@@ -290,13 +290,13 @@ describe("getUsageRecordsPaginated", () => {
       { date: "2026-06-13", product: "copilot", sku: "s1", quantity: 1, unit_type: "seat", applied_cost_per_quantity: 10, gross_amount: 10, discount_amount: 0, net_amount: 10, organization: "org1", repository: "", username: "target-user", workflow_path: "", cost_center_name: "", charge_scope: "user" },
       { date: "2026-06-13", product: "copilot", sku: "s1", quantity: 1, unit_type: "seat", applied_cost_per_quantity: 5, gross_amount: 5, discount_amount: 0, net_amount: 5, organization: "org1", repository: "", username: "other-user", workflow_path: "", cost_center_name: "", charge_scope: "user" },
     ]);
-    const result = getUsageRecordsPaginated("2026-06-01", "2026-06-31", 1, 10, "date", "asc", undefined, { username: "target-user" });
+    const result = getUsageRecordsPaginated("2026-06-01", "2026-06-30", 1, 10, "date", "asc", undefined, { username: "target-user" });
     expect(result.records.every(r => r.username === "target-user")).toBe(true);
     expect(result.total).toBe(1);
   });
 
   it("supports allowedLogins scope filter", () => {
-    const result = getUsageRecordsPaginated("2026-06-01", "2026-06-31", 1, 10, "date", "asc", undefined, { allowedLogins: ["alice"] });
+    const result = getUsageRecordsPaginated("2026-06-01", "2026-06-30", 1, 10, "date", "asc", undefined, { allowedLogins: ["alice"] });
     expect(result.records.every(r => r.username === "alice")).toBe(true);
   });
 
@@ -309,7 +309,7 @@ describe("getUsageRecordsPaginated", () => {
   });
 
   it("returns nothing when org+scopeOrgs have no intersection", () => {
-    const result = getUsageRecordsPaginated("2026-06-01", "2026-06-31", 1, 10, "date", "asc", undefined, { organization: ["nonexistent"], scopeOrgs: ["also-nonexistent"] });
+    const result = getUsageRecordsPaginated("2026-06-01", "2026-06-30", 1, 10, "date", "asc", undefined, { organization: ["nonexistent"], scopeOrgs: ["also-nonexistent"] });
     expect(result.total).toBe(0);
   });
 
@@ -324,7 +324,7 @@ describe("getUsageRecordsPaginated", () => {
   });
 
   it("supports sku filter", () => {
-    const result = getUsageRecordsPaginated("2026-06-01", "2026-06-31", 1, 10, "date", "asc", undefined, { sku: ["s1"] });
+    const result = getUsageRecordsPaginated("2026-06-01", "2026-06-30", 1, 10, "date", "asc", undefined, { sku: ["s1"] });
     expect(result.records.every(r => r.sku === "s1")).toBe(true);
   });
 
@@ -346,7 +346,7 @@ describe("getUsageRecordsPaginated", () => {
   });
 
   it("returns empty when allowedLogins is empty array with no scopeOrgs", () => {
-    const result = getUsageRecordsPaginated("2026-06-01", "2026-06-31", 1, 10, "date", "asc", undefined, { allowedLogins: [] });
+    const result = getUsageRecordsPaginated("2026-06-01", "2026-06-30", 1, 10, "date", "asc", undefined, { allowedLogins: [] });
     expect(result.total).toBe(0);
   });
 
@@ -354,7 +354,7 @@ describe("getUsageRecordsPaginated", () => {
     upsertUsageRecords("ent1", [
       { date: "2026-06-10", product: "copilot", sku: "s1", quantity: 1, unit_type: "seat", applied_cost_per_quantity: 10, gross_amount: 10, discount_amount: 0, net_amount: 10, organization: "org1", repository: "", username: "u1", workflow_path: "", cost_center_name: "", charge_scope: "user" },
     ]);
-    const result = getUsageRecordsPaginated("2026-06-01", "2026-06-31", 1, 10, "invalid_col", "desc");
+    const result = getUsageRecordsPaginated("2026-06-01", "2026-06-30", 1, 10, "invalid_col", "desc");
     expect(result.total).toBeGreaterThanOrEqual(1);
   });
 });
@@ -365,7 +365,7 @@ describe("getPremiumRequestsPaginated", () => {
       makePremiumRecord({ sku: "p1", input_tokens: 1000, output_tokens: 400, cached_tokens: 250 }),
       makePremiumRecord({ date: "2026-06-11", sku: "p2", quantity: 200, gross_amount: 2, net_amount: 2, username: "dev2", model: "claude-3", total_monthly_quota: 300, input_tokens: 2000, output_tokens: 800, cached_tokens: 500 }),
     ]);
-    const page1 = getPremiumRequestsPaginated("2026-06-01", "2026-06-31", 1, 1, "date", "asc");
+    const page1 = getPremiumRequestsPaginated("2026-06-01", "2026-06-30", 1, 1, "date", "asc");
     expect(page1.total).toBe(2);
     expect(page1.records).toHaveLength(1);
     expect(page1.records[0].input_tokens).toBe(1000);
@@ -377,13 +377,13 @@ describe("getPremiumRequestsPaginated", () => {
     upsertPremiumRequests("ent1", [
       makePremiumRecord({ date: "2026-06-12", sku: "p1", quantity: 10, gross_amount: 0.1, net_amount: 0.1, username: "search-user" }),
     ]);
-    const result = getPremiumRequestsPaginated("2026-06-01", "2026-06-31", 1, 10, "date", "asc", "search-user");
+    const result = getPremiumRequestsPaginated("2026-06-01", "2026-06-30", 1, 10, "date", "asc", "search-user");
     expect(result.total).toBe(1);
     expect(result.records[0].username).toBe("search-user");
   });
 
   it("supports model filter", () => {
-    const result = getPremiumRequestsPaginated("2026-06-01", "2026-06-31", 1, 10, "date", "asc", undefined, { model: ["gpt-4"] });
+    const result = getPremiumRequestsPaginated("2026-06-01", "2026-06-30", 1, 10, "date", "asc", undefined, { model: ["gpt-4"] });
     expect(result.records.every(r => r.model === "gpt-4")).toBe(true);
   });
 
@@ -391,18 +391,18 @@ describe("getPremiumRequestsPaginated", () => {
     upsertPremiumRequests("ent1", [
       makePremiumRecord({ date: "2026-06-13", sku: "p1", quantity: 999, gross_amount: 9.99, net_amount: 9.99, username: "heavy-user", exceeds_quota: "TRUE" }),
     ]);
-    const result = getPremiumRequestsPaginated("2026-06-01", "2026-06-31", 1, 10, "date", "asc", undefined, { exceedsQuota: true });
+    const result = getPremiumRequestsPaginated("2026-06-01", "2026-06-30", 1, 10, "date", "asc", undefined, { exceedsQuota: true });
     expect(result.records.every(r => r.exceeds_quota === "TRUE")).toBe(true);
     expect(result.total).toBeGreaterThanOrEqual(1);
   });
 
   it("supports organization filter", () => {
-    const result = getPremiumRequestsPaginated("2026-06-01", "2026-06-31", 1, 10, "date", "asc", undefined, { organization: ["org1"] });
+    const result = getPremiumRequestsPaginated("2026-06-01", "2026-06-30", 1, 10, "date", "asc", undefined, { organization: ["org1"] });
     expect(result.records.every(r => r.organization === "org1")).toBe(true);
   });
 
   it("supports allowedLogins scope filter", () => {
-    const result = getPremiumRequestsPaginated("2026-06-01", "2026-06-31", 1, 10, "date", "asc", undefined, { allowedLogins: ["dev1"] });
+    const result = getPremiumRequestsPaginated("2026-06-01", "2026-06-30", 1, 10, "date", "asc", undefined, { allowedLogins: ["dev1"] });
     expect(result.records.every(r => r.username === "dev1")).toBe(true);
   });
 
@@ -426,12 +426,12 @@ describe("getPremiumRequestsPaginated", () => {
   });
 
   it("returns empty when org+scopeOrgs intersection is empty", () => {
-    const result = getPremiumRequestsPaginated("2026-06-01", "2026-06-31", 1, 10, "date", "asc", undefined, { organization: ["no-match"], scopeOrgs: ["other-scope"] });
+    const result = getPremiumRequestsPaginated("2026-06-01", "2026-06-30", 1, 10, "date", "asc", undefined, { organization: ["no-match"], scopeOrgs: ["other-scope"] });
     expect(result.total).toBe(0);
   });
 
   it("returns empty when allowedLogins is empty with no active scopeOrgs", () => {
-    const result = getPremiumRequestsPaginated("2026-06-01", "2026-06-31", 1, 10, "date", "asc", undefined, { allowedLogins: [] });
+    const result = getPremiumRequestsPaginated("2026-06-01", "2026-06-30", 1, 10, "date", "asc", undefined, { allowedLogins: [] });
     expect(result.total).toBe(0);
   });
 
@@ -439,7 +439,7 @@ describe("getPremiumRequestsPaginated", () => {
     upsertPremiumRequests("ent1", [
       makePremiumRecord(),
     ]);
-    const result = getPremiumRequestsPaginated("2026-06-01", "2026-06-31", 1, 10, "bad_field", "asc");
+    const result = getPremiumRequestsPaginated("2026-06-01", "2026-06-30", 1, 10, "bad_field", "asc");
     expect(result.total).toBeGreaterThanOrEqual(1);
   });
 
@@ -466,7 +466,7 @@ describe("getPremiumUserSummary", () => {
       makePremiumRecord({ sku: "p1", input_tokens: 1000, output_tokens: 400, cached_tokens: 250 }),
       makePremiumRecord({ date: "2026-06-11", sku: "p2", quantity: 50, applied_cost_per_quantity: 0.02, model: "claude-3", input_tokens: 500, output_tokens: 200, cached_tokens: 100 }),
     ]);
-    const summary = getPremiumUserSummary("2026-06-01", "2026-06-31");
+    const summary = getPremiumUserSummary("2026-06-01", "2026-06-30");
     expect(summary).toHaveLength(1);
     expect(summary[0].username).toBe("dev1");
     expect(summary[0].total_requests).toBe(150);
@@ -482,7 +482,7 @@ describe("getPremiumModelSummary", () => {
       makePremiumRecord({ sku: "p1", input_tokens: 1000, output_tokens: 400, cached_tokens: 250 }),
       makePremiumRecord({ sku: "p2", quantity: 200, gross_amount: 2, net_amount: 2, username: "dev2", total_monthly_quota: 300, input_tokens: 2000, output_tokens: 900, cached_tokens: 500 }),
     ]);
-    const summary = getPremiumModelSummary("2026-06-01", "2026-06-31");
+    const summary = getPremiumModelSummary("2026-06-01", "2026-06-30");
     expect(summary).toHaveLength(1);
     expect(summary[0].model).toBe("gpt-4");
     expect(summary[0].total_requests).toBe(300);
@@ -498,7 +498,7 @@ describe("getCostCenterBreakdown", () => {
     upsertUsageRecords("ent1", [
       { date: "2026-06-10", product: "copilot", sku: "s1", quantity: 1, unit_type: "seat", applied_cost_per_quantity: 10, gross_amount: 10, discount_amount: 0, net_amount: 10, organization: "org1", repository: "", username: "", workflow_path: "", cost_center_name: "engineering", charge_scope: "org" },
     ]);
-    const breakdown = getCostCenterBreakdown("2026-06-01", "2026-06-31");
+    const breakdown = getCostCenterBreakdown("2026-06-01", "2026-06-30");
     expect(breakdown).toHaveLength(1);
     expect(breakdown[0].cost_center_name).toBe("engineering");
   });
@@ -637,7 +637,7 @@ describe("getRepositoryBreakdown", () => {
     upsertUsageRecords("ent1", [
       { date: "2026-06-10", product: "actions", sku: "s1", quantity: 100, unit_type: "min", applied_cost_per_quantity: 0.1, gross_amount: 10, discount_amount: 0, net_amount: 10, organization: "org1", repository: "org1/repo-a", username: "", workflow_path: ".github/workflows/ci.yml", cost_center_name: "", charge_scope: "org" },
     ]);
-    const breakdown = getRepositoryBreakdown("2026-06-01", "2026-06-31");
+    const breakdown = getRepositoryBreakdown("2026-06-01", "2026-06-30");
     expect(breakdown).toHaveLength(1);
     expect(breakdown[0].repository).toBe("org1/repo-a");
   });
@@ -649,7 +649,7 @@ describe("getPremiumDailyTrend", () => {
       makePremiumRecord({ sku: "p1", input_tokens: 1000, output_tokens: 400, cached_tokens: 250 }),
       makePremiumRecord({ date: "2026-06-11", sku: "p2", quantity: 200, gross_amount: 2, net_amount: 2, input_tokens: 2000, output_tokens: 800, cached_tokens: 500 }),
     ]);
-    const trend = getPremiumDailyTrend("2026-06-01", "2026-06-31");
+    const trend = getPremiumDailyTrend("2026-06-01", "2026-06-30");
     expect(trend).toHaveLength(2);
     expect(trend[0].day).toBe("2026-06-10");
     expect(trend[0].total_input_tokens).toBe(1000);
@@ -684,7 +684,7 @@ describe("appendBillingFilters edge cases", () => {
     upsertUsageRecords("ent1", [
       { date: "2026-06-10", product: "copilot", sku: "s1", quantity: 1, unit_type: "seat", applied_cost_per_quantity: 10, gross_amount: 10, discount_amount: 0, net_amount: 10, organization: "org1", repository: "", username: "u1", workflow_path: "", cost_center_name: "", charge_scope: "user" },
     ]);
-    const result = getOverviewKPIs("2026-06-01", "2026-06-31", { organization: ["org1"], scopeOrgs: ["different-org"] });
+    const result = getOverviewKPIs("2026-06-01", "2026-06-30", { organization: ["org1"], scopeOrgs: ["different-org"] });
     expect(result.totalNet).toBe(0);
   });
 
@@ -692,7 +692,7 @@ describe("appendBillingFilters edge cases", () => {
     upsertUsageRecords("ent1", [
       { date: "2026-06-10", product: "copilot", sku: "s1", quantity: 1, unit_type: "seat", applied_cost_per_quantity: 10, gross_amount: 10, discount_amount: 0, net_amount: 10, organization: "org1", repository: "", username: "u1", workflow_path: "", cost_center_name: "", charge_scope: "user" },
     ]);
-    const result = getOverviewKPIs("2026-06-01", "2026-06-31", { allowedLogins: [] });
+    const result = getOverviewKPIs("2026-06-01", "2026-06-30", { allowedLogins: [] });
     expect(result.totalNet).toBe(0);
   });
 
@@ -700,7 +700,7 @@ describe("appendBillingFilters edge cases", () => {
     upsertUsageRecords("ent1", [
       { date: "2026-06-10", product: "copilot", sku: "s1", quantity: 1, unit_type: "seat", applied_cost_per_quantity: 10, gross_amount: 10, discount_amount: 0, net_amount: 10, organization: "org1", repository: "", username: "u1", workflow_path: "", cost_center_name: "", charge_scope: "user" },
     ]);
-    const result = getOverviewKPIs("2026-06-01", "2026-06-31", { scopeOrgs: ["org1"] });
+    const result = getOverviewKPIs("2026-06-01", "2026-06-30", { scopeOrgs: ["org1"] });
     expect(result.totalNet).toBe(10);
   });
 
@@ -709,10 +709,10 @@ describe("appendBillingFilters edge cases", () => {
       { date: "2026-06-10", product: "copilot", sku: "s1", quantity: 1, unit_type: "seat", applied_cost_per_quantity: 5, gross_amount: 5, discount_amount: 0, net_amount: 5, organization: "org1", repository: "", username: "u1", workflow_path: "", cost_center_name: "", charge_scope: "user" },
     ]);
     // No premium requests → premium query returns undefined → ?? 0 fallbacks fire
-    const result = getOverviewKPIs("2026-06-01", "2026-06-31", undefined, ["ent1"]);
+    const result = getOverviewKPIs("2026-06-01", "2026-06-30", undefined, ["ent1"]);
     expect(result.totalNet).toBe(5);
     // Non-matching enterprise returns 0
-    const empty = getOverviewKPIs("2026-06-01", "2026-06-31", undefined, ["no-match"]);
+    const empty = getOverviewKPIs("2026-06-01", "2026-06-30", undefined, ["no-match"]);
     expect(empty.totalNet).toBe(0);
   });
 
@@ -720,9 +720,9 @@ describe("appendBillingFilters edge cases", () => {
     upsertUsageRecords("ent1", [
       { date: "2026-06-10", product: "copilot", sku: "s1", quantity: 1, unit_type: "seat", applied_cost_per_quantity: 10, gross_amount: 10, discount_amount: 0, net_amount: 10, organization: "org1", repository: "", username: "u1", workflow_path: "", cost_center_name: "", charge_scope: "user" },
     ]);
-    const rows = getDailyAggregates("2026-06-01", "2026-06-31", undefined, ["ent1"]);
+    const rows = getDailyAggregates("2026-06-01", "2026-06-30", undefined, ["ent1"]);
     expect(rows.length).toBe(1);
-    const empty = getDailyAggregates("2026-06-01", "2026-06-31", undefined, ["no-match"]);
+    const empty = getDailyAggregates("2026-06-01", "2026-06-30", undefined, ["no-match"]);
     expect(empty.length).toBe(0);
   });
 
@@ -730,7 +730,7 @@ describe("appendBillingFilters edge cases", () => {
     upsertUsageRecords("ent1", [
       { date: "2026-06-10", product: "copilot", sku: "s1", quantity: 1, unit_type: "seat", applied_cost_per_quantity: 10, gross_amount: 10, discount_amount: 0, net_amount: 10, organization: "org1", repository: "", username: "u1", workflow_path: "", cost_center_name: "", charge_scope: "user" },
     ]);
-    const rows = getProductBreakdown("2026-06-01", "2026-06-31", undefined, ["ent1"]);
+    const rows = getProductBreakdown("2026-06-01", "2026-06-30", undefined, ["ent1"]);
     expect(rows.length).toBe(1);
   });
 
@@ -738,7 +738,7 @@ describe("appendBillingFilters edge cases", () => {
     upsertUsageRecords("ent1", [
       { date: "2026-06-10", product: "copilot", sku: "s1", quantity: 1, unit_type: "seat", applied_cost_per_quantity: 10, gross_amount: 10, discount_amount: 0, net_amount: 10, organization: "org1", repository: "", username: "u1", workflow_path: "", cost_center_name: "", charge_scope: "user" },
     ]);
-    const rows = getOrgBreakdown("2026-06-01", "2026-06-31", undefined, ["ent1"]);
+    const rows = getOrgBreakdown("2026-06-01", "2026-06-30", undefined, ["ent1"]);
     expect(rows.length).toBe(1);
   });
 
@@ -746,7 +746,7 @@ describe("appendBillingFilters edge cases", () => {
     upsertUsageRecords("ent1", [
       { date: "2026-06-10", product: "copilot", sku: "s1", quantity: 1, unit_type: "seat", applied_cost_per_quantity: 10, gross_amount: 10, discount_amount: 0, net_amount: 10, organization: "org1", repository: "", username: "u1", workflow_path: "", cost_center_name: "", charge_scope: "user" },
     ]);
-    const rows = getUserBreakdown("2026-06-01", "2026-06-31", undefined, ["ent1"]);
+    const rows = getUserBreakdown("2026-06-01", "2026-06-30", undefined, ["ent1"]);
     expect(rows.length).toBe(1);
   });
 
@@ -754,7 +754,7 @@ describe("appendBillingFilters edge cases", () => {
     upsertUsageRecords("ent1", [
       { date: "2026-06-10", product: "copilot", sku: "s1", quantity: 1, unit_type: "seat", applied_cost_per_quantity: 10, gross_amount: 10, discount_amount: 0, net_amount: 10, organization: "org1", repository: "", username: "u1", workflow_path: "", cost_center_name: "", charge_scope: "user" },
     ]);
-    const r = getUsageRecordsPaginated("2026-06-01", "2026-06-31", 1, 10, "date", "asc", undefined, undefined, ["ent1"]);
+    const r = getUsageRecordsPaginated("2026-06-01", "2026-06-30", 1, 10, "date", "asc", undefined, undefined, ["ent1"]);
     expect(r.total).toBe(1);
   });
 
@@ -762,7 +762,7 @@ describe("appendBillingFilters edge cases", () => {
     upsertPremiumRequests("ent1", [
       makePremiumRecord({ sku: "p1", username: "u1" }),
     ]);
-    const r = getPremiumRequestsPaginated("2026-06-01", "2026-06-31", 1, 10, "date", "asc", undefined, undefined, ["ent1"]);
+    const r = getPremiumRequestsPaginated("2026-06-01", "2026-06-30", 1, 10, "date", "asc", undefined, undefined, ["ent1"]);
     expect(r.total).toBe(1);
   });
 
@@ -770,7 +770,7 @@ describe("appendBillingFilters edge cases", () => {
     upsertPremiumRequests("ent1", [
       makePremiumRecord({ sku: "p1", username: "u1" }),
     ]);
-    const rows = getPremiumUserSummary("2026-06-01", "2026-06-31", undefined, ["ent1"]);
+    const rows = getPremiumUserSummary("2026-06-01", "2026-06-30", undefined, ["ent1"]);
     expect(rows.length).toBe(1);
   });
 
@@ -778,7 +778,7 @@ describe("appendBillingFilters edge cases", () => {
     upsertPremiumRequests("ent1", [
       makePremiumRecord({ sku: "p1", username: "u1" }),
     ]);
-    const rows = getPremiumModelSummary("2026-06-01", "2026-06-31", undefined, ["ent1"]);
+    const rows = getPremiumModelSummary("2026-06-01", "2026-06-30", undefined, ["ent1"]);
     expect(rows.length).toBe(1);
   });
 
@@ -786,7 +786,7 @@ describe("appendBillingFilters edge cases", () => {
     upsertUsageRecords("ent1", [
       { date: "2026-06-10", product: "copilot", sku: "s1", quantity: 1, unit_type: "seat", applied_cost_per_quantity: 10, gross_amount: 10, discount_amount: 0, net_amount: 10, organization: "org1", repository: "", username: "u1", workflow_path: "", cost_center_name: "cc1", charge_scope: "user" },
     ]);
-    const rows = getCostCenterBreakdown("2026-06-01", "2026-06-31", undefined, ["ent1"]);
+    const rows = getCostCenterBreakdown("2026-06-01", "2026-06-30", undefined, ["ent1"]);
     expect(rows.length).toBe(1);
   });
 
@@ -794,7 +794,7 @@ describe("appendBillingFilters edge cases", () => {
     upsertUsageRecords("ent1", [
       { date: "2026-06-10", product: "copilot", sku: "s1", quantity: 1, unit_type: "seat", applied_cost_per_quantity: 10, gross_amount: 10, discount_amount: 0, net_amount: 10, organization: "org1", repository: "org1/repo1", username: "u1", workflow_path: "", cost_center_name: "", charge_scope: "user" },
     ]);
-    const rows = getRepositoryBreakdown("2026-06-01", "2026-06-31", undefined, 20, ["ent1"]);
+    const rows = getRepositoryBreakdown("2026-06-01", "2026-06-30", undefined, 20, ["ent1"]);
     expect(rows.length).toBe(1);
   });
 
@@ -802,7 +802,7 @@ describe("appendBillingFilters edge cases", () => {
     upsertPremiumRequests("ent1", [
       makePremiumRecord({ sku: "p1", username: "u1" }),
     ]);
-    const rows = getPremiumDailyTrend("2026-06-01", "2026-06-31", undefined, ["ent1"]);
+    const rows = getPremiumDailyTrend("2026-06-01", "2026-06-30", undefined, ["ent1"]);
     expect(rows.length).toBe(1);
   });
 
@@ -840,23 +840,23 @@ describe("premium requests — multi-enterprise isolation", () => {
   });
 
   it("getPremiumRequestsPaginated isolates by enterprise", () => {
-    const a = getPremiumRequestsPaginated("2026-06-01", "2026-06-31", 1, 50, "date", "desc", undefined, undefined, [entA]);
+    const a = getPremiumRequestsPaginated("2026-06-01", "2026-06-30", 1, 50, "date", "desc", undefined, undefined, [entA]);
     expect(a.total).toBe(1);
     expect(a.records[0].model).toBe("gpt-4");
     expect(a.records[0].input_tokens).toBe(2000);
 
-    const b = getPremiumRequestsPaginated("2026-06-01", "2026-06-31", 1, 50, "date", "desc", undefined, undefined, [entB]);
+    const b = getPremiumRequestsPaginated("2026-06-01", "2026-06-30", 1, 50, "date", "desc", undefined, undefined, [entB]);
     expect(b.total).toBe(1);
     expect(b.records[0].model).toBe("claude-3");
     expect(b.records[0].input_tokens).toBe(1200);
 
     // No enterprise filter → both
-    const all = getPremiumRequestsPaginated("2026-06-01", "2026-06-31", 1, 50, "date", "desc");
+    const all = getPremiumRequestsPaginated("2026-06-01", "2026-06-30", 1, 50, "date", "desc");
     expect(all.total).toBe(2);
   });
 
   it("getPremiumUserSummary aggregates correctly per enterprise", () => {
-    const a = getPremiumUserSummary("2026-06-01", "2026-06-31", undefined, [entA]);
+    const a = getPremiumUserSummary("2026-06-01", "2026-06-30", undefined, [entA]);
     expect(a).toHaveLength(1);
     expect(a[0].total_requests).toBe(100);
     expect(a[0].total_input_tokens).toBe(2000);
@@ -864,50 +864,50 @@ describe("premium requests — multi-enterprise isolation", () => {
     expect(a[0].total_cached_tokens).toBe(500);
 
     // Aggregate (no filter): same user in both enterprises → merges into one row
-    const all = getPremiumUserSummary("2026-06-01", "2026-06-31");
+    const all = getPremiumUserSummary("2026-06-01", "2026-06-30");
     expect(all).toHaveLength(1); // same username+org → grouped
     expect(all[0].total_requests).toBe(160); // 100 + 60
     expect(all[0].total_input_tokens).toBe(3200); // 2000 + 1200
   });
 
   it("getPremiumModelSummary isolates by enterprise with token sums", () => {
-    const a = getPremiumModelSummary("2026-06-01", "2026-06-31", undefined, [entA]);
+    const a = getPremiumModelSummary("2026-06-01", "2026-06-30", undefined, [entA]);
     expect(a).toHaveLength(1);
     expect(a[0].model).toBe("gpt-4");
     expect(a[0].total_input_tokens).toBe(2000);
 
-    const b = getPremiumModelSummary("2026-06-01", "2026-06-31", undefined, [entB]);
+    const b = getPremiumModelSummary("2026-06-01", "2026-06-30", undefined, [entB]);
     expect(b).toHaveLength(1);
     expect(b[0].model).toBe("claude-3");
     expect(b[0].total_input_tokens).toBe(1200);
 
     // No filter → two models
-    const all = getPremiumModelSummary("2026-06-01", "2026-06-31");
+    const all = getPremiumModelSummary("2026-06-01", "2026-06-30");
     expect(all).toHaveLength(2);
   });
 
   it("getPremiumDailyTrend aggregates by enterprise with tokens", () => {
-    const a = getPremiumDailyTrend("2026-06-01", "2026-06-31", undefined, [entA]);
+    const a = getPremiumDailyTrend("2026-06-01", "2026-06-30", undefined, [entA]);
     expect(a).toHaveLength(1);
     expect(a[0].total_requests).toBe(100);
     expect(a[0].total_input_tokens).toBe(2000);
     expect(a[0].total_cached_tokens).toBe(500);
 
     // Aggregate: same day → merged
-    const all = getPremiumDailyTrend("2026-06-01", "2026-06-31");
+    const all = getPremiumDailyTrend("2026-06-01", "2026-06-30");
     expect(all).toHaveLength(1);
     expect(all[0].total_requests).toBe(160);
     expect(all[0].total_input_tokens).toBe(3200);
   });
 
   it("getPremiumFilterOptions scoped to enterprise", () => {
-    const a = getPremiumFilterOptions("2026-06-01", "2026-06-31", [entA]);
+    const a = getPremiumFilterOptions("2026-06-01", "2026-06-30", [entA]);
     expect(a.models).toEqual(["gpt-4"]);
 
-    const b = getPremiumFilterOptions("2026-06-01", "2026-06-31", [entB]);
+    const b = getPremiumFilterOptions("2026-06-01", "2026-06-30", [entB]);
     expect(b.models).toEqual(["claude-3"]);
 
-    const all = getPremiumFilterOptions("2026-06-01", "2026-06-31");
+    const all = getPremiumFilterOptions("2026-06-01", "2026-06-30");
     expect(all.models).toEqual(expect.arrayContaining(["claude-3", "gpt-4"]));
   });
 
@@ -917,30 +917,30 @@ describe("premium requests — multi-enterprise isolation", () => {
       { date: "2026-06-15", product: "copilot", sku: "seat", quantity: 1, unit_type: "seat", applied_cost_per_quantity: 19, gross_amount: 19, discount_amount: 0, net_amount: 19, organization: "org-shared", repository: "", username: "alice", workflow_path: "", cost_center_name: "", charge_scope: "user" },
     ]);
 
-    const a = getOverviewKPIs("2026-06-01", "2026-06-31", undefined, [entA]);
+    const a = getOverviewKPIs("2026-06-01", "2026-06-30", undefined, [entA]);
     expect(a.totalNet).toBe(19 + 4); // usage net + premium net
     expect(a.userChargesNet).toBe(19 + 4);
 
-    const b = getOverviewKPIs("2026-06-01", "2026-06-31", undefined, [entB]);
+    const b = getOverviewKPIs("2026-06-01", "2026-06-30", undefined, [entB]);
     expect(b.totalNet).toBe(2.4); // only premium, no usage in ent-b
   });
 
   it("non-matching enterprise returns empty results", () => {
-    const r = getPremiumRequestsPaginated("2026-06-01", "2026-06-31", 1, 50, "date", "desc", undefined, undefined, ["no-such-enterprise"]);
+    const r = getPremiumRequestsPaginated("2026-06-01", "2026-06-30", 1, 50, "date", "desc", undefined, undefined, ["no-such-enterprise"]);
     expect(r.total).toBe(0);
 
-    const summary = getPremiumUserSummary("2026-06-01", "2026-06-31", undefined, ["no-such-enterprise"]);
+    const summary = getPremiumUserSummary("2026-06-01", "2026-06-30", undefined, ["no-such-enterprise"]);
     expect(summary).toHaveLength(0);
 
-    const trend = getPremiumDailyTrend("2026-06-01", "2026-06-31", undefined, ["no-such-enterprise"]);
+    const trend = getPremiumDailyTrend("2026-06-01", "2026-06-30", undefined, ["no-such-enterprise"]);
     expect(trend).toHaveLength(0);
   });
 
   it("multi-enterprise selection returns combined data", () => {
-    const both = getPremiumRequestsPaginated("2026-06-01", "2026-06-31", 1, 50, "date", "desc", undefined, undefined, [entA, entB]);
+    const both = getPremiumRequestsPaginated("2026-06-01", "2026-06-30", 1, 50, "date", "desc", undefined, undefined, [entA, entB]);
     expect(both.total).toBe(2);
 
-    const summary = getPremiumUserSummary("2026-06-01", "2026-06-31", undefined, [entA, entB]);
+    const summary = getPremiumUserSummary("2026-06-01", "2026-06-30", undefined, [entA, entB]);
     expect(summary).toHaveLength(1); // same user/org → grouped
     expect(summary[0].total_requests).toBe(160);
   });

@@ -34,7 +34,7 @@ const CLIvsIDEChart = dynamic(
   () => import("@/components/charts/CLIvsIDEChart").then(m => ({ default: m.CLIvsIDEChart })),
   { ssr: false, loading: () => <ChartSkeleton /> }
 );
-import { Users, UserCheck, Bot, Terminal, CreditCard, Activity, Eye, GitPullRequest, ShieldAlert, TrendingDown, Sparkles, Code2, Brain, Monitor, Receipt, Calendar } from "lucide-react";
+import { Users, UserCheck, Bot, Terminal, CreditCard, Activity, Eye, GitPullRequest, ShieldAlert, TrendingDown, Sparkles, Code2, Brain, Monitor, Receipt, Calendar, AppWindow } from "lucide-react";
 
 export default function DashboardOverview() {
   const { days } = useDateRange();
@@ -99,8 +99,8 @@ export default function DashboardOverview() {
     return (
       <div>
         <PageHeader title="Executive Overview" description="Loading metrics..." />
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-8 mb-8">
-          {Array.from({ length: 8 }).map((_, i) => (
+        <div className={`grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4 mb-8 ${hasFilter ? "xl:grid-cols-9" : "xl:grid-cols-10"}`}>
+          {Array.from({ length: hasFilter ? 9 : 10 }).map((_, i) => (
             <KPISkeleton key={i} />
           ))}
         </div>
@@ -172,7 +172,7 @@ export default function DashboardOverview() {
 
       {/* KPI Cards */}
       <Section title="Key Metrics">
-        <div ref={kpiRef} className={`grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4 ${isFiltered ? "xl:grid-cols-8" : "xl:grid-cols-9"}`}>
+        <div ref={kpiRef} className={`grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4 ${isFiltered ? "xl:grid-cols-9" : "xl:grid-cols-10"}`}>
           <MetricCard
             title="Period Active Users"
             value={kpis.periodActiveUsers ?? 0}
@@ -244,6 +244,14 @@ export default function DashboardOverview() {
             accent="green"
             stagger={8}
           />
+          <MetricCard
+            title="Copilot App Users"
+            value={kpis.copilotAppUsers ?? 0}
+            icon={<AppWindow className="h-4 w-4" />}
+            subtitle="Yesterday"
+            accent="violet"
+            stagger={9}
+          />
           {!isFiltered && (
             <MetricCard
               title="License Utilization"
@@ -252,7 +260,7 @@ export default function DashboardOverview() {
               icon={<CreditCard className="h-4 w-4" />}
               subtitle="Active / total seats"
               accent="red"
-              stagger={9}
+              stagger={10}
             />
           )}
         </div>
@@ -283,6 +291,7 @@ export default function DashboardOverview() {
           { href: "/dashboard/teams", visKey: "teams", icon: <Users className="h-4 w-4 text-sky-500" />, label: "Team Analytics", desc: "Adoption and usage leaderboard by team" },
           { href: "/dashboard/ide-languages", visKey: "ideLanguages", icon: <Monitor className="h-4 w-4 text-indigo-500" />, label: "IDE & Languages", desc: "Editor and programming language breakdown" },
           { href: "/dashboard/billing", visKey: "billing", icon: <Receipt className="h-4 w-4 text-rose-500" />, label: "Billing", desc: "Cost summary and spend breakdown" },
+          { href: "/dashboard/copilot-app", visKey: "copilotApp", icon: <AppWindow className="h-4 w-4 text-violet-500" />, label: "Copilot App", desc: "Mobile/App adoption, sessions, and code impact" },
         ].filter((l) => isVisible(l.visKey));
         if (quickLinks.length === 0) return null;
         return (

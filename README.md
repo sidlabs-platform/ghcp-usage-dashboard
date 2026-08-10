@@ -59,7 +59,7 @@ A comprehensive dashboard for visualizing GitHub Copilot usage metrics, GHAS sec
 
 ## Prerequisites
 
-- **Node.js 20+** (with npm)
+- **Node.js 20–22** (with npm). The repo pins Node 20 via `.nvmrc` and enforces `>=20 <23` through `package.json` `engines`, matching CI. Node 23+ is not supported because the `better-sqlite3` native addon does not build against its V8 API. With `nvm`, `fnm`, or Volta installed, run `nvm use` / `fnm use` in the repo root to pick up the right version.
 - A **GitHub Personal Access Token** (classic or fine-grained) with scopes appropriate for the features you enable:
 
 | Feature | Classic PAT Scope | Fine-Grained PAT Permission |

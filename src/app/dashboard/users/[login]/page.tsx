@@ -14,6 +14,7 @@ import { CHART_COLORS, FEATURE_LABELS, CHAT_MODE_LABELS, CHAT_MODE_COLORS } from
 import {
   ArrowLeft, Calendar, MessageSquare, CheckCircle,
   FileCode, FileCheck, FileX, Bot, Terminal, Sparkles,
+  AppWindow, Send, Hash, ArrowRight,
 } from "lucide-react";
 import {
   AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell,
@@ -34,6 +35,20 @@ interface DailyActivity {
   aiCreditsUsed: number;
   agentLocAdded: number;
   agentLocDeleted: number;
+  // Strict completion-only LoC (server-computed via the IS_COMPLETION_SQL
+  // allowlist) — the same basis as summary.totalLocSuggested/
+  // completionLocAccepted/completionLocDeleted, so the daily chart and the
+  // summary card agree.
+  completionLocSuggested: number;
+  completionLocAccepted: number;
+  completionLocDeleted: number;
+  // Strict completion-only counterpart to locSuggestedDelete (top-level
+  // loc_suggested_to_delete_sum). Used by the chart instead of
+  // locSuggestedDelete so the "Suggested (Delete)" series never includes
+  // copilot_app/chat_inline/unknown/agent_edit suggested-deletion activity.
+  completionLocSuggestedDelete: number;
+  appLocAdded: number;
+  appLocDeleted: number;
 }
 
 interface UserSummary {
@@ -53,6 +68,12 @@ interface UserSummary {
   totalLocSuggested: number;
   completionLocAccepted: number;
   completionLocDeleted: number;
+  // Strict completion-only counterpart to totalLocSuggestedDelete (top-level
+  // loc_suggested_to_delete_sum across ALL features) — used for the "LoC
+  // Deleted" card subtitle so it never mixes a completion-only headline
+  // value with a top-level (copilot_app/chat_inline/unknown/agent_edit
+  // inclusive) suggested-deletion count.
+  completionLocSuggestedDelete: number;
   completionAcceptanceRate: number;
   usedAgent: boolean;
   usedChat: boolean;
@@ -60,6 +81,23 @@ interface UserSummary {
   usedCodeReview: boolean;
   usedCodingAgent: boolean;
   usedCodeReviewPassive: boolean;
+  // Three-state: true = actual App activity (flag or real metrics); false =
+  // supported but never used; null/undefined = no App evidence at all
+  // (legacy data). Only `true` shows the badge and the App activity section.
+  usedCopilotApp?: boolean | null;
+}
+
+interface CopilotAppStats {
+  sessions: number;
+  requests: number;
+  prompts: number;
+  promptTokens: number;
+  outputTokens: number;
+  avgTokensPerRequest: number;
+  codeGenerations: number;
+  codeAcceptances: number;
+  locAdded: number;
+  locDeleted: number;
 }
 
 interface TopLanguage {
@@ -113,6 +151,7 @@ interface UserDetailData {
   featureUsage: FeatureUsageRow[];
   chatModes: ChatModes;
   cliStats: CliStats | null;
+  copilotAppStats: CopilotAppStats | null;
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────
@@ -151,15 +190,13 @@ function LoadingSkeleton() {
 // ── Chart Components ──────────────────────────────────────────────────
 
 function LocTrendChart({ data }: { data: DailyActivity[] }) {
-  // Approximate completion-only LOC by subtracting per-day agent contributions.
-  // The summary cards use precise json_each(totals_by_feature) decomposition.
   const chartData = useMemo(() => data.map((d) => ({
     day: d.day,
-    locSuggested: d.locSuggested,
-    completionLocAccepted: Math.max(0, d.locAccepted - d.agentLocAdded),
+    completionLocSuggested: d.completionLocSuggested,
+    completionLocAccepted: d.completionLocAccepted,
     agentLocAdded: d.agentLocAdded,
-    locSuggestedDelete: d.locSuggestedDelete,
-    completionLocDeleted: Math.max(0, d.locDeleted - d.agentLocDeleted),
+    completionLocSuggestedDelete: d.completionLocSuggestedDelete,
+    completionLocDeleted: d.completionLocDeleted,
   })), [data]);
 
   return (
@@ -176,8 +213,13 @@ function LocTrendChart({ data }: { data: DailyActivity[] }) {
               <YAxis tick={{ fontSize: 12 }} stroke="hsl(var(--muted-foreground))" />
               <Tooltip contentStyle={tooltipStyle} />
               <Legend />
+              {/* completionLocSuggested/completionLocAccepted/completionLocDeleted/
+                  completionLocSuggestedDelete are all server-computed via the strict
+                  IS_COMPLETION_SQL allowlist — the same fields the summary cards use —
+                  so this chart and the cards never disagree, and copilot_app/chat_inline/
+                  unknown/agent_edit activity never inflates these series. */}
               <Area
-                type="monotone" dataKey="locSuggested" name="LoC Suggested"
+                type="monotone" dataKey="completionLocSuggested" name="LoC Suggested"
                 stroke={CHART_COLORS.locSuggested} fill={CHART_COLORS.locSuggested}
                 fillOpacity={0.15} strokeWidth={2}
               />
@@ -192,7 +234,7 @@ function LocTrendChart({ data }: { data: DailyActivity[] }) {
                 fillOpacity={0.10} strokeWidth={1.5} strokeDasharray="4 2"
               />
               <Area
-                type="monotone" dataKey="locSuggestedDelete" name="LoC Suggested (Delete)"
+                type="monotone" dataKey="completionLocSuggestedDelete" name="LoC Suggested (Delete)"
                 stroke={CHART_COLORS.danger} fill={CHART_COLORS.danger}
                 fillOpacity={0.08} strokeWidth={1.5} strokeDasharray="4 2"
               />
@@ -446,6 +488,68 @@ function CliStatsCard({ data }: { data: CliStats }) {
   );
 }
 
+// Copilot App activity — only rendered when actual App activity was detected
+// (summary.usedCopilotApp === true), never for "supported but unused" or
+// "no evidence" cases. See usedCopilotApp's three-state doc comment above.
+function CopilotAppStatsSection({ data }: { data: CopilotAppStats }) {
+  return (
+    <>
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <SectionHeader>Copilot App Activity</SectionHeader>
+        <Link
+          href="/dashboard/copilot-app"
+          className="inline-flex items-center gap-1 text-xs text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))]"
+        >
+          View Copilot App Analytics
+          <ArrowRight className="h-3 w-3" />
+        </Link>
+      </div>
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        <MetricCard
+          title="Sessions"
+          value={data.sessions}
+          icon={<AppWindow className="h-4 w-4" />}
+          accent="violet"
+        />
+        <MetricCard
+          title="Requests"
+          value={data.requests}
+          icon={<Send className="h-4 w-4" />}
+          accent="blue"
+        />
+        <MetricCard
+          title="Prompts"
+          value={data.prompts}
+          icon={<MessageSquare className="h-4 w-4" />}
+          accent="teal"
+        />
+        <MetricCard
+          title="Tokens / Request"
+          value={data.avgTokensPerRequest}
+          format="raw"
+          icon={<Hash className="h-4 w-4" />}
+          accent="amber"
+          subtitle="(Prompt + output) ÷ requests"
+        />
+        <MetricCard
+          title="App LoC"
+          value={data.locAdded}
+          icon={<FileCode className="h-4 w-4" />}
+          accent="green"
+          subtitle={`${formatNumber(data.locDeleted)} deleted`}
+        />
+        <MetricCard
+          title="Code Generations"
+          value={data.codeGenerations}
+          icon={<Sparkles className="h-4 w-4" />}
+          accent="teal"
+          subtitle={`${formatNumber(data.codeAcceptances)} accepted`}
+        />
+      </div>
+    </>
+  );
+}
+
 // ── Page ──────────────────────────────────────────────────────────────
 
 export default function UserDetailPage() {
@@ -582,7 +686,7 @@ export default function UserDetailPage() {
               value={data.summary.completionLocDeleted}
               icon={<FileX className="h-4 w-4" />}
               accent="red"
-              subtitle={`${formatNumber(data.summary.totalLocSuggestedDelete)} suggested`}
+              subtitle={`${formatNumber(data.summary.completionLocSuggestedDelete)} suggested`}
             />
             {data.summary.agentLocAdded > 0 || data.summary.agentLocDeleted > 0 ? (
               <MetricCard
@@ -611,6 +715,7 @@ export default function UserDetailPage() {
             {data.summary.usedCodeReview && <Badge variant="warning">Code Review</Badge>}
             {data.summary.usedCodingAgent && <Badge variant="secondary">Coding Agent</Badge>}
             {data.summary.usedCodeReviewPassive && <Badge variant="warning">Code Review (Passive)</Badge>}
+            {data.summary.usedCopilotApp && <Badge variant="secondary">Copilot App</Badge>}
           </div>
 
           {/* ── Activity trends ───────────────────────────────────────── */}
@@ -655,6 +760,11 @@ export default function UserDetailPage() {
                 {data.cliStats && <CliStatsCard data={data.cliStats} />}
               </div>
             </>
+          )}
+
+          {/* ── Copilot App ───────────────────────────────────────────── */}
+          {data.summary.usedCopilotApp === true && data.copilotAppStats && (
+            <CopilotAppStatsSection data={data.copilotAppStats} />
           )}
         </div>
       )}

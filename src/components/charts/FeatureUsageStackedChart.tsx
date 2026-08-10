@@ -21,6 +21,8 @@ interface FeatureUsageStackedChartProps {
     chat: number;
     agent: number;
     cli: number;
+    // Optional so existing/older data still renders without the App series.
+    app?: number;
   }[];
 }
 
@@ -30,10 +32,16 @@ function formatDate(dateStr: string) {
 }
 
 const AREAS = [
-  { key: "completions", name: "Completions", color: CHART_COLORS.completions },
-  { key: "chat", name: "Chat", color: CHART_COLORS.chat },
-  { key: "agent", name: "Agent", color: CHART_COLORS.agent },
-  { key: "cli", name: "CLI", color: CHART_COLORS.cli },
+  { key: "completions", name: "Completions", color: CHART_COLORS.completions, stackId: "1" },
+  { key: "chat", name: "Chat", color: CHART_COLORS.chat, stackId: "1" },
+  { key: "agent", name: "Agent", color: CHART_COLORS.agent, stackId: "1" },
+  { key: "cli", name: "CLI", color: CHART_COLORS.cli, stackId: "1" },
+  // Copilot App is an overlapping active-surface count (a user can also be
+  // counted in completions/chat/agent/cli for the same day). It uses its own
+  // stackId so it renders as its own unstacked area instead of compounding
+  // into the completions/chat/agent/cli total — stacking it there would
+  // double-count users and inflate the visible daily total.
+  { key: "app", name: "Copilot App", color: CHART_COLORS.copilotApp, stackId: "app" },
 ] as const;
 
 export function FeatureUsageStackedChart({ data }: FeatureUsageStackedChartProps) {
@@ -91,7 +99,7 @@ export function FeatureUsageStackedChart({ data }: FeatureUsageStackedChartProps
                 type="monotone"
                 dataKey={area.key}
                 name={area.name}
-                stackId="1"
+                stackId={area.stackId}
                 fill={`url(#grad-feature-${area.key})`}
                 stroke={area.color}
                 strokeWidth={1.5}

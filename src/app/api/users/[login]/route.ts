@@ -5,6 +5,19 @@ import { parseScopeFilter } from "@/lib/api/scope-filter";
 import { withCache } from "@/lib/cache/with-cache";
 import { withTimeout } from "@/lib/api/timeout";
 import { CACHE_TTL } from "@/lib/cache/memory-cache";
+// Shared completion-feature allowlist SQL fragment — the single source of
+// truth for "is this feature a completion feature" across all raw SQL call
+// sites. Never re-declare a local copy or fall back to a bare
+// `!= 'agent_edit'` exclusion, since that would silently misclassify
+// `copilot_app`, `chat_inline`, or any future unknown feature as completion.
+import { IS_COMPLETION_SQL, NOT_AGENT_OR_APP_SQL, getCompletionDailyTrend } from "@/lib/db/aggregation-queries";
+// Copilot App KPI aggregation is delegated entirely to this shared query
+// helper (Task 2/3's SQL layer) rather than re-implemented here: it already
+// dedupes same-login/same-day rows across enterprises via MAX-before-SUM and
+// computes the weighted avgTokensPerRequest = (promptTokens + outputTokens) /
+// requests, so re-deriving either here would risk drifting from the
+// org/enterprise-level Copilot App analytics routes that use the same helper.
+import { getCopilotAppUserSummary } from "@/lib/db/copilot-app-queries";
 
 interface DailyActivity {
   day: string;
@@ -18,6 +31,24 @@ interface DailyActivity {
   aiCreditsUsed: number;
   agentLocAdded: number;
   agentLocDeleted: number;
+  // Strict completion-only LoC (IS_COMPLETION_SQL allowlist) — the same values
+  // the summary card's totalLocSuggested/completionLocAccepted/completionLocDeleted
+  // are built from, so the daily chart and the card never disagree. Unlike
+  // locSuggested/locAccepted (top-level loc_suggested_to_add_sum/loc_added_sum,
+  // which also include copilot_app/chat_inline/unknown and agent_edit writes),
+  // these exclude all of them.
+  completionLocSuggested: number;
+  completionLocAccepted: number;
+  completionLocDeleted: number;
+  // Strict completion-only loc_suggested_to_delete_sum (IS_COMPLETION_SQL
+  // allowlist) — the "suggested deletion" counterpart to completionLocDeleted
+  // above, from the same getCompletionDailyTrend query. Unlike the top-level
+  // locSuggestedDelete (loc_suggested_to_delete_sum across ALL features), this
+  // excludes copilot_app/chat_inline/unknown and agent_edit activity.
+  completionLocSuggestedDelete: number;
+  // Copilot App LoC, broken out for future use — never folded into completion.
+  appLocAdded: number;
+  appLocDeleted: number;
 }
 
 interface UserSummary {
@@ -39,6 +70,12 @@ interface UserSummary {
   totalLocSuggested: number;
   completionLocAccepted: number;
   completionLocDeleted: number;
+  // Strict completion-only counterpart to totalLocSuggestedDelete (top-level
+  // loc_suggested_to_delete_sum across ALL features). Used by the page's
+  // "LoC Deleted" card subtitle so it never mixes completion-only headline
+  // values with a top-level (copilot_app/chat_inline/unknown/agent_edit
+  // inclusive) suggested-deletion count.
+  completionLocSuggestedDelete: number;
   completionAcceptanceRate: number;
   usedAgent: boolean;
   usedChat: boolean;
@@ -46,6 +83,34 @@ interface UserSummary {
   usedCodeReview: boolean;
   usedCodingAgent: boolean;
   usedCodeReviewPassive: boolean;
+  // Copilot App availability/activity — three-state, distinct from the other
+  // used* booleans above:
+  //   true  — at least one row has used_copilot_app = 1, OR real App activity
+  //           (sessions/requests/prompts/generations/LOC) is present. Actual
+  //           data evidence always wins over a missing/stale flag.
+  //   false — App support evidence exists (the flag, dedicated totals, or an
+  //           App feature row) but every value is zero/false — "supported,
+  //           never used".
+  //   null  — no App evidence at all for this user/period (legacy data
+  //           synced before Copilot App tracking existed).
+  usedCopilotApp: boolean | null;
+}
+
+/** Copilot App activity stats for a single user, combining the dedicated
+ * `totals_by_copilot_app` totals (sessions/requests/prompts/tokens) with the
+ * `copilot_app` feature-code totals from `totals_by_feature`
+ * (generations/acceptances/LOC) — see {@link getCopilotAppUserSummary}. */
+interface CopilotAppStats {
+  sessions: number;
+  requests: number;
+  prompts: number;
+  promptTokens: number;
+  outputTokens: number;
+  avgTokensPerRequest: number;
+  codeGenerations: number;
+  codeAcceptances: number;
+  locAdded: number;
+  locDeleted: number;
 }
 
 interface TopLanguage {
@@ -125,7 +190,8 @@ async function handler(request: NextRequest) {
 
     // Daily activity (with per-day agent LOC extracted from agent_edit JSON)
     // Use CASE WHEN json_valid() to guard against empty/malformed agent_edit values
-    const dailyActivity = db.prepare(`
+    type DailyActivityRow = Omit<DailyActivity, "completionLocSuggested" | "completionLocAccepted" | "completionLocDeleted" | "completionLocSuggestedDelete" | "appLocAdded" | "appLocDeleted">;
+    const dailyActivityRows = db.prepare(`
       SELECT day,
         COALESCE(code_generation_activity_count, 0) AS codeGen,
         COALESCE(code_acceptance_activity_count, 0) AS codeAccept,
@@ -140,7 +206,33 @@ async function handler(request: NextRequest) {
       FROM user_daily_metrics
       WHERE user_login = ? AND day BETWEEN ? AND ?${efClause}
       ORDER BY day ASC
-    `).all(decodedLogin, start, end, ...efParams) as DailyActivity[];
+    `).all(decodedLogin, start, end, ...efParams) as DailyActivityRow[];
+
+    // Per-day strict completion/app LoC — via json_each(totals_by_feature)
+    // GROUP BY day, reusing the same shared aggregation query the org-level
+    // code-generation route uses (getCompletionDailyTrend), scoped to this
+    // single user. This is a separate query merged in JS by day, NOT a join
+    // against the query above, so it can never multiply dailyActivity rows.
+    // getCompletionDailyTrend supplies completionSuggested/completionAccepted/
+    // completionDeleted/appAdded/appDeleted all from the same strict
+    // IS_COMPLETION_SQL / IS_COPILOT_APP_SQL allowlists, so no extra per-day
+    // query is needed to fill in any of these fields.
+    const completionTrendByDay = new Map(
+      getCompletionDailyTrend(start, end, [decodedLogin], scope.enterpriseSlugs).map((r) => [r.day, r]),
+    );
+
+    const dailyActivity: DailyActivity[] = dailyActivityRows.map((row) => {
+      const trend = completionTrendByDay.get(row.day);
+      return {
+        ...row,
+        completionLocSuggested: trend?.completionSuggested ?? 0,
+        completionLocAccepted: trend?.completionAccepted ?? 0,
+        completionLocDeleted: trend?.completionDeleted ?? 0,
+        completionLocSuggestedDelete: trend?.completionSuggestedDelete ?? 0,
+        appLocAdded: trend?.appAdded ?? 0,
+        appLocDeleted: trend?.appDeleted ?? 0,
+      };
+    });
 
     // Summary — top-level aggregation (includes all features)
     const summaryRow = db.prepare(`
@@ -191,25 +283,56 @@ async function handler(request: NextRequest) {
         AND agent_edit IS NOT NULL AND agent_edit != ''${efClause}
     `).get(decodedLogin, start, end, ...efParams) as { agentLocAdded: number; agentLocDeleted: number } | undefined;
 
-    // Completion-only LOC and acceptance from totals_by_feature (excludes agent_edit)
+    // Completion-only LOC and acceptance from totals_by_feature.
+    // Uses the explicit completion allowlist (code_completion, inline_chat,
+    // chat_panel, chat_panel_*) — NOT a bare `!= 'agent_edit'` exclusion —
+    // so `copilot_app`, `chat_inline`, and any unknown feature never leak
+    // into completion LoC or the completion acceptance rate.
     const completionLocRow = db.prepare(`
       SELECT
         COALESCE(SUM(json_extract(j.value, '$.loc_suggested_to_add_sum')), 0) AS compLocSuggested,
         COALESCE(SUM(json_extract(j.value, '$.loc_added_sum')), 0) AS compLocAccepted,
         COALESCE(SUM(json_extract(j.value, '$.loc_deleted_sum')), 0) AS compLocDeleted,
+        COALESCE(SUM(json_extract(j.value, '$.loc_suggested_to_delete_sum')), 0) AS compLocSuggestedDelete,
         COALESCE(SUM(json_extract(j.value, '$.code_generation_activity_count')), 0) AS compCodeGen,
         COALESCE(SUM(json_extract(j.value, '$.code_acceptance_activity_count')), 0) AS compCodeAccept
       FROM user_daily_metrics u, json_each(u.totals_by_feature) j
       WHERE u.user_login = ? AND u.day BETWEEN ? AND ?
         AND u.totals_by_feature IS NOT NULL AND u.totals_by_feature != '[]'
-        AND COALESCE(json_extract(j.value, '$.feature'), '') != 'agent_edit'${efClause}
+        AND json_valid(u.totals_by_feature)
+        AND ${IS_COMPLETION_SQL}${efClause}
     `).get(decodedLogin, start, end, ...efParams) as {
       compLocSuggested: number;
       compLocAccepted: number;
       compLocDeleted: number;
+      compLocSuggestedDelete: number;
       compCodeGen: number;
       compCodeAccept: number;
     } | undefined;
+
+    // Copilot App — a single call to the shared Task 2/3 query helper
+    // (getCopilotAppUserSummary) scoped to this one login, handles the
+    // multi-enterprise MAX-before-SUM dedupe and weighted avgTokensPerRequest
+    // internally. `supportedRows` distinguishes "no App evidence at all"
+    // (usedCopilotApp: null) from "supported but inactive" (usedCopilotApp:
+    // false, zero-value stats) and "actual activity" (usedCopilotApp: true).
+    const appSummary = getCopilotAppUserSummary(start, end, [decodedLogin], scope.enterpriseSlugs);
+    const hasCopilotAppEvidence = appSummary.supportedRows > 0;
+    const usedCopilotApp: boolean | null = hasCopilotAppEvidence ? appSummary.appActiveUsers > 0 : null;
+    const copilotAppStats: CopilotAppStats | null = hasCopilotAppEvidence
+      ? {
+          sessions: appSummary.sessions,
+          requests: appSummary.requests,
+          prompts: appSummary.prompts,
+          promptTokens: appSummary.promptTokens,
+          outputTokens: appSummary.outputTokens,
+          avgTokensPerRequest: appSummary.avgTokensPerRequest,
+          codeGenerations: appSummary.codeGenerations,
+          codeAcceptances: appSummary.codeAcceptances,
+          locAdded: appSummary.locAdded,
+          locDeleted: appSummary.locDeleted,
+        }
+      : null;
 
     let summary: UserSummary | null = null;
     if (summaryRow && summaryRow.totalActiveDays > 0) {
@@ -224,6 +347,10 @@ async function handler(request: NextRequest) {
       const compDeleted = completionLocRow
         ? completionLocRow.compLocDeleted
         : Math.max(0, summaryRow.totalLocDeleted - agentDeleted);
+      // No agent/copilot_app suggested-deletion fallback subtraction is possible here
+      // (loc_suggested_to_delete_sum isn't tracked per-feature outside totals_by_feature),
+      // so when completionLocRow is unavailable this just falls back to the top-level total.
+      const compSuggestedDelete = completionLocRow?.compLocSuggestedDelete ?? summaryRow.totalLocSuggestedDelete;
       const compCodeGen = completionLocRow?.compCodeGen ?? summaryRow.totalCodeGen;
       const compCodeAccept = completionLocRow?.compCodeAccept ?? summaryRow.totalCodeAccept;
 
@@ -252,6 +379,7 @@ async function handler(request: NextRequest) {
         totalLocSuggested: compSuggested,
         completionLocAccepted: compAccepted,
         completionLocDeleted: compDeleted,
+        completionLocSuggestedDelete: compSuggestedDelete,
         completionAcceptanceRate: Math.round(compRate * 10) / 10,
         usedAgent: summaryRow.usedAgent === 1,
         usedChat: summaryRow.usedChat === 1,
@@ -259,10 +387,17 @@ async function handler(request: NextRequest) {
         usedCodeReview: summaryRow.usedCodeReview === 1,
         usedCodingAgent: summaryRow.usedCodingAgent === 1,
         usedCodeReviewPassive: summaryRow.usedCodeReviewPassive === 1,
+        usedCopilotApp,
       };
     }
 
-    // Top languages (excludes agent_edit to show completion-only language metrics)
+    // Top languages — mirrors getLanguageBreakdown/getLanguageByFeatureBreakdown
+    // in aggregation-queries.ts: uses NOT_AGENT_OR_APP_SQL (exclusion), not the
+    // strict IS_COMPLETION_SQL allowlist, so legacy rows synced before the
+    // `feature` key existed (COALESCE(feature, '') = '') remain included, while
+    // agent_edit and copilot_app are still excluded from this "completion-ish"
+    // language view. This intentionally differs from summary.completionLocAccepted
+    // above, which uses the strict allowlist.
     const topLanguages = db.prepare(`
       SELECT
         j.value->>'language' AS language,
@@ -270,7 +405,9 @@ async function handler(request: NextRequest) {
         SUM(CAST(COALESCE(j.value->>'code_acceptance_activity_count', '0') AS INTEGER)) AS acceptances
       FROM user_daily_metrics u, json_each(u.totals_by_language_feature) j
       WHERE u.user_login = ? AND u.day BETWEEN ? AND ?
-        AND COALESCE(j.value->>'feature', '') != 'agent_edit'${efClause}
+        AND u.totals_by_language_feature IS NOT NULL AND u.totals_by_language_feature != '[]'
+        AND json_valid(u.totals_by_language_feature)
+        AND ${NOT_AGENT_OR_APP_SQL}${efClause}
       GROUP BY language
       ORDER BY suggestions DESC
       LIMIT 10
@@ -309,7 +446,8 @@ async function handler(request: NextRequest) {
         COALESCE(SUM(json_extract(j.value, '$.loc_added_sum')), 0) AS locAdded
       FROM user_daily_metrics u, json_each(u.totals_by_feature) j
       WHERE u.user_login = ? AND u.day BETWEEN ? AND ?
-        AND u.totals_by_feature IS NOT NULL AND u.totals_by_feature != '[]'${efClause}
+        AND u.totals_by_feature IS NOT NULL AND u.totals_by_feature != '[]'
+        AND json_valid(u.totals_by_feature)${efClause}
       GROUP BY feature
       ORDER BY interactions DESC
     `).all(decodedLogin, start, end, ...efParams) as FeatureUsageRow[];
@@ -356,6 +494,7 @@ async function handler(request: NextRequest) {
       featureUsage,
       chatModes,
       cliStats,
+      copilotAppStats,
     }, {
       headers: { "Cache-Control": "private, max-age=300, stale-while-revalidate=60" },
     });

@@ -1,6 +1,15 @@
 // Summary table refresh logic — populates pre-aggregated tables after sync
 
 import { getDb } from "./database";
+// Shared completion/agent feature-classification SQL fragments — the single
+// source of truth for "is this feature a completion feature" across the
+// codebase (see also src/app/api/users/[login]/route.ts and
+// src/app/api/teams/[slug]/route.ts). Never re-declare a local
+// `!= 'agent_edit'` exclusion here: that would silently misclassify
+// `copilot_app`, `chat_inline`, or any future unknown feature as completion.
+// Both constants are built from json_extract(j.value, '$.feature') and every
+// query below aliases its json_each(...) row as `j`, matching that fragment.
+import { IS_COMPLETION_SQL, IS_AGENT_SQL } from "./aggregation-queries";
 
 /**
  * Refresh user_period_summary for a given date range.
@@ -58,19 +67,22 @@ export function refreshUserSummary(periodStart: string, periodEnd: string, enter
     GROUP BY enterprise_slug, user_login
   `).run(periodStart, periodEnd, now, periodStart, periodEnd, ...extraParams);
 
-  // Override acceptance_rate with completion-only rate (excludes agent_edit which
-  // has code_generation_activity_count > 0 but code_acceptance_activity_count = 0,
-  // deflating the top-level rate).
+  // Override acceptance_rate with a completion-only rate using the shared
+  // IS_COMPLETION_SQL allowlist — not a bare `!= 'agent_edit'` exclusion,
+  // since that would silently fold `copilot_app`, `chat_inline`, or any
+  // future unknown feature into "completion". agent_edit has
+  // code_generation_activity_count > 0 but code_acceptance_activity_count = 0,
+  // which would deflate the top-level rate if left in.
   db.prepare(`
     UPDATE user_period_summary SET acceptance_rate = COALESCE(f.rate, 0)
     FROM (
       SELECT u.enterprise_slug, u.user_login,
-        CASE WHEN SUM(CASE WHEN json_extract(j.value, '$.feature') != 'agent_edit'
+        CASE WHEN SUM(CASE WHEN ${IS_COMPLETION_SQL}
             THEN json_extract(j.value, '$.code_generation_activity_count') ELSE 0 END) > 0
           THEN ROUND(
-            CAST(SUM(CASE WHEN json_extract(j.value, '$.feature') != 'agent_edit'
+            CAST(SUM(CASE WHEN ${IS_COMPLETION_SQL}
               THEN json_extract(j.value, '$.code_acceptance_activity_count') ELSE 0 END) AS REAL) /
-            SUM(CASE WHEN json_extract(j.value, '$.feature') != 'agent_edit'
+            SUM(CASE WHEN ${IS_COMPLETION_SQL}
               THEN json_extract(j.value, '$.code_generation_activity_count') ELSE 0 END) * 100, 1)
           ELSE 0 END as rate
       FROM user_daily_metrics u, json_each(u.totals_by_feature) j
@@ -138,7 +150,10 @@ export function refreshDailyAggregate(day: string, enterpriseSlug?: string): voi
     GROUP BY enterprise_slug
   `).run(day, now, day, ...extraParams);
 
-  // Update completion/agent LOC from json_each(totals_by_feature) for accuracy.
+  // Update completion/agent LOC from json_each(totals_by_feature) for accuracy,
+  // using the shared IS_COMPLETION_SQL/IS_AGENT_SQL predicates (not a bare
+  // `!= 'agent_edit'` exclusion) so copilot_app/chat_inline/unknown features
+  // are excluded from completion rather than silently folded into it.
   // Top-level loc_added_sum includes agent_edit writes; these subqueries separate them.
   db.prepare(`
     UPDATE daily_aggregate_cache SET
@@ -147,11 +162,11 @@ export function refreshDailyAggregate(day: string, enterpriseSlug?: string): voi
       agent_loc_added = COALESCE(f.aa, 0)
     FROM (
       SELECT u.enterprise_slug,
-        SUM(CASE WHEN json_extract(j.value, '$.feature') != 'agent_edit'
+        SUM(CASE WHEN ${IS_COMPLETION_SQL}
           THEN json_extract(j.value, '$.loc_suggested_to_add_sum') ELSE 0 END) as cs,
-        SUM(CASE WHEN json_extract(j.value, '$.feature') != 'agent_edit'
+        SUM(CASE WHEN ${IS_COMPLETION_SQL}
           THEN json_extract(j.value, '$.loc_added_sum') ELSE 0 END) as ca,
-        SUM(CASE WHEN json_extract(j.value, '$.feature') = 'agent_edit'
+        SUM(CASE WHEN ${IS_AGENT_SQL}
           THEN json_extract(j.value, '$.loc_added_sum') ELSE 0 END) as aa
       FROM user_daily_metrics u, json_each(u.totals_by_feature) j
       WHERE u.day = ? AND u.totals_by_feature IS NOT NULL AND u.totals_by_feature != '[]'${enterpriseFilter}
@@ -263,17 +278,19 @@ export function refreshTeamSummary(periodStart: string, periodEnd: string, enter
     ) m ON t.enterprise_slug = m.enterprise_slug AND t.team_slug = m.team_slug AND t.source = m.source
   `).run(periodStart, periodEnd, totalDays, now, ...extraParams, periodStart, periodEnd, ...extraParams);
 
-  // Override overall_acceptance_rate with completion-only rate (excludes agent_edit)
+  // Override overall_acceptance_rate with a completion-only rate using the
+  // shared IS_COMPLETION_SQL allowlist (not a bare `!= 'agent_edit'`
+  // exclusion), so copilot_app/chat_inline/unknown features never leak in.
   db.prepare(`
     UPDATE team_summary_cache SET overall_acceptance_rate = COALESCE(f.rate, 0)
     FROM (
       SELECT tm.enterprise_slug, tm.team_slug, tm.source,
-        CASE WHEN SUM(CASE WHEN json_extract(j.value, '$.feature') != 'agent_edit'
+        CASE WHEN SUM(CASE WHEN ${IS_COMPLETION_SQL}
             THEN json_extract(j.value, '$.code_generation_activity_count') ELSE 0 END) > 0
           THEN ROUND(
-            CAST(SUM(CASE WHEN json_extract(j.value, '$.feature') != 'agent_edit'
+            CAST(SUM(CASE WHEN ${IS_COMPLETION_SQL}
               THEN json_extract(j.value, '$.code_acceptance_activity_count') ELSE 0 END) AS REAL) /
-            SUM(CASE WHEN json_extract(j.value, '$.feature') != 'agent_edit'
+            SUM(CASE WHEN ${IS_COMPLETION_SQL}
               THEN json_extract(j.value, '$.code_generation_activity_count') ELSE 0 END) * 100, 1)
           ELSE 0 END as rate
       FROM team_memberships tm

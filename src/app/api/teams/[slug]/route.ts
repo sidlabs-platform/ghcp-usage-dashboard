@@ -5,6 +5,12 @@ import { withCache } from "@/lib/cache/with-cache";
 import { withTimeout } from "@/lib/api/timeout";
 import { CACHE_TTL } from "@/lib/cache/memory-cache";
 import type { MemberRow, TeamDetailResponse } from "@/lib/types/team-detail";
+// Shared completion-feature allowlist SQL fragment — the single source of
+// truth for "is this feature a completion feature" across all raw SQL call
+// sites. Never re-declare a local copy or fall back to a bare
+// `!= 'agent_edit'` exclusion, since that would silently misclassify
+// `copilot_app`, `chat_inline`, or any future unknown feature as completion.
+import { IS_COMPLETION_SQL } from "@/lib/db/aggregation-queries";
 
 async function handler(request: NextRequest) {
   try {
@@ -61,7 +67,10 @@ async function handler(request: NextRequest) {
     const countRow = db.prepare(countRowSql).get(...countRowParams) as { cnt: number };
 
     // Aggregate member metrics directly from user_daily_metrics, scoped to team members.
-    // Acceptance rate uses completion-only features (excludes agent_edit) via json_each.
+    // Acceptance rate uses the explicit completion allowlist (code_completion,
+    // inline_chat, chat_panel, chat_panel_*) via json_each — not a bare
+    // `!= 'agent_edit'` exclusion — so copilot_app/chat_inline/unknown features
+    // never leak into a team member's completion acceptance rate.
     let teamLoginsSql = `SELECT DISTINCT user_login FROM team_memberships WHERE team_slug = ?`;
     const teamLoginsParams: any[] = [slug];
     if (source) {
@@ -102,7 +111,8 @@ async function handler(request: NextRequest) {
         json_each(udm.totals_by_feature) j
         WHERE udm.day >= ? AND udm.day <= ?
           AND udm.totals_by_feature IS NOT NULL AND udm.totals_by_feature != '[]'
-          AND COALESCE(json_extract(j.value, '$.feature'), '') != 'agent_edit'
+          AND json_valid(udm.totals_by_feature)
+          AND ${IS_COMPLETION_SQL}
         GROUP BY udm.user_login
       )
       SELECT

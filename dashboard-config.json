@@ -1,4 +1,16 @@
 {
+  "enterprises": [
+    {
+      "slug": "octodemo",
+      "displayName": "octodemo",
+      "tokenEnvVar": "GITHUB_TOKEN"
+    },
+    {
+      "slug": "sidlabs",
+      "displayName": "sidlabs",
+      "tokenEnvVar": "GITHUB_TOKEN_SIDLABS"
+    }
+  ],
   "metrics": {
     "copilot": {
       "enabled": true,
