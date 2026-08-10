@@ -82,28 +82,58 @@ function lookupConfiguredSlug(slug?: string): string | undefined {
 // ── Validated URL construction ────────────────────────────────────────
 
 /**
- * Construct a validated URL from a path or absolute URL.
- * Ensures the URL's origin is in the allowed set (unless authMode is "none").
- * For relative paths, enforces root-relative format and constructs against GITHUB_API_BASE.
+ * Construct a validated URL from a root-relative GitHub API path.
+ * Absolute and protocol-relative URLs are rejected so caller-controlled input
+ * cannot replace the configured API origin.
  */
-function buildValidatedUrl(pathOrUrl: string, mode: AuthMode): string {
-  if (pathOrUrl.startsWith("http")) {
-    let parsed: URL;
-    try {
-      parsed = new URL(pathOrUrl);
-    } catch {
-      throw new Error(`Invalid URL: ${pathOrUrl.slice(0, 120).replace(/\n|\r/g, "")}`);
-    }
-    if (mode !== "none" && !ALLOWED_ORIGINS.has(parsed.origin)) {
-      throw new Error(`Blocked request to disallowed origin: ${parsed.origin.replace(/\n|\r/g, "")}`);
-    }
-    return parsed.href;
+function assertRootRelativePath(path: string): void {
+  if (!path.startsWith("/") || path.startsWith("//")) {
+    throw new Error(`GitHub API path must be root-relative (start with /): ${path.slice(0, 120).replace(/\n|\r/g, "")}`);
+  }
+}
+
+/**
+ * Convert a GitHub API pagination link to the root-relative path accepted by
+ * the authenticated transport, rejecting links that escape the API allowlist.
+ */
+export function toRootRelativeGitHubApiPath(pathOrUrl: string): string {
+  if (pathOrUrl.startsWith("/") && !pathOrUrl.startsWith("//")) {
+    return pathOrUrl;
   }
 
-  if (!pathOrUrl.startsWith("/") || pathOrUrl.startsWith("//")) {
-    throw new Error(`GitHub API path must be root-relative (start with /): ${pathOrUrl.slice(0, 120).replace(/\n|\r/g, "")}`);
+  let parsed: URL;
+  try {
+    parsed = new URL(pathOrUrl);
+  } catch {
+    throw new Error("GitHub API pagination link is not a valid URL.");
+  }
+  if (!ALLOWED_ORIGINS.has(parsed.origin)) {
+    throw new Error(`GitHub API pagination link uses a disallowed origin: ${parsed.origin.replace(/\n|\r/g, "")}`);
   }
 
+  let pathname = parsed.pathname;
+  try {
+    const configuredBase = new URL(GITHUB_API_BASE);
+    const basePath = configuredBase.pathname.replace(/\/+$/, "");
+    if (
+      parsed.origin === configuredBase.origin &&
+      basePath &&
+      basePath !== "/" &&
+      (pathname === basePath || pathname.startsWith(`${basePath}/`))
+    ) {
+      pathname = pathname.slice(basePath.length) || "/";
+    }
+  } catch {
+    // buildValidatedUrl reports a sanitized configuration error at request time.
+  }
+
+  const path = `${pathname}${parsed.search}`;
+  assertRootRelativePath(path);
+  return path;
+}
+
+function buildValidatedUrl(pathOrUrl: string): string {
+  assertRootRelativePath(pathOrUrl);
   // Use string concatenation to preserve GHES path prefixes (e.g., /api/v3),
   // then parse to normalize and validate the result.
   const fullUrl = `${GITHUB_API_BASE}${pathOrUrl}`;
@@ -133,17 +163,6 @@ interface AuthContext {
  * are based on server-controlled data, not raw user input.
  */
 function resolveAuthContext(path: string, enterpriseSlug?: string): AuthContext {
-  // Absolute non-GitHub URLs (e.g., pre-signed download links) need no auth
-  if (path.startsWith("http")) {
-    try {
-      const parsed = new URL(path);
-      if (!ALLOWED_ORIGINS.has(parsed.origin)) return { mode: "none" };
-      path = parsed.pathname;
-    } catch {
-      // If URL parsing fails, fall through to path-based detection
-    }
-  }
-
   // Look up enterprise slug in server config (returns server-owned string or undefined)
   const configuredSlug = lookupConfiguredSlug(enterpriseSlug);
 
@@ -170,12 +189,13 @@ function resolveAuthContext(path: string, enterpriseSlug?: string): AuthContext 
 }
 
 /**
- * Resolve auth mode from a URL path.
- * - Non-GitHub absolute URLs (pre-signed Azure/S3) → "none"
+ * Resolve auth mode from a root-relative GitHub API path.
+ * - Absolute and protocol-relative URLs are rejected
  * - Paths starting with `/enterprises/` → "pat" (always)
  * - All other GitHub API paths → "app" if configured, else "pat"
  */
 export function resolveAuthMode(path: string, enterpriseSlug?: string): AuthMode {
+  assertRootRelativePath(path);
   return resolveAuthContext(path, enterpriseSlug).mode;
 }
 
@@ -271,6 +291,11 @@ interface RateLimitState {
 
 const rateLimitStates = new Map<string, RateLimitState>();
 
+/** @internal Reset adaptive rate-limit tracking state — for testing only. */
+export function _resetRateLimitStateForTesting(): void {
+  rateLimitStates.clear();
+}
+
 function rateLimitKey(mode: AuthMode, enterpriseSlug?: string): string {
   return `${enterpriseSlug ?? "default"}:${mode}`;
 }
@@ -299,11 +324,16 @@ function updateRateLimit(resp: Response, mode: AuthMode, enterpriseSlug?: string
   }
 }
 
+// Cap the proactive "wait until reset" delay so a single low-quota check
+// can never stall a request for close to an hour — mirrors the cap applied
+// to explicit server-provided retry hints further below (Retry-After/reset).
+const ADAPTIVE_DELAY_CAP_MS = 120_000;
+
 /**
  * Adaptive delay based on remaining rate limit quota for a specific auth context.
  * - > 1000 remaining: no delay
  * - 100–1000 remaining: 200ms delay
- * - < 100 remaining: wait until reset
+ * - < 100 remaining: wait until reset, capped at `ADAPTIVE_DELAY_CAP_MS`
  */
 async function adaptiveRateDelay(mode: AuthMode, enterpriseSlug?: string): Promise<void> {
   if (mode === "none") return; // No rate limits for pre-signed URLs
@@ -313,56 +343,340 @@ async function adaptiveRateDelay(mode: AuthMode, enterpriseSlug?: string): Promi
     await sleep(200);
     return;
   }
-  // Low quota: wait until reset
-  const waitMs = Math.max(0, state.resetAt - Date.now() + 1000);
-  if (waitMs > 0 && waitMs < 3600_000) {
+  // Low quota: wait until reset, but never more than the cap — a stale or
+  // bogus far-future reset timestamp must not stall the request for close
+  // to an hour.
+  const waitMs = Math.min(Math.max(0, state.resetAt - Date.now() + 1000), ADAPTIVE_DELAY_CAP_MS);
+  if (waitMs > 0) {
     const label = enterpriseSlug ? `${enterpriseSlug.replace(/\n|\r/g, "")}:${mode}` : mode;
     console.warn("[Rate Limit] (%s) Only %d requests remaining, waiting %ds until reset", label, state.remaining, Math.round(waitMs / 1000));
     await sleep(waitMs);
   }
 }
 
-/** Typed error carrying the HTTP status code from a failed GitHub API call. */
+/**
+ * Typed error carrying the HTTP status code from a failed GitHub API call.
+ * `retryable` marks failures that were classified as transient/rate-limited
+ * at the time they were thrown (429, 5xx, secondary/primary rate-limited
+ * 403s, or a transport-level failure using the `0` sentinel status) — even
+ * when retries were exhausted or skipped (e.g. a single-attempt probe).
+ * Callers like the auth preflight use this to distinguish "throttled, try
+ * again later" from a genuine permission denial.
+ */
 export class GitHubApiError extends Error {
-  constructor(public readonly status: number, path: string, body: string) {
+  constructor(
+    public readonly status: number,
+    path: string,
+    body: string,
+    public readonly retryable: boolean = false,
+  ) {
     super(`GitHub API error ${status} on ${path}: ${body}`);
     this.name = "GitHubApiError";
   }
 }
 
-export async function githubFetch<T>(path: string, retries = 3, authMode?: AuthMode, enterpriseSlug?: string): Promise<T> {
+// ── Selected response header exposure (never Authorization) ──────────
+
+// Explicit allowlist — Authorization must never appear here even if a
+// misbehaving upstream (or test double) echoes it back. Because we only
+// ever iterate this fixed allowlist (which never contains "authorization")
+// to populate the result, there is no code path that could set it — no
+// defensive `delete` is needed or possible to exercise.
+const SELECTED_RESPONSE_HEADERS = [
+  "x-oauth-scopes",
+  "x-accepted-oauth-scopes",
+  "x-ratelimit-limit",
+  "x-ratelimit-remaining",
+  "x-ratelimit-reset",
+  "x-ratelimit-used",
+  "x-ratelimit-resource",
+  "retry-after",
+  "link",
+] as const;
+
+function selectResponseHeaders(resp: Response): Record<string, string> {
+  const selected: Record<string, string> = {};
+  for (const key of SELECTED_RESPONSE_HEADERS) {
+    const value = resp.headers.get(key);
+    if (value != null) selected[key] = value;
+  }
+  return selected;
+}
+
+// ── Hardened retry classification & capped exponential full jitter ───
+
+const BACKOFF_BASE_MS = 1000;
+const BACKOFF_CAP_MS = 30_000;
+// Ceiling applied to explicit server-provided waits (Retry-After / reset)
+// so a misbehaving upstream can't stall a request indefinitely.
+const SERVER_HINT_CAP_MS = 120_000;
+// Sentinel status used for GitHubApiError when no HTTP response was ever
+// received (DNS failure, connection refused, timeout, etc.) — 0 is not a
+// valid HTTP status code, so it's unambiguous as a "transport failure" marker.
+const TRANSPORT_FAILURE_STATUS = 0;
+
+function isRateLimitedResponseBody(bodyText: string): boolean {
+  const lower = bodyText.toLowerCase();
+  return (
+    lower.includes("secondary rate limit") ||
+    lower.includes("secondary-rate-limit") ||
+    lower.includes("abuse detection") ||
+    // Primary rate limiting — GitHub returns this exact phrase (historically
+    // as 403, occasionally as 429) when the request quota is exhausted.
+    lower.includes("api rate limit exceeded")
+  );
+}
+
+/** Read a response body defensively — tolerates test doubles without `.text()`. */
+async function safeResponseText(resp: Response): Promise<string> {
+  if (typeof resp.text !== "function") return "";
+  try {
+    return await resp.text();
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * Determine whether a failed response should be retried:
+ * - 429 and 5xx are always retryable.
+ * - 403 is retryable only when it carries primary/secondary/abuse rate-limit
+ *   signals (a Retry-After header, or a recognizable phrase in the body).
+ *   Plain 403s (missing scope, disabled feature, etc.) still fail fast.
+ * This is the single source of truth for retry classification — every
+ * failure branch below routes through it so there's no duplicated (and
+ * potentially drifting) logic. It also doubles as the "is this failure
+ * rate-limit-related?" signal carried on GitHubApiError.retryable, so
+ * callers (e.g. the auth preflight) can tell throttling apart from a
+ * genuine permission denial even on a single-attempt request.
+ */
+function isRetryableFailure(status: number, resp: Response, bodyText: string): boolean {
+  if (status === 429 || status >= 500) return true;
+  if (status === 403) {
+    if (resp.headers.get("retry-after") != null) return true;
+    return isRateLimitedResponseBody(bodyText);
+  }
+  return false;
+}
+
+/**
+ * Capped exponential backoff with full jitter: random(0, min(cap, base*2^attempt)).
+ * Exported (as a thin wrapper) so tests can assert exact, deterministic
+ * values by stubbing Math.random instead of relying on fake-timer ranges.
+ */
+function jitterBackoffMs(attempt: number): number {
+  const exponential = Math.min(BACKOFF_CAP_MS, BACKOFF_BASE_MS * Math.pow(2, attempt));
+  return Math.random() * exponential;
+}
+
+/**
+ * Compute the wait time before the next retry attempt, given the raw
+ * Retry-After and X-RateLimit-Reset header values (or null if absent).
+ * Priority: Retry-After header > X-RateLimit-Reset header > capped
+ * exponential backoff with full jitter. Server-provided hints are capped at
+ * `SERVER_HINT_CAP_MS` so a misbehaving upstream can't stall indefinitely.
+ */
+function computeRetryDelayMs(attempt: number, retryAfterHeader: string | null, resetHeader: string | null): number {
+  const parsedRetryAfter = retryAfterHeader ? parseInt(retryAfterHeader, 10) : NaN;
+  if (Number.isFinite(parsedRetryAfter) && parsedRetryAfter > 0) {
+    return Math.min(parsedRetryAfter * 1000, SERVER_HINT_CAP_MS);
+  }
+
+  const parsedReset = resetHeader ? parseInt(resetHeader, 10) : NaN;
+  if (Number.isFinite(parsedReset)) {
+    const waitMs = parsedReset * 1000 - Date.now();
+    if (waitMs > 0) return Math.min(waitMs, SERVER_HINT_CAP_MS);
+  }
+
+  return jitterBackoffMs(attempt);
+}
+
+function computeRetryDelayMsForResponse(attempt: number, resp: Response): number {
+  return computeRetryDelayMs(attempt, resp.headers.get("retry-after"), resp.headers.get("x-ratelimit-reset"));
+}
+
+/**
+ * @internal Pure, deterministic access to the retry backoff formula — for
+ * testing only. Lets tests assert exact delay values (e.g. with Math.random
+ * stubbed to 0 or 1) instead of relying on loose fake-timer ranges.
+ */
+export function _computeRetryDelayMsForTesting(
+  attempt: number,
+  retryAfterHeader: string | null = null,
+  resetHeader: string | null = null,
+): number {
+  return computeRetryDelayMs(attempt, retryAfterHeader, resetHeader);
+}
+
+export interface GithubFetchMetaOptions {
+  method?: "GET" | "POST" | "PATCH" | "PUT" | "DELETE";
+  body?: unknown;
+  retries?: number;
+  authMode?: AuthMode;
+  enterpriseSlug?: string;
+  extraHeaders?: Record<string, string>;
+}
+
+export interface GithubFetchMetaResult<T> {
+  /**
+   * The parsed response body, or `null` for a 204 No Content response.
+   * Honestly typed as nullable — see `githubFetch` for the historical
+   * non-null public contract preserved on top of this primitive.
+   */
+  data: T | null;
+  status: number;
+  /** Selected response headers only — never includes Authorization. */
+  headers: Record<string, string>;
+}
+
+// Header names that extraHeaders may never set, case-insensitively — these
+// are owned by the request primitive itself: real credentials, and the
+// content type that matches the JSON body we actually send.
+const PROTECTED_REQUEST_HEADER_NAMES = new Set(["authorization", "content-type"]);
+
+/**
+ * Merge auth headers with caller-supplied extraHeaders into a real Headers
+ * instance (so header-name matching is case-insensitive, matching what the
+ * underlying fetch implementation will do), while guaranteeing extraHeaders
+ * can never override Authorization or the JSON body's Content-Type.
+ */
+function buildRequestHeaders(
+  authHeaders: Record<string, string>,
+  extraHeaders: Record<string, string> | undefined,
+  hasJsonBody: boolean,
+): Headers {
+  const headers = new Headers(authHeaders);
+  if (extraHeaders) {
+    for (const [key, value] of Object.entries(extraHeaders)) {
+      if (PROTECTED_REQUEST_HEADER_NAMES.has(key.toLowerCase())) continue;
+      headers.set(key, value);
+    }
+  }
+  if (hasJsonBody) headers.set("Content-Type", "application/json");
+  return headers;
+}
+
+/**
+ * @internal Authenticated request primitive shared by githubFetch and the
+ * GraphQL/preflight clients. Reuses validated URL construction, enterprise
+ * token selection, auth readiness, adaptive rate tracking, and hardened
+ * retry behavior. Returns the parsed body alongside status and a small
+ * allowlisted set of response headers — the Authorization header sent on
+ * the request is never exposed on the returned result, and extraHeaders can
+ * never override Authorization or Content-Type.
+ *
+ * Retry exhaustion (for retryable 429/5xx/secondary-403 failures, or
+ * repeated transport-level failures such as a refused connection) throws a
+ * typed GitHubApiError carrying the last observed status/body — transport
+ * failures use a `0` sentinel status — with `retryable: true`, so callers
+ * like the auth preflight can classify these as "unknown" outcomes rather
+ * than a genuine permission denial, instead of only ever seeing a generic
+ * error. Non-retryable failures (a real permission-denied 403, a plain
+ * 404, etc.) throw immediately with `retryable: false`.
+ */
+export async function githubFetchWithMeta<T>(
+  path: string,
+  options: GithubFetchMetaOptions = {},
+): Promise<GithubFetchMetaResult<T>> {
+  const { method = "GET", body, retries = 3, authMode, enterpriseSlug, extraHeaders } = options;
+  const url = buildValidatedUrl(path);
   const ctx = resolveOrOverrideContext(path, authMode, enterpriseSlug);
   await ensureAuthReady(ctx.mode);
-  const url = buildValidatedUrl(path, ctx.mode);
+
+  let lastStatus = TRANSPORT_FAILURE_STATUS;
+  let lastBody = "";
 
   for (let attempt = 0; attempt < retries; attempt++) {
     await adaptiveRateDelay(ctx.mode, ctx.enterpriseSlug);
-    const hdrs = await headersForAuth(ctx.mode, ctx.enterpriseSlug);
-    const resp = await fetch(url, { headers: hdrs, cache: "no-store" });
+    const authHeaders = await headersForAuth(ctx.mode, ctx.enterpriseSlug);
+    const headers = buildRequestHeaders(authHeaders, extraHeaders, body !== undefined);
+    const init: RequestInit = { method, headers, cache: "no-store" };
+    if (body !== undefined) init.body = JSON.stringify(body);
+
+    let resp: Response;
+    try {
+      resp = await fetch(url, init);
+    } catch (err) {
+      // Transport-level failure — no HTTP response was ever received (DNS,
+      // connection refused, timeout, etc.). Treat it like any other
+      // retryable failure so a transient network blip doesn't need special
+      // handling by callers.
+      lastStatus = TRANSPORT_FAILURE_STATUS;
+      lastBody = err instanceof Error ? err.message : String(err);
+      if (attempt < retries - 1) {
+        const waitMs = jitterBackoffMs(attempt);
+        console.warn(
+          "GitHub API transport error on %s, retrying in %dms (attempt %d/%d): %s",
+          path.replace(/\n|\r/g, ""), Math.round(waitMs), attempt + 1, retries, lastBody.replace(/\n|\r/g, ""),
+        );
+        await sleep(waitMs);
+        continue;
+      }
+      break;
+    }
+
     updateRateLimit(resp, ctx.mode, ctx.enterpriseSlug);
 
+    // Per the Fetch spec, a 204 response always has `ok === true` — there is
+    // no real-world case where a 204 arrives with `ok === false`, so only
+    // this branch (nested under `resp.ok`) is ever reachable for it.
     if (resp.ok) {
-      return resp.json() as Promise<T>;
+      let data: T | null = null;
+      if (resp.status !== 204) {
+        try {
+          data = (await resp.json()) as T;
+        } catch {
+          throw new GitHubApiError(resp.status, path, "Response body was not valid JSON.", false);
+        }
+      }
+      return { data, status: resp.status, headers: selectResponseHeaders(resp) };
     }
 
-    if (resp.status === 429 || resp.status >= 500) {
-      const retryAfter = resp.headers.get("retry-after");
-      const parsed = retryAfter ? parseInt(retryAfter, 10) : NaN;
-      const waitMs = Number.isFinite(parsed) && parsed > 0 ? parsed * 1000 : Math.pow(2, attempt) * 1000;
-      console.warn("GitHub API %d on %s, retrying in %dms (attempt %d/%d)", resp.status, path.replace(/\n|\r/g, ""), waitMs, attempt + 1, retries);
-      await sleep(waitMs);
-      continue;
+    const bodyText = await safeResponseText(resp);
+
+    if (isRetryableFailure(resp.status, resp, bodyText)) {
+      lastStatus = resp.status;
+      lastBody = bodyText;
+      if (attempt < retries - 1) {
+        const waitMs = computeRetryDelayMsForResponse(attempt, resp);
+        console.warn(
+          "GitHub API %d on %s, retrying in %dms (attempt %d/%d)",
+          resp.status, path.replace(/\n|\r/g, ""), Math.round(waitMs), attempt + 1, retries,
+        );
+        await sleep(waitMs);
+        continue;
+      }
+      break;
     }
 
-    if (resp.status === 204) {
-      return null as T;
-    }
-
-    const body = await resp.text().catch(() => "");
-    throw new GitHubApiError(resp.status, path, body);
+    throw new GitHubApiError(resp.status, path, bodyText, false);
   }
 
-  throw new Error(`GitHub API failed after ${retries} retries on ${path.replace(/\n|\r/g, "")}`);
+  // Exhausted all retry attempts on a retryable failure — preserve the last
+  // observed status/body as a typed GitHubApiError instead of a generic
+  // Error, so callers (e.g. the auth preflight) can classify the outcome
+  // (e.g. "unknown") rather than only ever seeing an opaque failure. We only
+  // ever reach here via a retryable (or transport) path — a non-retryable
+  // failure always throws immediately above — so `retryable` is always true.
+  throw new GitHubApiError(
+    lastStatus,
+    path,
+    lastBody || `Exhausted ${retries} retries with no response body.`,
+    true,
+  );
+}
+
+/**
+ * Public, backward-compatible entry point. `githubFetch` has always
+ * resolved to `null` (cast to the caller's expected `T`) for 204 responses;
+ * `githubFetchWithMeta` now honestly types that as `T | null`, so this
+ * explicit cast preserves githubFetch's original runtime behavior and
+ * public type signature without forcing every existing caller to add a
+ * null-check for a case they've never had to handle.
+ */
+export async function githubFetch<T>(path: string, retries = 3, authMode?: AuthMode, enterpriseSlug?: string): Promise<T> {
+  const result = await githubFetchWithMeta<T>(path, { retries, authMode, enterpriseSlug });
+  return result.data as T;
 }
 
 export async function githubFetchPaginated<T>(path: string, perPage = 100, authMode?: AuthMode, enterpriseSlug?: string): Promise<T[]> {
@@ -374,7 +688,7 @@ export async function githubFetchPaginated<T>(path: string, perPage = 100, authM
   while (true) {
     const separator = path.includes("?") ? "&" : "?";
     const pageUrl = `${path}${separator}per_page=${perPage}&page=${page}`;
-    const fullUrl = buildValidatedUrl(pageUrl, ctx.mode);
+    const fullUrl = buildValidatedUrl(pageUrl);
     await adaptiveRateDelay(ctx.mode, ctx.enterpriseSlug);
     const hdrs = await headersForAuth(ctx.mode, ctx.enterpriseSlug);
     const resp = await fetch(fullUrl, { headers: hdrs, cache: "no-store" });
@@ -470,7 +784,7 @@ export async function githubFetchPaginatedWithCutoff<
   while (page <= MAX_PAGES) {
     const separator = path.includes("?") ? "&" : "?";
     const pageUrl = `${path}${separator}per_page=${perPage}&page=${page}`;
-    const fullUrl = buildValidatedUrl(pageUrl, ctx.mode);
+    const fullUrl = buildValidatedUrl(pageUrl);
     await adaptiveRateDelay(ctx.mode, ctx.enterpriseSlug);
     const hdrs = await headersForAuth(ctx.mode, ctx.enterpriseSlug);
     const resp = await fetch(fullUrl, { headers: hdrs, cache: "no-store" });
@@ -535,7 +849,7 @@ export async function githubFetchCursorPaginatedWithCutoff<
     const separator: string = path.includes("?") ? "&" : "?";
     const cursorParam: string = after ? `&after=${after}` : "";
     const pageUrl: string = `${path}${separator}per_page=${perPage}${cursorParam}`;
-    const fullUrl: string = buildValidatedUrl(pageUrl, ctx.mode);
+    const fullUrl: string = buildValidatedUrl(pageUrl);
     await adaptiveRateDelay(ctx.mode, ctx.enterpriseSlug);
     const hdrs = await headersForAuth(ctx.mode, ctx.enterpriseSlug);
     const resp: Response = await fetch(fullUrl, { headers: hdrs, cache: "no-store" });

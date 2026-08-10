@@ -12,7 +12,6 @@ const A4_WIDTH_PT = 841.89; // A4 landscape width in points
 const A4_HEIGHT_PT = 595.28; // A4 landscape height in points
 const MARGIN = 30;
 const CONTENT_WIDTH = A4_WIDTH_PT - 2 * MARGIN;
-const CONTENT_HEIGHT = A4_HEIGHT_PT - 2 * MARGIN;
 const METADATA_HEIGHT = 60;
 
 /**
@@ -53,37 +52,50 @@ export async function captureSectionsAsPDF(
 
   // Capture each section
   for (const section of sections) {
-    // Determine target dimensions based on actual DOM size multiplied by scale factor
-    // This gives us higher resolution than regular capture
-    const scale = 2;
-    const width = section.offsetWidth * scale;
-    const height = section.offsetHeight * scale;
-    
     // Clone the element to capture it with a consistent background
-    // This ensures exported PDFs match the current theme without flicker
+    // and remove tab visibility attributes so inactive panels still lay out.
     const cloneWrapper = document.createElement("div");
     cloneWrapper.style.position = "absolute";
     cloneWrapper.style.left = "-9999px";
     cloneWrapper.style.top = "-9999px";
     cloneWrapper.style.backgroundColor = bgcolor;
-    
+
+    const sourceWidth = Math.max(
+      section.offsetWidth,
+      section.scrollWidth,
+      section.parentElement?.clientWidth ?? 0,
+      document.documentElement.clientWidth,
+      1024,
+    );
+    cloneWrapper.style.width = `${sourceWidth}px`;
+
     const clone = section.cloneNode(true) as HTMLElement;
+    clone.removeAttribute("hidden");
+    clone.style.display = "block";
+    clone.style.width = "100%";
+    clone.style.height = "auto";
     cloneWrapper.appendChild(clone);
     document.body.appendChild(cloneWrapper);
-    
+
     try {
+      const scale = 2;
+      const captureWidth = Math.max(clone.offsetWidth, clone.scrollWidth, sourceWidth);
+      const captureHeight = Math.max(clone.offsetHeight, clone.scrollHeight, section.scrollHeight, 1);
+      const width = captureWidth * scale;
+      const height = captureHeight * scale;
+
       const imgData = await domtoimage.toPng(clone, {
         width: width,
         height: height,
         style: {
           transform: `scale(${scale})`,
           transformOrigin: "top left",
-          width: `${section.offsetWidth}px`,
-          height: `${section.offsetHeight}px`,
+          width: `${captureWidth}px`,
+          height: `${captureHeight}px`,
         },
-        bgcolor: bgcolor
+        bgcolor: bgcolor,
       });
-      
+
       // Calculate dimensions to maintain aspect ratio
       const imgAspect = width / height;
       const imgWidth = CONTENT_WIDTH;

@@ -11,6 +11,7 @@ const SCHEMA_PATH = path.join(process.cwd(), "src", "lib", "db", "schema.sql");
 const GHAS_SCHEMA_PATH = path.join(process.cwd(), "src", "lib", "db", "ghas-schema.sql");
 const SUMMARY_SCHEMA_PATH = path.join(process.cwd(), "src", "lib", "db", "summary-schema.sql");
 const BILLING_SCHEMA_PATH = path.join(process.cwd(), "src", "lib", "db", "billing-schema.sql");
+const LICENSING_SCHEMA_PATH = path.join(process.cwd(), "src", "lib", "db", "licensing-schema.sql");
 
 let _db: Database.Database | null = null;
 
@@ -31,6 +32,7 @@ export function getDb(): Database.Database {
   const ghasSchema = fs.readFileSync(GHAS_SCHEMA_PATH, "utf-8");
   const summarySchema = fs.readFileSync(SUMMARY_SCHEMA_PATH, "utf-8");
   const billingSchema = fs.readFileSync(BILLING_SCHEMA_PATH, "utf-8");
+  const licensingSchema = fs.readFileSync(LICENSING_SCHEMA_PATH, "utf-8");
 
   // Add columns introduced after initial schema (safe if already present).
   // MUST run BEFORE schema exec: the schema files include CREATE INDEX statements
@@ -88,6 +90,13 @@ export function getDb(): Database.Database {
   _db.exec(ghasSchema);
   _db.exec(summarySchema);
   _db.exec(billingSchema);
+
+  // Historical licensing/AI-Credit reconciliation tables. New, additive, and
+  // independent of the legacy PK migration below: they are created here for
+  // the first time with their final schema (no pre-multi-enterprise rows
+  // exist for them), so they never need to be part of `tablesToRecreate` or
+  // the enterprise_slug legacy backfill.
+  _db.exec(licensingSchema);
 
   // Additive, idempotent Copilot App usage metrics migration (adds columns +
   // backfills from raw_json on already-synced tables). Kept separate from the

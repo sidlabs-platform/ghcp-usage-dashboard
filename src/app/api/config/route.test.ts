@@ -43,6 +43,7 @@ describe("config route", { timeout: 15000 }, () => {
       isMetricEnabledForAnyEnterprise: vi.fn(),
       isCopilotSubEnabledForAnyEnterprise: vi.fn(),
       isBillingSubEnabledForAnyEnterprise: vi.fn(),
+      isLicensingHistoryEnabledForAnyEnterprise: () => false,
     }));
 
     const { GET } = await loadRoute();
@@ -52,6 +53,7 @@ describe("config route", { timeout: 15000 }, () => {
     expect(payload.enterpriseMode).toBe(false);
     expect(payload.multiEnterprise).toBe(false);
     expect(payload.resolvedOrgs).toEqual([{ slug: "platform", name: "Platform" }]);
+    expect(payload.licensingHistoryEnabled).toBe(false);
     expect(payload.pageVisibility).toMatchObject({
       overview: true,
       codeGeneration: true,
@@ -63,12 +65,163 @@ describe("config route", { timeout: 15000 }, () => {
       billing: false,
       billingUsage: false,
       billingPremium: false,
+      // Neither aiCredits nor premiumRequests is enabled (isBillingSubEnabled
+      // always returns false in this test), so the License & Credits page
+      // must stay hidden — same OR-of-both-sources rule as billingPremium.
+      licenseReconciliation: false,
       aiCreditsUsers: true,
       copilotApp: true,
     });
     expect(isCopilotSubEnabled).toHaveBeenCalledWith("userMetrics");
     expect(isCopilotSubEnabled).toHaveBeenCalledWith("pullRequests");
     expect(isBillingSubEnabled).not.toHaveBeenCalled();
+  });
+
+  it("shows License & Credits when only aiCredits (not premiumRequests) is enabled in single-enterprise mode", async () => {
+    vi.doMock("@/lib/config/dashboard-config", () => ({
+      getDashboardConfig: () => ({
+        metrics: {
+          copilot: { enabled: true },
+          billing: { enabled: true },
+          codeScanning: { enabled: false },
+          dependabot: { enabled: false },
+          secretScanning: { enabled: false },
+        },
+      }),
+      isEnterpriseEnabled: () => true,
+      getEffectiveBillingEnabled: () => true,
+      isBillingSubEnabled: (key: string) => key === "aiCredits",
+      isCopilotSubEnabled: () => true,
+      getResolvedOrgs: () => [],
+    }));
+
+    vi.doMock("@/lib/config/enterprise-config", () => ({
+      getClientEnterpriseList: () => [],
+      getClientEnterpriseMetrics: () => ({}),
+      isMultiEnterprise: () => false,
+      isMetricEnabledForAnyEnterprise: vi.fn(),
+      isCopilotSubEnabledForAnyEnterprise: vi.fn(),
+      isBillingSubEnabledForAnyEnterprise: vi.fn(),
+      isLicensingHistoryEnabledForAnyEnterprise: () => true,
+    }));
+
+    const { GET } = await loadRoute();
+    const response = await GET();
+    const payload = await response.json();
+
+    expect(payload.licensingHistoryEnabled).toBe(true);
+    expect(payload.pageVisibility.licenseReconciliation).toBe(true);
+    expect(payload.pageVisibility.billingPremium).toBe(true);
+  });
+
+  it("never exposes server-side licensing paths, CSV paths, or log output paths even when configured", async () => {
+    const SENSITIVE_AUDIT_ARCHIVE_PATH = "/var/secrets/licensing-audit-archive";
+    const SENSITIVE_IDENTITY_MAP_PATH = "/var/secrets/identity-map.json";
+    const SENSITIVE_SNAPSHOT_DIRECTORY = "/var/secrets/licensing-snapshots";
+    const SENSITIVE_CSV_PATH = "/var/secrets/aic-consumption-export.csv";
+
+    vi.doMock("@/lib/config/dashboard-config", () => ({
+      getDashboardConfig: () => ({
+        metrics: {
+          copilot: { enabled: true },
+          billing: {
+            enabled: true,
+            meteredUsage: true,
+            premiumRequests: true,
+            aiCredits: true,
+            // A fully-configured licensing block, exactly as an operator
+            // would set it in dashboard-config.json — every field here is
+            // server-filesystem-only and must never reach the browser.
+            licensing: {
+              history: {
+                enabled: true,
+                reportMonths: ["2026-01", "2026-02"],
+                auditArchivePath: SENSITIVE_AUDIT_ARCHIVE_PATH,
+                identityMapPath: SENSITIVE_IDENTITY_MAP_PATH,
+                snapshotDirectory: SENSITIVE_SNAPSHOT_DIRECTORY,
+                emitSnapshots: true,
+              },
+              aicConsumption: { mode: "auto", csvPath: SENSITIVE_CSV_PATH },
+            },
+          },
+          codeScanning: { enabled: false },
+          dependabot: { enabled: false },
+          secretScanning: { enabled: false },
+        },
+      }),
+      isEnterpriseEnabled: () => true,
+      getEffectiveBillingEnabled: () => true,
+      isBillingSubEnabled: () => true,
+      isCopilotSubEnabled: () => true,
+      getResolvedOrgs: () => [],
+    }));
+
+    vi.doMock("@/lib/config/enterprise-config", () => ({
+      getClientEnterpriseList: () => [],
+      getClientEnterpriseMetrics: () => ({}),
+      isMultiEnterprise: () => false,
+      isMetricEnabledForAnyEnterprise: vi.fn(),
+      isCopilotSubEnabledForAnyEnterprise: vi.fn(),
+      isBillingSubEnabledForAnyEnterprise: vi.fn(),
+      isLicensingHistoryEnabledForAnyEnterprise: () => true,
+    }));
+
+    const { GET } = await loadRoute();
+    const response = await GET();
+    const payload = await response.json();
+    const serialized = JSON.stringify(payload);
+
+    expect(serialized).not.toContain(SENSITIVE_AUDIT_ARCHIVE_PATH);
+    expect(serialized).not.toContain(SENSITIVE_IDENTITY_MAP_PATH);
+    expect(serialized).not.toContain(SENSITIVE_SNAPSHOT_DIRECTORY);
+    expect(serialized).not.toContain(SENSITIVE_CSV_PATH);
+    // The whole raw licensing config block must be stripped, not just the
+    // path fields individually — this proves the route never forwards it
+    // as-is instead of relying on an incomplete per-field denylist.
+    expect(payload.metrics?.billing?.licensing).toBeUndefined();
+    // Non-sensitive billing sub-toggles must remain intact (backward compat).
+    expect(payload.metrics?.billing?.enabled).toBe(true);
+    expect(payload.metrics?.billing?.meteredUsage).toBe(true);
+    expect(payload.metrics?.billing?.premiumRequests).toBe(true);
+    expect(payload.metrics?.billing?.aiCredits).toBe(true);
+    // The safe, computed summary boolean is still surfaced for navigation/UI.
+    expect(payload.licensingHistoryEnabled).toBe(true);
+  });
+
+  it("fails licensing history visibility closed when licensing config is invalid", async () => {
+    delete process.env.GITHUB_ENTERPRISE;
+    delete process.env.GITHUB_ORGS;
+
+    vi.doMock("@/lib/config/dashboard-config", () => ({
+      getDashboardConfig: () => ({
+        enterprises: [],
+        metrics: {
+          copilot: { enabled: true },
+          billing: { enabled: true, aiCredits: true },
+          codeScanning: { enabled: false },
+          dependabot: { enabled: false },
+          secretScanning: { enabled: false },
+        },
+      }),
+      getLicensingConfig: () => {
+        throw new Error("invalid licensing config");
+      },
+      isEnterpriseEnabled: () => false,
+      getEffectiveBillingEnabled: () => true,
+      isBillingSubEnabled: (key: string) => key === "aiCredits",
+      isCopilotSubEnabled: () => true,
+      getResolvedOrgs: () => [],
+    }));
+    vi.doUnmock("@/lib/config/enterprise-config");
+
+    const { GET } = await loadRoute();
+    const response = await GET();
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      licensingHistoryEnabled: false,
+      pageVisibility: { licenseReconciliation: true },
+    });
   });
 
   it("keeps Copilot App visible when base copilot metric is enabled but user metrics are disabled", async () => {
@@ -109,6 +262,7 @@ describe("config route", { timeout: 15000 }, () => {
       isMetricEnabledForAnyEnterprise: vi.fn(),
       isCopilotSubEnabledForAnyEnterprise: vi.fn(),
       isBillingSubEnabledForAnyEnterprise: vi.fn(),
+      isLicensingHistoryEnabledForAnyEnterprise: () => false,
     }));
 
     const { GET } = await loadRoute();
@@ -151,6 +305,7 @@ describe("config route", { timeout: 15000 }, () => {
       isMetricEnabledForAnyEnterprise: vi.fn(),
       isCopilotSubEnabledForAnyEnterprise: vi.fn(),
       isBillingSubEnabledForAnyEnterprise: vi.fn(),
+      isLicensingHistoryEnabledForAnyEnterprise: () => false,
     }));
 
     const { GET } = await loadRoute();
@@ -202,6 +357,8 @@ describe("config route", { timeout: 15000 }, () => {
       isMetricEnabled,
     }));
 
+    const isLicensingHistoryEnabledForAnyEnterprise = vi.fn(() => true);
+
     vi.doMock("@/lib/config/enterprise-config", () => ({
       getClientEnterpriseList: () => [{ slug: "ent-a", displayName: "Enterprise A" }],
       getClientEnterpriseMetrics: () => ({ "ent-a": { billing: true } }),
@@ -209,6 +366,7 @@ describe("config route", { timeout: 15000 }, () => {
       isMetricEnabledForAnyEnterprise,
       isCopilotSubEnabledForAnyEnterprise,
       isBillingSubEnabledForAnyEnterprise,
+      isLicensingHistoryEnabledForAnyEnterprise,
     }));
 
     const { GET } = await loadRoute();
@@ -220,6 +378,7 @@ describe("config route", { timeout: 15000 }, () => {
     expect(payload.enterprises).toEqual([{ slug: "ent-a", displayName: "Enterprise A" }]);
     expect(payload.enterpriseMetrics).toEqual({ "ent-a": { billing: true } });
     expect(payload.effectiveBilling).toBe(true);
+    expect(payload.licensingHistoryEnabled).toBe(true);
     expect(payload.pageVisibility).toMatchObject({
       overview: true,
       codeGeneration: true,
@@ -230,6 +389,11 @@ describe("config route", { timeout: 15000 }, () => {
       billing: true,
       billingUsage: false,
       billingPremium: true,
+      // aiCredits is enabled for "ent-a" (the mocked "any enterprise" check
+      // only returns true for "aiCredits"), so the License & Credits page
+      // must be visible even though premiumRequests is not — same OR rule
+      // as billingPremium, applied "for any enterprise" in multi-enterprise mode.
+      licenseReconciliation: true,
       aiCreditsUsers: true,
       copilotApp: true,
     });

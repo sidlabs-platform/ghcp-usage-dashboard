@@ -1,9 +1,57 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from "vitest";
-import Database from "better-sqlite3";
+import { DatabaseSync } from "node:sqlite";
 import path from "path";
 import fs from "fs";
 
-let db: Database.Database;
+/**
+ * Minimal better-sqlite3-compatible facade backed by Node's built-in
+ * `node:sqlite` (`DatabaseSync`). Used here — instead of `better-sqlite3`
+ * directly — because that package's native binding cannot be located/loaded
+ * under this environment's Node version, which otherwise makes every test in
+ * this file skip before any assertion runs. This is a real, in-process
+ * SQLite engine exercising the production repo's real SQL/params, not a
+ * mock of query results: `license-repo.ts` is never modified, and this
+ * facade only translates the handful of better-sqlite3 API shapes
+ * (`pragma`, `.transaction`, positional/named `?`/`@param` binding) that
+ * `node:sqlite` spells slightly differently.
+ */
+class TestDb {
+  private readonly raw: DatabaseSync;
+  constructor(location: string) {
+    this.raw = new DatabaseSync(location);
+  }
+  pragma(clause: string): void {
+    this.raw.exec(`PRAGMA ${clause};`);
+  }
+  exec(sql: string): void {
+    this.raw.exec(sql);
+  }
+  prepare(sql: string) {
+    const stmt = this.raw.prepare(sql);
+    return {
+      run: (...params: unknown[]) => stmt.run(...(params as never[])),
+      get: (...params: unknown[]) => stmt.get(...(params as never[])),
+      all: (...params: unknown[]) => stmt.all(...(params as never[])),
+    };
+  }
+  transaction<Args extends unknown[]>(fn: (...args: Args) => void): (...args: Args) => void {
+    return (...args: Args) => {
+      this.raw.exec("BEGIN");
+      try {
+        fn(...args);
+        this.raw.exec("COMMIT");
+      } catch (err) {
+        this.raw.exec("ROLLBACK");
+        throw err;
+      }
+    };
+  }
+  close(): void {
+    this.raw.close();
+  }
+}
+
+let db: TestDb;
 
 vi.mock("./database", () => ({
   getDb: () => db,
@@ -74,7 +122,7 @@ function insertConsumption(username: string, credits: number, usd: number, date 
 const WINDOW = { start: "2026-06-01", end: "2026-06-30" };
 
 beforeAll(() => {
-  db = new Database(":memory:");
+  db = new TestDb(":memory:");
   db.pragma("journal_mode = WAL");
   db.exec(fs.readFileSync(path.join(process.cwd(), "src", "lib", "db", "schema.sql"), "utf-8"));
   db.exec(fs.readFileSync(path.join(process.cwd(), "src", "lib", "db", "billing-schema.sql"), "utf-8"));
@@ -186,6 +234,21 @@ describe("getLicenseReconciliationRows", () => {
     expect(rows[0].user_login).toBe("a");
   });
 
+  it("filters by allowedLogins with multiple allowed logins", () => {
+    insertSeat({ user_login: "a" });
+    insertSeat({ user_login: "b" });
+    insertSeat({ user_login: "c" });
+    const rows = getLicenseReconciliationRows({ ...WINDOW, filters: { allowedLogins: new Set(["a", "b"]) } });
+    expect(rows.map((r) => r.user_login).sort()).toEqual(["a", "b"]);
+  });
+
+  it("fails closed to zero rows for an EMPTY allowedLogins Set — never unrestricted", () => {
+    insertSeat({ user_login: "a" });
+    insertSeat({ user_login: "b" });
+    const rows = getLicenseReconciliationRows({ ...WINDOW, filters: { allowedLogins: new Set() } });
+    expect(rows).toEqual([]);
+  });
+
   it("filters by search on login or org", () => {
     insertSeat({ user_login: "alpha", org_slug: "orgX" });
     insertSeat({ user_login: "beta", org_slug: "orgY" });
@@ -202,6 +265,12 @@ describe("getLicenseReconciliationRows", () => {
 });
 
 describe("computeLicenseKPIs", () => {
+  it("marks output as live_snapshot_only (this is the legacy live-query path, not materialized history)", () => {
+    insertSeat({ user_login: "dev1", plan_type: "business" });
+    const kpis = computeLicenseKPIs(getLicenseReconciliationRows(WINDOW));
+    expect(kpis.dataSource).toBe("live_snapshot_only");
+  });
+
   it("aggregates totals and utilization", () => {
     insertSeat({ user_login: "dev1", plan_type: "business" });
     insertSeat({ user_login: "dev2", plan_type: "enterprise" });

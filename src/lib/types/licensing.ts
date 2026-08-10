@@ -7,8 +7,29 @@
 // configured pricing / allowances.
 
 import type { LicensePlanKey } from "@/lib/config/dashboard-config";
+import type { SeatLedgerConfidence } from "@/lib/licensing/seat-ledger";
 
 export type { LicensePlanKey } from "@/lib/config/dashboard-config";
+export type { SeatLedgerConfidence } from "@/lib/licensing/seat-ledger";
+
+// Re-exported so consumers of historical licensing reconciliation can import
+// everything they need from a single `@/lib/types/licensing` module, without
+// duplicating the underlying config type definitions (source of truth stays
+// in `@/lib/config/dashboard-config`).
+export type {
+  DatedAllowance,
+  AicConsumptionMode,
+  LicensingHistoryConfig,
+  LicensingIdentityConfig,
+  LicensingAicConsumptionConfig,
+  LicensingValidationConfig,
+  ResolvedLicensingHistoryConfig,
+  ResolvedLicensingIdentityConfig,
+  ResolvedLicensingAicConsumptionConfig,
+  ResolvedLicensingValidationConfig,
+  ResolvedLicensingConfig,
+} from "@/lib/config/dashboard-config";
+export { LicensingConfigError } from "@/lib/config/dashboard-config";
 
 /** Derived seat status for a user's license. */
 export type SeatStatus = "active" | "pending_cancellation";
@@ -92,6 +113,8 @@ export interface LicenseReconciliationKPIs {
   overBudgetUsers: number;
   totalCostOfOwnership: number;
   currency: string;
+  /** Always "live_snapshot_only": this legacy reconciliation is computed live from current `copilot_seats` + billing rows (no historical persistence). See `materialize-license-period.ts`/`license-history-repo.ts` (Task 7) for the materialized-history equivalent, which callers should prefer when available. */
+  dataSource: "live_snapshot_only";
 }
 
 /** Allocation-vs-consumption breakdown by plan or org. */
@@ -136,3 +159,82 @@ export interface LicenseReconciliationEnabled {
 export type LicenseReconciliationResponse =
   | LicenseReconciliationEnabled
   | LicenseReconciliationDisabled;
+
+// ── Materialized license history (Task 7) ──────────────────────────────
+//
+// Filter shape shared by every `license_period_rows` query in
+// `license-history-repo.ts` (detail/rollup query, KPI totals, plan/org
+// breakdowns, existence check) so filtering stays consistent across all of
+// them. `LicensePeriodQuery` (defined in `license-history-repo.ts`) extends
+// this with pagination/sort/view fields specific to the paginated query.
+
+export interface LicensePeriodFilterQuery {
+  enterpriseSlug?: string;
+  enterpriseSlugs?: string[];
+  /** Explicit list of "YYYY-MM" billing periods. Combinable with periodStart/periodEnd. */
+  periods?: string[];
+  /** Inclusive "YYYY-MM" range start. */
+  periodStart?: string;
+  /** Inclusive "YYYY-MM" range end. */
+  periodEnd?: string;
+  orgLogins?: string[];
+  /** Matches user_login, resolved_user_login, or holder_key. */
+  logins?: string[];
+  /**
+   * Team/org-resolved login allowlist, matched against the same three
+   * identity columns as {@link logins} (user_login, resolved_user_login,
+   * holder_key). Same fail-closed convention as `LicenseReconciliationFilters.allowedLogins`
+   * in `license-repo.ts` (there a `Set<string>`; a readonly array here so it
+   * parameterizes directly into a SQL `IN`/`OR` clause) — `undefined` means
+   * unrestricted, but an explicitly **empty** array means zero rows match
+   * (the caller resolved a team/org scope with no members), never
+   * "unrestricted". Combines with {@link logins}/org/enterprise filters via
+   * `AND`, so a login must satisfy every provided filter.
+   */
+  allowedLogins?: readonly string[];
+  planTypes?: string[];
+  accountStates?: string[];
+  seatStatuses?: string[];
+  historyConfidence?: SeatLedgerConfidence[];
+  /** Free-text search across login/org/external-identity columns. */
+  search?: string;
+}
+
+/** Headline KPI totals aggregated in SQL over materialized `license_period_rows` matching a filter. */
+export interface LicenseHistoryKPIs {
+  /** Number of (org, holder, period) rows matched — NOT deduplicated by user (see `totalUsers`). */
+  totalRows: number;
+  /** Distinct resolved logins (falling back to holder_key when unresolved) across matched rows. */
+  totalUsers: number;
+  activeSeats: number;
+  inactiveSeats: number;
+  /** Rows (org/holder/period grain) with zero recorded AI-Credit consumption. */
+  zeroConsumptionRows: number;
+  totalLicenseCost: number;
+  totalAllowanceCredits: number;
+  totalAssignedUsd: number;
+  totalConsumedCredits: number;
+  totalConsumedUsd: number;
+  /** consumed / assigned (falling back to default allowance) × 100, safe zero-budget semantics. */
+  overallUtilizationPct: number;
+  /** Rows whose consumption exceeds their effective (assigned, else default) budget. */
+  overBudgetRows: number;
+  /** Sum of per-row max(consumed - effective budget, 0) — never negative, never double-counts covered consumption. */
+  totalOverageUsd: number;
+  /** totalLicenseCost + totalOverageUsd. */
+  totalCostOfOwnership: number;
+  currency: string;
+}
+
+/** Allocation-vs-consumption breakdown by plan or org, aggregated in SQL over materialized `license_period_rows`. */
+export interface LicenseHistoryGroupBreakdown {
+  key: string;
+  rows: number;
+  licenseCost: number;
+  allowanceCredits: number;
+  assignedUsd: number;
+  consumedCredits: number;
+  consumedUsd: number;
+  utilizationPct: number;
+  overageUsd: number;
+}

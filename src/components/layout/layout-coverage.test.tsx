@@ -169,6 +169,7 @@ describe("layout coverage", () => {
             billing: false,
             billingUsage: false,
             billingPremium: false,
+            licenseReconciliation: false,
             cli: true,
             copilotApp: true,
           },
@@ -191,6 +192,41 @@ describe("layout coverage", () => {
     expect(screen.getByText("Copilot App").closest("a")).toHaveAttribute("href", "/dashboard/copilot-app");
     expect(screen.getByText("AI Credits by User").closest("a")).toHaveAttribute("href", "/dashboard/ai-credits-users");
     expect(screen.getByText("AI Credits by User").closest("a")).toHaveClass("border-l-2");
+    expect(screen.queryByText("Billing")).not.toBeInTheDocument();
+    expect(screen.queryByText("AI Credits")).not.toBeInTheDocument();
+    // License & Credits is billing's own reconciliation surface — hidden
+    // here alongside Billing/Metered Usage/AI Credits since none of the
+    // underlying billing sub-toggles are enabled.
+    expect(screen.queryByText("License & Credits")).not.toBeInTheDocument();
+  });
+
+  it("shows License & Credits when its own page-visibility flag is enabled, independent of the other Finance pages", async () => {
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      if (String(input) === "/api/config") {
+        return mockJsonResponse({
+          pageVisibility: {
+            // Billing/Metered Usage/AI Credits stay hidden; License & Credits
+            // is gated by its own `licenseReconciliation` key (true when
+            // either aiCredits or premiumRequests is enabled — see
+            // src/app/api/config/route.ts), so it must render on its own.
+            billing: false,
+            billingUsage: false,
+            billingPremium: false,
+            licenseReconciliation: true,
+          },
+        });
+      }
+      if (String(input) === "/api/filters") {
+        return mockJsonResponse({ enterprises: [] });
+      }
+      throw new Error(`Unexpected fetch: ${String(input)}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<Sidebar />);
+
+    const link = await screen.findByText("License & Credits");
+    expect(link.closest("a")).toHaveAttribute("href", "/dashboard/license-reconciliation");
     expect(screen.queryByText("Billing")).not.toBeInTheDocument();
     expect(screen.queryByText("AI Credits")).not.toBeInTheDocument();
   });

@@ -2,6 +2,7 @@ import fs from "fs";
 import path from "path";
 import type { EnterpriseConfig } from "./enterprise-config";
 import { getDiscoveredOrgsFromDb } from "./orgs-resolver";
+import { parseReportMonths } from "@/lib/licensing/periods";
 
 // --- Types ---
 
@@ -17,6 +18,82 @@ export interface CopilotMetricConfig {
   teams?: boolean;
   /** Show pull request metrics page. PR data is embedded in daily metrics — this toggles page visibility. */
   pullRequests?: boolean;
+}
+
+/**
+ * A time-bounded AI-credit allowance override, keyed by plan. Used to model
+ * negotiated allowance changes over time (e.g. a plan's monthly allowance
+ * changed on a given date) for historical reconciliation.
+ *
+ * `start` is inclusive; `end` (if present) is also inclusive — the window
+ * covers the whole `end` day. An open-ended window (no `end`) applies from
+ * `start` through the present.
+ */
+export interface DatedAllowance {
+  /** Inclusive start date (YYYY-MM-DD) this allowance takes effect. */
+  start: string;
+  /** Inclusive end date (YYYY-MM-DD). Omit for an open-ended (still active) window. */
+  end?: string;
+  /** Monthly AI-credit allowance (credits) per normalized plan type during this window. */
+  credits: Partial<Record<LicensePlanKey, number>>;
+}
+
+/** Historical reconciliation / audit-trail settings for licensing data. */
+export interface LicensingHistoryConfig {
+  /** Enable historical (multi-period) licensing reconciliation. Default: false. */
+  enabled?: boolean;
+  /**
+   * Report months to reconcile. A single "YYYY-MM", an inclusive range
+   * "YYYY-MM..YYYY-MM", "last_N_months", or an array mixing any of these.
+   * `null` is treated the same as an absent value (unconfigured), consistent
+   * with the other optional fields in this config. Default: the current month.
+   */
+  reportMonths?: string | string[] | null;
+  /** How many days of seat assignment/revocation audit events to retain. Default: 400. */
+  auditRetentionDays?: number;
+  /** Emit a point-in-time snapshot file after each sync. Default: false. */
+  emitSnapshots?: boolean;
+  /** Directory to write monthly snapshot files to. Default: "data/licensing-snapshots". */
+  snapshotDirectory?: string;
+  /** Directory/path to write archived audit-log exports to. Default: "data/licensing-audit". */
+  auditArchivePath?: string;
+  /** Path to a persisted login → canonical-identity map file. Default: "data/identity-map.json". */
+  identityMapPath?: string;
+}
+
+/** Identity-resolution settings used to reconcile logins across enterprises/orgs. */
+export interface LicensingIdentityConfig {
+  /** Fetch org/enterprise membership to resolve identity across renamed logins. Default: false. */
+  fetchMembership?: boolean;
+  /** Fetch enterprise-level consolidated identities (SCIM/SAML). Default: false. */
+  fetchEnterpriseIdentities?: boolean;
+  /** Fetch org-level identities. Default: false. */
+  fetchOrgIdentities?: boolean;
+}
+
+/** How to source per-user AI-credit consumption for reconciliation. */
+export type AicConsumptionMode = "auto" | "billing_report" | "per_user_api";
+
+/** Per-user AI-credit consumption sourcing settings. */
+export interface LicensingAicConsumptionConfig {
+  /**
+   * "billing_report" reads consumption from synced billing reports;
+   * "per_user_api" fetches per-user consumption directly; "auto" picks
+   * whichever is available. Default: "auto".
+   */
+  mode?: AicConsumptionMode;
+  /** Optional path to a CSV export of consumption data (used to backfill/override). */
+  csvPath?: string;
+  /** Max concurrent per-user API requests when mode is "per_user_api"/"auto". Default: 4. */
+  concurrency?: number;
+}
+
+/** Reconciliation validation / tolerance settings. */
+export interface LicensingValidationConfig {
+  /** Enable cross-checking reconciled totals against source reports. Default: true. */
+  enabled?: boolean;
+  /** Acceptable variance (percent, 0-100) between reconciled and reported AIC totals before flagging. Default: 5. */
+  aicTolerancePct?: number;
 }
 
 /**
@@ -39,6 +116,21 @@ export interface LicensingConfig {
   aicAllowance?: Partial<Record<LicensePlanKey, number>>;
   /** Optional per-user AI-credit budget override (USD), keyed by login. */
   perUserBudgetUsd?: Record<string, number>;
+  /**
+   * Time-bounded allowance overrides, applied instead of the static
+   * `aicAllowance` for periods they cover. Windows must not overlap for the
+   * same plan; malformed, reversed, or overlapping entries cause
+   * {@link getLicensingConfig} to throw a `LicensingConfigError`.
+   */
+  datedAllowances?: DatedAllowance[];
+  /** Historical reconciliation / audit-trail settings. */
+  history?: LicensingHistoryConfig;
+  /** Identity-resolution settings used to reconcile logins across enterprises/orgs. */
+  identity?: LicensingIdentityConfig;
+  /** Per-user AI-credit consumption sourcing settings. */
+  aicConsumption?: LicensingAicConsumptionConfig;
+  /** Reconciliation validation / tolerance settings. */
+  validation?: LicensingValidationConfig;
 }
 
 export type LicensePlanKey = "business" | "enterprise" | "unknown";
@@ -55,6 +147,38 @@ export interface BillingMetricConfig {
   licensing?: LicensingConfig;
 }
 
+/** Resolved historical reconciliation settings with all fields populated. */
+export interface ResolvedLicensingHistoryConfig {
+  enabled: boolean;
+  /** Parsed, de-duplicated, sorted "YYYY-MM" report months (see `parseReportMonths`). */
+  reportMonths: string[];
+  auditRetentionDays: number;
+  emitSnapshots: boolean;
+  snapshotDirectory: string;
+  auditArchivePath: string;
+  identityMapPath: string;
+}
+
+/** Resolved identity-resolution settings with all fields populated. */
+export interface ResolvedLicensingIdentityConfig {
+  fetchMembership: boolean;
+  fetchEnterpriseIdentities: boolean;
+  fetchOrgIdentities: boolean;
+}
+
+/** Resolved AIC consumption-sourcing settings with all fields populated. */
+export interface ResolvedLicensingAicConsumptionConfig {
+  mode: AicConsumptionMode;
+  csvPath?: string;
+  concurrency: number;
+}
+
+/** Resolved reconciliation validation settings with all fields populated. */
+export interface ResolvedLicensingValidationConfig {
+  enabled: boolean;
+  aicTolerancePct: number;
+}
+
 /** Resolved licensing config with all fields populated. */
 export interface ResolvedLicensingConfig {
   creditToUsd: number;
@@ -62,6 +186,12 @@ export interface ResolvedLicensingConfig {
   licenseCost: Record<LicensePlanKey, number>;
   aicAllowance: Record<LicensePlanKey, number>;
   perUserBudgetUsd: Record<string, number>;
+  /** Time-bounded allowance overrides, sorted by start date. Overlapping/malformed entries cause `getLicensingConfig` to throw. */
+  datedAllowances: DatedAllowance[];
+  history: ResolvedLicensingHistoryConfig;
+  identity: ResolvedLicensingIdentityConfig;
+  aicConsumption: ResolvedLicensingAicConsumptionConfig;
+  validation: ResolvedLicensingValidationConfig;
 }
 
 export interface MetricConfig {
@@ -251,29 +381,427 @@ export const DEFAULT_LICENSING: ResolvedLicensingConfig = {
   licenseCost: { business: 19, enterprise: 39, unknown: 0 },
   aicAllowance: { business: 1900, enterprise: 3900, unknown: 0 },
   perUserBudgetUsd: {},
+  datedAllowances: [],
+  history: {
+    enabled: false,
+    // Placeholder only: `resolveHistoryConfig` always computes the actual
+    // default (the current month) at resolve-time via `parseReportMonths`,
+    // since the resolved shape is a concrete `string[]`, not a re-evaluable
+    // token like "last_1_months".
+    reportMonths: [],
+    auditRetentionDays: 400,
+    emitSnapshots: false,
+    snapshotDirectory: "data/licensing-snapshots",
+    auditArchivePath: "data/licensing-audit",
+    identityMapPath: "data/identity-map.json",
+  },
+  identity: {
+    fetchMembership: false,
+    fetchEnterpriseIdentities: false,
+    fetchOrgIdentities: false,
+  },
+  aicConsumption: {
+    mode: "auto",
+    concurrency: 4,
+  },
+  validation: {
+    enabled: true,
+    aicTolerancePct: 5,
+  },
 };
+
+/**
+ * Thrown by {@link getLicensingConfig} when one or more *explicitly
+ * configured* `metrics.billing.licensing` values are invalid (malformed
+ * syntax, out-of-bounds numbers, unknown plan keys, overlapping/reversed
+ * date ranges, etc.). Fields the operator never set always fall back to
+ * safe defaults and never trigger this error — it only fires for values
+ * that are present in config but invalid.
+ */
+export class LicensingConfigError extends Error {
+  /** One human-readable message per invalid field/entry found. */
+  readonly details: string[];
+
+  constructor(details: string[]) {
+    super(
+      details.length === 1
+        ? `Invalid licensing configuration: ${details[0]}`
+        : `Invalid licensing configuration (${details.length} problems found):\n- ${details.join("\n- ")}`
+    );
+    this.name = "LicensingConfigError";
+    this.details = details;
+  }
+}
+
+// Pragmatic, documented bounds used to validate historical licensing config.
+const MIN_AUDIT_RETENTION_DAYS = 1;
+const MAX_AUDIT_RETENTION_DAYS = 3650; // 10 years
+const MIN_CONCURRENCY = 1;
+const MAX_CONCURRENCY = 20;
+const MIN_TOLERANCE_PCT = 0;
+const MAX_TOLERANCE_PCT = 100;
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+const AIC_CONSUMPTION_MODES: AicConsumptionMode[] = ["auto", "billing_report", "per_user_api"];
+const KNOWN_PLAN_KEYS: LicensePlanKey[] = ["business", "enterprise", "unknown"];
+
+/** True when `value` is a valid calendar date in "YYYY-MM-DD" form. */
+function isValidDateString(value: string): boolean {
+  if (!DATE_RE.test(value)) return false;
+  const ms = Date.parse(`${value}T00:00:00.000Z`);
+  if (Number.isNaN(ms)) return false;
+  // Guard against JS Date normalizing an out-of-range day/month (e.g. 2026-02-30 -> 2026-03-02).
+  return new Date(ms).toISOString().slice(0, 10) === value;
+}
+
+/**
+ * Validate an explicitly-configured boolean field. `undefined`/`null` are
+ * treated as "not configured" (documented default-absence semantics) and
+ * pass through without error; any other non-boolean value is a type error
+ * appended to `errors`. Returns `undefined` when unconfigured or invalid so
+ * the caller can fall back to its own default in both cases.
+ */
+function validateOptionalBoolean(value: unknown, fieldPath: string, errors: string[]): boolean | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== "boolean") {
+    errors.push(`licensing.${fieldPath} must be a boolean (got ${JSON.stringify(value)})`);
+    return undefined;
+  }
+  return value;
+}
+
+/**
+ * Validate an explicitly-configured non-empty string field. `undefined`/`null`
+ * are treated as "not configured" and pass through without error; any other
+ * non-string or empty/whitespace-only string is a validation error appended
+ * to `errors`. Returns `undefined` when unconfigured or invalid so the caller
+ * can fall back to its own default in both cases.
+ */
+function validateOptionalNonEmptyString(value: unknown, fieldPath: string, errors: string[]): string | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== "string" || value.trim() === "") {
+    errors.push(`licensing.${fieldPath} must be a non-empty string (got ${JSON.stringify(value)})`);
+    return undefined;
+  }
+  return value;
+}
+
+/**
+ * Validate a plan-keyed credits map. Every configured key must be a known
+ * {@link LicensePlanKey} and every value must be a non-negative finite
+ * number; violations are appended to `errors` (collected and thrown together
+ * by the caller) rather than silently dropped. Unconfigured plan keys are
+ * simply absent from the result and fall back to defaults by the caller.
+ */
+function validateCreditsMap(
+  raw: Partial<Record<LicensePlanKey, number>> | undefined,
+  contextLabel: string,
+  errors: string[]
+): Partial<Record<LicensePlanKey, number>> {
+  const result: Partial<Record<LicensePlanKey, number>> = {};
+  for (const [plan, value] of Object.entries(raw ?? {})) {
+    if (!KNOWN_PLAN_KEYS.includes(plan as LicensePlanKey)) {
+      errors.push(
+        `licensing.${contextLabel} has unknown plan key "${plan}" (expected one of ${KNOWN_PLAN_KEYS.join(", ")})`
+      );
+      continue;
+    }
+    if (typeof value === "number" && Number.isFinite(value) && value >= 0) {
+      result[plan as LicensePlanKey] = value;
+    } else {
+      errors.push(`licensing.${contextLabel}.${plan} must be a non-negative finite number (got ${JSON.stringify(value)})`);
+    }
+  }
+  return result;
+}
+
+/**
+ * Validate configured `datedAllowances`: malformed dates, reversed (end
+ * before start) ranges, unknown plan keys, and negative/invalid credit
+ * values are all appended to `errors`. Any dated-window overlap for the same
+ * plan is likewise an error (rather than silently dropping the overlapping
+ * entry) — dropping only the overlapping entry would silently discard valid
+ * data for any *other* plan the same entry also covers. Returns entries
+ * sorted by start date; the return value is only meaningful when `errors`
+ * remains empty (the caller throws before using it otherwise).
+ *
+ * `raw` is typed `unknown` (rather than `DatedAllowance[] | undefined`)
+ * because it is ultimately sourced from an unchecked `JSON.parse` of
+ * `dashboard-config.json` — a config file can set `datedAllowances` to any
+ * JSON value (e.g. a plain object or a string), and this is the runtime
+ * boundary that must reject those with a clear `LicensingConfigError`
+ * detail rather than let a raw `TypeError` (e.g. `raw.forEach is not a
+ * function`) leak out of `getLicensingConfig`.
+ */
+function validateDatedAllowances(raw: unknown, errors: string[]): DatedAllowance[] {
+  if (raw === undefined || raw === null) return [];
+  if (!Array.isArray(raw)) {
+    errors.push(`licensing.datedAllowances must be an array (got ${typeof raw}: ${JSON.stringify(raw)})`);
+    return [];
+  }
+  if (raw.length === 0) return [];
+
+  const parsed: DatedAllowance[] = [];
+  raw.forEach((entry: unknown, index) => {
+    const contextLabel = `datedAllowances[${index}]`;
+    if (!entry || typeof entry !== "object" || typeof (entry as DatedAllowance).start !== "string" || !isValidDateString((entry as DatedAllowance).start)) {
+      errors.push(`licensing.${contextLabel} has a malformed start date: ${JSON.stringify(entry)}`);
+      return;
+    }
+    const typedEntry = entry as DatedAllowance;
+    if (typedEntry.end !== undefined && (typeof typedEntry.end !== "string" || !isValidDateString(typedEntry.end))) {
+      errors.push(`licensing.${contextLabel} has a malformed end date: ${JSON.stringify(entry)}`);
+      return;
+    }
+    if (typedEntry.end !== undefined && typedEntry.end < typedEntry.start) {
+      errors.push(`licensing.${contextLabel} has end (${typedEntry.end}) before start (${typedEntry.start})`);
+      return;
+    }
+    // Distinguish "no credits configured at all" from "credits were
+    // configured but every one of them was individually invalid" — the
+    // latter case already has a specific per-value error from
+    // validateCreditsMap, so pushing a second blanket "no valid credit
+    // values" error would just be a confusing duplicate.
+    const hasConfiguredCredits =
+      typedEntry.credits != null && typeof typedEntry.credits === "object" && Object.keys(typedEntry.credits).length > 0;
+    const credits = validateCreditsMap(typedEntry.credits, contextLabel, errors);
+    if (Object.keys(credits).length === 0) {
+      if (!hasConfiguredCredits) {
+        errors.push(`licensing.${contextLabel} has no valid credit values: ${JSON.stringify(entry)}`);
+      }
+      return;
+    }
+    parsed.push({ start: typedEntry.start, end: typedEntry.end, credits });
+  });
+
+  // Sort ascending by start date so overlap detection is deterministic.
+  const sorted = [...parsed].sort((a, b) => (a.start < b.start ? -1 : a.start > b.start ? 1 : 0));
+
+  // Track the latest window end date (or "open-ended") seen so far per plan.
+  const lastEndByPlan = new Map<LicensePlanKey, string | null>(); // null = open-ended (no end)
+
+  for (const entry of sorted) {
+    const plansInEntry = Object.keys(entry.credits) as LicensePlanKey[];
+    for (const plan of plansInEntry) {
+      const lastEnd = lastEndByPlan.get(plan);
+      const overlaps = lastEnd !== undefined && (lastEnd === null || entry.start <= lastEnd);
+      if (overlaps) {
+        errors.push(
+          `licensing.datedAllowances has overlapping windows for plan "${plan}": window starting ${entry.start} overlaps a prior window ending ${
+            lastEnd === null ? "(open-ended)" : lastEnd
+          }`
+        );
+      }
+    }
+    for (const plan of plansInEntry) {
+      const lastEnd = lastEndByPlan.get(plan);
+      // An open-ended window is sticky: once a plan has an unbounded window,
+      // no later (necessarily bounded) entry can shrink its recorded end —
+      // doing so would let a subsequent window that starts after the
+      // shrunk-to date wrongly pass the overlap check even though the
+      // original open-ended window still covers it.
+      if (lastEnd === null) continue;
+      const newEnd = entry.end ?? null;
+      // Keep whichever end reaches furthest, so later overlap checks stay accurate.
+      if (lastEnd === undefined || newEnd === null || newEnd > lastEnd) {
+        lastEndByPlan.set(plan, newEnd);
+      }
+    }
+  }
+
+  return sorted;
+}
+
+/** Resolve `history` settings with field-level defaults, bounds, and syntax validation applied. */
+function resolveHistoryConfig(raw: LicensingHistoryConfig | undefined, errors: string[]): ResolvedLicensingHistoryConfig {
+  const defaults = DEFAULT_LICENSING.history;
+
+  // `parseReportMonths` treats both `undefined` and `null` as "unconfigured"
+  // (resolving to the current month), consistent with how the other
+  // optional licensing fields treat a `null` config value the same as an
+  // absent one — so there's no need to special-case either here.
+  let reportMonths: string[];
+  try {
+    reportMonths = parseReportMonths(raw?.reportMonths);
+  } catch (err) {
+    errors.push(
+      `licensing.history.reportMonths (${JSON.stringify(raw?.reportMonths)}) is invalid: ${
+        err instanceof Error ? err.message : String(err)
+      }`
+    );
+    reportMonths = []; // unused: caller throws before this value is read
+  }
+
+  let auditRetentionDays = defaults.auditRetentionDays;
+  if (raw?.auditRetentionDays !== undefined) {
+    if (
+      typeof raw.auditRetentionDays === "number" &&
+      Number.isFinite(raw.auditRetentionDays) &&
+      raw.auditRetentionDays >= MIN_AUDIT_RETENTION_DAYS &&
+      raw.auditRetentionDays <= MAX_AUDIT_RETENTION_DAYS
+    ) {
+      auditRetentionDays = raw.auditRetentionDays;
+    } else {
+      errors.push(
+        `licensing.history.auditRetentionDays (${JSON.stringify(raw.auditRetentionDays)}) must be a number between ${MIN_AUDIT_RETENTION_DAYS} and ${MAX_AUDIT_RETENTION_DAYS}`
+      );
+    }
+  }
+
+  return {
+    enabled: validateOptionalBoolean(raw?.enabled, "history.enabled", errors) ?? defaults.enabled,
+    reportMonths,
+    auditRetentionDays,
+    emitSnapshots: validateOptionalBoolean(raw?.emitSnapshots, "history.emitSnapshots", errors) ?? defaults.emitSnapshots,
+    snapshotDirectory:
+      validateOptionalNonEmptyString(raw?.snapshotDirectory, "history.snapshotDirectory", errors) ??
+      defaults.snapshotDirectory,
+    auditArchivePath:
+      validateOptionalNonEmptyString(raw?.auditArchivePath, "history.auditArchivePath", errors) ??
+      defaults.auditArchivePath,
+    identityMapPath:
+      validateOptionalNonEmptyString(raw?.identityMapPath, "history.identityMapPath", errors) ??
+      defaults.identityMapPath,
+  };
+}
+
+/** Resolve `identity` settings with field-level defaults applied. */
+function resolveIdentityConfig(raw: LicensingIdentityConfig | undefined, errors: string[]): ResolvedLicensingIdentityConfig {
+  const defaults = DEFAULT_LICENSING.identity;
+  return {
+    fetchMembership:
+      validateOptionalBoolean(raw?.fetchMembership, "identity.fetchMembership", errors) ?? defaults.fetchMembership,
+    fetchEnterpriseIdentities:
+      validateOptionalBoolean(raw?.fetchEnterpriseIdentities, "identity.fetchEnterpriseIdentities", errors) ??
+      defaults.fetchEnterpriseIdentities,
+    fetchOrgIdentities:
+      validateOptionalBoolean(raw?.fetchOrgIdentities, "identity.fetchOrgIdentities", errors) ??
+      defaults.fetchOrgIdentities,
+  };
+}
+
+/** Resolve `aicConsumption` settings with field-level defaults and bounds applied. */
+function resolveAicConsumptionConfig(
+  raw: LicensingAicConsumptionConfig | undefined,
+  errors: string[]
+): ResolvedLicensingAicConsumptionConfig {
+  const defaults = DEFAULT_LICENSING.aicConsumption;
+
+  let mode = defaults.mode;
+  if (raw?.mode !== undefined) {
+    if (AIC_CONSUMPTION_MODES.includes(raw.mode)) {
+      mode = raw.mode;
+    } else {
+      errors.push(
+        `licensing.aicConsumption.mode "${raw.mode}" is invalid (expected one of ${AIC_CONSUMPTION_MODES.join(", ")})`
+      );
+    }
+  }
+
+  let concurrency = defaults.concurrency;
+  if (raw?.concurrency !== undefined) {
+    if (
+      typeof raw.concurrency === "number" &&
+      Number.isFinite(raw.concurrency) &&
+      raw.concurrency >= MIN_CONCURRENCY &&
+      raw.concurrency <= MAX_CONCURRENCY
+    ) {
+      concurrency = raw.concurrency;
+    } else {
+      errors.push(
+        `licensing.aicConsumption.concurrency (${JSON.stringify(raw.concurrency)}) must be a number between ${MIN_CONCURRENCY} and ${MAX_CONCURRENCY}`
+      );
+    }
+  }
+
+  const csvPath = validateOptionalNonEmptyString(raw?.csvPath, "aicConsumption.csvPath", errors);
+
+  return { mode, csvPath, concurrency };
+}
+
+/** Resolve `validation` settings with field-level defaults and bounds applied. */
+function resolveValidationConfig(raw: LicensingValidationConfig | undefined, errors: string[]): ResolvedLicensingValidationConfig {
+  const defaults = DEFAULT_LICENSING.validation;
+
+  let aicTolerancePct = defaults.aicTolerancePct;
+  if (raw?.aicTolerancePct !== undefined) {
+    if (
+      typeof raw.aicTolerancePct === "number" &&
+      Number.isFinite(raw.aicTolerancePct) &&
+      raw.aicTolerancePct >= MIN_TOLERANCE_PCT &&
+      raw.aicTolerancePct <= MAX_TOLERANCE_PCT
+    ) {
+      aicTolerancePct = raw.aicTolerancePct;
+    } else {
+      errors.push(
+        `licensing.validation.aicTolerancePct (${JSON.stringify(raw.aicTolerancePct)}) must be a number between ${MIN_TOLERANCE_PCT} and ${MAX_TOLERANCE_PCT}`
+      );
+    }
+  }
+
+  return {
+    enabled: validateOptionalBoolean(raw?.enabled, "validation.enabled", errors) ?? defaults.enabled,
+    aicTolerancePct,
+  };
+}
 
 /**
  * Resolve the licensing config with field-level defaults applied. Safe to call
  * with no configured `licensing` block — always returns a fully populated object.
+ *
+ * Throws {@link LicensingConfigError} when any *explicitly configured* value
+ * is invalid (malformed syntax, out-of-bounds number, unknown plan key,
+ * reversed/overlapping date range, etc.) rather than silently falling back —
+ * misconfiguration should surface loudly instead of quietly reconciling
+ * against the wrong numbers. Fields left unconfigured always use safe
+ * defaults and never cause a throw.
  */
 export function getLicensingConfig(): ResolvedLicensingConfig {
   const configured = (getDashboardConfig().metrics.billing as BillingMetricConfig).licensing ?? {};
+  const errors: string[] = [];
+
   const rawBudgets = configured.perUserBudgetUsd ?? {};
   const perUserBudgetUsd: Record<string, number> = {};
   for (const [login, amount] of Object.entries(rawBudgets)) {
-    perUserBudgetUsd[login.toLowerCase()] = amount;
+    if (typeof amount === "number" && Number.isFinite(amount) && amount >= 0) {
+      perUserBudgetUsd[login.toLowerCase()] = amount;
+    } else {
+      errors.push(`licensing.perUserBudgetUsd["${login}"] must be a non-negative finite number (got ${JSON.stringify(amount)})`);
+    }
+  }
+
+  let creditToUsd = DEFAULT_LICENSING.creditToUsd;
+  if (configured.creditToUsd !== undefined) {
+    if (typeof configured.creditToUsd === "number" && Number.isFinite(configured.creditToUsd) && configured.creditToUsd >= 0) {
+      creditToUsd = configured.creditToUsd;
+    } else {
+      errors.push(`licensing.creditToUsd must be a non-negative finite number (got ${JSON.stringify(configured.creditToUsd)})`);
+    }
+  }
+
+  const licenseCost = validateCreditsMap(configured.licenseCost, "licenseCost", errors);
+  const aicAllowance = validateCreditsMap(configured.aicAllowance, "aicAllowance", errors);
+  const datedAllowances = validateDatedAllowances(configured.datedAllowances, errors);
+  const history = resolveHistoryConfig(configured.history, errors);
+  const identity = resolveIdentityConfig(configured.identity, errors);
+  const aicConsumption = resolveAicConsumptionConfig(configured.aicConsumption, errors);
+  const validation = resolveValidationConfig(configured.validation, errors);
+  const currency = validateOptionalNonEmptyString(configured.currency, "currency", errors) ?? DEFAULT_LICENSING.currency;
+
+  if (errors.length > 0) {
+    throw new LicensingConfigError(errors);
   }
 
   return {
-    creditToUsd:
-      typeof configured.creditToUsd === "number" && configured.creditToUsd >= 0
-        ? configured.creditToUsd
-        : DEFAULT_LICENSING.creditToUsd,
-    currency: configured.currency || DEFAULT_LICENSING.currency,
-    licenseCost: { ...DEFAULT_LICENSING.licenseCost, ...(configured.licenseCost ?? {}) },
-    aicAllowance: { ...DEFAULT_LICENSING.aicAllowance, ...(configured.aicAllowance ?? {}) },
+    creditToUsd,
+    currency,
+    licenseCost: { ...DEFAULT_LICENSING.licenseCost, ...licenseCost },
+    aicAllowance: { ...DEFAULT_LICENSING.aicAllowance, ...aicAllowance },
     perUserBudgetUsd,
+    datedAllowances,
+    history,
+    identity,
+    aicConsumption,
+    validation,
   };
 }
 

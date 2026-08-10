@@ -19,19 +19,52 @@ export interface ExportMetadata {
   orgs?: string;
 }
 
+// Characters that spreadsheet applications (Excel, Google Sheets, etc.) may
+// interpret as the start of a formula/command when a CSV cell is opened.
+// Tab, CR, and LF are included per OWASP CSV-injection guidance: they are
+// themselves recognized as dangerous leading bytes (not just as separators
+// for a following `=`/`+`/`-`/`@`), since some tools treat a leading
+// control-whitespace byte specially in addition to whatever follows it.
+const FORMULA_TRIGGER_CHARS = new Set(["=", "+", "-", "@", "|", "%", "\t", "\r", "\n"]);
+
+/**
+ * True when a string's effective first character (after skipping any
+ * leading plain ASCII spaces, `0x20`) is a formula-injection trigger. This
+ * catches values that hide a dangerous prefix behind leading spaces (e.g.
+ * `"  =SUM(A1)"`), not just a literal leading `=`/`+`/`-`/`@`/`|`/`%`/tab/CR/LF.
+ * Leading tabs/CRs/LFs are *not* skipped past — each is itself a recognized
+ * trigger character, so encountering one immediately reports a risk rather
+ * than continuing to look further into the string.
+ */
+function hasFormulaInjectionRisk(str: string): boolean {
+  let i = 0;
+  while (i < str.length && str.charCodeAt(i) === 0x20) i++;
+  if (i >= str.length) return false;
+  return FORMULA_TRIGGER_CHARS.has(str[i]);
+}
+
 /**
  * Escape a single CSV cell value, including formula-injection prefixes and
  * standard CSV quoting for commas, quotes, and newlines.
+ *
+ * Numeric values (`typeof value === "number"`) are always rendered as plain
+ * numbers and never subjected to the formula-injection guard: a negative
+ * number like `-12.34` must round-trip as `-12.34`, not `"'-12.34"` — only a
+ * *string* that happens to look like a negative number (e.g. the literal
+ * text `"-12"`) is guarded, since spreadsheet apps only ever interpret
+ * *text* cells as formulas.
  */
 export function escapeCSVValue(value: unknown): string {
   if (value === null || value === undefined) return "";
-  const str = String(value);
-  // Prevent CSV formula injection
-  const firstChar = str.charAt(0);
-  if (["=", "+", "-", "@", "|", "%", "\t", "\r", "\n"].includes(firstChar)) {
+  if (typeof value === "number") return String(value);
+  const str = typeof value === "string" ? value : String(value);
+  if (hasFormulaInjectionRisk(str)) {
     return `"'${str.replace(/"/g, '""')}"`;
   }
-  if (str.includes(",") || str.includes('"') || str.includes("\n")) {
+  // RFC4180: quote any field containing a comma, a double quote, an
+  // embedded LF, or a bare CR (a lone CR — not part of a formula-prefix
+  // check above — still breaks naive line-based CSV parsing unless quoted).
+  if (str.includes(",") || str.includes('"') || str.includes("\n") || str.includes("\r")) {
     return `"${str.replace(/"/g, '""')}"`;
   }
   return str;

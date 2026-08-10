@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { act, renderHook } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useExport } from "./useExport";
 
 const mockState = vi.hoisted(() => ({
@@ -34,6 +34,15 @@ describe("useExport", () => {
     mockState.triggerDownloadFromUrl.mockReset();
     mockState.captureSectionsAsPDF.mockReset();
     vi.unstubAllGlobals();
+  });
+
+  afterEach(() => {
+    // window.alert is spied per-test via vi.spyOn; without restoring here,
+    // vitest reuses the same underlying mock across tests (spyOn on an
+    // already-mocked property does not create a fresh wrapper), so a prior
+    // test's alert call would otherwise leak into a later test's call-count
+    // assertions.
+    vi.restoreAllMocks();
   });
 
   it("downloads server-side user exports via fetch and blob", async () => {
@@ -104,6 +113,48 @@ describe("useExport", () => {
     expect(alertSpy).toHaveBeenCalledWith(
       "Export failed: Request timed out. Try a narrower date range or add filters.",
     );
+    expect(result.current.exporting).toBeNull();
+  });
+
+  it("rewrites the license-reconciliation fetchUrl to the server-side CSV export endpoint in a single request (no client-side page loop)", async () => {
+    const alertSpy = vi.spyOn(window, "alert").mockImplementation(() => undefined);
+    const csvBlob = new Blob(["enterprise,period\nacme,2026-01"], { type: "text/csv;charset=utf-8" });
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      headers: new Headers({
+        "Content-Disposition": 'attachment; filename="license-reconciliation-2026-01.csv"',
+        "Content-Type": "text/csv; charset=utf-8",
+      }),
+      blob: () => Promise.resolve(csvBlob),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const { result } = renderHook(() => useExport());
+
+    await act(async () => {
+      await result.current.exportCSV({
+        fetchUrl: "/api/billing/license-reconciliation",
+        extraParams: new URLSearchParams([
+          ["periods", "2026-01"],
+          ["view", "detail"],
+          ["teams", "eng"],
+        ]),
+        columns: [{ key: "enterprise", label: "Enterprise" }],
+        dataExtractor: (json) => (json as { rows?: unknown[] }).rows ?? [],
+        filename: "license-reconciliation-2026-01",
+      });
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/export/license-reconciliation?periods=2026-01&view=detail&teams=eng",
+    );
+    expect(mockState.fetchAllPages).not.toHaveBeenCalled();
+    expect(mockState.triggerDownload).toHaveBeenCalledWith(
+      csvBlob,
+      "license-reconciliation-2026-01.csv",
+      "text/csv; charset=utf-8",
+    );
+    expect(alertSpy).not.toHaveBeenCalled();
     expect(result.current.exporting).toBeNull();
   });
 

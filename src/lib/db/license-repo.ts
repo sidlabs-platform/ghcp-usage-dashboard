@@ -344,6 +344,7 @@ export function computeLicenseKPIs(
     overBudgetUsers,
     totalCostOfOwnership: round2(totalLicenseCost + totalConsumedUsd),
     currency: cfg.currency,
+    dataSource: "live_snapshot_only",
   };
 }
 

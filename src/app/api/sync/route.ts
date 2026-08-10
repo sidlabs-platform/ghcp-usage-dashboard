@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { fullSync } from "@/lib/db/sync-service";
+import { fullSync, getLicensingSyncStatusSummary } from "@/lib/db/sync-service";
 import { fullGhasSync } from "@/lib/db/ghas-sync-service";
 import { getSyncStatus, acquireSyncLock, releaseSyncLock, isSyncLocked, clearEmptySyncEntries, forceReleaseSyncLock, getSyncLockInfo } from "@/lib/db/metrics-repo";
 import { getAutoSyncStatus } from "@/lib/sync/auto-sync-scheduler";
@@ -33,6 +33,11 @@ export async function POST(request: Request) {
       inProgress: true,
       status: getSyncStatus(),
       lockInfo,
+      // Additive — Task 9 spec-review fix #3: derived safely from resolved
+      // server config only (completion data isn't available yet for an
+      // already-in-progress run). The completed per-enterprise summary
+      // remains durable/logged and is exposed by the Task 10 diagnostics API.
+      licensing: getLicensingSyncStatusSummary("in_progress"),
     });
   }
 
@@ -47,6 +52,18 @@ export async function POST(request: Request) {
         errors: result.backfill.errors,
         seatsSynced: result.seats,
         teamsSynced: result.teams,
+        // Additive — historical license reconciliation summary; absent/inert
+        // when licensing history is disabled (existing behavior unchanged).
+        licensing: {
+          enabled: result.licensing.enabled,
+          enterprises: result.licensing.enterprises.map((e) => ({
+            enterpriseSlug: e.enterpriseSlug,
+            status: e.status,
+            runId: e.runId,
+            warningCount: e.warnings.length,
+            errorMessage: e.errorMessage,
+          })),
+        },
       }));
 
       // Run GHAS sync if any security metrics are enabled
@@ -74,6 +91,11 @@ export async function POST(request: Request) {
     success: true,
     message: "Sync started. Poll GET /api/sync/status for progress.",
     inProgress: true,
+    // Additive — Task 9 spec-review fix #3: derived safely from resolved
+    // server config only (completion data isn't available yet at request
+    // time). The completed per-enterprise summary remains durable/logged
+    // and is exposed by the Task 10 diagnostics API.
+    licensing: getLicensingSyncStatusSummary("started"),
   });
 }
 
