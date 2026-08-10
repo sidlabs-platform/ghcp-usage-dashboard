@@ -75,6 +75,7 @@ import {
   getMaterializedPlanBreakdown,
   getMaterializedOrgBreakdown,
   getMaterializedPeriods,
+  getEarliestMaterializedPeriod,
   getMaterializedUtilizationBuckets,
   getLatestLicenseQualitySummary,
   hasMaterializedRows,
@@ -1474,6 +1475,27 @@ describe("historical reconciliation response aggregates", () => {
         }),
       ).toEqual(["2026-60"]);
       expect(getMaterializedPeriods({ periods: ["2099-01"] })).toEqual([]);
+    });
+
+    it("returns the earliest materialized period in the requested row scope", () => {
+      replaceMaterializedPeriod("ent1", "2024-02", [
+        makePeriodRow({ holderKey: "alice", userLogin: "alice", resolvedUserLogin: "alice" }),
+      ]);
+      replaceMaterializedPeriod("ent1", "2025-03", [
+        makePeriodRow({ holderKey: "bob", userLogin: "bob", resolvedUserLogin: "bob" }),
+      ]);
+      replaceMaterializedPeriod("ent2", "2023-01", [
+        makePeriodRow({ holderKey: "alice", userLogin: "alice", resolvedUserLogin: "alice" }),
+      ]);
+
+      expect(getEarliestMaterializedPeriod({ enterpriseSlugs: ["ent1"] })).toBe("2024-02");
+      expect(
+        getEarliestMaterializedPeriod({
+          enterpriseSlugs: ["ent1"],
+          allowedLogins: ["bob"],
+        }),
+      ).toBe("2025-03");
+      expect(getEarliestMaterializedPeriod({ enterpriseSlugs: ["missing"] })).toBeNull();
     });
 
     it("aggregates the utilization histogram in SQL at the enterprise-user rollup grain", () => {

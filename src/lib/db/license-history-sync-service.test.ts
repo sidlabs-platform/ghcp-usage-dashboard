@@ -356,6 +356,50 @@ describe("license-history-sync-service", () => {
 
   // ── archive-before-audit-API merge/dedupe ───────────────────────────
   describe("configured imports precede API audit consumption", () => {
+    it("materializes an archive-backed period older than the live audit retention window", async () => {
+      const archiveEvent: NormalizedAuditEvent = {
+        eventId: "archive-old-assign",
+        orgLogin: "acme-org",
+        action: "assign",
+        occurredAt: "2024-01-05T00:00:00.000Z",
+        observedLogin: "alice",
+        externalIdentity: null,
+        assignedVia: null,
+        source: "audit_archive",
+        raw: {},
+      };
+      const baseConfig = makeConfig();
+      const deps = makeDeps({
+        getConfig: vi.fn(() =>
+          makeConfig({
+            history: {
+              ...baseConfig.history,
+              reportMonths: ["2024-01", "2025-03"],
+              auditRetentionDays: 30,
+              auditArchivePath: "/configured/audit.ndjson",
+            },
+          }),
+        ),
+        importAuditArchive: vi.fn(() => ({
+          records: [archiveEvent],
+          warnings: [],
+          skippedRows: 0,
+          sourceFingerprint: "old-archive",
+        })),
+      });
+
+      const result = await syncLicenseHistoryForEnterprise("acme", deps);
+
+      expect(result.materializedPeriods).toContain("2024-01");
+      expect(deps.buildSeatLedger).toHaveBeenCalledWith(
+        expect.objectContaining({ periods: ["2024-01", "2025-03"] }),
+      );
+      expect(deps.getEnterpriseAuditEvents).toHaveBeenCalledWith(
+        "acme",
+        Date.parse("2025-02-01T00:00:00.000Z"),
+      );
+    });
+
     it("keeps the archive's copy of a duplicate (eventId, source) pair and merges deterministically", async () => {
       const archiveEvent: NormalizedAuditEvent = {
         eventId: "evt-1",

@@ -459,6 +459,7 @@ describe("additional API route coverage", { timeout: 15000 }, () => {
         getMaterializedPeriodKPIs: vi.fn(),
         getMaterializedPlanBreakdown: vi.fn(),
         getMaterializedOrgBreakdown: vi.fn(),
+        getEarliestMaterializedPeriod: vi.fn(() => null),
         getLatestLicenseQualitySummary: vi.fn(() => ({ pass: 0, warning: 0, fail: 0 })),
         hasMaterializedRows: vi.fn(() => false),
       };

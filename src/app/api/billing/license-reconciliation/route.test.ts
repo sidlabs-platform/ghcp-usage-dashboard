@@ -16,6 +16,7 @@ const historyRepoState = vi.hoisted(() => ({
   getMaterializedPlanBreakdown: vi.fn(),
   getMaterializedOrgBreakdown: vi.fn(),
   getMaterializedPeriods: vi.fn(),
+  getEarliestMaterializedPeriod: vi.fn(),
   getMaterializedUtilizationBuckets: vi.fn(),
   getLatestLicenseQualitySummary: vi.fn(),
   hasMaterializedRows: vi.fn(),
@@ -111,6 +112,8 @@ vi.mock("@/lib/db/license-history-repo", () => ({
   getMaterializedPlanBreakdown: (...a: unknown[]) => historyRepoState.getMaterializedPlanBreakdown(...a),
   getMaterializedOrgBreakdown: (...a: unknown[]) => historyRepoState.getMaterializedOrgBreakdown(...a),
   getMaterializedPeriods: (...a: unknown[]) => historyRepoState.getMaterializedPeriods(...a),
+  getEarliestMaterializedPeriod: (...a: unknown[]) =>
+    historyRepoState.getEarliestMaterializedPeriod(...a),
   getMaterializedUtilizationBuckets: (...a: unknown[]) =>
     historyRepoState.getMaterializedUtilizationBuckets(...a),
   getLatestLicenseQualitySummary: (...a: unknown[]) =>
@@ -152,6 +155,7 @@ beforeEach(() => {
   historyRepoState.getMaterializedPlanBreakdown.mockReturnValue([]);
   historyRepoState.getMaterializedOrgBreakdown.mockReturnValue([]);
   historyRepoState.getMaterializedPeriods.mockReturnValue([]);
+  historyRepoState.getEarliestMaterializedPeriod.mockReturnValue(null);
   historyRepoState.getMaterializedUtilizationBuckets.mockReturnValue([]);
   historyRepoState.getLatestLicenseQualitySummary.mockReturnValue({ pass: 0, warning: 0, fail: 0 });
   configState.getLicensingConfig.mockReturnValue({
@@ -425,6 +429,27 @@ describe("license reconciliation route", () => {
         expect(historyRepoState.getLatestLicenseQualitySummary).toHaveBeenCalledWith(
           expect.objectContaining({ periods: ["2026-01", "2026-02"] }),
         );
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("extends earliest recoverability to the scoped materialized history extent", async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-08-10T00:00:00Z"));
+      historyRepoState.getEarliestMaterializedPeriod.mockReturnValue("2024-02");
+
+      try {
+        const res = await GET(
+          req("http://localhost/api/billing/license-reconciliation?periods=2026-01"),
+        );
+        const body = await res.json();
+
+        expect(body.coverage.earliestRecoverablePeriod).toBe("2024-02");
+        expect(historyRepoState.getEarliestMaterializedPeriod).toHaveBeenCalledWith({
+          enterpriseSlugs: undefined,
+          allowedLogins: undefined,
+        });
       } finally {
         vi.useRealTimers();
       }

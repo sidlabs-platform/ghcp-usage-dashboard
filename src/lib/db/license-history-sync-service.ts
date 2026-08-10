@@ -1129,7 +1129,36 @@ export async function syncLicenseHistoryForEnterprise(
     deps.heartbeatSyncLock();
 
     // ── recoverable range ────────────────────────────────────────────────
-    const earliest = earliestRecoverablePeriod({ auditRetentionDays: config.history.auditRetentionDays, now });
+    // Retention bounds only what the live audit API can return. Configured
+    // archives and durable audit/snapshot evidence may extend historical
+    // materialization further back, so derive the period gate from both.
+    const requestedThroughCurrent = [...new Set([
+      ...requestedPeriods.filter((period) => period <= currentPeriod),
+      currentPeriod,
+    ])].sort();
+    const persistedAuditEvidence = deps.listPersistedAuditEvents(
+      enterpriseSlug,
+      requestedThroughCurrent,
+    );
+    const persistedSnapshotEvidence = deps.listPersistedSeatSnapshots(
+      enterpriseSlug,
+      requestedThroughCurrent,
+    );
+    const liveAuditEarliest = earliestRecoverablePeriod({
+      auditRetentionDays: config.history.auditRetentionDays,
+      now,
+    });
+    const earliest = earliestRecoverablePeriod({
+      auditRetentionDays: config.history.auditRetentionDays,
+      archiveDates: [
+        ...archiveImport.records.map((event) => event.occurredAt),
+        ...persistedAuditEvidence.map((event) => event.occurredAt),
+      ],
+      snapshotDates: persistedSnapshotEvidence
+        .filter((snapshot) => snapshot.source !== "live_seats")
+        .map((snapshot) => `${snapshot.billingPeriod}-01T00:00:00.000Z`),
+      now,
+    });
     const recoverablePeriods = requestedPeriods.filter((period) => (earliest ? period >= earliest : true) && period <= currentPeriod);
     if (!recoverablePeriods.includes(currentPeriod)) {
       recoverablePeriods.push(currentPeriod);
@@ -1138,7 +1167,9 @@ export async function syncLicenseHistoryForEnterprise(
 
     // ── audit API (recoverable range only) ──────────────────────────────
     deps.onProgress?.({ enterprise: enterpriseSlug, source: "audit", current: 0, total: 1, message: `Fetching audit log events for ${sanitizeForLog(enterpriseSlug)}...` });
-    const cutoffMs = earliest ? Date.parse(`${earliest}-01T00:00:00.000Z`) : null;
+    const cutoffMs = liveAuditEarliest
+      ? Date.parse(`${liveAuditEarliest}-01T00:00:00.000Z`)
+      : null;
     type EnrichedAuditEvent = SeatLedgerAuditEventInput & {
       observedLogin: string | null;
       externalIdentity: string | null;
@@ -1639,9 +1670,7 @@ export async function syncLicenseHistoryForEnterprise(
     }
     deps.heartbeatSyncLock();
 
-    const persistedAuditEvents: EnrichedAuditEvent[] = deps
-      .listPersistedAuditEvents(enterpriseSlug, recoverablePeriods)
-      .map((event) => ({
+    const persistedAuditEvents: EnrichedAuditEvent[] = persistedAuditEvidence.map((event) => ({
         eventId: event.eventId,
         source: event.source,
         orgLogin: event.orgLogin ?? "",
@@ -1652,7 +1681,7 @@ export async function syncLicenseHistoryForEnterprise(
         observedLogin: event.observedLogin ?? null,
         externalIdentity: event.externalIdentity ?? null,
         assignedVia: event.assignedVia ?? null,
-      }));
+    }));
     const durableAuditByEventId = new Map<string, EnrichedAuditEvent>();
     for (const event of [...persistedAuditEvents, ...mergedAuditEvents]) {
       durableAuditByEventId.set(event.eventId, event);
@@ -1663,7 +1692,9 @@ export async function syncLicenseHistoryForEnterprise(
       durableAuditBySemanticKey.set(key, event);
     }
     const durableAuditEvents = [...durableAuditBySemanticKey.values()];
-    const persistedSeatSnapshots = deps.listPersistedSeatSnapshots(enterpriseSlug, recoverablePeriods);
+    const persistedSeatSnapshots = persistedSnapshotEvidence.filter((snapshot) =>
+      recoverablePeriods.includes(snapshot.billingPeriod),
+    );
     const persistedSeatSnapshotByPeriodKey = new Map(
       persistedSeatSnapshots.map((snapshot) => [
         `${snapshot.billingPeriod}\u0000${licensePeriodCanonicalKey(snapshot.orgLogin ?? "", snapshot.holderKey)}`,

@@ -1462,6 +1462,21 @@ export function getMaterializedPeriods(query: LicensePeriodFilterQuery = {}): st
   return rows.map((row) => row.billing_period);
 }
 
+/** Return the earliest materialized period present in the requested row scope. */
+export function getEarliestMaterializedPeriod(
+  query: LicensePeriodFilterQuery = {},
+): string | null {
+  const db = getDb();
+  const { where, params } = buildFilterWhere(query);
+  const row = db
+    .prepare(`
+      SELECT MIN(billing_period) AS billing_period
+      FROM license_period_rows${where}
+    `)
+    .get(...params) as { billing_period: string | null };
+  return row.billing_period;
+}
+
 export interface MaterializedUtilizationBucket {
   label: string;
   min: number;

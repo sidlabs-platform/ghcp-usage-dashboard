@@ -18,6 +18,7 @@ import {
   getMaterializedPlanBreakdown,
   getMaterializedOrgBreakdown,
   getMaterializedPeriods,
+  getEarliestMaterializedPeriod,
   getMaterializedUtilizationBuckets,
   getLatestLicenseQualitySummary,
   hasMaterializedRows,
@@ -337,8 +338,15 @@ async function handler(request: NextRequest) {
     const sortDir = params.get("sortDir") === "asc" ? "asc" : "desc";
 
     const cfg = getLicensingConfig();
+    const earliestMaterialized = getEarliestMaterializedPeriod({
+      enterpriseSlugs: baseFilterQuery.enterpriseSlugs,
+      allowedLogins: baseFilterQuery.allowedLogins,
+    });
     const earliestRecoverable = earliestRecoverablePeriod({
       auditRetentionDays: cfg.history?.auditRetentionDays ?? 0,
+      snapshotDates: earliestMaterialized
+        ? [`${earliestMaterialized}-01T00:00:00.000Z`]
+        : [],
     });
 
     // Only the base scope (enterprise + period + team/org-resolved
