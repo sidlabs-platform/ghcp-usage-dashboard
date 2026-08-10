@@ -281,7 +281,10 @@ describe("additional API route coverage", { timeout: 15000 }, () => {
       clearEmptySyncEntries: vi.fn(),
       forceReleaseSyncLock: vi.fn(),
     }));
-    vi.doMock("@/lib/db/sync-service", () => ({ fullSync: vi.fn() }));
+    vi.doMock("@/lib/db/sync-service", () => ({
+      fullSync: vi.fn(),
+      getLicensingSyncStatusSummary: vi.fn(() => ({ enabled: true, status: "in_progress" })),
+    }));
     vi.doMock("@/lib/db/ghas-sync-service", () => ({ fullGhasSync: vi.fn() }));
     vi.doMock("@/lib/sync/auto-sync-scheduler", () => ({
       getAutoSyncStatus: vi.fn(() => ({ enabled: true, utcTime: "04:00", nextRunAt: null })),
@@ -317,7 +320,10 @@ describe("additional API route coverage", { timeout: 15000 }, () => {
       clearEmptySyncEntries: vi.fn(),
       forceReleaseSyncLock: vi.fn(),
     }));
-    vi.doMock("@/lib/db/sync-service", () => ({ fullSync: vi.fn() }));
+    vi.doMock("@/lib/db/sync-service", () => ({
+      fullSync: vi.fn(),
+      getLicensingSyncStatusSummary: vi.fn(() => ({ enabled: true, status: "in_progress" })),
+    }));
     vi.doMock("@/lib/db/ghas-sync-service", () => ({ fullGhasSync: vi.fn() }));
     vi.doMock("@/lib/sync/auto-sync-scheduler", () => ({
       getAutoSyncStatus: vi.fn(() => ({ enabled: false })),
@@ -337,6 +343,7 @@ describe("additional API route coverage", { timeout: 15000 }, () => {
       inProgress: true,
       status: [{ days_synced: 2 }],
       lockInfo: { locked: true, owner: "job-1" },
+      licensing: { enabled: true, status: "in_progress" },
     });
     expect(acquireSyncLock).toHaveBeenCalledTimes(1);
   });
@@ -348,6 +355,7 @@ describe("additional API route coverage", { timeout: 15000 }, () => {
         backfill: { daysSynced: 3, daysSkipped: 1, errors: [] },
         seats: 5,
         teams: 2,
+        licensing: { enabled: true, enterprises: [] },
       };
     });
     const fullGhasSync = vi.fn(async (onProgress: (progress: { message: string }) => void) => {
@@ -358,7 +366,13 @@ describe("additional API route coverage", { timeout: 15000 }, () => {
     const forceReleaseSyncLock = vi.fn(() => ({ locked: false }));
     const releaseSyncLock = vi.fn();
 
-    vi.doMock("@/lib/db/sync-service", () => ({ fullSync }));
+    vi.doMock("@/lib/db/sync-service", () => ({
+      fullSync,
+      getLicensingSyncStatusSummary: vi.fn((status: "started" | "in_progress") => ({
+        enabled: true,
+        status,
+      })),
+    }));
     vi.doMock("@/lib/db/ghas-sync-service", () => ({ fullGhasSync }));
     vi.doMock("@/lib/db/metrics-repo", () => ({
       getSyncStatus: vi.fn(() => []),
@@ -391,6 +405,7 @@ describe("additional API route coverage", { timeout: 15000 }, () => {
       success: true,
       message: "Sync started. Poll GET /api/sync/status for progress.",
       inProgress: true,
+      licensing: { enabled: true, status: "started" },
     });
 
     await waitForExpectedCalls(() => {

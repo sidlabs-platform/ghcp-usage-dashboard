@@ -83,7 +83,8 @@ export async function GET() {
   // rather than relying on an incomplete per-field denylist. Every other
   // billing sub-toggle (`enabled`/`meteredUsage`/`premiumRequests`/
   // `aiCredits`) is preserved unchanged for backward compatibility.
-  const { licensing: _licensing, ...safeBilling } = config.metrics.billing as BillingMetricConfig;
+  const safeBilling = { ...config.metrics.billing } as BillingMetricConfig;
+  delete safeBilling.licensing;
   const safeMetrics = { ...config.metrics, billing: safeBilling };
 
   return NextResponse.json({
