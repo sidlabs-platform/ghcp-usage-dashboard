@@ -64,11 +64,19 @@ import {
   upsertIdentityRecords,
   upsertOrgBillingSnapshots,
   upsertAicConsumption,
+  listPersistedAuditEvents,
+  listPersistedSeatSnapshots,
+  listPersistedIdentityRecords,
+  listPersistedOrgBillingSnapshots,
+  listPersistedAicConsumption,
   replaceMaterializedPeriod,
   queryLicensePeriodRows,
   getMaterializedPeriodKPIs,
   getMaterializedPlanBreakdown,
   getMaterializedOrgBreakdown,
+  getMaterializedPeriods,
+  getMaterializedUtilizationBuckets,
+  getLatestLicenseQualitySummary,
   hasMaterializedRows,
   stableStringify,
   parseJsonArray,
@@ -164,6 +172,8 @@ afterAll(() => {
 });
 
 beforeEach(() => {
+  db.exec("DELETE FROM license_reconciliation_checks");
+  db.exec("DELETE FROM license_reconciliation_runs");
   db.exec("DELETE FROM license_audit_events");
   db.exec("DELETE FROM license_identity_records");
   db.exec("DELETE FROM license_seat_snapshots");
@@ -256,6 +266,113 @@ describe("upsertAuditEvents", () => {
     expect(upsertAuditEvents("ent1", events)).toBe(1);
     const rows = db.prepare(`SELECT * FROM license_audit_events WHERE enterprise_slug = 'ent1'`).all();
     expect(rows).toHaveLength(1);
+  });
+
+  describe("persisted source readers", () => {
+    it("returns durable source rows scoped by enterprise and billing period", () => {
+      upsertAuditEvents("ent1", [{
+        eventId: "evt1",
+        orgLogin: "org1",
+        action: "copilot.canceled",
+        occurredAt: "2026-01-20T00:00:00Z",
+        githubUserId: 7,
+        observedLogin: "churned-user",
+        externalIdentity: "opaque-id",
+        assignedVia: "team",
+        source: "audit_log",
+      }]);
+      replacePeriodSnapshots("ent1", "2026-01", [{
+        orgLogin: "org1",
+        holderKey: "id:7",
+        githubUserId: 7,
+        observedLogin: "churned-user",
+        planType: "enterprise",
+        assignedVia: "team",
+        lastActivityAt: "2026-01-15T00:00:00Z",
+        snapshotAt: "2026-01-31T00:00:00Z",
+        source: "authoritative_import",
+      }]);
+      upsertIdentityRecords("ent1", [{
+        identityKey: "id:7",
+        githubUserId: 7,
+        resolvedLogin: "churned-user",
+        externalIdentity: "opaque-id",
+        accountState: "deprovisioned",
+        resolutionSource: "scim_enterprise",
+        observedAt: "2026-02-01T00:00:00Z",
+      }]);
+      upsertOrgBillingSnapshots("ent1", [{
+        billingPeriod: "2026-01",
+        orgLogin: "org1",
+        planType: "enterprise",
+        totalSeats: 1,
+        pendingCancellation: 0,
+        observedAt: "2026-01-31T00:00:00Z",
+      }]);
+      upsertAicConsumption("ent1", [{
+        billingPeriod: "2026-01",
+        orgLogin: "org1",
+        holderKey: "id:7",
+        username: "churned-user",
+        credits: 40,
+        grossUsd: 4,
+        netUsd: 3.5,
+        source: "enterprise_api",
+        observedAt: "2026-01-31T00:00:00Z",
+      }]);
+
+      expect(listPersistedAuditEvents("ent1", ["2026-01"])).toEqual([
+        expect.objectContaining({
+          eventId: "evt1",
+          holderKey: "id:7",
+          observedLogin: "churned-user",
+          externalIdentity: "opaque-id",
+        }),
+      ]);
+      expect(listPersistedSeatSnapshots("ent1", ["2026-01"])).toEqual([
+        expect.objectContaining({
+          billingPeriod: "2026-01",
+          holderKey: "id:7",
+          planType: "enterprise",
+          source: "authoritative_import",
+        }),
+      ]);
+      expect(listPersistedIdentityRecords("ent1")).toEqual([
+        expect.objectContaining({
+          identityKey: "id:7",
+          accountState: "deprovisioned",
+        }),
+      ]);
+      expect(listPersistedOrgBillingSnapshots("ent1", ["2026-01"])).toEqual([
+        expect.objectContaining({ billingPeriod: "2026-01", orgLogin: "org1", totalSeats: 1 }),
+      ]);
+      expect(listPersistedAicConsumption("ent1", ["2026-01"])).toEqual([
+        expect.objectContaining({
+          billingPeriod: "2026-01",
+          holderKey: "id:7",
+          netUsd: 3.5,
+        }),
+      ]);
+
+      expect(listPersistedAuditEvents("ent2", ["2026-01"])).toEqual([]);
+      expect(listPersistedSeatSnapshots("ent1", ["2026-02"])).toEqual([]);
+      expect(listPersistedAicConsumption("ent1", ["2026-02"])).toEqual([]);
+    });
+
+    it("includes pre-period audit assignments needed to reconstruct an open interval", () => {
+      upsertAuditEvents("ent1", [{
+        eventId: "dec-assign",
+        orgLogin: "org1",
+        action: "copilot.assigned",
+        occurredAt: "2025-12-20T00:00:00Z",
+        githubUserId: 7,
+        observedLogin: "churned-user",
+        source: "audit_log",
+      }]);
+
+      expect(listPersistedAuditEvents("ent1", ["2026-01"]).map((event) => event.eventId))
+        .toContain("dec-assign");
+    });
   });
 
   it("isolates events by enterprise_slug", () => {
@@ -720,9 +837,9 @@ describe("replaceMaterializedPeriod + queryLicensePeriodRows", () => {
     // GROUP_CONCAT(DISTINCT ...) uses a comma separator (splitDistinct must
     // parse on ",", not "\u0001") — assert the grouped arrays themselves,
     // not just their counts.
-    expect(user1?.periods.slice().sort()).toEqual(["2026-01", "2026-02"]);
-    expect(user1?.orgLogins.slice().sort()).toEqual(["org1"]);
-    expect(user1?.planTypes.slice().sort()).toEqual(["business"]);
+    expect(user1?.periods).toEqual(["2026-01", "2026-02"]);
+    expect(user1?.orgLogins).toEqual(["org1"]);
+    expect(user1?.planTypes).toEqual(["business"]);
 
     const user2 = rollup.rows.find((r) => r.resolvedUserLogin === "user2");
     expect(user2?.periods).toEqual(["2026-01"]);
@@ -1334,5 +1451,137 @@ describe("empty tables", () => {
     const rows = emptyDb.prepare(`SELECT * FROM license_period_rows`).all();
     expect(rows).toEqual([]);
     emptyDb.close();
+  });
+});
+
+describe("historical reconciliation response aggregates", () => {
+    it("returns only materialized periods in the requested enterprise and login scope", () => {
+      replaceMaterializedPeriod("ent1", "2026-60", [
+        makePeriodRow({ holderKey: "alice", userLogin: "alice", resolvedUserLogin: "alice" }),
+      ]);
+      replaceMaterializedPeriod("ent1", "2026-61", [
+        makePeriodRow({ holderKey: "bob", userLogin: "bob", resolvedUserLogin: "bob" }),
+      ]);
+      replaceMaterializedPeriod("ent2", "2026-60", [
+        makePeriodRow({ holderKey: "alice", userLogin: "alice", resolvedUserLogin: "alice" }),
+      ]);
+
+      expect(
+        getMaterializedPeriods({
+          enterpriseSlugs: ["ent1"],
+          periods: ["2026-60", "2026-61", "2026-62"],
+          allowedLogins: ["alice"],
+        }),
+      ).toEqual(["2026-60"]);
+      expect(getMaterializedPeriods({ periods: ["2099-01"] })).toEqual([]);
+    });
+
+    it("aggregates the utilization histogram in SQL at the enterprise-user rollup grain", () => {
+      replaceMaterializedPeriod("ent1", "2026-63", [
+        makePeriodRow({ holderKey: "zero", resolvedUserLogin: "zero", aicAssignedUsd: 100, aicConsumedUsd: 0 }),
+        makePeriodRow({ holderKey: "low", resolvedUserLogin: "low", aicAssignedUsd: 100, aicConsumedUsd: 10 }),
+        makePeriodRow({ holderKey: "medium", resolvedUserLogin: "medium", aicAssignedUsd: 100, aicConsumedUsd: 30 }),
+        makePeriodRow({ holderKey: "high", resolvedUserLogin: "high", aicAssignedUsd: 100, aicConsumedUsd: 60 }),
+        makePeriodRow({ holderKey: "full", resolvedUserLogin: "full", aicAssignedUsd: 100, aicConsumedUsd: 90 }),
+        makePeriodRow({ holderKey: "over", resolvedUserLogin: "over", aicAssignedUsd: 100, aicConsumedUsd: 110 }),
+      ]);
+
+      expect(
+        getMaterializedUtilizationBuckets({
+          enterpriseSlugs: ["ent1"],
+          periods: ["2026-63"],
+        }),
+      ).toEqual([
+        { label: "0%", min: 0, max: 0, count: 1 },
+        { label: "1–25%", min: 0.0001, max: 25, count: 1 },
+        { label: "26–50%", min: 25, max: 50, count: 1 },
+        { label: "51–75%", min: 50, max: 75, count: 1 },
+        { label: "76–100%", min: 75, max: 100, count: 1 },
+        { label: ">100%", min: 100, max: null, count: 1 },
+      ]);
+    });
+
+    it("summarizes checks from only the latest completed run per enterprise and requested scope", () => {
+      db.prepare(`
+        INSERT INTO license_reconciliation_runs
+          (id, enterprise_slug, started_at, completed_at, status, requested_periods)
+        VALUES
+          ('old-ent1', 'ent1', '2026-06-01T00:00:00Z', '2026-06-01T00:01:00Z', 'warning', '["2026-60"]'),
+          ('latest-ent1', 'ent1', '2026-07-01T00:00:00Z', '2026-07-01T00:01:00Z', 'warning', '["2026-60","2026-61"]'),
+          ('latest-ent2', 'ent2', '2026-07-01T00:00:00Z', '2026-07-01T00:01:00Z', 'failed', '["2026-60"]')
+      `).run();
+      db.prepare(`
+        INSERT INTO license_reconciliation_checks
+          (run_id, check_name, billing_period, org_login, status, message)
+        VALUES
+          ('old-ent1', 'seat_count', '2026-60', 'org1', 'fail', 'old failure'),
+          ('latest-ent1', 'seat_count', '2026-60', 'org1', 'pass', 'ok'),
+          ('latest-ent1', 'history_coverage', '2026-60', 'org1', 'warning', 'partial'),
+          ('latest-ent1', 'seat_count', '2026-61', 'org1', 'fail', 'other period'),
+          ('latest-ent1', 'seat_count', '2026-60', 'org2', 'fail', 'other org'),
+          ('latest-ent2', 'seat_count', '2026-60', 'org1', 'fail', 'other enterprise')
+      `).run();
+
+      expect(
+        getLatestLicenseQualitySummary({
+          enterpriseSlugs: ["ent1"],
+          periods: ["2026-60"],
+          orgLogins: ["org1"],
+        }),
+      ).toEqual({ pass: 1, warning: 1, fail: 0 });
+      expect(
+        getLatestLicenseQualitySummary({
+          enterpriseSlugs: ["ent1"],
+          periods: ["2099-01"],
+        }),
+      ).toEqual({ pass: 0, warning: 0, fail: 0 });
+  });
+
+  it("selects the most recently completed run when completed runs overlap", () => {
+      db.prepare(`
+        INSERT INTO license_reconciliation_runs
+          (id, enterprise_slug, started_at, completed_at, status, requested_periods)
+        VALUES
+          ('started-later', 'ent1', '2026-07-02T00:00:00Z', '2026-07-02T00:01:00Z', 'warning', '["2026-64"]'),
+          ('completed-later', 'ent1', '2026-07-01T00:00:00Z', '2026-07-02T00:02:00Z', 'success', '["2026-64"]')
+      `).run();
+      db.prepare(`
+        INSERT INTO license_reconciliation_checks
+          (run_id, check_name, billing_period, org_login, status, message)
+        VALUES
+          ('started-later', 'seat_count', '2026-64', 'org1', 'fail', 'stale result'),
+          ('completed-later', 'seat_count', '2026-64', 'org1', 'pass', 'latest result')
+      `).run();
+
+      expect(
+        getLatestLicenseQualitySummary({
+          enterpriseSlugs: ["ent1"],
+          periods: ["2026-64"],
+        }),
+      ).toEqual({ pass: 1, warning: 0, fail: 0 });
+  });
+
+  it("selects the latest completed run that covers the requested period", () => {
+    db.prepare(`
+      INSERT INTO license_reconciliation_runs
+        (id, enterprise_slug, started_at, completed_at, status, requested_periods)
+      VALUES
+        ('target-period-run', 'ent1', '2026-07-01T00:00:00Z', '2026-07-01T00:01:00Z', 'failed', '["2026-66"]'),
+        ('newer-other-period-run', 'ent1', '2026-07-02T00:00:00Z', '2026-07-02T00:01:00Z', 'success', '["2026-67"]')
+    `).run();
+    db.prepare(`
+      INSERT INTO license_reconciliation_checks
+        (run_id, check_name, billing_period, org_login, status, message)
+      VALUES
+        ('target-period-run', 'seat_count', '2026-66', 'org1', 'fail', 'target failure'),
+        ('newer-other-period-run', 'seat_count', '2026-67', 'org1', 'pass', 'other period')
+    `).run();
+
+    expect(
+      getLatestLicenseQualitySummary({
+        enterpriseSlugs: ["ent1"],
+        periods: ["2026-66"],
+      }),
+    ).toEqual({ pass: 0, warning: 0, fail: 1 });
   });
 });

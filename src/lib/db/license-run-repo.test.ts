@@ -506,6 +506,60 @@ describe("recordLicenseRunDiagnostics", () => {
     expect(listLicenseChecks(runB)).toHaveLength(1);
     expect(listLicenseChecks(runB)[0].message).toBe("run B");
   });
+
+  it("bounds persisted warning and unresolved-identity diagnostics with omission counts", () => {
+    const runId = startLicenseRun({ enterpriseSlug: "ent1", requestedPeriods: ["2026-01"] });
+
+    recordLicenseRunDiagnostics({
+      runId,
+      finish: {
+        status: "warning",
+        warnings: Array.from({ length: 205 }, (_, index) => `warning-${String(index).padStart(3, "0")}`),
+        unresolvedIdentities: Array.from({ length: 505 }, (_, index) => ({
+          holderKey: `holder-${String(index).padStart(3, "0")}`,
+          reason: "no_login",
+        })),
+      },
+      checks: [],
+    });
+
+    const run = getLicenseRun(runId)!;
+    expect(run.warnings).toHaveLength(200);
+    expect(run.warnings.at(-1)).toBe("6 additional warnings omitted");
+    expect(run.unresolvedIdentities).toHaveLength(500);
+    expect(run.unresolvedIdentities.at(-1)).toEqual({
+      holderKey: "[omitted]",
+      reason: "6 additional unresolved identities omitted",
+    });
+  });
+
+  it("retains only the 100 most recent completed runs per enterprise and cascades their checks", () => {
+    let oldestRunId = "";
+    for (let index = 0; index < 101; index += 1) {
+      const runId = startLicenseRun({
+        enterpriseSlug: "ent1",
+        requestedPeriods: ["2026-01"],
+        startedAt: `2026-01-01T00:00:${String(index).padStart(3, "0")}Z`,
+      });
+      if (index === 0) {
+        oldestRunId = runId;
+      }
+      recordLicenseRunDiagnostics({
+        runId,
+        finish: { status: "success" },
+        checks: [{ checkName: "seat_count", status: "pass", message: "ok" }],
+      });
+    }
+    const otherEnterpriseRun = startLicenseRun({
+      enterpriseSlug: "ent2",
+      requestedPeriods: ["2026-01"],
+    });
+
+    expect(listLicenseRuns("ent1", 200)).toHaveLength(100);
+    expect(getLicenseRun(oldestRunId)).toBeNull();
+    expect(listLicenseChecks(oldestRunId)).toEqual([]);
+    expect(getLicenseRun(otherEnterpriseRun)).not.toBeNull();
+  });
 });
 
 describe("buildLicenseRunReport / serializeLicenseRunReport / renderLicenseRunReportText", () => {

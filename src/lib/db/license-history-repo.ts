@@ -67,6 +67,15 @@ export function parseJsonObject(raw: string | null | undefined): Record<string, 
   }
 }
 
+function parseRawJson(raw: string | null | undefined): unknown {
+  if (!raw) return undefined;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return undefined;
+  }
+}
+
 // ── Input types (write side, camelCase) ──────────────────────────────
 
 export interface LicenseAuditEventInput {
@@ -129,6 +138,20 @@ export interface LicenseAicConsumptionInput {
   observedAt: string;
   raw?: unknown;
 }
+
+export interface PersistedLicenseAuditEvent extends LicenseAuditEventInput {
+  holderKey: string;
+}
+
+export interface PersistedLicenseSeatSnapshot extends LicenseSeatSnapshotInput {
+  billingPeriod: string;
+}
+
+export type PersistedLicenseIdentityRecord = LicenseIdentityRecordInput;
+
+export type PersistedLicenseOrgBillingSnapshot = LicenseOrgBillingSnapshotInput;
+
+export type PersistedLicenseAicConsumption = LicenseAicConsumptionInput;
 
 export interface LicensePeriodRowInput {
   orgLogin?: string;
@@ -537,7 +560,10 @@ function splitDistinct(value: string | null | undefined): string[] {
   // GROUP_CONCAT(DISTINCT ...) joins with a comma by default. Values stored
   // in these columns (billing_period, org_login, plan_type) are structural
   // identifiers that never contain commas, so a plain split is safe.
-  return value.split(",").filter((v) => v.length > 0);
+  return value
+    .split(",")
+    .filter((v) => v.length > 0)
+    .sort((a, b) => a.localeCompare(b));
 }
 
 /**
@@ -1026,6 +1052,163 @@ export function upsertAicConsumption(enterpriseSlug: string, records: LicenseAic
   return records.length;
 }
 
+function buildPeriodInClause(periods: string[], column: string): { sql: string; params: string[] } {
+  if (periods.length === 0) return { sql: " AND 1 = 0", params: [] };
+  return {
+    sql: ` AND ${column} IN (${periods.map(() => "?").join(", ")})`,
+    params: periods,
+  };
+}
+
+/** Read durable normalized audit events for the requested periods. */
+export function listPersistedAuditEvents(
+  enterpriseSlug: string,
+  periods: string[],
+): PersistedLicenseAuditEvent[] {
+  if (periods.length === 0) return [];
+  const db = getDb();
+  const latestPeriod = [...periods].sort().at(-1)!;
+  const rows = db.prepare(`
+    SELECT event_id, org_login, action, occurred_at, github_user_id,
+           observed_login, external_identity, assigned_via, source, raw_json
+    FROM license_audit_events
+    WHERE enterprise_slug = ? AND substr(occurred_at, 1, 7) <= ?
+    ORDER BY occurred_at ASC, event_id ASC
+  `).all(enterpriseSlug, latestPeriod) as Record<string, unknown>[];
+
+  return rows.map((row) => {
+    const githubUserId = (row.github_user_id as number | null) ?? null;
+    const observedLogin = (row.observed_login as string | null) ?? null;
+    return {
+      eventId: row.event_id as string,
+      orgLogin: row.org_login as string,
+      holderKey: githubUserId != null
+        ? `id:${githubUserId}`
+        : `login:${(observedLogin ?? "unknown").toLowerCase()}`,
+      action: row.action as string,
+      occurredAt: row.occurred_at as string,
+      githubUserId,
+      observedLogin,
+      externalIdentity: (row.external_identity as string | null) ?? null,
+      assignedVia: (row.assigned_via as string | null) ?? null,
+      source: row.source as string,
+      raw: parseRawJson(row.raw_json as string | null),
+    };
+  });
+}
+
+/** Read durable seat snapshots for the requested periods. */
+export function listPersistedSeatSnapshots(
+  enterpriseSlug: string,
+  periods: string[],
+): PersistedLicenseSeatSnapshot[] {
+  const db = getDb();
+  const periodFilter = buildPeriodInClause(periods, "billing_period");
+  const rows = db.prepare(`
+    SELECT billing_period, org_login, holder_key, github_user_id, observed_login,
+           plan_type, assigned_via, last_activity_at, pending_cancellation_date,
+           snapshot_at, source, raw_json
+    FROM license_seat_snapshots
+    WHERE enterprise_slug = ?${periodFilter.sql}
+    ORDER BY billing_period ASC, org_login ASC, holder_key ASC
+  `).all(enterpriseSlug, ...periodFilter.params) as Record<string, unknown>[];
+
+  return rows.map((row) => ({
+    billingPeriod: row.billing_period as string,
+    orgLogin: row.org_login as string,
+    holderKey: row.holder_key as string,
+    githubUserId: (row.github_user_id as number | null) ?? null,
+    observedLogin: (row.observed_login as string | null) ?? null,
+    planType: row.plan_type as string,
+    assignedVia: row.assigned_via as string,
+    lastActivityAt: (row.last_activity_at as string | null) ?? null,
+    pendingCancellationDate: (row.pending_cancellation_date as string | null) ?? null,
+    snapshotAt: row.snapshot_at as string,
+    source: row.source as string,
+    raw: parseRawJson(row.raw_json as string | null),
+  }));
+}
+
+/** Read every durable identity record for one enterprise. */
+export function listPersistedIdentityRecords(
+  enterpriseSlug: string,
+): PersistedLicenseIdentityRecord[] {
+  const db = getDb();
+  const rows = db.prepare(`
+    SELECT identity_key, github_user_id, resolved_login, external_identity,
+           account_state, resolution_source, observed_at, raw_json
+    FROM license_identity_records
+    WHERE enterprise_slug = ?
+    ORDER BY observed_at DESC, identity_key ASC, resolution_source ASC
+  `).all(enterpriseSlug) as Record<string, unknown>[];
+
+  return rows.map((row) => ({
+    identityKey: row.identity_key as string,
+    githubUserId: (row.github_user_id as number | null) ?? null,
+    resolvedLogin: (row.resolved_login as string | null) ?? null,
+    externalIdentity: (row.external_identity as string | null) ?? null,
+    accountState: row.account_state as string,
+    resolutionSource: row.resolution_source as string,
+    observedAt: row.observed_at as string,
+    raw: parseRawJson(row.raw_json as string | null),
+  }));
+}
+
+/** Read durable organization billing comparators for the requested periods. */
+export function listPersistedOrgBillingSnapshots(
+  enterpriseSlug: string,
+  periods: string[],
+): PersistedLicenseOrgBillingSnapshot[] {
+  const db = getDb();
+  const periodFilter = buildPeriodInClause(periods, "billing_period");
+  const rows = db.prepare(`
+    SELECT billing_period, org_login, plan_type, total_seats,
+           pending_cancellation, observed_at, raw_json
+    FROM license_org_billing_snapshots
+    WHERE enterprise_slug = ?${periodFilter.sql}
+    ORDER BY billing_period ASC, org_login ASC
+  `).all(enterpriseSlug, ...periodFilter.params) as Record<string, unknown>[];
+
+  return rows.map((row) => ({
+    billingPeriod: row.billing_period as string,
+    orgLogin: row.org_login as string,
+    planType: (row.plan_type as string | null) ?? null,
+    totalSeats: row.total_seats as number,
+    pendingCancellation: row.pending_cancellation as number,
+    observedAt: row.observed_at as string,
+    raw: parseRawJson(row.raw_json as string | null),
+  }));
+}
+
+/** Read durable AI-credit source rows for the requested periods. */
+export function listPersistedAicConsumption(
+  enterpriseSlug: string,
+  periods: string[],
+): PersistedLicenseAicConsumption[] {
+  const db = getDb();
+  const periodFilter = buildPeriodInClause(periods, "billing_period");
+  const rows = db.prepare(`
+    SELECT billing_period, org_login, holder_key, username, credits,
+           gross_usd, net_usd, source, observed_at, raw_json
+    FROM license_aic_consumption
+    WHERE enterprise_slug = ?${periodFilter.sql}
+    ORDER BY billing_period ASC, org_login ASC, holder_key ASC, source ASC
+  `).all(enterpriseSlug, ...periodFilter.params) as Record<string, unknown>[];
+
+  return rows.map((row) => ({
+    billingPeriod: row.billing_period as string,
+    orgLogin: row.org_login as string,
+    holderKey: row.holder_key as string,
+    username: (row.username as string | null) ?? null,
+    credits: row.credits as number,
+    grossUsd: row.gross_usd as number,
+    netUsd: (row.net_usd as number | null) ?? null,
+    source: row.source as string,
+    observedAt: row.observed_at as string,
+    raw: parseRawJson(row.raw_json as string | null),
+  }));
+}
+
 /**
  * Replace the materialized `license_period_rows` for a single enterprise/period
  * (delete then insert) so re-materializing a period never leaves stale rows.
@@ -1260,4 +1443,177 @@ export function hasMaterializedRows(query: LicensePeriodFilterQuery = {}): boole
     found: number;
   };
   return row.found === 1;
+}
+
+const MAX_COVERAGE_PERIODS = 120;
+
+/** Return the bounded set of materialized periods present in the requested row scope. */
+export function getMaterializedPeriods(query: LicensePeriodFilterQuery = {}): string[] {
+  const db = getDb();
+  const { where, params } = buildFilterWhere(query);
+  const rows = db
+    .prepare(`
+      SELECT DISTINCT billing_period
+      FROM license_period_rows${where}
+      ORDER BY billing_period ASC
+      LIMIT ?
+    `)
+    .all(...params, MAX_COVERAGE_PERIODS) as { billing_period: string }[];
+  return rows.map((row) => row.billing_period);
+}
+
+export interface MaterializedUtilizationBucket {
+  label: string;
+  min: number;
+  /** `null` represents an open upper bound in the JSON response. */
+  max: number | null;
+  count: number;
+}
+
+/**
+ * Aggregate historical utilization at the same enterprise/user rollup grain
+ * as the historical rollup view, then bucket it entirely in SQL.
+ */
+export function getMaterializedUtilizationBuckets(
+  query: LicensePeriodFilterQuery = {},
+): MaterializedUtilizationBucket[] {
+  const db = getDb();
+  const { where, params } = buildFilterWhere(query);
+  const row = db
+    .prepare(`
+      WITH user_utilization AS (
+        SELECT
+          enterprise_slug,
+          COALESCE(NULLIF(resolved_user_login, ''), holder_key) AS resolved_login,
+          CASE
+            WHEN COALESCE(SUM(${EFFECTIVE_BUDGET_SQL}), 0) > 0
+              THEN COALESCE(SUM(aic_consumed_usd), 0) * 100.0 / SUM(${EFFECTIVE_BUDGET_SQL})
+            ELSE 0
+          END AS utilization_pct
+        FROM license_period_rows${where}
+        GROUP BY enterprise_slug, COALESCE(NULLIF(resolved_user_login, ''), holder_key)
+      )
+      SELECT
+        COALESCE(SUM(CASE WHEN utilization_pct <= 0 THEN 1 ELSE 0 END), 0) AS zero_count,
+        COALESCE(SUM(CASE WHEN utilization_pct > 0 AND utilization_pct <= 25 THEN 1 ELSE 0 END), 0) AS low_count,
+        COALESCE(SUM(CASE WHEN utilization_pct > 25 AND utilization_pct <= 50 THEN 1 ELSE 0 END), 0) AS medium_count,
+        COALESCE(SUM(CASE WHEN utilization_pct > 50 AND utilization_pct <= 75 THEN 1 ELSE 0 END), 0) AS high_count,
+        COALESCE(SUM(CASE WHEN utilization_pct > 75 AND utilization_pct <= 100 THEN 1 ELSE 0 END), 0) AS full_count,
+        COALESCE(SUM(CASE WHEN utilization_pct > 100 THEN 1 ELSE 0 END), 0) AS over_count
+      FROM user_utilization
+    `)
+    .get(...params) as Record<string, number>;
+
+  return [
+    { label: "0%", min: 0, max: 0, count: row.zero_count ?? 0 },
+    { label: "1–25%", min: 0.0001, max: 25, count: row.low_count ?? 0 },
+    { label: "26–50%", min: 25, max: 50, count: row.medium_count ?? 0 },
+    { label: "51–75%", min: 50, max: 75, count: row.high_count ?? 0 },
+    { label: "76–100%", min: 75, max: 100, count: row.full_count ?? 0 },
+    { label: ">100%", min: 100, max: null, count: row.over_count ?? 0 },
+  ];
+}
+
+export interface LicenseQualitySummary {
+  pass: number;
+  warning: number;
+  fail: number;
+}
+
+export interface LicenseQualitySummaryQuery {
+  enterpriseSlug?: string;
+  enterpriseSlugs?: string[];
+  periods?: string[];
+  periodStart?: string;
+  periodEnd?: string;
+  orgLogins?: string[];
+}
+
+/**
+ * Count checks from only the latest completed reconciliation run per
+ * enterprise. The aggregate is a single bounded row and never exposes check
+ * messages, details, identities, or other diagnostic payloads.
+ */
+export function getLatestLicenseQualitySummary(
+  query: LicenseQualitySummaryQuery = {},
+): LicenseQualitySummary {
+  const db = getDb();
+  const runClauses = ["completed_at IS NOT NULL"];
+  const checkClauses: string[] = [];
+  const runParams: unknown[] = [];
+  const checkParams: unknown[] = [];
+  const enterpriseSlugs = query.enterpriseSlugs?.length
+    ? query.enterpriseSlugs
+    : query.enterpriseSlug
+      ? [query.enterpriseSlug]
+      : [];
+
+  if (enterpriseSlugs.length > 0) {
+    runClauses.push(`enterprise_slug IN (${enterpriseSlugs.map(() => "?").join(",")})`);
+    runParams.push(...enterpriseSlugs);
+  }
+  const requestedPeriodClauses: string[] = [];
+  if (query.periods?.length) {
+    requestedPeriodClauses.push(`requested_period.value IN (${query.periods.map(() => "?").join(",")})`);
+    runParams.push(...query.periods);
+    checkClauses.push(`c.billing_period IN (${query.periods.map(() => "?").join(",")})`);
+    checkParams.push(...query.periods);
+  }
+  if (query.periodStart) {
+    requestedPeriodClauses.push("requested_period.value >= ?");
+    runParams.push(query.periodStart);
+    checkClauses.push("c.billing_period >= ?");
+    checkParams.push(query.periodStart);
+  }
+  if (query.periodEnd) {
+    requestedPeriodClauses.push("requested_period.value <= ?");
+    runParams.push(query.periodEnd);
+    checkClauses.push("c.billing_period <= ?");
+    checkParams.push(query.periodEnd);
+  }
+  if (requestedPeriodClauses.length > 0) {
+    runClauses.push(`
+      EXISTS (
+        SELECT 1
+        FROM json_each(COALESCE(requested_periods, '[]')) AS requested_period
+        WHERE ${requestedPeriodClauses.join(" AND ")}
+      )
+    `);
+  }
+  if (query.orgLogins?.length) {
+    checkClauses.push(`c.org_login IN (${query.orgLogins.map(() => "?").join(",")})`);
+    checkParams.push(...query.orgLogins);
+  }
+
+  const checksWhere = checkClauses.length > 0 ? `WHERE ${checkClauses.join(" AND ")}` : "";
+  const row = db
+    .prepare(`
+      WITH ranked_runs AS (
+        SELECT
+          id,
+          ROW_NUMBER() OVER (
+            PARTITION BY enterprise_slug
+            ORDER BY completed_at DESC, id DESC
+          ) AS run_rank
+        FROM license_reconciliation_runs
+        WHERE ${runClauses.join(" AND ")}
+      ),
+      latest_runs AS (
+        SELECT id FROM ranked_runs WHERE run_rank = 1
+      )
+      SELECT
+        COALESCE(SUM(CASE WHEN c.status = 'pass' THEN 1 ELSE 0 END), 0) AS pass_count,
+        COALESCE(SUM(CASE WHEN c.status = 'warning' THEN 1 ELSE 0 END), 0) AS warning_count,
+        COALESCE(SUM(CASE WHEN c.status = 'fail' THEN 1 ELSE 0 END), 0) AS fail_count
+      FROM latest_runs lr
+      JOIN license_reconciliation_checks c ON c.run_id = lr.id
+      ${checksWhere}
+    `)
+    .get(...runParams, ...checkParams) as Record<string, number>;
+
+  return {
+    pass: row.pass_count ?? 0,
+    warning: row.warning_count ?? 0,
+    fail: row.fail_count ?? 0,
+  };
 }

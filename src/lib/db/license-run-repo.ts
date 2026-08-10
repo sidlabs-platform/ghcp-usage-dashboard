@@ -17,6 +17,35 @@ import type {
   SourceStateSummary,
 } from "../licensing/reconciliation-checks";
 
+const MAX_PERSISTED_RUN_WARNINGS = 200;
+const MAX_PERSISTED_UNRESOLVED_IDENTITIES = 500;
+const MAX_COMPLETED_RUNS_PER_ENTERPRISE = 100;
+
+function boundRunWarnings(warnings: string[]): string[] {
+  if (warnings.length <= MAX_PERSISTED_RUN_WARNINGS) {
+    return warnings;
+  }
+  const retainedCount = MAX_PERSISTED_RUN_WARNINGS - 1;
+  return [
+    ...warnings.slice(0, retainedCount),
+    `${warnings.length - retainedCount} additional warnings omitted`,
+  ];
+}
+
+function boundUnresolvedIdentities(identities: unknown[]): unknown[] {
+  if (identities.length <= MAX_PERSISTED_UNRESOLVED_IDENTITIES) {
+    return identities;
+  }
+  const retainedCount = MAX_PERSISTED_UNRESOLVED_IDENTITIES - 1;
+  return [
+    ...identities.slice(0, retainedCount),
+    {
+      holderKey: "[omitted]",
+      reason: `${identities.length - retainedCount} additional unresolved identities omitted`,
+    },
+  ];
+}
+
 // ── Types ─────────────────────────────────────────────────────────────
 
 export type LicenseRunStatus = "running" | "success" | "warning" | "failed";
@@ -174,22 +203,44 @@ export function startLicenseRun(input: StartLicenseRunInput): string {
 export function finishLicenseRun(id: string, result: FinishLicenseRunInput): void {
   const db = getDb();
   const completedAt = result.completedAt ?? new Date().toISOString();
-  const info = db.prepare(`
+  const selectRunStmt = db.prepare(`SELECT enterprise_slug FROM license_reconciliation_runs WHERE id = ?`);
+  const finishStmt = db.prepare(`
     UPDATE license_reconciliation_runs
     SET status = ?, completed_at = ?, source_stats = ?, unresolved_identities = ?, warnings = ?, error_message = ?
     WHERE id = ?
-  `).run(
-    result.status,
-    completedAt,
-    stableStringify(result.sourceStats ?? {}),
-    stableStringify(result.unresolvedIdentities ?? []),
-    stableStringify(result.warnings ?? []),
-    result.errorMessage ?? null,
-    id
-  );
-  if (info.changes === 0) {
-    throw new Error(`finishLicenseRun: no license_reconciliation_runs row found for id "${id}"`);
-  }
+  `);
+  const pruneRunsStmt = db.prepare(`
+    DELETE FROM license_reconciliation_runs
+    WHERE enterprise_slug = ?
+      AND status <> 'running'
+      AND id NOT IN (
+        SELECT id
+        FROM license_reconciliation_runs
+        WHERE enterprise_slug = ? AND status <> 'running'
+        ORDER BY started_at DESC, id DESC
+        LIMIT ?
+      )
+  `);
+  const tx = db.transaction(() => {
+    const existing = selectRunStmt.get(id) as { enterprise_slug?: string } | undefined;
+    if (!existing?.enterprise_slug) {
+      throw new Error(`finishLicenseRun: no license_reconciliation_runs row found for id "${id}"`);
+    }
+    const info = finishStmt.run(
+      result.status,
+      completedAt,
+      stableStringify(result.sourceStats ?? {}),
+      stableStringify(boundUnresolvedIdentities(result.unresolvedIdentities ?? [])),
+      stableStringify(boundRunWarnings(result.warnings ?? [])),
+      result.errorMessage ?? null,
+      id
+    );
+    if (info.changes === 0) {
+      throw new Error(`finishLicenseRun: no license_reconciliation_runs row found for id "${id}"`);
+    }
+    pruneRunsStmt.run(existing.enterprise_slug, existing.enterprise_slug, MAX_COMPLETED_RUNS_PER_ENTERPRISE);
+  });
+  tx();
 }
 
 /** Fetch a single run by id, or null when it does not exist. */
@@ -387,6 +438,7 @@ export function recordLicenseRunDiagnostics(input: LicenseRunDiagnosticsInput): 
     SET status = ?, completed_at = ?, source_stats = ?, unresolved_identities = ?, warnings = ?, error_message = ?
     WHERE id = ?
   `);
+  const selectRunStmt = db.prepare(`SELECT enterprise_slug FROM license_reconciliation_runs WHERE id = ?`);
   const deleteChecksStmt = db.prepare(`DELETE FROM license_reconciliation_checks WHERE run_id = ?`);
   const insertCheckStmt = db.prepare(`
     INSERT INTO license_reconciliation_checks (
@@ -401,15 +453,31 @@ export function recordLicenseRunDiagnostics(input: LicenseRunDiagnosticsInput): 
       enterprise_slug, source, billing_period, last_synced_at, status, coverage_start, coverage_end, error_message
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
   `);
+  const pruneRunsStmt = db.prepare(`
+    DELETE FROM license_reconciliation_runs
+    WHERE enterprise_slug = ?
+      AND status <> 'running'
+      AND id NOT IN (
+        SELECT id
+        FROM license_reconciliation_runs
+        WHERE enterprise_slug = ? AND status <> 'running'
+        ORDER BY started_at DESC, id DESC
+        LIMIT ?
+      )
+  `);
 
   const tx = db.transaction((diagnostics: LicenseRunDiagnosticsInput) => {
     const completedAt = diagnostics.finish.completedAt ?? new Date().toISOString();
+    const existingRun = selectRunStmt.get(diagnostics.runId) as { enterprise_slug?: string } | undefined;
+    if (!existingRun?.enterprise_slug) {
+      throw new Error(`recordLicenseRunDiagnostics: no license_reconciliation_runs row found for id "${diagnostics.runId}"`);
+    }
     const info = finishStmt.run(
       diagnostics.finish.status,
       completedAt,
       stableStringify(diagnostics.finish.sourceStats ?? {}),
-      stableStringify(diagnostics.finish.unresolvedIdentities ?? []),
-      stableStringify(diagnostics.finish.warnings ?? []),
+      stableStringify(boundUnresolvedIdentities(diagnostics.finish.unresolvedIdentities ?? [])),
+      stableStringify(boundRunWarnings(diagnostics.finish.warnings ?? [])),
       diagnostics.finish.errorMessage ?? null,
       diagnostics.runId
     );
@@ -481,6 +549,12 @@ export function recordLicenseRunDiagnostics(input: LicenseRunDiagnosticsInput): 
         nextErrorMessage
       );
     }
+
+    pruneRunsStmt.run(
+      existingRun.enterprise_slug,
+      existingRun.enterprise_slug,
+      MAX_COMPLETED_RUNS_PER_ENTERPRISE
+    );
   });
 
   tx(input);

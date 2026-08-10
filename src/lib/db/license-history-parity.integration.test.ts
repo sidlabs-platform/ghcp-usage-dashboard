@@ -104,6 +104,11 @@ import {
   upsertIdentityRecords,
   upsertOrgBillingSnapshots,
   upsertAicConsumption,
+  listPersistedAuditEvents,
+  listPersistedSeatSnapshots,
+  listPersistedIdentityRecords,
+  listPersistedOrgBillingSnapshots,
+  listPersistedAicConsumption,
   replaceMaterializedPeriod,
   queryLicensePeriodRows,
   queryLicensePeriodExport,
@@ -241,6 +246,11 @@ function buildDeps(): LicenseHistorySyncDeps {
     upsertIdentityRecords,
     upsertOrgBillingSnapshots,
     upsertAicConsumption,
+    listPersistedAuditEvents,
+    listPersistedSeatSnapshots,
+    listPersistedIdentityRecords,
+    listPersistedOrgBillingSnapshots,
+    listPersistedAicConsumption,
     replaceMaterializedPeriod,
     queryLicensePeriodRows: (query): { rows: LicensePeriodRowLike[] } => queryLicensePeriodRows({ ...query, view: "detail" }),
     hasMaterializedRows,
@@ -281,6 +291,19 @@ beforeAll(async () => {
     ) VALUES ('ent-alpha', '2026-03-10', 'copilot', 'sku1', 50, 'requests', 0.02, 1, 0, 1, 'legacyuser', 'alpha-eng', 'gpt-4', 'FALSE', 500, 'user')
   `).run();
   execSchema(db, "licensing-schema.sql");
+  for (const period of ["2026-01", "2026-02"]) {
+    replacePeriodSnapshots(ALPHA, period, [
+      {
+        orgLogin: FIXTURE_ORGS.ALPHA_ENG,
+        holderKey: "login:alice",
+        observedLogin: "alice",
+        planType: "business",
+        assignedVia: "direct",
+        snapshotAt: `${period}-28T23:59:59.000Z`,
+        source: "authoritative_fixture",
+      },
+    ]);
+  }
 
   const deps = buildDeps();
   syncResult = await syncLicenseHistory([ALPHA, BETA], deps);
@@ -351,7 +374,7 @@ describe("historical license reconciliation — two-enterprise, three-month pari
       orgLogin: FIXTURE_ORGS.ALPHA_ENG,
       resolvedUserLogin: "alice",
       seatStatus: "active",
-      historyConfidence: "exact_snapshot",
+      historyConfidence: "audit_reconstructed",
     });
   });
 
@@ -397,12 +420,14 @@ describe("historical license reconciliation — two-enterprise, three-month pari
     expect(persisted?.resolved_login).toBeNull();
   });
 
-  it("records erin (suspended) and frank (deprovisioned) with an active seat, and persists their SCIM account state for diagnostics even though it does not (yet) enrich this run's materialized accountState", () => {
+  it("records erin and frank with active seats while preserving their SCIM account states in materialized rows and diagnostics", () => {
     const marchRows = queryLicensePeriodRows({ enterpriseSlug: ALPHA, periods: ["2026-03"], view: "detail", page: 1, pageSize: 100 });
     const erin = marchRows.rows.find((r) => r.resolvedUserLogin === "erin");
     const frank = marchRows.rows.find((r) => r.resolvedUserLogin === "frank");
     expect(erin?.seatStatus).toBe("active");
     expect(frank?.seatStatus).toBe("active");
+    expect(erin?.accountState).toBe("suspended");
+    expect(frank?.accountState).toBe("deprovisioned");
 
     const erinScim = db
       .prepare("SELECT account_state FROM license_identity_records WHERE enterprise_slug = ? AND identity_key = ?")
@@ -501,7 +526,13 @@ describe("historical license reconciliation — two-enterprise, three-month pari
     // pass/fail, regardless of the netUsd figures fixtures provide.
     const grossVsNet = checks.filter((c) => c.checkName === "aic_gross_vs_net");
     expect(grossVsNet.length).toBeGreaterThan(0);
-    expect(grossVsNet.every((c) => c.status === "warning")).toBe(true);
+    expect(grossVsNet.some((c) => c.status === "pass")).toBe(true);
+    expect(grossVsNet.some((c) => c.status === "fail")).toBe(true);
+    expect(
+      grossVsNet
+        .filter((c) => c.status !== "warning")
+        .every((c) => typeof c.details.grossUsd === "number" && typeof c.details.netUsd === "number"),
+    ).toBe(true);
 
     const betaChecks = listLicenseChecks(listLicenseRuns(BETA, 5)[0].id);
     const historyCoverageFail = betaChecks.find((c) => c.checkName === "history_coverage" && c.status === "fail");
@@ -585,7 +616,9 @@ describe("historical license reconciliation — two-enterprise, three-month pari
       expect(response.status).toBe(200);
       expect(response.headers.get("Content-Type")).toContain("text/csv");
       const csv = await response.text();
-      expect(csv).toContain("Enterprise,Period,Org,Login,Holder Key,Plan Type");
+      expect(csv).toContain(
+        "user_login,license_assigned_date,gh_copilot_license_cost,default_aic_user_level,aic_billing_dollar_assigned,aic_consumed",
+      );
       expect(csv).toContain(ALPHA);
     });
 

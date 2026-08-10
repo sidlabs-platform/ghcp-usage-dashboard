@@ -459,6 +459,7 @@ describe("additional API route coverage", { timeout: 15000 }, () => {
         getMaterializedPeriodKPIs: vi.fn(),
         getMaterializedPlanBreakdown: vi.fn(),
         getMaterializedOrgBreakdown: vi.fn(),
+        getLatestLicenseQualitySummary: vi.fn(() => ({ pass: 0, warning: 0, fail: 0 })),
         hasMaterializedRows: vi.fn(() => false),
       };
     });
@@ -610,6 +611,8 @@ describe("additional API route coverage", { timeout: 15000 }, () => {
     expect(response.headers.get("Content-Type")).toContain("text/csv");
     expect(response.headers.get("Content-Disposition")).toContain("attachment");
     const csv = await response.text();
-    expect(csv).toContain("Enterprise,Period,Org,Login,Holder Key,Plan Type");
+    expect(csv).toContain(
+      "user_login,license_assigned_date,gh_copilot_license_cost,default_aic_user_level,aic_billing_dollar_assigned,aic_consumed",
+    );
   });
 });

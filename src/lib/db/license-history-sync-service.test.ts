@@ -23,7 +23,14 @@ import type { NormalizedAuditEvent } from "@/lib/licensing/audit-archive-import"
 import type { AicCsvConsumptionRecord } from "@/lib/licensing/aic-csv-import";
 import type { NormalizedIdentityRecord as ImportedIdentityMapRecord } from "@/lib/licensing/identity-map-import";
 import type { LicenseRunDiagnosticsInput, StartLicenseRunInput } from "./license-run-repo";
-import type { LicenseAicConsumptionInput } from "./license-history-repo";
+import type {
+  LicenseAicConsumptionInput,
+  PersistedLicenseAuditEvent,
+  PersistedLicenseSeatSnapshot,
+  PersistedLicenseIdentityRecord,
+  PersistedLicenseOrgBillingSnapshot,
+  PersistedLicenseAicConsumption,
+} from "./license-history-repo";
 import type {
   LicenseHistorySyncDeps,
   LicenseHistorySyncProgress,
@@ -231,6 +238,11 @@ function makeDeps(overrides: Partial<LicenseHistorySyncDeps> = {}): LicenseHisto
     upsertIdentityRecords: vi.fn(() => 0),
     upsertOrgBillingSnapshots: vi.fn(() => 0),
     upsertAicConsumption: vi.fn(() => 0),
+    listPersistedAuditEvents: vi.fn((): PersistedLicenseAuditEvent[] => []),
+    listPersistedSeatSnapshots: vi.fn((): PersistedLicenseSeatSnapshot[] => []),
+    listPersistedIdentityRecords: vi.fn((): PersistedLicenseIdentityRecord[] => []),
+    listPersistedOrgBillingSnapshots: vi.fn((): PersistedLicenseOrgBillingSnapshot[] => []),
+    listPersistedAicConsumption: vi.fn((): PersistedLicenseAicConsumption[] => []),
     replaceMaterializedPeriod: vi.fn(() => 1),
     queryLicensePeriodRows: vi.fn(() => ({ rows: [] })),
     hasMaterializedRows: vi.fn(() => false),
@@ -1480,6 +1492,220 @@ describe("license-history-sync-service", () => {
       const forwardFp = (diagnosticsForward[0]!.finish.sourceStats!.periodFingerprints as Record<string, string>)["2025-01"];
       const reversedFp = (diagnosticsReversed[0]!.finish.sourceStats!.periodFingerprints as Record<string, string>)["2025-01"];
       expect(forwardFp).toBe(reversedFp);
+    });
+  });
+
+  describe("durable source continuity", () => {
+    it("reuses persisted historical sources for ledger, pricing, identity state, and gross-vs-net checks", async () => {
+      const buildSeatLedger = vi.fn((options: BuildSeatLedgerOptions): SeatLedgerResult => ({
+        rows: options.periods.map((period) => makeLedgerRow(period, {
+          enterpriseSlug: options.enterpriseSlug,
+          orgLogin: "acme-org",
+          holderKey: "id:7",
+          githubUserId: 7,
+          observedLogin: "churned-user",
+          confidence: period === "2025-01" ? "exact_snapshot" : "live_snapshot_only",
+          source: period === "2025-01" ? "exact_snapshot" : "live_snapshot_only",
+        })),
+        coverage: [],
+        warnings: [],
+      }));
+      const resolveIdentity = vi.fn((input) => makeIdentity({
+        holderKey: input.holderKey,
+        githubUserId: input.githubUserId ?? null,
+        userLogin: input.seatLogin ?? null,
+        resolvedUserLogin: input.seatLogin ?? input.enterpriseIdentity?.resolvedLogin ?? null,
+        accountState: input.enterpriseIdentity?.accountState === "deprovisioned" ? "deprovisioned" : "unknown",
+      }));
+      const diagnostics: LicenseRunDiagnosticsInput[] = [];
+      const deps = makeDeps({
+        getConfig: vi.fn(() => makeConfig({
+          history: { ...makeConfig().history, reportMonths: ["2025-01"] },
+          identity: { fetchMembership: true, fetchEnterpriseIdentities: false, fetchOrgIdentities: false },
+        })),
+        getEnterpriseAuditEvents: vi.fn(async (): Promise<AuditFetchResult> => ({
+          status: "unavailable",
+          reason: "forbidden",
+          target: "acme",
+        })),
+        getEnterpriseScimUsers: vi.fn(async (): Promise<ScimFetchResult> => ({
+          status: "unavailable",
+          reason: "forbidden",
+          enterprise: "acme",
+        })),
+        getOrgBilling: vi.fn(async (): Promise<OrgBillingResult> => ({
+          status: "unavailable",
+          reason: "forbidden",
+          orgLogin: "acme-org",
+        })),
+        listPersistedAuditEvents: vi.fn(() => [{
+          eventId: "persisted-assign",
+          orgLogin: "acme-org",
+          holderKey: "id:7",
+          action: "copilot.assigned",
+          occurredAt: "2024-12-15T00:00:00Z",
+          githubUserId: 7,
+          observedLogin: "churned-user",
+          externalIdentity: "opaque-id",
+          assignedVia: "team",
+          source: "audit_log",
+        }]),
+        listPersistedSeatSnapshots: vi.fn(() => [{
+          billingPeriod: "2025-01",
+          orgLogin: "acme-org",
+          holderKey: "id:7",
+          githubUserId: 7,
+          observedLogin: "churned-user",
+          planType: "enterprise",
+          assignedVia: "team",
+          lastActivityAt: "2025-01-10T00:00:00Z",
+          pendingCancellationDate: null,
+          snapshotAt: "2025-01-31T00:00:00Z",
+          source: "authoritative_import",
+        }]),
+        listPersistedIdentityRecords: vi.fn(() => [{
+          identityKey: "id:7",
+          githubUserId: 7,
+          resolvedLogin: "churned-user",
+          externalIdentity: "opaque-id",
+          accountState: "deprovisioned",
+          resolutionSource: "scim_enterprise",
+          observedAt: "2025-02-01T00:00:00Z",
+        }]),
+        listPersistedOrgBillingSnapshots: vi.fn(() => [{
+          billingPeriod: "2025-01",
+          orgLogin: "acme-org",
+          planType: "enterprise",
+          totalSeats: 1,
+          pendingCancellation: 0,
+          observedAt: "2025-01-31T00:00:00Z",
+        }]),
+        listPersistedAicConsumption: vi.fn(() => [
+          {
+            billingPeriod: "2025-01",
+            orgLogin: "acme-org",
+            holderKey: "id:7",
+            username: "churned-user",
+            credits: 40,
+            grossUsd: 4,
+            netUsd: null,
+            source: "enterprise_api",
+            observedAt: "2025-01-31T00:00:00Z",
+          },
+          {
+            billingPeriod: "2025-01",
+            orgLogin: "acme-org",
+            holderKey: "id:7",
+            username: "churned-user",
+            credits: 38,
+            grossUsd: 3.8,
+            netUsd: 3.8,
+            source: "billing_report",
+            observedAt: "2025-01-31T00:00:00Z",
+          },
+        ]),
+        buildSeatLedger,
+        resolveIdentity,
+        recordLicenseRunDiagnostics: vi.fn((input: LicenseRunDiagnosticsInput) => diagnostics.push(input)),
+      });
+
+      await syncLicenseHistoryForEnterprise("acme", deps);
+
+      expect(buildSeatLedger).toHaveBeenCalledWith(expect.objectContaining({
+        auditEvents: [expect.objectContaining({
+          eventId: "persisted-assign",
+          observedLogin: "churned-user",
+        })],
+        snapshots: [expect.objectContaining({
+          billingPeriod: "2025-01",
+          holderKey: "id:7",
+        })],
+        liveSeats: [expect.objectContaining({ holderKey: "login:alice" })],
+      }));
+      expect(resolveIdentity).toHaveBeenCalledWith(expect.objectContaining({
+        holderKey: "id:7",
+        enterpriseIdentity: expect.objectContaining({
+          resolvedLogin: "churned-user",
+          accountState: "deprovisioned",
+        }),
+      }));
+      expect(deps.materializeLicensePeriodRows).toHaveBeenCalledWith(expect.objectContaining({
+        billingPeriod: "2025-01",
+        seatMetadata: {
+          "acme-org\u0000id:7": {
+            planType: "enterprise",
+            assignedVia: "team",
+            lastActivityAt: "2025-01-10T00:00:00Z",
+          },
+        },
+        consumption: expect.arrayContaining([expect.objectContaining({
+          holderKey: "id:7",
+          grossUsd: 4,
+        })]),
+      }));
+      const aicCheck = diagnostics[0]!.checks.find((check) => check.checkName === "aic_gross_vs_net");
+      expect(aicCheck).toEqual(expect.objectContaining({
+        billingPeriod: "2025-01",
+        orgLogin: "acme-org",
+        details: expect.objectContaining({ grossUsd: 4, netUsd: 3.8 }),
+      }));
+    });
+
+    it("keeps an existing period when a degraded run would replace it with zero rows", async () => {
+      const existing = makeMaterializedRow("2025-01", {
+        holderKey: "id:7",
+        resolvedUserLogin: "churned-user",
+      });
+      const deps = makeDeps({
+        getConfig: vi.fn(() => makeConfig({
+          history: { ...makeConfig().history, reportMonths: ["2025-01"] },
+        })),
+        buildSeatLedger: vi.fn(() => ({ rows: [], coverage: [], warnings: [] })),
+        materializeLicensePeriodRows: vi.fn(() => ({ rows: [], warnings: ["optional source unavailable"] })),
+        hasMaterializedRows: vi.fn(() => true),
+        queryLicensePeriodRows: vi.fn(({ periods }) => ({
+          rows: periods?.includes("2025-01") ? [existing] : [],
+        })),
+      });
+
+      const result = await syncLicenseHistoryForEnterprise("acme", deps);
+
+      expect(deps.replaceMaterializedPeriod).not.toHaveBeenCalledWith("acme", "2025-01", []);
+      expect(result.skippedPeriods).toContain("2025-01");
+      expect(result.warnings).toContain(
+        "Retained the existing 2025-01 materialization because the current run produced no replacement rows.",
+      );
+    });
+
+    it("does not classify the stored current live capture as an exact historical snapshot", async () => {
+      const buildSeatLedger = vi.fn((): SeatLedgerResult => ({
+        rows: [],
+        coverage: [],
+        warnings: [],
+      }));
+      const deps = makeDeps({
+        listPersistedSeatSnapshots: vi.fn(() => [{
+          billingPeriod: "2025-03",
+          orgLogin: "acme-org",
+          holderKey: "login:alice",
+          githubUserId: 1,
+          observedLogin: "alice",
+          planType: "business",
+          assignedVia: "direct",
+          lastActivityAt: null,
+          pendingCancellationDate: null,
+          snapshotAt: "2025-03-15T00:00:00Z",
+          source: "live_seats",
+        }]),
+        buildSeatLedger,
+      });
+
+      await syncLicenseHistoryForEnterprise("acme", deps);
+
+      expect(buildSeatLedger).toHaveBeenCalledWith(expect.objectContaining({
+        snapshots: [],
+        liveSeats: [expect.objectContaining({ holderKey: "login:alice" })],
+      }));
     });
   });
 

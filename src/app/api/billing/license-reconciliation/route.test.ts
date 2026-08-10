@@ -15,6 +15,9 @@ const historyRepoState = vi.hoisted(() => ({
   getMaterializedPeriodKPIs: vi.fn(),
   getMaterializedPlanBreakdown: vi.fn(),
   getMaterializedOrgBreakdown: vi.fn(),
+  getMaterializedPeriods: vi.fn(),
+  getMaterializedUtilizationBuckets: vi.fn(),
+  getLatestLicenseQualitySummary: vi.fn(),
   hasMaterializedRows: vi.fn(),
 }));
 
@@ -107,6 +110,11 @@ vi.mock("@/lib/db/license-history-repo", () => ({
   getMaterializedPeriodKPIs: (...a: unknown[]) => historyRepoState.getMaterializedPeriodKPIs(...a),
   getMaterializedPlanBreakdown: (...a: unknown[]) => historyRepoState.getMaterializedPlanBreakdown(...a),
   getMaterializedOrgBreakdown: (...a: unknown[]) => historyRepoState.getMaterializedOrgBreakdown(...a),
+  getMaterializedPeriods: (...a: unknown[]) => historyRepoState.getMaterializedPeriods(...a),
+  getMaterializedUtilizationBuckets: (...a: unknown[]) =>
+    historyRepoState.getMaterializedUtilizationBuckets(...a),
+  getLatestLicenseQualitySummary: (...a: unknown[]) =>
+    historyRepoState.getLatestLicenseQualitySummary(...a),
   hasMaterializedRows: (...a: unknown[]) => historyRepoState.hasMaterializedRows(...a),
 }));
 
@@ -143,7 +151,14 @@ beforeEach(() => {
   historyRepoState.getMaterializedPeriodKPIs.mockReturnValue({});
   historyRepoState.getMaterializedPlanBreakdown.mockReturnValue([]);
   historyRepoState.getMaterializedOrgBreakdown.mockReturnValue([]);
-  configState.getLicensingConfig.mockReturnValue({ currency: "USD", creditToUsd: 0.01 });
+  historyRepoState.getMaterializedPeriods.mockReturnValue([]);
+  historyRepoState.getMaterializedUtilizationBuckets.mockReturnValue([]);
+  historyRepoState.getLatestLicenseQualitySummary.mockReturnValue({ pass: 0, warning: 0, fail: 0 });
+  configState.getLicensingConfig.mockReturnValue({
+    currency: "USD",
+    creditToUsd: 0.01,
+    history: { auditRetentionDays: 400 },
+  });
 });
 
 afterEach(() => {
@@ -218,6 +233,67 @@ describe("license reconciliation route", () => {
     it("never returns a 500 or triggers a resync when falling back", async () => {
       const res = await GET(req());
       expect(res.status).not.toBe(500);
+    });
+
+    it("reports missing historical coverage without replacing it with successful zeroes", async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-08-10T00:00:00Z"));
+      repoState.computeUtilizationBuckets.mockReturnValue([
+        { label: "0%", min: 0, max: 0, count: 2 },
+      ]);
+
+      try {
+        const res = await GET(
+          req("http://localhost/api/billing/license-reconciliation?periods=2026-01,2026-02"),
+        );
+        const body = await res.json();
+
+        expect(body.coverage).toEqual({
+          mode: "live_snapshot_only",
+          periods: ["2026-01", "2026-02"],
+          view: "detail",
+          requestedPeriods: ["2026-01", "2026-02"],
+          materializedPeriods: [],
+          missingPeriods: ["2026-01", "2026-02"],
+          earliestRecoverablePeriod: "2025-07",
+          warnings: [
+            "No materialized historical data is available for the requested periods; showing the live snapshot instead.",
+          ],
+        });
+        expect(body.qualitySummary).toEqual({ pass: 0, warning: 0, fail: 0 });
+        expect(body.utilizationBuckets).toEqual([{ label: "0%", min: 0, max: 0, count: 2 }]);
+        expect(body.warnings).toContain(
+          "No materialized historical data is available for the requested periods; showing the live snapshot instead.",
+        );
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("retains latest durable quality failures when materialized rows are unavailable", async () => {
+      historyRepoState.getLatestLicenseQualitySummary.mockReturnValue({
+        pass: 3,
+        warning: 1,
+        fail: 2,
+      });
+
+      const res = await GET(
+        req("http://localhost/api/billing/license-reconciliation?periods=2026-01"),
+      );
+      const body = await res.json();
+
+      expect(body.qualitySummary).toEqual({ pass: 3, warning: 1, fail: 2 });
+      expect(body.warnings).toContain(
+        "Latest reconciliation diagnostics include 1 warning check.",
+      );
+      expect(body.warnings).toContain(
+        "Latest reconciliation diagnostics include 2 failed checks.",
+      );
+      expect(historyRepoState.getLatestLicenseQualitySummary).toHaveBeenCalledWith({
+        enterpriseSlugs: ["acme", "other-ent"],
+        periods: ["2026-01"],
+        orgLogins: undefined,
+      });
     });
   });
 
@@ -298,6 +374,96 @@ describe("license reconciliation route", () => {
       expect(historyRepoState.getMaterializedPeriodKPIs).toHaveBeenCalledWith(
         expect.objectContaining({ periods: ["2026-01", "2026-02"] }),
       );
+    });
+
+    it("returns truthful partial coverage, SQL-backed utilization, and bounded latest-run quality diagnostics", async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-08-10T00:00:00Z"));
+      historyRepoState.getMaterializedPeriods.mockReturnValue(["2026-01"]);
+      historyRepoState.getMaterializedUtilizationBuckets.mockReturnValue([
+        { label: "0%", min: 0, max: 0, count: 1 },
+        { label: ">100%", min: 100, max: null, count: 2 },
+      ]);
+      historyRepoState.getLatestLicenseQualitySummary.mockReturnValue({
+        pass: 7,
+        warning: 2,
+        fail: 1,
+      });
+
+      try {
+        const res = await GET(
+          req("http://localhost/api/billing/license-reconciliation?periods=2026-01,2026-02"),
+        );
+        const body = await res.json();
+
+        expect(body.coverage).toEqual({
+          mode: "historical",
+          periods: ["2026-01", "2026-02"],
+          view: "detail",
+          requestedPeriods: ["2026-01", "2026-02"],
+          materializedPeriods: ["2026-01"],
+          missingPeriods: ["2026-02"],
+          earliestRecoverablePeriod: "2025-07",
+          warnings: ["Historical data is unavailable for requested period: 2026-02."],
+        });
+        expect(body.qualitySummary).toEqual({ pass: 7, warning: 2, fail: 1 });
+        expect(body.utilizationBuckets).toEqual([
+          { label: "0%", min: 0, max: 0, count: 1 },
+          { label: ">100%", min: 100, max: null, count: 2 },
+        ]);
+        expect(body.warnings).toEqual([
+          "Historical data is unavailable for requested period: 2026-02.",
+          "Latest reconciliation diagnostics include 2 warning checks.",
+          "Latest reconciliation diagnostics include 1 failed check.",
+        ]);
+        expect(historyRepoState.getMaterializedPeriods).toHaveBeenCalledWith(
+          expect.objectContaining({ periods: ["2026-01", "2026-02"] }),
+        );
+        expect(historyRepoState.getMaterializedUtilizationBuckets).toHaveBeenCalledWith(
+          expect.objectContaining({ periods: ["2026-01", "2026-02"] }),
+        );
+        expect(historyRepoState.getLatestLicenseQualitySummary).toHaveBeenCalledWith(
+          expect.objectContaining({ periods: ["2026-01", "2026-02"] }),
+        );
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("applies enterprise and org scope to coverage, utilization, and quality helpers", async () => {
+      scopeState.parseScopeFilter.mockReturnValue({
+        selectedTeams: [],
+        selectedOrgs: ["octo-org"],
+        selectedEnterprises: ["acme"],
+        hasFilter: true,
+        allowedLogins: new Set(["alice"]),
+        enterpriseSlugs: ["acme"],
+      });
+
+      await GET(
+        req(
+          "http://localhost/api/billing/license-reconciliation?periods=2026-01&enterprises=acme&orgs=octo-org&plan=enterprise",
+        ),
+      );
+
+      expect(historyRepoState.getMaterializedPeriods).toHaveBeenCalledWith({
+        enterpriseSlugs: ["acme"],
+        periods: ["2026-01"],
+        allowedLogins: ["alice"],
+      });
+      expect(historyRepoState.getMaterializedUtilizationBuckets).toHaveBeenCalledWith(
+        expect.objectContaining({
+          enterpriseSlugs: ["acme"],
+          periods: ["2026-01"],
+          allowedLogins: ["alice"],
+          planTypes: ["enterprise"],
+        }),
+      );
+      expect(historyRepoState.getLatestLicenseQualitySummary).toHaveBeenCalledWith({
+        enterpriseSlugs: ["acme"],
+        periods: ["2026-01"],
+        orgLogins: ["octo-org"],
+      });
     });
   });
 

@@ -38,36 +38,60 @@ interface CsvColumnDef<T> {
   value: (row: T) => unknown;
 }
 
+interface DetailCsvRecord extends LicensePeriodRowRecord {
+  userStatus: string;
+  loginRecoverySource: string;
+}
+
+function mapHistoricalRowToDetailRecord(row: LicensePeriodRowRecord): DetailCsvRecord {
+  return {
+    ...row,
+    userStatus: row.seatStatus === "active" ? "active" : "inactive",
+    loginRecoverySource: row.identityResolutionSource,
+  };
+}
+
 /**
  * Exact, deterministic detail-view column order (also reused for the legacy
  * live-snapshot fallback — see {@link mapLegacyRowToDetailRecord}).
- * `externalIdentity` and `dataQualityNotes` (free-form, not guaranteed safe)
- * are deliberately never included.
+ * The approved contract columns must remain first; dashboard-only enrichment
+ * follows them.
  */
-const DETAIL_COLUMNS: CsvColumnDef<LicensePeriodRowRecord>[] = [
-  { label: "Enterprise", value: (r) => r.enterpriseSlug },
-  { label: "Period", value: (r) => r.billingPeriod },
-  { label: "Org", value: (r) => r.orgLogin },
-  { label: "Login", value: (r) => r.resolvedUserLogin ?? r.userLogin ?? "" },
-  { label: "Holder Key", value: (r) => r.holderKey },
-  { label: "Plan Type", value: (r) => r.planType },
-  { label: "Account State", value: (r) => r.accountState },
-  { label: "Seat Status", value: (r) => r.seatStatus },
-  { label: "Assigned Via", value: (r) => r.assignedVia },
-  { label: "License Assigned Date", value: (r) => r.licenseAssignedDate },
-  { label: "User Revoked Date", value: (r) => r.userRevokedDate },
-  { label: "Row Source", value: (r) => r.rowSource },
-  { label: "Consumption Source", value: (r) => r.consumptionSource },
-  { label: "History Confidence", value: (r) => r.historyConfidence },
-  { label: "Default AIC Credits", value: (r) => r.defaultAicCredits },
-  { label: "AIC Assigned USD", value: (r) => r.aicAssignedUsd },
-  { label: "AIC Consumed Credits", value: (r) => r.aicConsumedCredits },
-  { label: "AIC Consumed USD", value: (r) => r.aicConsumedUsd },
-  { label: "Over Budget", value: (r) => computeOverBudget(r.aicConsumedUsd, r.aicAssignedUsd) },
-  { label: "License Cost", value: (r) => r.licenseCost },
-  { label: "Currency", value: (r) => r.currency },
-  { label: "As Of (UTC)", value: (r) => r.asOfUtc },
-  { label: "Generated At (UTC)", value: (r) => r.generatedAtUtc },
+const DETAIL_COLUMNS: CsvColumnDef<DetailCsvRecord>[] = [
+  { label: "user_login", value: (r) => r.userLogin },
+  { label: "license_assigned_date", value: (r) => r.licenseAssignedDate },
+  { label: "gh_copilot_license_cost", value: (r) => r.licenseCost },
+  { label: "default_aic_user_level", value: (r) => r.defaultAicCredits },
+  { label: "aic_billing_dollar_assigned", value: (r) => r.aicAssignedUsd },
+  { label: "aic_consumed", value: (r) => r.aicConsumedCredits },
+  { label: "user_status", value: (r) => r.userStatus },
+  { label: "user_revoked_date", value: (r) => r.userRevokedDate },
+  { label: "org_login", value: (r) => r.orgLogin },
+  { label: "plan_type", value: (r) => r.planType },
+  { label: "seat_status", value: (r) => r.seatStatus },
+  { label: "assigned_via", value: (r) => r.assignedVia },
+  { label: "last_activity_at", value: (r) => r.lastActivityAt },
+  { label: "external_identity", value: (r) => r.externalIdentity },
+  { label: "github_user_id", value: (r) => r.githubUserId },
+  { label: "resolved_user_login", value: (r) => r.resolvedUserLogin },
+  { label: "identity_resolution_source", value: (r) => r.identityResolutionSource },
+  { label: "account_state", value: (r) => r.accountState },
+  { label: "aic_assigned_rule_used", value: (r) => r.aicAssignedRule },
+  { label: "default_aic_usd", value: (r) => r.defaultAicUsd },
+  { label: "aic_consumed_usd", value: (r) => r.aicConsumedUsd },
+  { label: "currency", value: (r) => r.currency },
+  { label: "billing_period", value: (r) => r.billingPeriod },
+  { label: "row_source", value: (r) => r.rowSource },
+  { label: "login_recovery_source", value: (r) => r.loginRecoverySource },
+  { label: "history_confidence", value: (r) => r.historyConfidence },
+  { label: "as_of_utc", value: (r) => r.asOfUtc },
+  { label: "data_quality_notes", value: (r) => r.dataQualityNotes.map(String).join(",") },
+  { label: "data_generated_at_utc", value: (r) => r.generatedAtUtc },
+  { label: "enterprise", value: (r) => r.enterpriseSlug },
+  { label: "holder_key", value: (r) => r.holderKey },
+  { label: "consumption_source", value: (r) => r.consumptionSource },
+  { label: "over_budget", value: (r) => computeOverBudget(r.aicConsumedUsd, r.aicAssignedUsd) },
+  { label: "total_cost", value: (r) => r.licenseCost + r.aicConsumedUsd },
 ];
 
 /** Exact, deterministic rollup-view column order — an aggregated grain, so per-row assignment/revocation dates and identity-resolution source do not apply. */
@@ -100,7 +124,7 @@ type LegacyReconciliationRow = any;
  * shape `DETAIL_COLUMNS` reads, so the live-fallback CSV export path reuses
  * the exact same column list/order as the historical path rather than
  * duplicating a second set of column definitions. Fields the legacy dataset
- * genuinely does not track (accountState, consumptionSource) render empty;
+ * genuinely does not track render empty;
  * `rowSource`/`historyConfidence` are set to `"live_snapshot_only"`, an
  * existing, real `SeatLedgerConfidence` value — the same marker the JSON
  * route uses for this fallback mode.
@@ -110,18 +134,18 @@ function mapLegacyRowToDetailRecord(
   enterpriseSlugs: string[] | undefined,
   currency: string,
   nowIso: string,
-): LicensePeriodRowRecord {
+): DetailCsvRecord {
   return {
     enterpriseSlug: enterpriseSlugs?.join(";") ?? "",
     billingPeriod: "live",
     orgLogin: Array.isArray(row.orgs) ? row.orgs.join(";") : "",
-    holderKey: row.user_login,
-    githubUserId: null,
+    holderKey: row.holder_key ?? row.user_login,
+    githubUserId: row.github_user_id ?? null,
     userLogin: row.user_login,
-    resolvedUserLogin: row.user_login,
-    externalIdentity: null,
-    identityResolutionSource: "live_snapshot_only",
-    accountState: "",
+    resolvedUserLogin: row.resolved_user_login ?? row.user_login,
+    externalIdentity: row.external_identity ?? null,
+    identityResolutionSource: row.identity_resolution_source ?? "live_snapshot_only",
+    accountState: row.account_state ?? "",
     licenseAssignedDate: row.license_assigned_date ?? null,
     userRevokedDate: row.user_revoked_date ?? null,
     planType: row.plan_type,
@@ -139,9 +163,11 @@ function mapLegacyRowToDetailRecord(
     rowSource: "live_snapshot_only",
     consumptionSource: "",
     historyConfidence: "live_snapshot_only",
-    dataQualityNotes: [],
+    dataQualityNotes: Array.isArray(row.data_quality_notes) ? row.data_quality_notes : [],
     asOfUtc: nowIso,
     generatedAtUtc: nowIso,
+    userStatus: row.user_status ?? "",
+    loginRecoverySource: row.login_recovery_source ?? "live_snapshot_only",
   };
 }
 
@@ -165,7 +191,7 @@ function buildMetadataLines(periodsLabel: string, view: string): string[] {
     `Report,${escapeCSVValue("License Reconciliation")}`,
     `Period,${escapeCSVValue(periodsLabel)}`,
     `View,${escapeCSVValue(view)}`,
-    `Exported At,${escapeCSVValue(new Date().toLocaleString())}`,
+    `Exported At,${escapeCSVValue(new Date().toISOString())}`,
     "",
   ];
 }
@@ -268,7 +294,8 @@ async function handler(request: NextRequest) {
         { status: 400, headers: NO_STORE_HEADERS },
       );
     }
-    const csv = buildCsv(result.rows, DETAIL_COLUMNS, buildMetadataLines(periodsLabel, "detail"));
+    const detailRows = result.rows.map(mapHistoricalRowToDetailRecord);
+    const csv = buildCsv(detailRows, DETAIL_COLUMNS, buildMetadataLines(periodsLabel, "detail"));
     return csvResponse(csv, filenameBase);
   } catch (err) {
     if (err instanceof LicensingConfigError) {

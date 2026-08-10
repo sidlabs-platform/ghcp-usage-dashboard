@@ -20,6 +20,8 @@
 import { UNATTRIBUTED_ORG, type SeatLedgerCoverage, type SeatLedgerConfidence } from "./seat-ledger";
 import type { MaterializedLicensePeriodRow } from "./materialize-license-period";
 
+const MAX_CHECK_DETAIL_ARRAY_ITEMS = 100;
+
 // ── Shared types ──────────────────────────────────────────────────────────
 
 /** Every reconciliation check this module implements, in no particular order. */
@@ -80,7 +82,26 @@ function makeResult(
   actualValue: number | null = null,
   affectedCount = 0
 ): ReconciliationCheckResult {
-  return { name, status, message, billingPeriod, orgLogin, expectedValue, actualValue, affectedCount, details };
+  const boundedDetails: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(details)) {
+    if (Array.isArray(value) && value.length > MAX_CHECK_DETAIL_ARRAY_ITEMS) {
+      boundedDetails[key] = value.slice(0, MAX_CHECK_DETAIL_ARRAY_ITEMS);
+      boundedDetails[`${key}OmittedCount`] = value.length - MAX_CHECK_DETAIL_ARRAY_ITEMS;
+    } else {
+      boundedDetails[key] = value;
+    }
+  }
+  return {
+    name,
+    status,
+    message,
+    billingPeriod,
+    orgLogin,
+    expectedValue,
+    actualValue,
+    affectedCount,
+    details: boundedDetails,
+  };
 }
 
 /** Stable sort: by check name, then billing period, then org login — mirrors `license-run-repo.ts`'s `listLicenseChecks` ORDER BY, so persisted order matches computed order. */

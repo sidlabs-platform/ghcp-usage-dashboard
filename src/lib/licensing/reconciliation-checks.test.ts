@@ -431,6 +431,22 @@ describe("checkHistoryCoverage", () => {
     expect(results[0].status).toBe("warning");
     expect(results[0].details.confidence).toBeNull();
   });
+
+  it("bounds diagnostic warning details and reports how many were omitted", () => {
+    const warnings = Array.from({ length: 105 }, (_, index) => `warning-${index}`);
+    const results = checkHistoryCoverage({
+      coverage: [
+        coverage({
+          confidence: "unrecoverable",
+          counts: { exact_snapshot: 0, audit_reconstructed: 0, live_snapshot_only: 0, unrecoverable: 1 },
+          warnings,
+        }),
+      ],
+    });
+
+    expect(results[0].details.warnings).toHaveLength(100);
+    expect(results[0].details.warningsOmittedCount).toBe(5);
+  });
 });
 
 describe("deriveOverallRunStatus", () => {

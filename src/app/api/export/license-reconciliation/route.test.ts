@@ -108,6 +108,71 @@ function req(url: string): NextRequest {
 
 const BASE_URL = "http://localhost/api/export/license-reconciliation";
 
+const APPROVED_DETAIL_COLUMNS = [
+  "user_login",
+  "license_assigned_date",
+  "gh_copilot_license_cost",
+  "default_aic_user_level",
+  "aic_billing_dollar_assigned",
+  "aic_consumed",
+  "user_status",
+  "user_revoked_date",
+  "org_login",
+  "plan_type",
+  "seat_status",
+  "assigned_via",
+  "last_activity_at",
+  "external_identity",
+  "github_user_id",
+  "resolved_user_login",
+  "identity_resolution_source",
+  "account_state",
+  "aic_assigned_rule_used",
+  "default_aic_usd",
+  "aic_consumed_usd",
+  "currency",
+  "billing_period",
+  "row_source",
+  "login_recovery_source",
+  "history_confidence",
+  "as_of_utc",
+  "data_quality_notes",
+  "data_generated_at_utc",
+];
+
+const DASHBOARD_DETAIL_COLUMNS = [
+  "enterprise",
+  "holder_key",
+  "consumption_source",
+  "over_budget",
+  "total_cost",
+];
+
+function parseCsvRecord(record: string): string[] {
+  const values: string[] = [];
+  let value = "";
+  let quoted = false;
+
+  for (let i = 0; i < record.length; i += 1) {
+    const char = record[i];
+    if (char === '"') {
+      if (quoted && record[i + 1] === '"') {
+        value += '"';
+        i += 1;
+      } else {
+        quoted = !quoted;
+      }
+    } else if (char === "," && !quoted) {
+      values.push(value);
+      value = "";
+    } else {
+      value += char;
+    }
+  }
+  values.push(value);
+  return values;
+}
+
 function makeDetailRow(overrides: Partial<Record<string, unknown>> = {}) {
   return {
     enterpriseSlug: "acme",
@@ -207,6 +272,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.clearAllMocks();
 });
 
@@ -243,14 +309,15 @@ describe("license reconciliation CSV export route", () => {
     expect(body.error).toBe("invalid_licensing_config");
   });
 
-  it("exports historical detail rows with the exact deterministic column order, RFC4180 quoting, and no externalIdentity/free-form data", async () => {
+  it("exports historical detail rows with the approved contract before dashboard-only columns", async () => {
     historyRepoState.hasMaterializedRows.mockReturnValue(true);
     historyRepoState.queryLicensePeriodExport.mockReturnValue(
       exportResult([
         makeDetailRow({
-          orgLogin: 'org, with "quotes"\nand a newline',
-          userLogin: null,
-          resolvedUserLogin: null,
+          userLogin: "observed-alice",
+          resolvedUserLogin: "resolved-alice",
+          externalIdentity: 'external, "identity"',
+          dataQualityNotes: ["=untrusted note", 'free,form "note"'],
           licenseAssignedDate: undefined,
           userRevokedDate: null,
         }),
@@ -265,48 +332,56 @@ describe("license reconciliation CSV export route", () => {
     expect(res.headers.get("Cache-Control")).toMatch(/no-store/);
 
     const text = await res.text();
-    expect(text).not.toContain("should-never-appear@example.com");
-    expect(text).not.toContain("externalIdentity");
-    expect(text).not.toContain("free-form-note-should-not-appear");
-
-    // Rows must be CRLF-separated per RFC4180.
     const lines = text.trim().split("\r\n");
-    const headerLine = lines.find((l) => l.startsWith("Enterprise,"));
-    expect(headerLine).toBe(
-      [
-        "Enterprise",
-        "Period",
-        "Org",
-        "Login",
-        "Holder Key",
-        "Plan Type",
-        "Account State",
-        "Seat Status",
-        "Assigned Via",
-        "License Assigned Date",
-        "User Revoked Date",
-        "Row Source",
-        "Consumption Source",
-        "History Confidence",
-        "Default AIC Credits",
-        "AIC Assigned USD",
-        "AIC Consumed Credits",
-        "AIC Consumed USD",
-        "Over Budget",
-        "License Cost",
-        "Currency",
-        "As Of (UTC)",
-        "Generated At (UTC)",
-      ].join(","),
+    const headerLine = lines.find((l) => l.startsWith("user_login,"));
+    const header = parseCsvRecord(headerLine!);
+    expect(header.slice(0, APPROVED_DETAIL_COLUMNS.length)).toEqual(APPROVED_DETAIL_COLUMNS);
+    expect(header.slice(APPROVED_DETAIL_COLUMNS.length)).toEqual(DASHBOARD_DETAIL_COLUMNS);
+    const headerIdx = lines.indexOf(headerLine!);
+    const values = parseCsvRecord(lines[headerIdx + 1]);
+    const row = Object.fromEntries(header.map((column, index) => [column, values[index]]));
+    expect(row).toMatchObject({
+      user_login: "observed-alice",
+      license_assigned_date: "",
+      gh_copilot_license_cost: "19",
+      default_aic_user_level: "300",
+      aic_billing_dollar_assigned: "3",
+      aic_consumed: "100",
+      user_status: "active",
+      user_revoked_date: "",
+      org_login: "acme-eng",
+      external_identity: 'external, "identity"',
+      github_user_id: "1",
+      resolved_user_login: "resolved-alice",
+      identity_resolution_source: "github_login",
+      aic_assigned_rule_used: "plan_default",
+      login_recovery_source: "github_login",
+      data_quality_notes: '\'=untrusted note,free,form "note"',
+      data_generated_at_utc: "2026-02-01T00:00:00.000Z",
+      enterprise: "acme",
+      holder_key: "acme:acme-eng:alice",
+      consumption_source: "billing_premium_requests",
+      over_budget: "false",
+      total_cost: "20",
+    });
+    expect(values).not.toContain("null");
+    expect(values).not.toContain("undefined");
+  });
+
+  it("marks historical rows without an active seat as inactive users", async () => {
+    historyRepoState.hasMaterializedRows.mockReturnValue(true);
+    historyRepoState.queryLicensePeriodExport.mockReturnValue(
+      exportResult([makeDetailRow({ seatStatus: "no_seat" })]),
     );
 
-    const headerIdx = lines.indexOf(headerLine!);
-    const dataLine = lines[headerIdx + 1];
-    // Quoted org value (comma/quotes/newline collapsed onto one CSV cell).
-    expect(dataLine).toContain('"org, with ""quotes""');
-    // null/undefined login/dates must render as empty string, never literal "null"/"undefined".
-    expect(dataLine).not.toContain("null");
-    expect(dataLine).not.toContain("undefined");
+    const res = await GET(req(`${BASE_URL}?periods=2026-01&view=detail`));
+    const lines = (await res.text()).trim().split("\r\n");
+    const headerLine = lines.find((line) => line.startsWith("user_login,"))!;
+    const header = parseCsvRecord(headerLine);
+    const values = parseCsvRecord(lines[lines.indexOf(headerLine) + 1]);
+    const record = Object.fromEntries(header.map((column, index) => [column, values[index]]));
+
+    expect(record.user_status).toBe("inactive");
   });
 
   it("exports historical rollup rows with the rollup column order and aggregated fields", async () => {
@@ -357,7 +432,7 @@ describe("license reconciliation CSV export route", () => {
     expect(historyRepoState.queryLicensePeriodRows).not.toHaveBeenCalled();
     const text = await res.text();
     const lines = text.trim().split("\r\n");
-    const headerIdx = lines.findIndex((l) => l.startsWith("Enterprise,"));
+    const headerIdx = lines.findIndex((l) => l.startsWith("user_login,"));
     const dataLines = lines.slice(headerIdx + 1);
     expect(dataLines).toHaveLength(250);
   });
@@ -373,11 +448,18 @@ describe("license reconciliation CSV export route", () => {
     expect(historyRepoState.queryLicensePeriodExport).toHaveBeenCalledTimes(1);
   });
 
-  it("falls back to the live snapshot query when no materialized history exists for the scope, mapping rows onto the same detail columns", async () => {
+  it("maps live fallback rows onto the same approved detail contract", async () => {
     historyRepoState.hasMaterializedRows.mockReturnValue(false);
     repoState.getLicenseReconciliationRows.mockReturnValue([
       {
         user_login: "bob",
+        resolved_user_login: "resolved-bob",
+        external_identity: 'external, "bob"',
+        github_user_id: 42,
+        identity_resolution_source: "legacy_api",
+        login_recovery_source: "identity_map",
+        account_state: "member",
+        data_quality_notes: ["live note", "second,note"],
         orgs: ["acme-eng"],
         org_count: 1,
         seat_count: 1,
@@ -387,7 +469,7 @@ describe("license reconciliation CSV export route", () => {
         activity_status: "active_30d",
         assigned_via: "direct",
         user_status: "active",
-        seat_status: "active",
+        seat_status: "pending_cancellation",
         user_revoked_date: null,
         license_cost: 19,
         default_aic_credits: 300,
@@ -407,8 +489,27 @@ describe("license reconciliation CSV export route", () => {
     expect(historyRepoState.queryLicensePeriodRows).not.toHaveBeenCalled();
     expect(historyRepoState.queryLicensePeriodExport).not.toHaveBeenCalled();
     const text = await res.text();
-    expect(text).toContain("bob");
-    expect(text).toContain("live_snapshot_only");
+    const lines = text.trim().split("\r\n");
+    const headerLine = lines.find((line) => line.startsWith("user_login,"));
+    const header = parseCsvRecord(headerLine!);
+    const values = parseCsvRecord(lines[lines.indexOf(headerLine!) + 1]);
+    const row = Object.fromEntries(header.map((column, index) => [column, values[index]]));
+    expect(header.slice(0, APPROVED_DETAIL_COLUMNS.length)).toEqual(APPROVED_DETAIL_COLUMNS);
+    expect(row).toMatchObject({
+      user_login: "bob",
+      user_status: "active",
+      external_identity: 'external, "bob"',
+      github_user_id: "42",
+      resolved_user_login: "resolved-bob",
+      identity_resolution_source: "legacy_api",
+      account_state: "member",
+      login_recovery_source: "identity_map",
+      data_quality_notes: "live note,second,note",
+      billing_period: "live",
+      row_source: "live_snapshot_only",
+      history_confidence: "live_snapshot_only",
+      total_cost: "20",
+    });
   });
 
   it("rejects the live-snapshot fallback export when the legacy row count exceeds the export cap", async () => {
@@ -447,6 +548,8 @@ describe("license reconciliation CSV export route", () => {
   });
 
   it("includes Report/Period/View/Exported At metadata comment rows before the header, matching the sibling export pattern", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-10T04:21:33.096Z"));
     historyRepoState.hasMaterializedRows.mockReturnValue(true);
     historyRepoState.queryLicensePeriodExport.mockReturnValue(exportResult([makeDetailRow()]));
 
@@ -455,7 +558,7 @@ describe("license reconciliation CSV export route", () => {
     expect(text).toMatch(/^Report,/);
     expect(text).toContain("Period,2026-01");
     expect(text).toContain("View,detail");
-    expect(text).toContain("Exported At,");
+    expect(text).toContain("Exported At,2026-08-10T04:21:33.096Z");
     // Rows are CRLF-separated, matching the RFC4180 requirement.
     expect(text).toContain("\r\n");
   });

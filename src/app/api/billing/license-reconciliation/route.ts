@@ -17,6 +17,9 @@ import {
   getMaterializedPeriodKPIs,
   getMaterializedPlanBreakdown,
   getMaterializedOrgBreakdown,
+  getMaterializedPeriods,
+  getMaterializedUtilizationBuckets,
+  getLatestLicenseQualitySummary,
   hasMaterializedRows,
   DETAIL_SORT_COLUMNS,
   ROLLUP_SORT_COLUMNS,
@@ -25,7 +28,7 @@ import {
 import type { LicensePeriodFilterQuery } from "@/lib/types/licensing";
 import type { AccountState } from "@/lib/licensing/identity-resolver";
 import type { SeatLedgerConfidence } from "@/lib/licensing/seat-ledger";
-import { parseReportMonths, MAX_REPORT_MONTHS } from "@/lib/licensing/periods";
+import { earliestRecoverablePeriod, parseReportMonths, MAX_REPORT_MONTHS } from "@/lib/licensing/periods";
 import { withCache } from "@/lib/cache/with-cache";
 import { withTimeout } from "@/lib/api/timeout";
 import { withRateLimit } from "@/lib/api/rate-limit/rate-limiter";
@@ -135,6 +138,36 @@ function parseStrictIntParam(
 const MAX_PAGE = 100_000;
 /** Aligned with the repository's historical-query pageSize cap so live and historical modes behave consistently. */
 const MAX_PAGE_SIZE = 200;
+
+interface QualitySummary {
+  pass: number;
+  warning: number;
+  fail: number;
+}
+
+function getCoverageWarnings(mode: "historical" | "live_snapshot_only", missingPeriods: string[]): string[] {
+  if (missingPeriods.length === 0) return [];
+  if (mode === "live_snapshot_only") {
+    return [
+      "No materialized historical data is available for the requested periods; showing the live snapshot instead.",
+    ];
+  }
+  const noun = missingPeriods.length === 1 ? "period" : "periods";
+  return [`Historical data is unavailable for requested ${noun}: ${missingPeriods.join(", ")}.`];
+}
+
+function getQualityWarnings(summary: QualitySummary): string[] {
+  const warnings: string[] = [];
+  if (summary.warning > 0) {
+    const noun = summary.warning === 1 ? "check" : "checks";
+    warnings.push(`Latest reconciliation diagnostics include ${summary.warning} warning ${noun}.`);
+  }
+  if (summary.fail > 0) {
+    const noun = summary.fail === 1 ? "check" : "checks";
+    warnings.push(`Latest reconciliation diagnostics include ${summary.fail} failed ${noun}.`);
+  }
+  return warnings;
+}
 
 /** Structured 400 error shape returned by {@link resolveReconciliationFilters}. */
 export interface ReconciliationQueryError {
@@ -304,6 +337,9 @@ async function handler(request: NextRequest) {
     const sortDir = params.get("sortDir") === "asc" ? "asc" : "desc";
 
     const cfg = getLicensingConfig();
+    const earliestRecoverable = earliestRecoverablePeriod({
+      auditRetentionDays: cfg.history?.auditRetentionDays ?? 0,
+    });
 
     // Only the base scope (enterprise + period + team/org-resolved
     // allowedLogins) decides whether materialized history exists — narrow
@@ -329,6 +365,12 @@ async function handler(request: NextRequest) {
         );
       }
     }
+    const qualitySummary = getLatestLicenseQualitySummary({
+      enterpriseSlugs: scope.enterpriseSlugs ?? getEnterpriseSlugs(),
+      periods,
+      orgLogins: (scope.selectedOrgs?.length ?? 0) > 0 ? scope.selectedOrgs : undefined,
+    });
+    const qualityWarnings = getQualityWarnings(qualitySummary);
 
     if (!materialized) {
       // Backward-compatible fallback: no materialized rows for this
@@ -365,7 +407,10 @@ async function handler(request: NextRequest) {
       const offset = (page - 1) * pageSize;
       const rows = sorted.slice(offset, offset + pageSize);
 
-      const warnings: string[] = [];
+      const materializedPeriods: string[] = [];
+      const missingPeriods = [...periods];
+      const coverageWarnings = getCoverageWarnings("live_snapshot_only", missingPeriods);
+      const warnings = [...coverageWarnings, ...qualityWarnings];
       if (liveSort !== sort) {
         warnings.push(`${sort} sorting requires materialized history; sorting the live snapshot by total cost instead.`);
       }
@@ -376,8 +421,18 @@ async function handler(request: NextRequest) {
       return NextResponse.json(
         {
           enabled: true,
-          coverage: { mode: "live_snapshot_only", periods, view: "detail" },
+          coverage: {
+            mode: "live_snapshot_only",
+            periods,
+            view: "detail",
+            requestedPeriods: periods,
+            materializedPeriods,
+            missingPeriods,
+            earliestRecoverablePeriod: earliestRecoverable,
+            warnings: coverageWarnings,
+          },
           dataSource: "live_snapshot_only",
+          qualitySummary,
           kpis,
           rows,
           planBreakdown,
@@ -407,20 +462,35 @@ async function handler(request: NextRequest) {
     const kpis = getMaterializedPeriodKPIs(filterQuery);
     const planBreakdown = getMaterializedPlanBreakdown(filterQuery);
     const orgBreakdown = getMaterializedOrgBreakdown(filterQuery);
+    const materializedSet = new Set(getMaterializedPeriods(baseFilterQuery));
+    const materializedPeriods = periods.filter((period) => materializedSet.has(period));
+    const missingPeriods = periods.filter((period) => !materializedSet.has(period));
+    const coverageWarnings = getCoverageWarnings("historical", missingPeriods);
+    const utilizationBuckets = getMaterializedUtilizationBuckets(filterQuery);
 
     return NextResponse.json(
       {
         enabled: true,
-        coverage: { mode: "historical", periods, view },
+        coverage: {
+          mode: "historical",
+          periods,
+          view,
+          requestedPeriods: periods,
+          materializedPeriods,
+          missingPeriods,
+          earliestRecoverablePeriod: earliestRecoverable,
+          warnings: coverageWarnings,
+        },
         dataSource: "historical",
+        qualitySummary,
         kpis,
         rows: paginated.rows,
         planBreakdown,
         orgBreakdown,
-        utilizationBuckets: [],
+        utilizationBuckets,
         config: { currency: cfg.currency, creditToUsd: cfg.creditToUsd },
         pagination: paginated.pagination,
-        warnings: [],
+        warnings: [...coverageWarnings, ...qualityWarnings],
       },
       { headers: { "Cache-Control": "private, max-age=300, stale-while-revalidate=60" } },
     );

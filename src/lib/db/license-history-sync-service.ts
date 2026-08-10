@@ -94,6 +94,7 @@ import {
   resolveIdentity as pureResolveIdentity,
   type IdentityResolutionInput,
   type ResolvedIdentity,
+  type AccountState,
 } from "@/lib/licensing/identity-resolver";
 import {
   buildSeatLedger as pureBuildSeatLedger,
@@ -108,10 +109,12 @@ import {
   materializeLicensePeriodRows as pureMaterializeLicensePeriodRows,
   licensePeriodCanonicalKey,
   normalizePlanKey,
+  CONSUMPTION_SOURCE_PRECEDENCE,
   type MaterializeLicensePeriodInput,
   type MaterializeLicensePeriodResult,
   type MaterializedLicensePeriodRow,
   type ConsumptionRecordInput,
+  type ConsumptionSourceKind,
 } from "@/lib/licensing/materialize-license-period";
 import {
   checkSeatCount,
@@ -131,6 +134,11 @@ import {
   upsertIdentityRecords,
   upsertOrgBillingSnapshots,
   upsertAicConsumption,
+  listPersistedAuditEvents,
+  listPersistedSeatSnapshots,
+  listPersistedIdentityRecords,
+  listPersistedOrgBillingSnapshots,
+  listPersistedAicConsumption,
   replaceMaterializedPeriod,
   queryLicensePeriodRows,
   hasMaterializedRows,
@@ -140,6 +148,11 @@ import {
   type LicenseIdentityRecordInput,
   type LicenseOrgBillingSnapshotInput,
   type LicenseAicConsumptionInput,
+  type PersistedLicenseAuditEvent,
+  type PersistedLicenseSeatSnapshot,
+  type PersistedLicenseIdentityRecord,
+  type PersistedLicenseOrgBillingSnapshot,
+  type PersistedLicenseAicConsumption,
   type LicensePeriodRowInput,
 } from "./license-history-repo";
 import {
@@ -229,6 +242,11 @@ export interface LicenseHistorySyncDeps {
   upsertIdentityRecords: (enterpriseSlug: string, records: LicenseIdentityRecordInput[]) => number;
   upsertOrgBillingSnapshots: (enterpriseSlug: string, records: LicenseOrgBillingSnapshotInput[]) => number;
   upsertAicConsumption: (enterpriseSlug: string, records: LicenseAicConsumptionInput[]) => number;
+  listPersistedAuditEvents: (enterpriseSlug: string, periods: string[]) => PersistedLicenseAuditEvent[];
+  listPersistedSeatSnapshots: (enterpriseSlug: string, periods: string[]) => PersistedLicenseSeatSnapshot[];
+  listPersistedIdentityRecords: (enterpriseSlug: string) => PersistedLicenseIdentityRecord[];
+  listPersistedOrgBillingSnapshots: (enterpriseSlug: string, periods: string[]) => PersistedLicenseOrgBillingSnapshot[];
+  listPersistedAicConsumption: (enterpriseSlug: string, periods: string[]) => PersistedLicenseAicConsumption[];
   replaceMaterializedPeriod: (enterpriseSlug: string, period: string, rows: LicensePeriodRowInput[]) => number;
   queryLicensePeriodRows: (query: LicensePeriodFilterQuery & { view?: "detail" }) => { rows: LicensePeriodRowLike[] };
   hasMaterializedRows: (query: LicensePeriodFilterQuery) => boolean;
@@ -351,6 +369,11 @@ export function createDefaultLicenseHistorySyncDeps(
     upsertIdentityRecords,
     upsertOrgBillingSnapshots,
     upsertAicConsumption,
+    listPersistedAuditEvents,
+    listPersistedSeatSnapshots,
+    listPersistedIdentityRecords,
+    listPersistedOrgBillingSnapshots,
+    listPersistedAicConsumption,
     replaceMaterializedPeriod,
     queryLicensePeriodRows: (query) => queryLicensePeriodRows({ ...query, view: "detail" }),
     hasMaterializedRows,
@@ -467,6 +490,123 @@ function sanitizeForLog(s: string): string {
 
 function currentPeriodOf(now: Date): string {
   return now.toISOString().slice(0, 7);
+}
+
+type PeriodConsumptionRecord = ConsumptionRecordInput & {
+  billingPeriod: string;
+  netUsd?: number | null;
+};
+
+const ACCOUNT_STATE_RANK: Record<AccountState, number> = {
+  unknown: 0,
+  member: 1,
+  suspended: 2,
+  deprovisioned: 3,
+};
+
+function normalizeAccountState(value: string | null | undefined): AccountState {
+  switch (value?.trim().toLowerCase()) {
+    case "active":
+    case "enabled":
+    case "member":
+      return "member";
+    case "disabled":
+    case "suspended":
+      return "suspended";
+    case "deleted":
+    case "removed":
+    case "deprovisioned":
+      return "deprovisioned";
+    default:
+      return "unknown";
+  }
+}
+
+function mergeIdentityEvidence(
+  records: PersistedLicenseIdentityRecord[],
+): NonNullable<IdentityResolutionInput["enterpriseIdentity"]> | null {
+  if (records.length === 0) return null;
+  let accountState: AccountState = "unknown";
+  let resolvedLogin: string | null = null;
+  let externalIdentity: string | null = null;
+
+  for (const record of records) {
+    resolvedLogin ??= record.resolvedLogin ?? null;
+    externalIdentity ??= record.externalIdentity ?? null;
+    const candidateState = normalizeAccountState(record.accountState);
+    if (ACCOUNT_STATE_RANK[candidateState] > ACCOUNT_STATE_RANK[accountState]) {
+      accountState = candidateState;
+    }
+  }
+
+  return { resolvedLogin, externalIdentity, accountState };
+}
+
+function isConsumptionSourceKind(source: string): source is ConsumptionSourceKind {
+  return (CONSUMPTION_SOURCE_PRECEDENCE as readonly string[]).includes(source);
+}
+
+function buildGrossVsNetComparisons(records: PeriodConsumptionRecord[]) {
+  const selectedByHolder = new Map<string, PeriodConsumptionRecord>();
+  const selectedNetByHolder = new Map<string, PeriodConsumptionRecord>();
+  for (const record of records) {
+    const orgLogin = record.orgLogin || LEDGER_UNATTRIBUTED_ORG;
+    const key = `${record.billingPeriod}\u0000${orgLogin}\u0000${record.holderKey}`;
+    const current = selectedByHolder.get(key);
+    const candidateRank = CONSUMPTION_SOURCE_PRECEDENCE.indexOf(record.source);
+    const currentRank = current
+      ? CONSUMPTION_SOURCE_PRECEDENCE.indexOf(current.source)
+      : Number.POSITIVE_INFINITY;
+    if (!current || candidateRank < currentRank) {
+      selectedByHolder.set(key, record);
+    }
+    if (record.netUsd != null) {
+      const currentNet = selectedNetByHolder.get(key);
+      const currentNetRank = currentNet
+        ? CONSUMPTION_SOURCE_PRECEDENCE.indexOf(currentNet.source)
+        : Number.POSITIVE_INFINITY;
+      if (!currentNet || candidateRank < currentNetRank) {
+        selectedNetByHolder.set(key, record);
+      }
+    }
+  }
+
+  const comparisons = new Map<string, {
+    billingPeriod: string;
+    orgLogin: string;
+    grossUsd: number;
+    netUsd: number;
+    hasCompleteNet: boolean;
+  }>();
+  for (const [holderKey, record] of selectedByHolder) {
+    const orgLogin = record.orgLogin || LEDGER_UNATTRIBUTED_ORG;
+    const key = `${record.billingPeriod}\u0000${orgLogin}`;
+    const netRecord = selectedNetByHolder.get(holderKey);
+    const comparison = comparisons.get(key) ?? {
+      billingPeriod: record.billingPeriod,
+      orgLogin,
+      grossUsd: 0,
+      netUsd: 0,
+      hasCompleteNet: true,
+    };
+    comparison.grossUsd += record.grossUsd ?? 0;
+    if (netRecord?.netUsd == null) {
+      comparison.hasCompleteNet = false;
+    } else {
+      comparison.netUsd += netRecord.netUsd;
+    }
+    comparisons.set(key, comparison);
+  }
+
+  return [...comparisons.values()]
+    .sort((a, b) =>
+      a.billingPeriod.localeCompare(b.billingPeriod) ||
+      a.orgLogin.localeCompare(b.orgLogin)
+    )
+    .map(({ hasCompleteNet, ...comparison }) => ({
+      ...comparison,
+      netUsd: hasCompleteNet ? comparison.netUsd : null,
+    }));
 }
 
 /**
@@ -980,19 +1120,6 @@ export async function syncLicenseHistoryForEnterprise(
     if (captureResult.errorMessage) {
       throw new Error(captureResult.errorMessage);
     }
-    const currentSnapshotInputs: LicenseSeatSnapshotInput[] = liveSeats.map((seat) => ({
-      orgLogin: seat.orgLogin,
-      holderKey: seat.holderKey,
-      githubUserId: seat.githubUserId,
-      observedLogin: seat.observedLogin,
-      planType: seat.planType,
-      assignedVia: seat.assignedVia,
-      lastActivityAt: seat.lastActivityAt,
-      pendingCancellationDate: seat.pendingCancellationDate,
-      snapshotAt: now.toISOString(),
-      source: "live_seats",
-      raw: seat.raw,
-    }));
     sourceStates.push({ enterpriseSlug, source: "live_seats", billingPeriod: currentPeriod, lastSyncedAt: now.toISOString(), status: "ok" });
     // Design note: this hook is an internal test seam for this module's own
     // phase ordering only — see the module doc for how the real
@@ -1012,7 +1139,12 @@ export async function syncLicenseHistoryForEnterprise(
     // ── audit API (recoverable range only) ──────────────────────────────
     deps.onProgress?.({ enterprise: enterpriseSlug, source: "audit", current: 0, total: 1, message: `Fetching audit log events for ${sanitizeForLog(enterpriseSlug)}...` });
     const cutoffMs = earliest ? Date.parse(`${earliest}-01T00:00:00.000Z`) : null;
-    const apiAuditEvents: (SeatLedgerAuditEventInput & { observedLogin: string | null })[] = [];
+    type EnrichedAuditEvent = SeatLedgerAuditEventInput & {
+      observedLogin: string | null;
+      externalIdentity: string | null;
+      assignedVia: string | null;
+    };
+    const apiAuditEvents: EnrichedAuditEvent[] = [];
     // Optional source: this client already normalizes GitHubApiError into a
     // typed unavailable/unknown result, but a genuine unexpected throw must
     // still degrade to a warning here (never fail the whole enterprise run)
@@ -1031,6 +1163,8 @@ export async function syncLicenseHistoryForEnterprise(
             action: event.action,
             occurredAt: event.occurredAt,
             observedLogin: event.observedLogin ?? null,
+            externalIdentity: event.externalIdentity ?? null,
+            assignedVia: event.team ?? null,
           });
         }
         warnings.push(...auditApiResult.warnings);
@@ -1089,7 +1223,7 @@ export async function syncLicenseHistoryForEnterprise(
     // API-sourced event describing the same real holder always share a
     // `holderKey`, letting the ledger reconstruct a single assignment
     // interval across "assign in archive, cancel via API" (or vice versa).
-    const archiveAuditEvents: (SeatLedgerAuditEventInput & { observedLogin: string | null })[] = archiveImport.records.map((event) => {
+    const archiveAuditEvents: EnrichedAuditEvent[] = archiveImport.records.map((event) => {
       const observedLogin = event.observedLogin ?? null;
       const mappedId = observedLogin ? loginToGithubId.get(observedLogin.toLowerCase()) ?? null : null;
       return {
@@ -1101,6 +1235,8 @@ export async function syncLicenseHistoryForEnterprise(
         action: event.action === "cancel" ? "cancel" : "assign",
         occurredAt: event.occurredAt,
         observedLogin,
+        externalIdentity: event.externalIdentity,
+        assignedVia: event.assignedVia,
       };
     });
 
@@ -1121,12 +1257,14 @@ export async function syncLicenseHistoryForEnterprise(
     //      "cancel in API" pair for the same holder always survives as two
     //      distinct events (one ledger interval, via the shared
     //      holderKey — not one collapsed event).
-    type MergeableAuditEvent = SeatLedgerAuditEventInput & { observedLogin: string | null };
+    type MergeableAuditEvent = EnrichedAuditEvent;
     function mergeEnrichment(primary: MergeableAuditEvent, secondary: MergeableAuditEvent): MergeableAuditEvent {
       return {
         ...primary,
         githubUserId: primary.githubUserId ?? secondary.githubUserId ?? null,
         observedLogin: primary.observedLogin ?? secondary.observedLogin ?? null,
+        externalIdentity: primary.externalIdentity ?? secondary.externalIdentity ?? null,
+        assignedVia: primary.assignedVia ?? secondary.assignedVia ?? null,
       };
     }
     function preferArchive(a: MergeableAuditEvent, b: MergeableAuditEvent): MergeableAuditEvent {
@@ -1155,6 +1293,9 @@ export async function syncLicenseHistoryForEnterprise(
         action: event.action,
         occurredAt: event.occurredAt,
         githubUserId: event.githubUserId,
+        observedLogin: event.observedLogin,
+        externalIdentity: event.externalIdentity,
+        assignedVia: event.assignedVia,
         source: event.source,
       })),
     );
@@ -1163,17 +1304,23 @@ export async function syncLicenseHistoryForEnterprise(
     // ── membership/SCIM/SAML identities (optional) ──────────────────────
     deps.onProgress?.({ enterprise: enterpriseSlug, source: "identity", current: 0, total: 1, message: `Fetching identity/membership sources for ${sanitizeForLog(enterpriseSlug)}...` });
     const identityRecordsToPersist: LicenseIdentityRecordInput[] = [];
-    const enterpriseIdentityByLogin = new Map<string, { externalIdentity: string | null; resolvedLogin: string | null }>();
-    const orgIdentityByLogin = new Map<string, { externalIdentity: string | null; resolvedLogin: string | null }>();
     const knownExternalIdentities: string[] = [];
+
+    for (const record of identityMapImport.records) {
+      identityRecordsToPersist.push({
+        identityKey: `identity-map:${record.resolvedLogin.toLowerCase()}`,
+        resolvedLogin: record.resolvedLogin,
+        externalIdentity: record.externalIdentity,
+        accountState: record.accountState ?? undefined,
+        resolutionSource: "identity_map",
+        observedAt: now.toISOString(),
+      });
+    }
 
     if (config.identity.fetchEnterpriseIdentities) {
       try {
         const enterpriseIdentities = await deps.getEnterpriseIdentities(enterpriseSlug);
         for (const identity of enterpriseIdentities.identities) {
-          if (identity.resolvedLogin) {
-            enterpriseIdentityByLogin.set(identity.resolvedLogin.toLowerCase(), { externalIdentity: identity.externalIdentity, resolvedLogin: identity.resolvedLogin });
-          }
           if (identity.externalIdentity) knownExternalIdentities.push(identity.externalIdentity);
           identityRecordsToPersist.push({
             identityKey: identity.identityKey,
@@ -1199,9 +1346,6 @@ export async function syncLicenseHistoryForEnterprise(
         for (const org of orgs) {
           const orgIdentities = await deps.getOrgIdentities(org, enterpriseSlug);
           for (const identity of orgIdentities.identities) {
-            if (identity.resolvedLogin) {
-              orgIdentityByLogin.set(identity.resolvedLogin.toLowerCase(), { externalIdentity: identity.externalIdentity, resolvedLogin: identity.resolvedLogin });
-            }
             if (identity.externalIdentity) knownExternalIdentities.push(identity.externalIdentity);
             identityRecordsToPersist.push({
               identityKey: identity.identityKey,
@@ -1296,7 +1440,8 @@ export async function syncLicenseHistoryForEnterprise(
     // with an explicit billingPeriod so each materialize call and
     // reconciliation check below can filter to the right period instead of
     // double-counting the same row across every historical period.
-    const consumptionRecordsWithPeriod: (ConsumptionRecordInput & { billingPeriod: string })[] = [];
+    let consumptionRecordsWithPeriod: PeriodConsumptionRecord[] = [];
+    const csvConsumptionToPersist: LicenseAicConsumptionInput[] = [];
     for (const record of aicCsvImport.records) {
       consumptionRecordsWithPeriod.push({
         billingPeriod: record.billingPeriod,
@@ -1306,6 +1451,19 @@ export async function syncLicenseHistoryForEnterprise(
         credits: record.credits,
         grossUsd: record.grossUsd,
       });
+      csvConsumptionToPersist.push({
+        billingPeriod: record.billingPeriod,
+        orgLogin: record.orgLogin ?? undefined,
+        holderKey: `login:${record.userLogin.toLowerCase()}`,
+        username: record.userLogin,
+        credits: record.credits,
+        grossUsd: record.grossUsd,
+        source: "csv_import",
+        observedAt: now.toISOString(),
+      });
+    }
+    if (csvConsumptionToPersist.length > 0) {
+      deps.upsertAicConsumption(enterpriseSlug, csvConsumptionToPersist);
     }
 
     let enterpriseApiUnavailable = false;
@@ -1426,6 +1584,7 @@ export async function syncLicenseHistoryForEnterprise(
                 holderKey: `login:${result.record.userLogin.toLowerCase()}`,
                 credits: result.record.credits,
                 grossUsd: result.record.grossUsd,
+                netUsd: result.record.netUsd,
               });
               aicPersist.push({
                 billingPeriod: result.record.billingPeriod,
@@ -1480,10 +1639,88 @@ export async function syncLicenseHistoryForEnterprise(
     }
     deps.heartbeatSyncLock();
 
+    const persistedAuditEvents: EnrichedAuditEvent[] = deps
+      .listPersistedAuditEvents(enterpriseSlug, recoverablePeriods)
+      .map((event) => ({
+        eventId: event.eventId,
+        source: event.source,
+        orgLogin: event.orgLogin ?? "",
+        holderKey: event.holderKey,
+        githubUserId: event.githubUserId ?? null,
+        action: event.action as SeatLedgerAuditEventInput["action"],
+        occurredAt: event.occurredAt,
+        observedLogin: event.observedLogin ?? null,
+        externalIdentity: event.externalIdentity ?? null,
+        assignedVia: event.assignedVia ?? null,
+      }));
+    const durableAuditByEventId = new Map<string, EnrichedAuditEvent>();
+    for (const event of [...persistedAuditEvents, ...mergedAuditEvents]) {
+      durableAuditByEventId.set(event.eventId, event);
+    }
+    const durableAuditBySemanticKey = new Map<string, EnrichedAuditEvent>();
+    for (const event of durableAuditByEventId.values()) {
+      const key = `${event.orgLogin}\u0000${event.holderKey}\u0000${event.action}\u0000${event.occurredAt}`;
+      durableAuditBySemanticKey.set(key, event);
+    }
+    const durableAuditEvents = [...durableAuditBySemanticKey.values()];
+    const persistedSeatSnapshots = deps.listPersistedSeatSnapshots(enterpriseSlug, recoverablePeriods);
+    const persistedSeatSnapshotByPeriodKey = new Map(
+      persistedSeatSnapshots.map((snapshot) => [
+        `${snapshot.billingPeriod}\u0000${licensePeriodCanonicalKey(snapshot.orgLogin ?? "", snapshot.holderKey)}`,
+        snapshot,
+      ]),
+    );
+    const durableIdentityRecords = [
+      ...identityRecordsToPersist,
+      ...deps.listPersistedIdentityRecords(enterpriseSlug),
+    ];
+    const durableOrgBillingByKey = new Map<string, LicenseOrgBillingSnapshotInput>();
+    for (const snapshot of [
+      ...deps.listPersistedOrgBillingSnapshots(enterpriseSlug, recoverablePeriods),
+      ...orgBillingSnapshots,
+    ]) {
+      durableOrgBillingByKey.set(`${snapshot.billingPeriod}\u0000${snapshot.orgLogin}`, snapshot);
+    }
+    const durableOrgBillingSnapshots = [...durableOrgBillingByKey.values()];
+    const freshConsumptionRecords = consumptionRecordsWithPeriod;
+    const persistedConsumption = deps.listPersistedAicConsumption(enterpriseSlug, recoverablePeriods);
+    const durableConsumptionByKey = new Map<string, PeriodConsumptionRecord>();
+    for (const record of persistedConsumption) {
+      if (!isConsumptionSourceKind(record.source)) {
+        warnings.push(`Ignored persisted AI-Credit row with unsupported source "${sanitizeForLog(record.source)}".`);
+        continue;
+      }
+      const normalized: PeriodConsumptionRecord = {
+        billingPeriod: record.billingPeriod,
+        source: record.source,
+        orgLogin: record.orgLogin,
+        holderKey: record.holderKey,
+        credits: record.credits,
+        grossUsd: record.grossUsd,
+        netUsd: record.netUsd,
+      };
+      durableConsumptionByKey.set(
+        `${normalized.billingPeriod}\u0000${normalized.orgLogin ?? ""}\u0000${normalized.holderKey}\u0000${normalized.source}`,
+        normalized,
+      );
+    }
+    for (const record of freshConsumptionRecords) {
+      durableConsumptionByKey.set(
+        `${record.billingPeriod}\u0000${record.orgLogin ?? ""}\u0000${record.holderKey}\u0000${record.source}`,
+        record,
+      );
+    }
+    consumptionRecordsWithPeriod = [...durableConsumptionByKey.values()];
+    for (const record of durableIdentityRecords) {
+      if (record.externalIdentity) knownExternalIdentities.push(record.externalIdentity);
+    }
+
     // ── ledger materialization (per enterprise, explicit requested periods) ──
     deps.onProgress?.({ enterprise: enterpriseSlug, source: "ledger", current: 0, total: 1, message: `Building seat ledger for ${sanitizeForLog(enterpriseSlug)}...` });
-    const ledgerSnapshots: SeatLedgerSnapshotInput[] = currentSnapshotInputs.map((snapshot) => ({
-      billingPeriod: currentPeriod,
+    const ledgerSnapshots: SeatLedgerSnapshotInput[] = persistedSeatSnapshots
+      .filter((snapshot) => snapshot.source !== "live_seats")
+      .map((snapshot) => ({
+      billingPeriod: snapshot.billingPeriod,
       orgLogin: snapshot.orgLogin ?? "",
       holderKey: snapshot.holderKey,
       githubUserId: snapshot.githubUserId ?? null,
@@ -1499,7 +1736,7 @@ export async function syncLicenseHistoryForEnterprise(
     }));
     const ledger = deps.buildSeatLedger({
       enterpriseSlug,
-      auditEvents: mergedAuditEvents,
+      auditEvents: durableAuditEvents,
       snapshots: ledgerSnapshots,
       liveSeats: ledgerLiveSeats,
       periods: recoverablePeriods,
@@ -1514,30 +1751,73 @@ export async function syncLicenseHistoryForEnterprise(
     const holderKeys = new Set(ledger.rows.map((row) => row.holderKey));
     const identities: Record<string, ResolvedIdentity> = {};
     const auditObservationsByHolder = new Map<string, { githubUserId?: number | null; observedLogin: string | null; occurredAt: string; period?: string | null }[]>();
-    for (const event of mergedAuditEvents) {
+    for (const event of durableAuditEvents) {
       const list = auditObservationsByHolder.get(event.holderKey) ?? [];
       list.push({ githubUserId: event.githubUserId, observedLogin: event.observedLogin ?? null, occurredAt: event.occurredAt });
       auditObservationsByHolder.set(event.holderKey, list);
     }
-    // Indexed by resolvedLogin (the canonical GitHub login the map entry
-    // supplies) — not externalIdentity — since holders are looked up by
-    // their seat-observed login below.
-    const identityMapByResolvedLogin = new Map(identityMapImport.records.map((rec) => [rec.resolvedLogin.toLowerCase(), rec]));
+
+    const indexIdentityRecord = (
+      index: Map<string, PersistedLicenseIdentityRecord[]>,
+      key: string | null | undefined,
+      record: PersistedLicenseIdentityRecord,
+    ) => {
+      if (!key) return;
+      const normalized = key.toLowerCase();
+      const list = index.get(normalized) ?? [];
+      list.push(record);
+      index.set(normalized, list);
+    };
+    const identityRecordsByKey = new Map<string, PersistedLicenseIdentityRecord[]>();
+    const identityRecordsByLogin = new Map<string, PersistedLicenseIdentityRecord[]>();
+    const identityRecordsByGithubId = new Map<string, PersistedLicenseIdentityRecord[]>();
+    for (const record of durableIdentityRecords) {
+      indexIdentityRecord(identityRecordsByKey, record.identityKey, record);
+      indexIdentityRecord(identityRecordsByLogin, record.resolvedLogin, record);
+      if (record.githubUserId != null) {
+        indexIdentityRecord(identityRecordsByGithubId, String(record.githubUserId), record);
+      }
+    }
+
+    const seatRowByHolder = new Map<string, (typeof ledger.rows)[number]>();
+    for (const row of ledger.rows) {
+      const current = seatRowByHolder.get(row.holderKey);
+      if (!current || (current.revokedAt !== null && row.revokedAt === null)) {
+        seatRowByHolder.set(row.holderKey, row);
+      }
+    }
 
     for (const holderKey of holderKeys) {
-      const seatRow = ledger.rows.find((r) => r.holderKey === holderKey && r.revokedAt === null) ?? ledger.rows.find((r) => r.holderKey === holderKey);
+      const seatRow = seatRowByHolder.get(holderKey);
       const loginKey = seatRow?.observedLogin?.toLowerCase();
-      const enterpriseIdentity = loginKey ? enterpriseIdentityByLogin.get(loginKey) ?? null : null;
-      const orgIdentity = loginKey ? orgIdentityByLogin.get(loginKey) ?? null : null;
-      const identityMapEntry = loginKey ? identityMapByResolvedLogin.get(loginKey) ?? null : null;
+      const matchingIdentityRecords = new Set<PersistedLicenseIdentityRecord>([
+        ...(identityRecordsByKey.get(holderKey.toLowerCase()) ?? []),
+        ...(loginKey ? identityRecordsByLogin.get(loginKey) ?? [] : []),
+        ...(seatRow?.githubUserId != null
+          ? identityRecordsByGithubId.get(String(seatRow.githubUserId)) ?? []
+          : []),
+      ]);
+      const enterpriseIdentity = mergeIdentityEvidence(
+        [...matchingIdentityRecords].filter((record) =>
+          record.resolutionSource === "enterprise_identity" ||
+          record.resolutionSource === "scim_enterprise" ||
+          record.resolutionSource === "membership"
+        ),
+      );
+      const orgIdentity = mergeIdentityEvidence(
+        [...matchingIdentityRecords].filter((record) => record.resolutionSource === "org_identity"),
+      );
+      const identityMapEntry = mergeIdentityEvidence(
+        [...matchingIdentityRecords].filter((record) => record.resolutionSource === "identity_map"),
+      );
       identities[holderKey] = deps.resolveIdentity({
         holderKey,
         githubUserId: seatRow?.githubUserId ?? null,
         seatLogin: seatRow?.observedLogin ?? null,
         auditObservations: auditObservationsByHolder.get(holderKey) ?? [],
-        enterpriseIdentity: enterpriseIdentity ? { externalIdentity: enterpriseIdentity.externalIdentity, resolvedLogin: enterpriseIdentity.resolvedLogin } : null,
-        orgIdentity: orgIdentity ? { externalIdentity: orgIdentity.externalIdentity, resolvedLogin: orgIdentity.resolvedLogin } : null,
-        identityMap: identityMapEntry ? { externalIdentity: identityMapEntry.externalIdentity, resolvedLogin: identityMapEntry.resolvedLogin, accountState: identityMapEntry.accountState } : null,
+        enterpriseIdentity,
+        orgIdentity,
+        identityMap: identityMapEntry,
       });
     }
     deps.heartbeatSyncLock();
@@ -1547,7 +1827,7 @@ export async function syncLicenseHistoryForEnterprise(
     const priorRuns = deps.listLicenseRuns(enterpriseSlug, 20).filter((r) => r.status === "success" || r.status === "warning");
     const priorFingerprints = (priorRuns[0]?.sourceStats?.periodFingerprints as Record<string, string> | undefined) ?? {};
 
-    const nextPeriodFingerprints: Record<string, string> = { ...priorFingerprints };
+    const nextPeriodFingerprints: Record<string, string> = {};
     const materializedPeriods: string[] = [];
     const skippedPeriods: string[] = [];
     const asOfUtc = now.toISOString();
@@ -1558,7 +1838,7 @@ export async function syncLicenseHistoryForEnterprise(
       const period = recoverablePeriods[i];
       deps.onProgress?.({ enterprise: enterpriseSlug, source: "materialize", period, current: i + 1, total: recoverablePeriods.length, message: `Materializing ${period} for ${sanitizeForLog(enterpriseSlug)}...` });
 
-      const periodAuditTokens = mergedAuditEvents
+      const periodAuditTokens = durableAuditEvents
         .filter((e) => e.occurredAt.slice(0, 7) === period)
         .map((e) => stableStringify({ eventId: e.eventId, source: e.source, orgLogin: e.orgLogin, holderKey: e.holderKey, action: e.action, occurredAt: e.occurredAt }))
         .sort();
@@ -1583,7 +1863,7 @@ export async function syncLicenseHistoryForEnterprise(
         .filter((row) => row.billingPeriod === period)
         .map((row) => stableStringify({ orgLogin: row.orgLogin, holderKey: row.holderKey, assignedAt: row.assignedAt, revokedAt: row.revokedAt, confidence: row.confidence, source: row.source }))
         .sort();
-      const periodOrgBillingTokens = orgBillingSnapshots
+      const periodOrgBillingTokens = durableOrgBillingSnapshots
         .filter((snapshot) => snapshot.billingPeriod === period)
         .map((snapshot) => stableStringify({ orgLogin: snapshot.orgLogin, planType: snapshot.planType, totalSeats: snapshot.totalSeats, pendingCancellation: snapshot.pendingCancellation }))
         .sort();
@@ -1627,12 +1907,32 @@ export async function syncLicenseHistoryForEnterprise(
 
       const seatRowsForPeriod = ledger.rows.filter((row) => row.billingPeriod === period);
       const seatMetadata: Record<string, { planType?: string | null; assignedVia?: string | null; lastActivityAt?: string | null }> = {};
-      for (const seat of liveSeats) {
-        seatMetadata[licensePeriodCanonicalKey(seat.orgLogin, seat.holderKey)] = {
-          planType: seat.planType,
-          assignedVia: seat.assignedVia,
-          lastActivityAt: seat.lastActivityAt,
-        };
+      const periodOrgPlanByLogin = new Map(
+        durableOrgBillingSnapshots
+          .filter((snapshot) => snapshot.billingPeriod === period && snapshot.planType)
+          .map((snapshot) => [snapshot.orgLogin, snapshot.planType] as const),
+      );
+      for (const seatRow of seatRowsForPeriod) {
+        const snapshot = persistedSeatSnapshotByPeriodKey.get(
+          `${period}\u0000${licensePeriodCanonicalKey(seatRow.orgLogin, seatRow.holderKey)}`,
+        );
+        const orgPlanType = periodOrgPlanByLogin.get(seatRow.orgLogin) ?? null;
+        if (snapshot || orgPlanType) {
+          seatMetadata[licensePeriodCanonicalKey(seatRow.orgLogin, seatRow.holderKey)] = {
+            planType: snapshot?.planType ?? orgPlanType,
+            assignedVia: snapshot?.assignedVia ?? null,
+            lastActivityAt: snapshot?.lastActivityAt ?? null,
+          };
+        }
+      }
+      if (period === currentPeriod) {
+        for (const seat of liveSeats) {
+          seatMetadata[licensePeriodCanonicalKey(seat.orgLogin, seat.holderKey)] = {
+            planType: seat.planType,
+            assignedVia: seat.assignedVia,
+            lastActivityAt: seat.lastActivityAt,
+          };
+        }
       }
 
       const consumptionForPeriod: ConsumptionRecordInput[] = consumptionRecordsWithPeriod
@@ -1656,6 +1956,28 @@ export async function syncLicenseHistoryForEnterprise(
         generatedAtUtc,
       });
       warnings.push(...materializeResult.warnings);
+      const degradedPeriod =
+        materializeResult.warnings.length > 0 ||
+        sourceStates.some((state) => state.status === "warning") ||
+        ledger.coverage.some((coverage) =>
+          coverage.billingPeriod === period && coverage.confidence === "unrecoverable"
+        );
+      if (
+        materializeResult.rows.length === 0 &&
+        degradedPeriod &&
+        deps.hasMaterializedRows({ enterpriseSlug, periods: [period] })
+      ) {
+        const existing = deps.queryLicensePeriodRows({ enterpriseSlug, periods: [period] });
+        if (existing.rows.length > 0) {
+          const retainedWarning = `Retained the existing ${period} materialization because the current run produced no replacement rows.`;
+          warnings.push(retainedWarning);
+          skippedPeriods.push(period);
+          for (const row of existing.rows) {
+            allMaterializedRows.push(toMaterializedRowLike(row, enterpriseSlug));
+          }
+          continue;
+        }
+      }
       const rowInputs: LicensePeriodRowInput[] = materializeResult.rows.map((row) => ({
         orgLogin: row.orgLogin,
         holderKey: row.holderKey,
@@ -1698,7 +2020,7 @@ export async function syncLicenseHistoryForEnterprise(
     // Org billing's `totalSeats` is the authoritative seat-count comparator
     // `checkSeatCount` expects; a group with no org billing snapshot for its
     // (billingPeriod, orgLogin) legitimately warns (no comparator available).
-    const authoritativeSeatCounts: AuthoritativeSeatCount[] = orgBillingSnapshots.map((snapshot) => ({
+    const authoritativeSeatCounts: AuthoritativeSeatCount[] = durableOrgBillingSnapshots.map((snapshot) => ({
       billingPeriod: snapshot.billingPeriod,
       orgLogin: snapshot.orgLogin,
       totalSeats: snapshot.totalSeats ?? 0,
@@ -1709,14 +2031,7 @@ export async function syncLicenseHistoryForEnterprise(
       ...checkExternalIdentityLeak({ materializedRows: allMaterializedRows, knownExternalIdentities }),
       ...checkStatusAgreement({ materializedRows: allMaterializedRows }),
       ...checkAicGrossVsNet({
-        comparisons: orgBillingSnapshots.map((snapshot) => ({
-          billingPeriod: snapshot.billingPeriod,
-          orgLogin: snapshot.orgLogin,
-          grossUsd: consumptionRecordsWithPeriod
-            .filter((c) => c.orgLogin === snapshot.orgLogin && c.billingPeriod === snapshot.billingPeriod)
-            .reduce((sum, c) => sum + (c.grossUsd ?? 0), 0),
-          netUsd: null,
-        })),
+        comparisons: buildGrossVsNetComparisons(consumptionRecordsWithPeriod),
         tolerancePct: config.validation.aicTolerancePct,
       }),
       ...checkConsumptionAttribution({
