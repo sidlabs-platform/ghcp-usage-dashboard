@@ -1,16 +1,12 @@
 # ============================================================
 # GHCP Usage Dashboard — Multi-stage Dockerfile
 # ============================================================
-# Uses node:20-slim (Debian) for reliable better-sqlite3 support.
+# Uses Node 26 and its built-in SQLite implementation.
 # Produces a minimal standalone Next.js image (~200 MB).
 # ============================================================
 
 # ── Stage 1: Install dependencies ──────────────────────────
-FROM node:20-slim AS deps
-
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3 make g++ \
-  && rm -rf /var/lib/apt/lists/*
+FROM node:26-slim AS deps
 
 WORKDIR /app
 
@@ -18,7 +14,7 @@ COPY package.json package-lock.json ./
 RUN npm ci
 
 # ── Stage 2: Build the application ────────────────────────
-FROM node:20-slim AS builder
+FROM node:26-slim AS builder
 
 WORKDIR /app
 
@@ -29,7 +25,7 @@ ENV NEXT_TELEMETRY_DISABLED=1
 RUN npm run build
 
 # ── Stage 3: Production runner ─────────────────────────────
-FROM node:20-slim AS runner
+FROM node:26-slim AS runner
 
 WORKDIR /app
 

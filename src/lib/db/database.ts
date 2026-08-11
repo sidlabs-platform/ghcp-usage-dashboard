@@ -1,10 +1,10 @@
-// SQLite database setup using better-sqlite3
+// SQLite database setup using Node's built-in node:sqlite module.
 
-import Database from "better-sqlite3";
 import path from "path";
 import fs from "fs";
 import { migrateCopilotAppMetrics } from "./copilot-app-migration";
 import { migrateSummaryCacheClassification } from "./summary-cache-migration";
+import { SqliteDatabase } from "./sqlite-database";
 
 const DB_PATH = path.join(process.cwd(), "data", "copilot-metrics.db");
 const SCHEMA_PATH = path.join(process.cwd(), "src", "lib", "db", "schema.sql");
@@ -13,9 +13,9 @@ const SUMMARY_SCHEMA_PATH = path.join(process.cwd(), "src", "lib", "db", "summar
 const BILLING_SCHEMA_PATH = path.join(process.cwd(), "src", "lib", "db", "billing-schema.sql");
 const LICENSING_SCHEMA_PATH = path.join(process.cwd(), "src", "lib", "db", "licensing-schema.sql");
 
-let _db: Database.Database | null = null;
+let _db: SqliteDatabase | null = null;
 
-export function getDb(): Database.Database {
+export function getDb(): SqliteDatabase {
   if (_db) return _db;
 
   // Ensure data directory exists
@@ -24,7 +24,7 @@ export function getDb(): Database.Database {
     fs.mkdirSync(dataDir, { recursive: true });
   }
 
-  _db = new Database(DB_PATH);
+  _db = new SqliteDatabase(DB_PATH);
   _db.pragma("journal_mode = WAL");
   _db.pragma("foreign_keys = ON");
 

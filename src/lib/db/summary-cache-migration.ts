@@ -18,18 +18,18 @@
 // ./aggregation-queries) so this module can be required by database.ts
 // without creating a circular import: database.ts -> summary-cache-migration.ts
 // -> aggregation-queries.ts -> database.ts would otherwise be a cycle.
-import type Database from "better-sqlite3";
 import { IS_COMPLETION_SQL } from "./feature-classification";
+import type { SqliteDatabase } from "./sqlite-database";
 
 /** Ledger name recorded once this migration has successfully applied. */
 const MIGRATION_NAME = "summary-cache-completion-classification-v1";
 
-function tableExists(db: Database.Database, table: string): boolean {
+function tableExists(db: SqliteDatabase, table: string): boolean {
   const row = db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`).get(table);
   return !!row;
 }
 
-function alreadyApplied(db: Database.Database): boolean {
+function alreadyApplied(db: SqliteDatabase): boolean {
   if (!tableExists(db, "summary_cache_migrations")) return false;
   const row = db
     .prepare(`SELECT name FROM summary_cache_migrations WHERE name = ?`)
@@ -37,7 +37,7 @@ function alreadyApplied(db: Database.Database): boolean {
   return !!row;
 }
 
-function markApplied(db: Database.Database): void {
+function markApplied(db: SqliteDatabase): void {
   db.prepare(
     `INSERT INTO summary_cache_migrations (name, applied_at) VALUES (?, ?)
      ON CONFLICT(name) DO NOTHING`
@@ -54,7 +54,7 @@ function markApplied(db: Database.Database): void {
  * malformed totals_by_feature JSON are excluded via json_valid(...) so a
  * single corrupt legacy row can never throw and abort the whole migration.
  */
-function migrateUserPeriodSummary(db: Database.Database): void {
+function migrateUserPeriodSummary(db: SqliteDatabase): void {
   if (!tableExists(db, "user_period_summary") || !tableExists(db, "user_daily_metrics")) return;
 
   db.exec(`
@@ -94,7 +94,7 @@ function migrateUserPeriodSummary(db: Database.Database): void {
  * IS_AGENT_SQL (`feature = 'agent_edit'`) was never ambiguous, unlike the
  * completion allowlist.
  */
-function migrateDailyAggregateCache(db: Database.Database): void {
+function migrateDailyAggregateCache(db: SqliteDatabase): void {
   if (!tableExists(db, "daily_aggregate_cache") || !tableExists(db, "user_daily_metrics")) return;
 
   db.exec(`
@@ -123,7 +123,7 @@ function migrateDailyAggregateCache(db: Database.Database): void {
  * period_end) row, joining through team_memberships to reach the same
  * user_daily_metrics rows refreshTeamSummary would use for that period.
  */
-function migrateTeamSummaryCache(db: Database.Database): void {
+function migrateTeamSummaryCache(db: SqliteDatabase): void {
   if (
     !tableExists(db, "team_summary_cache") ||
     !tableExists(db, "team_memberships") ||
@@ -180,7 +180,7 @@ function migrateTeamSummaryCache(db: Database.Database): void {
  * work: future summary refreshes already use the current IS_COMPLETION_SQL
  * semantics, so there is nothing legacy left to fix.
  */
-export function migrateSummaryCacheClassification(db: Database.Database): void {
+export function migrateSummaryCacheClassification(db: SqliteDatabase): void {
   if (!tableExists(db, "summary_cache_migrations")) return;
   if (alreadyApplied(db)) return;
 

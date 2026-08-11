@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import Database from "better-sqlite3";
+import Database from "./sqlite-database";
 import path from "path";
 import fs from "fs";
 // Import the real, single-source-of-truth SQL predicate constants instead of
@@ -10,7 +10,7 @@ import { IS_COMPLETION_SQL, IS_AGENT_SQL, IS_COPILOT_APP_SQL, NOT_AGENT_OR_APP_S
 // We test the SQL queries directly against a temporary in-memory DB
 // to verify json_each aggregation logic
 
-let db: Database.Database;
+let db: Database;
 
 beforeAll(() => {
   db = new Database(":memory:");
@@ -553,7 +553,7 @@ describe("multi-enterprise SQL deduplication", () => {
 // ═══════════════════════════════════════════════════════════════════════
 
 describe("copilot_app SQL classification", () => {
-  let appDb: Database.Database;
+  let appDb: Database;
 
   beforeAll(() => {
     appDb = new Database(":memory:");

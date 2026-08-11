@@ -31,6 +31,7 @@ import {
   AlertTriangle,
   Building2,
   BadgeCheck,
+  Info,
 } from "lucide-react";
 import type {
   LicenseReconciliationRow,
@@ -63,6 +64,23 @@ type ReconciliationTableRows =
   | { view: "detail"; rows: LicensePeriodRowRecord[] }
   | { view: "rollup"; rows: LicenseRollupRowRecord[] }
   | { view: "legacy"; rows: LicenseReconciliationRow[] };
+
+/** Clarifies that zero AI-credit consumption is a data/period condition, not a reconciliation failure. Renders nothing when consumption exists. */
+function ZeroConsumptionNotice({ kpis }: Readonly<{ kpis: LicenseReconciliationKPIs }>) {
+  if (!(kpis.totalUsers > 0 && kpis.totalConsumedCredits <= 0)) return null;
+  const users = safeNum(kpis.totalUsers).toLocaleString(undefined, { maximumFractionDigits: 0 });
+  return (
+    <div role="note" className="flex items-start gap-3 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
+      <Info className="h-5 w-5 shrink-0 mt-0.5" />
+      <div>
+        <p className="font-medium">No AI-credit consumption recorded for this period.</p>
+        <p className="text-xs mt-1 opacity-90">
+          All {users} licensed users show zero AI-credit usage. This measures premium AI-credit spend, not Copilot activity &mdash; seats can be active with included features (completions, chat) while consuming zero credits. If you expect consumption, confirm the billing sync has AI-credit data for the selected window (AI Credits began 2026-06-01).
+        </p>
+      </div>
+    </div>
+  );
+}
 
 export default function LicenseReconciliationPage() {
   const { mode: dateMode, days, startDate, endDate } = useDateRange();
@@ -562,6 +580,8 @@ export default function LicenseReconciliationPage() {
                 <MetricCard title="Over-Budget Users" value={kpis.overBudgetUsers} accent="red" icon={<AlertTriangle className="h-5 w-5" />} subtitle="Consumption exceeds budget" />
                 <MetricCard title="Zero-Consumption Seats" value={kpis.zeroConsumptionSeats} accent="amber" icon={<AlertTriangle className="h-5 w-5" />} subtitle={`${fmtNum(kpis.pendingCancellation)} pending cancellation`} />
               </div>
+
+              <ZeroConsumptionNotice kpis={kpis} />
             </div>
 
             <div className="grid gap-6 lg:grid-cols-2">

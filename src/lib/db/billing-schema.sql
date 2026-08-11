@@ -1,5 +1,5 @@
 -- GitHub Enterprise Billing Reports — Database Schema
--- Uses SQLite via better-sqlite3
+-- Uses SQLite via Node's built-in node:sqlite module
 -- Stores metered usage records, premium request records, daily aggregates, and sync state
 
 -- ============================================================================

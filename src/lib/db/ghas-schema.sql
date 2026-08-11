@@ -1,5 +1,5 @@
 -- GitHub Advanced Security (GHAS) Metrics - Database Schema
--- Uses SQLite via better-sqlite3
+-- Uses SQLite via Node's built-in node:sqlite module
 -- Stores alert caches for incremental sync and daily aggregates for UI queries
 
 -- ============================================================================

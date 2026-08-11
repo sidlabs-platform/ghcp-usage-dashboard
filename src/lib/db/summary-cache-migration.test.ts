@@ -1,15 +1,15 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import Database from "better-sqlite3";
+import Database from "./sqlite-database";
 import { migrateSummaryCacheClassification } from "./summary-cache-migration";
 
-let db: Database.Database;
+let db: Database;
 
 afterEach(() => {
   db.close();
 });
 
 /** Minimal schema mirroring the real summary-schema.sql + user_daily_metrics/team_memberships shape. */
-function createSchema(database: Database.Database): void {
+function createSchema(database: Database): void {
   database.exec(`
     CREATE TABLE user_daily_metrics (
       day TEXT NOT NULL,
