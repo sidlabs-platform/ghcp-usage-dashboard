@@ -328,9 +328,9 @@ Tracks usage across Ask, Edit, Plan, Agent, and Custom modes. Shows adoption tre
 
 ### 📈 AI Adoption
 
-Classifies engaged developers into GitHub's AI adoption phases (Phase 0 passive, Phase 1 code first, Phase 2 agent first, Phase 3 multi-agent) and shows the distribution, the trend over time, per-phase engagement metrics, delivery impact (merged PRs by phase), and **Potential ROI**. Requires `copilot.userMetrics: true`.
+Classifies engaged developers into GitHub's AI adoption phases (Phase 0 no cohort, Phase 1 code first, Phase 2 agent first, Phase 3 multi-agent) and shows the distribution, the trend over time, per-phase engagement metrics, delivery impact (merged PRs by phase), and **Potential ROI**. Requires both `copilot.enabled: true` and `copilot.userMetrics: true`.
 
-**Potential ROI** compares early adopters (Phase 0 + Phase 1) against agent-first adopters (Phase 2 + Phase 3) on three normalized measures:
+**Potential ROI** compares chat & completions adopters (Phase 0 + Phase 1) against agent-first adopters (Phase 2 + Phase 3) on three normalized measures:
 
 | Measure | How it is derived |
 |---|---|

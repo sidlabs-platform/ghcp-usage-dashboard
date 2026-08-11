@@ -42,7 +42,15 @@ export function readStoredSalary(): number {
   }
 }
 
-/** Persist the salary, ignoring storage failures. */
+/**
+ * Persist the salary, ignoring storage failures.
+ *
+ * NOTE: static analysis (CodeQL `js/clear-text-storage-of-sensitive-data`) flags
+ * `localStorage` writes whose identifier looks salary-related. The value here is
+ * a *modeling band* the viewer picks for themselves to scale the ROI section —
+ * it is not anyone's compensation record, it is never transmitted to the server,
+ * and it carries no identity. Storing it in clear text is intentional.
+ */
 export function writeStoredSalary(value: number): void {
   if (typeof window === "undefined") return;
   const normalized = normalizeSalary(value);

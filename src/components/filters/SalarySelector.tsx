@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { cn } from "@/lib/utils";
 import { Wallet } from "lucide-react";
 import {
@@ -42,6 +42,16 @@ export function SalarySelector({ value, onChange, currency }: SalarySelectorProp
   const [showCustom, setShowCustom] = useState(isCustom);
   const [draft, setDraft] = useState(String(value));
   const [error, setError] = useState<string | null>(null);
+
+  // `value` arrives asynchronously (restored from localStorage after mount), so
+  // a persisted custom amount would otherwise leave the input hidden and the
+  // "Custom" button unlit.
+  useEffect(() => {
+    setDraft(String(value));
+    if (!SALARY_BANDS.includes(value as (typeof SALARY_BANDS)[number])) {
+      setShowCustom(true);
+    }
+  }, [value]);
 
   const applyCustom = () => {
     const normalized = normalizeSalary(draft);

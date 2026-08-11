@@ -1,6 +1,7 @@
 // Metrics repository — CRUD for enterprise/org/user daily metrics in SQLite
 
 import { getDb } from "./database";
+import { buildLoginFilter } from "./aggregation-queries";
 import type { DayTotal, UserDayRecord, TotalsByFeature } from "@/lib/types/metrics";
 
 export interface UserAiCreditsSummary {
@@ -1105,11 +1106,10 @@ function buildPhaseAssignmentWhere(
   }
 
   if (filters?.allowedLogins !== undefined) {
-    if (filters.allowedLogins.length === 0) {
-      clause += " AND 1 = 0";
-    } else {
-      clause += ` AND u.user_login IN (${filters.allowedLogins.map(() => "?").join(",")})`;
-      params.push(...filters.allowedLogins);
+    const lf = buildLoginFilter(filters.allowedLogins, "u.user_login", true);
+    if (lf.clause) {
+      clause += ` ${lf.clause}`;
+      params.push(...lf.params);
     }
   }
 
@@ -1162,25 +1162,44 @@ export function getPhaseDeveloperCounts(
 }
 
 /**
- * True when the billing AI-credit table holds at least one costed row in the
- * range. Used to decide between the billed-dollars path and the credit-estimate
- * fallback without reporting a misleading $0 when billing was never synced.
+ * True when the billing AI-credit table holds at least one costed row that is
+ * attributable to the users currently in scope.
+ *
+ * Applied with the same filters as {@link getPhaseCostFromBilling} so the cost
+ * source is chosen for the population actually being reported. Checking the
+ * unfiltered table instead would select the billed path for a team whose
+ * members have no billing rows, reporting $0 rather than falling back to the
+ * credit estimate.
  */
 export function hasBillingCostData(
   startDay: string,
   endDay: string,
-  enterpriseSlugs?: string[]
+  filters?: RoiCostFilters
 ): boolean {
   const db = getDb();
-  const ef = buildEnterpriseFilter(enterpriseSlugs);
+  const ef = buildEnterpriseFilter(filters?.enterpriseSlugs);
+  const params: unknown[] = [startDay, endDay, ...ef.params];
+  let loginClause = "";
+
+  // Billing usernames and metrics logins are not guaranteed to share casing.
+  if (filters?.allowedLogins !== undefined) {
+    if (filters.allowedLogins.length === 0) {
+      loginClause = " AND 1 = 0";
+    } else {
+      const placeholders = filters.allowedLogins.map(() => "?").join(",");
+      loginClause = ` AND LOWER(username) IN (${placeholders})`;
+      params.push(...filters.allowedLogins.map((l) => l.toLowerCase()));
+    }
+  }
+
   const row = db.prepare(`
     SELECT 1
     FROM billing_premium_requests
     WHERE date >= ? AND date <= ?
       AND COALESCE(aic_gross_amount, 0) > 0
-      AND COALESCE(username, '') != ''${ef.clause}
+      AND COALESCE(username, '') != ''${ef.clause}${loginClause}
     LIMIT 1
-  `).get(startDay, endDay, ...ef.params);
+  `).get(...params);
   return row !== undefined;
 }
 

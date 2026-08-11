@@ -138,6 +138,16 @@ describe("hasBillingCostData", () => {
     expect(hasBillingCostData("2026-06-01", "2026-06-28")).toBe(true);
     expect(hasBillingCostData("2026-07-01", "2026-07-28")).toBe(false);
   });
+
+  it("respects allowedLogins so an out-of-scope payer does not select the billing path", () => {
+    insertBilling("2026-06-05", "Alice", 12.5);
+
+    // Bob is the only login in scope and has no billing rows, so the caller must
+    // fall back to the credit estimate rather than reporting $0.00 for him.
+    expect(hasBillingCostData("2026-06-01", "2026-06-28", { allowedLogins: ["bob"] })).toBe(false);
+    expect(hasBillingCostData("2026-06-01", "2026-06-28", { allowedLogins: ["ALICE"] })).toBe(true);
+    expect(hasBillingCostData("2026-06-01", "2026-06-28", { allowedLogins: [] })).toBe(false);
+  });
 });
 
 describe("getPhaseCostFromBilling", () => {

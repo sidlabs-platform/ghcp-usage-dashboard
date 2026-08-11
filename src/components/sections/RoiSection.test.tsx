@@ -21,8 +21,12 @@ function makeResponse(overrides: Partial<RoiResponse> = {}): RoiResponse {
     hasData: true,
     costSource: "billing",
     currency: "USD",
+    creditToUsd: 0.01,
     hasPrData: true,
-    days: 28,
+    windowDays: 28,
+    dataAsOf: "2026-05-28",
+    daysLoaded: 28,
+    filtered: false,
     groups: [
       {
         key: "early",
@@ -143,9 +147,15 @@ describe("RoiSection", () => {
     expect(screen.getByText("+$32.62")).toBeInTheDocument();
   });
 
-  it("always shows the directional-estimate caveat", () => {
-    render(<RoiSection data={makeResponse()} />);
-    expect(screen.getByText(/treat these metrics as directional/)).toBeInTheDocument();
+  it("tailors the caveat to the cost source", () => {
+    const { unmount } = render(<RoiSection data={makeResponse({ costSource: "billing" })} />);
+    expect(screen.getByText(/billed AI Credit spend attributed per developer/)).toBeInTheDocument();
+    expect(screen.getByText(/salary band is a modeling input/)).toBeInTheDocument();
+    unmount();
+
+    render(<RoiSection data={makeResponse({ costSource: "credits" })} />);
+    expect(screen.getByText(/estimated from AI credit consumption/)).toBeInTheDocument();
+    expect(screen.getByText(/treat them as directional/)).toBeInTheDocument();
   });
 });
 

@@ -106,7 +106,7 @@ Use `isCompletionFeature()` and `isAgentFeature()` from `src/lib/aggregation/sep
 - Cohort user counts span the **entire** requested window (distinct users active on any day), not just the window's final day. The response carries `countBasis: "window" | "snapshot"`; `"snapshot"` means per-user phase data was unavailable and the enterprise last-day figure was used instead.
 
 ### Potential ROI
-- Compares early adopters (phases 0+1) against agent-first adopters (phases 2+3) on cost/dev/month, % payroll/month, and PRs/dev/month
+- Compares "Chat & completions" adopters (phases 0+1) against "Agent-first" adopters (phases 2+3) on cost/dev/month, % payroll/month, and PRs/dev/month
 - API: `/api/metrics/roi` — see `GROUP_DEFINITIONS` in `src/app/api/metrics/roi/route.ts`; SQL helpers live at the end of `src/lib/db/metrics-repo.ts`
 - Cost precedence: billing `aic_gross_amount` (per user, joined on `LOWER(username) = LOWER(user_login)`) → `ai_credits_used × creditToUsd` → `costSource: "none"` so the UI renders "—" instead of `$0.00`
 - `metrics.billing.licensing` is server-only and deliberately stripped from `/api/config` — read `creditToUsd` inside the route via `getLicensingConfig()` and return only derived USD; never widen the client config payload

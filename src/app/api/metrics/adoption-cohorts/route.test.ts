@@ -190,8 +190,31 @@ describe("adoption-cohorts window-wide user counts", () => {
     const res = await GET(new NextRequest("http://localhost/api/metrics/adoption-cohorts?days=28"));
     const json = await res.json();
 
-    const multiAgent = json.distribution.find((d: { phase: number }) => d.phase === 3);
-    expect(multiAgent.count).toBe(0);
+    const multiAgentZero = json.distribution.find((d: { phase: number }) => d.phase === 3);
+    expect(multiAgentZero.count).toBe(0);
     expect(json.totalEngaged).toBe(45);
+  });
+
+  it("includes a phase that appears in the window but not on the final day", async () => {
+    // Nobody in phase 3 was active on 2026-06-26, so the enterprise snapshot omits
+    // it entirely — but 12 developers were in that phase earlier in the window.
+    const phases = [makePhase(1, "Code first", 30, 40)];
+    allMock.mockReturnValue([
+      { day: "2026-06-26", totals_by_ai_adoption_phase: JSON.stringify(phases) },
+    ]);
+    getPhaseDeveloperCountsMock.mockReturnValue([
+      { phase: 1, developers: 45 },
+      { phase: 3, developers: 12 },
+    ]);
+
+    const GET = await getHandler();
+    const res = await GET(new NextRequest("http://localhost/api/metrics/adoption-cohorts?days=28"));
+    const json = await res.json();
+
+    expect(json.totalEngaged).toBe(57);
+    const multiAgent = json.distribution.find((d: { phase: number }) => d.phase === 3);
+    expect(multiAgent).toBeDefined();
+    expect(multiAgent.count).toBe(12);
+    expect(multiAgent.label).toBe("Multi-agent");
   });
 });

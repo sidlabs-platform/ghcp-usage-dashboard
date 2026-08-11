@@ -121,11 +121,28 @@ function getEnterpriseAdoptionCohorts(
   const windowCounts = getWindowPhaseCounts(start, end, enterpriseSlugs);
   const countBasis: "window" | "snapshot" = windowCounts ? "window" : "snapshot";
 
-  const countForPhase = (p: TotalsByAIAdoptionPhase) =>
+  const countForPhase = (p: { phase: number; engaged_users?: number }) =>
     windowCounts ? (windowCounts[p.phase] ?? 0) : (p.engaged_users || 0);
 
-  const totalEngaged = latestPhases.reduce((s, p) => s + countForPhase(p), 0);
-  const distribution = latestPhases.map((p) => {
+  // A phase can appear in the window without being present on the final day
+  // (nobody in it was active that day). Union both sources so those developers
+  // are still counted, otherwise the distribution silently drops them.
+  const distributionPhases: { phase: number; label?: string; engaged_users?: number }[] = [
+    ...latestPhases,
+  ];
+  if (windowCounts) {
+    const seen = new Set(latestPhases.map((p) => p.phase));
+    for (const key of Object.keys(windowCounts)) {
+      const phase = Number(key);
+      if (!seen.has(phase)) {
+        distributionPhases.push({ phase, engaged_users: 0 });
+      }
+    }
+    distributionPhases.sort((a, b) => a.phase - b.phase);
+  }
+
+  const totalEngaged = distributionPhases.reduce((s, p) => s + countForPhase(p), 0);
+  const distribution = distributionPhases.map((p) => {
     const count = countForPhase(p);
     return {
       phase: p.phase,

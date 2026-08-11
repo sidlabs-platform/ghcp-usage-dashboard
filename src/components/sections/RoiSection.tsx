@@ -48,6 +48,15 @@ const COST_SOURCE_LABEL: Record<RoiResponse["costSource"], string> = {
   none: "No cost data",
 };
 
+/** The cost half of the caveat depends on where the dollars actually came from. */
+const COST_CAVEAT: Record<RoiResponse["costSource"], string> = {
+  billing:
+    "Cost figures come from billed AI Credit spend attributed per developer, so they reflect actual charges rather than an estimate.",
+  credits:
+    "Cost figures are estimated from AI credit consumption rather than billed spend, so treat them as directional.",
+  none: "Cost figures are unavailable for this selection, so cost and payroll metrics are not shown.",
+};
+
 interface StatProps {
   label: string;
   value: string;
@@ -218,10 +227,9 @@ export function RoiSection({ data }: RoiSectionProps) {
       )}
 
       <p className="text-xs text-[hsl(var(--muted-foreground))]">
-        Cost figures are estimates derived from AI credit consumption and the salary band is a
-        modeling input rather than actual payroll data — treat these metrics as directional.
-        Developer counts come from user-level metrics while merged pull requests come from the
-        enterprise rollup, so the two populations can differ slightly.
+        {COST_CAVEAT[data.costSource]} The salary band is a modeling input rather than actual
+        payroll data. Developer counts come from user-level metrics while merged pull requests
+        come from the enterprise rollup, so the two populations can differ slightly.
       </p>
     </Section>
   );

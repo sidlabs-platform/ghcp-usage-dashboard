@@ -139,7 +139,7 @@ async function handler(request: NextRequest) {
 
     const costFilters: RoiCostFilters = { allowedLogins, enterpriseSlugs };
 
-    const useBilling = hasBillingCostData(start, end, enterpriseSlugs);
+    const useBilling = hasBillingCostData(start, end, costFilters);
     const costRows: PhaseCostRow[] = useBilling
       ? getPhaseCostFromBilling(start, end, costFilters)
       : getPhaseCostFromCredits(start, end, creditToUsd, costFilters);
@@ -213,8 +213,8 @@ async function handler(request: NextRequest) {
 
     return NextResponse.json(body, { headers: CACHE_HEADERS });
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    return NextResponse.json({ error: message }, { status: 500 });
+    console.error("[api/metrics/roi] request failed:", err);
+    return NextResponse.json({ error: "Failed to compute ROI metrics" }, { status: 500 });
   }
 }
 
