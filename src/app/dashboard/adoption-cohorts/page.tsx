@@ -14,7 +14,8 @@ import { Users, TrendingUp, Code2, Bot, Layers, GitMerge } from "lucide-react";
 import type { CohortDistributionData } from "@/components/charts/CohortDistributionChart";
 import type { CohortMergedData } from "@/components/charts/CohortMergedChart";
 import type { CohortTrendDataPoint } from "@/components/charts/CohortTrendChart";
-import type { TotalsByAIAdoptionPhase } from "@/lib/types/metrics";
+import type { RoiResponse, TotalsByAIAdoptionPhase } from "@/lib/types/metrics";
+import { RoiSection } from "@/components/sections/RoiSection";
 
 const CohortDistributionChart = dynamic(
   () => import("@/components/charts/CohortDistributionChart").then((m) => ({ default: m.CohortDistributionChart })),
@@ -42,6 +43,7 @@ interface AdoptionCohortsData {
   dataAsOf: string;
   daysLoaded: number;
   latestDay?: string;
+  countBasis?: "window" | "snapshot";
 }
 
 const PHASE_ICONS: Record<number, typeof Users> = {
@@ -62,12 +64,14 @@ export default function AdoptionCohortsPage() {
   const { days } = useDateRange();
   const { buildScopeParams } = useScope();
   const [data, setData] = useState<AdoptionCohortsData | null>(null);
+  const [roi, setRoi] = useState<RoiResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const kpiRef = useRef<HTMLDivElement>(null);
   const chartsRef = useRef<HTMLDivElement>(null);
   const mergedRef = useRef<HTMLDivElement>(null);
+  const roiRef = useRef<HTMLDivElement>(null);
 
   const fetchData = useCallback(() => {
     setLoading(true);
@@ -86,6 +90,15 @@ export default function AdoptionCohortsPage() {
         if (err.name !== "AbortError") setError(err.message);
       })
       .finally(() => setLoading(false));
+
+    // ROI is supplementary — a failure here hides the section rather than
+    // taking down the whole page.
+    fetch(`/api/metrics/roi?${params}`, { signal: controller.signal })
+      .then((res) => res.json())
+      .then((json: RoiResponse & { error?: string }) => {
+        setRoi(json.error ? null : json);
+      })
+      .catch(() => setRoi(null));
 
     return () => controller.abort();
   }, [days, buildScopeParams]);
@@ -147,11 +160,15 @@ export default function AdoptionCohortsPage() {
     <div>
       <PageHeader
         title="AI Adoption Cohorts"
-        description={`AI adoption maturity phases — ${data.daysLoaded} days · Distribution snapshot: ${data.latestDay ?? data.dataAsOf}`}
+        description={
+          data.countBasis === "snapshot"
+            ? `AI adoption maturity phases — ${data.daysLoaded} days · Counts as of ${data.latestDay ?? data.dataAsOf}`
+            : `AI adoption maturity phases — ${data.daysLoaded} days · Counts include every user active in the window`
+        }
       >
         <ExportMenu
           pdf={{
-            sectionRefs: [kpiRef, chartsRef, mergedRef],
+            sectionRefs: [kpiRef, chartsRef, mergedRef, roiRef],
             title: "AI Adoption Cohorts",
             filename: `adoption-cohorts-${days}d`,
             metadata: {
@@ -245,6 +262,13 @@ export default function AdoptionCohortsPage() {
             </div>
           </div>
         </Section>
+      )}
+
+      {/* Potential ROI — spend vs. pull request output by adoption depth */}
+      {roi?.hasData && (
+        <div ref={roiRef}>
+          <RoiSection data={roi} />
+        </div>
       )}
 
       {/* Per-phase metrics table */}

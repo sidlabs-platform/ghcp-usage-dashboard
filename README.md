@@ -326,6 +326,28 @@ Lines of code suggested vs accepted, language breakdowns, model usage for comple
 
 Tracks usage across Ask, Edit, Plan, Agent, and Custom modes. Shows adoption trends, model usage per mode, and feature comparison. Requires `copilot.userMetrics: true`. Supports both CSV and PDF export.
 
+### 📈 AI Adoption
+
+Classifies engaged developers into GitHub's AI adoption phases (Phase 0 passive, Phase 1 code first, Phase 2 agent first, Phase 3 multi-agent) and shows the distribution, the trend over time, per-phase engagement metrics, delivery impact (merged PRs by phase), and **Potential ROI**. Requires `copilot.userMetrics: true`.
+
+**Potential ROI** compares early adopters (Phase 0 + Phase 1) against agent-first adopters (Phase 2 + Phase 3) on three normalized measures:
+
+| Measure | How it is derived |
+|---|---|
+| Cost / dev / month | Attributed Copilot spend ÷ developers in the group, scaled to a 30.44-day month |
+| % Payroll / month | Cost per dev per month ÷ (annual salary ÷ 12), computed in the browser |
+| PRs / dev / month | Merged PRs for the group's phases ÷ developers, scaled from the API's 28-day rolling window |
+
+Cost is resolved with the following precedence, and the card labels which basis was used:
+
+1. **Billing** — `SUM(aic_gross_amount)` from `billing_premium_requests`, joined per user. Used whenever billing data has been synced.
+2. **Credits** — `SUM(ai_credits_used)` from user daily metrics × `metrics.billing.licensing.creditToUsd` from `dashboard-config.json`. Used as an estimate when billing data is unavailable.
+3. **None** — when neither source attributes any spend, cost metrics render `—` rather than a misleading `$0.00`.
+
+The salary selector offers preset bands plus a custom amount and persists to `localStorage`. Because payroll percentage is computed client-side, changing the salary recalculates instantly without refetching.
+
+> **No re-sync required.** The ROI section reads only fields that already exist in the schema. Merged-PR figures come from `total_pull_requests_merged` (a June 2026 API addition) — if your synced data predates it, PR metrics show `—` and the cost metrics still render. Cost and PR figures are directional estimates, and developer counts come from user-level metrics while merged PRs come from the enterprise rollup, so the two populations can differ slightly.
+
 ### 🧠 Model Statistics
 
 AI model usage distribution and trends across all Copilot features. Shows which models are being used most and how usage is shifting over time. Requires `copilot.userMetrics: true`.
@@ -388,6 +410,7 @@ Which config toggles control the visibility of each sidebar page:
 | Security | `codeScanning.enabled` OR `dependabot.enabled` OR `secretScanning.enabled` |
 | Code Generation | `copilot.enabled` + `copilot.userMetrics` |
 | Copilot Features | `copilot.enabled` + `copilot.userMetrics` |
+| AI Adoption | `copilot.enabled` + `copilot.userMetrics` |
 | Model Statistics | `copilot.enabled` + `copilot.userMetrics` |
 | CLI Analytics | `copilot.enabled` + `copilot.userMetrics` |
 | Pull Requests | `copilot.enabled` |
@@ -498,7 +521,7 @@ All fields live under `metrics.billing.licensing` in `dashboard-config.json` and
 
 | Field | Type | Default | Notes |
 |---|---|---|---|
-| `creditToUsd` | number | `0.01` | USD value of one AI credit. |
+| `creditToUsd` | number | `0.01` | USD value of one AI credit. Also drives the fallback cost estimate in the [AI Adoption](#-ai-adoption) Potential ROI section when billing data has not been synced. |
 | `currency` | string | `"USD"` | Display currency code. |
 | `licenseCost` | `{business?, enterprise?, unknown?}` (USD) | `{business: 19, enterprise: 39, unknown: 0}` | Negotiated monthly seat price per plan. |
 | `aicAllowance` | `{business?, enterprise?, unknown?}` (credits) | `{business: 1900, enterprise: 3900, unknown: 0}` | Monthly AI-credit allowance per plan; superseded by `datedAllowances` for periods they cover. |

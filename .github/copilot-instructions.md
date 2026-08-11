@@ -101,8 +101,19 @@ Use `isCompletionFeature()` and `isAgentFeature()` from `src/lib/aggregation/sep
 - Enterprise/org-level: `totals_by_ai_adoption_phase` array with per-phase engagement averages
 - Per-phase **total PRs merged** (`total_pull_requests_merged`, June 2026 API addition): absolute delivery throughput per cohort, enterprise/org reports only. Optional field — degrade gracefully (`hasMergeData` flag, "—" / hidden section) when older synced data lacks it. User-level reports have no per-phase PR data.
 - Stored as JSON TEXT columns: `ai_adoption_phase` on `user_daily_metrics`, `totals_by_ai_adoption_phase` on `enterprise_daily_metrics`/`org_daily_metrics`
-- Dashboard page: `/dashboard/adoption-cohorts` — distribution chart, trend chart, per-phase metrics table, plus a "Delivery Impact by Phase" section (merged-PR KPIs, merged-by-phase bar chart, merged trend)
+- Dashboard page: `/dashboard/adoption-cohorts` — distribution chart, trend chart, per-phase metrics table, a "Delivery Impact by Phase" section (merged-PR KPIs, merged-by-phase bar chart, merged trend), and a "Potential ROI" section
 - API: `/api/metrics/adoption-cohorts` — uses enterprise data when available, falls back to user-level aggregation; returns `mergedDistribution`, `mergedTrend`, `totalMerged`, `hasMergeData`
+- Cohort user counts span the **entire** requested window (distinct users active on any day), not just the window's final day. The response carries `countBasis: "window" | "snapshot"`; `"snapshot"` means per-user phase data was unavailable and the enterprise last-day figure was used instead.
+
+### Potential ROI
+- Compares early adopters (phases 0+1) against agent-first adopters (phases 2+3) on cost/dev/month, % payroll/month, and PRs/dev/month
+- API: `/api/metrics/roi` — see `GROUP_DEFINITIONS` in `src/app/api/metrics/roi/route.ts`; SQL helpers live at the end of `src/lib/db/metrics-repo.ts`
+- Cost precedence: billing `aic_gross_amount` (per user, joined on `LOWER(username) = LOWER(user_login)`) → `ai_credits_used × creditToUsd` → `costSource: "none"` so the UI renders "—" instead of `$0.00`
+- `metrics.billing.licensing` is server-only and deliberately stripped from `/api/config` — read `creditToUsd` inside the route via `getLicensingConfig()` and return only derived USD; never widen the client config payload
+- **Two different monthly divisors**: cost is summed over the requested `days` → `× DAYS_PER_MONTH / days`. But `total_pull_requests_merged` is already a 28-day rolling aggregate, so it uses `× DAYS_PER_MONTH / ENTERPRISE_ROLLING_WINDOW_DAYS` and is read from the **latest** enterprise day row only (summing across days would multiply-count the same PRs)
+- `hasPrData` is forced false when more than one enterprise is in scope — a single enterprise row cannot describe a multi-enterprise scope
+- Salary is applied client-side (`src/lib/roi/salary.ts`) so the selector recalculates without a refetch; persisted in `localStorage` under `ghcp:roi:annualSalary`
+- No schema changes and no re-sync required
 
 ### Billing: AI Credits (replacing Premium Requests)
 - As of June 2026, GitHub Copilot uses **AI Credits** instead of Premium Requests
