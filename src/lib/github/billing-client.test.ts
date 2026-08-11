@@ -315,6 +315,20 @@ describe("billingClient", () => {
       expect(records[0].quantity).toBe(0.3);
       expect(records[0].aic_quantity).toBe(0.97);
     });
+
+    it("falls back to quantity/gross_amount for ai-credits rows with empty aic_* columns", () => {
+      const csv = [
+        "date,username,product,sku,model,quantity,unit_type,applied_cost_per_quantity,gross_amount,discount_amount,net_amount,total_monthly_quota,organization,cost_center_name,aic_quantity,aic_gross_amount",
+        "2026-08-11,carol,copilot,copilot_ai_credit,Claude,288.89,ai-credits,0.01,2.8889,0,0,1000,my-org,,,",
+      ].join("\n");
+      const records = billingClient.parseAiCreditCSV(csv);
+      expect(records).toHaveLength(1);
+      expect(records[0].unit_type).toBe("ai-credits");
+      expect(records[0].quantity).toBe(288.89);
+      // aic_* columns empty → derived from quantity/gross_amount
+      expect(records[0].aic_quantity).toBe(288.89);
+      expect(records[0].aic_gross_amount).toBe(2.8889);
+    });
   });
 
   describe("fetchPremiumRequestReport", () => {

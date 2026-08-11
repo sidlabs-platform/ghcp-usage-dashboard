@@ -288,29 +288,39 @@ function parseAiCreditCSV(
   csvContent: string,
 ): BillingPremiumRequestRecord[] {
   const rawRows = parseCSV<AiCreditCSVRow>(csvContent);
-  return rawRows.map((r) => ({
-    date: r.date || "",
-    product: r.product || "",
-    sku: r.sku || "",
-    quantity: parseFloat(r.quantity) || 0,
-    unit_type: r.unit_type || "",
-    applied_cost_per_quantity: parseFloat(r.applied_cost_per_quantity) || 0,
-    gross_amount: parseFloat(r.gross_amount) || 0,
-    discount_amount: parseFloat(r.discount_amount) || 0,
-    net_amount: parseFloat(r.net_amount) || 0,
-    username: r.username || "",
-    organization: r.organization || "",
-    model: r.model || "",
-    exceeds_quota: "",
-    total_monthly_quota: parseFloat(r.total_monthly_quota || "0") || 0,
-    charge_scope: "user" as const,
-    input_tokens: 0,
-    output_tokens: 0,
-    cached_tokens: 0,
-    cost_center_name: r.cost_center_name || "",
-    aic_quantity: parseFloat(r.aic_quantity || "0") || 0,
-    aic_gross_amount: parseFloat(r.aic_gross_amount || "0") || 0,
-  }));
+  return rawRows.map((r) => {
+    const quantity = parseFloat(r.quantity) || 0;
+    const gross_amount = parseFloat(r.gross_amount) || 0;
+    const unit_type = r.unit_type || "";
+    const parsedAic = parseFloat(r.aic_quantity || "0") || 0;
+    const parsedAicGross = parseFloat(r.aic_gross_amount || "0") || 0;
+    // For `ai-credits` rows GitHub reports the credit amount in `quantity` and
+    // often leaves the dedicated aic_* columns empty, so fall back to it.
+    const isAiCredit = unit_type === "ai-credits";
+    return {
+      date: r.date || "",
+      product: r.product || "",
+      sku: r.sku || "",
+      quantity,
+      unit_type,
+      applied_cost_per_quantity: parseFloat(r.applied_cost_per_quantity) || 0,
+      gross_amount,
+      discount_amount: parseFloat(r.discount_amount) || 0,
+      net_amount: parseFloat(r.net_amount) || 0,
+      username: r.username || "",
+      organization: r.organization || "",
+      model: r.model || "",
+      exceeds_quota: "",
+      total_monthly_quota: parseFloat(r.total_monthly_quota || "0") || 0,
+      charge_scope: "user" as const,
+      input_tokens: 0,
+      output_tokens: 0,
+      cached_tokens: 0,
+      cost_center_name: r.cost_center_name || "",
+      aic_quantity: isAiCredit ? parsedAic || quantity : parsedAic,
+      aic_gross_amount: isAiCredit ? parsedAicGross || gross_amount : parsedAicGross,
+    };
+  });
 }
 
 // ── High-level orchestration ──────────────────────────────────────────
