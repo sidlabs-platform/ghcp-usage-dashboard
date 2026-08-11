@@ -17,6 +17,11 @@ function formatBand(amount: number): string {
 }
 
 function makeResponse(overrides: Partial<RoiResponse> = {}): RoiResponse {
+  // Values mirror what /api/metrics/roi would actually return for a 28-day
+  // window, so the fixture cannot mask a contract drift: cost/dev/month is
+  // totalCostUsd / developers * 30.44 / 28, and PRs/dev/month is
+  // prsMerged / developers * 30.44 / 28 (merged PRs are already a 28-day
+  // rolling aggregate).
   return {
     hasData: true,
     costSource: "billing",
@@ -36,7 +41,7 @@ function makeResponse(overrides: Partial<RoiResponse> = {}): RoiResponse {
         totalCostUsd: 1000,
         costPerDevPerMonth: 10.87,
         prsMerged: 400,
-        prsMergedPerDevPerMonth: 4,
+        prsMergedPerDevPerMonth: 4.35,
       },
       {
         key: "agent",
@@ -46,7 +51,7 @@ function makeResponse(overrides: Partial<RoiResponse> = {}): RoiResponse {
         totalCostUsd: 2000,
         costPerDevPerMonth: 43.49,
         prsMerged: 500,
-        prsMergedPerDevPerMonth: 10,
+        prsMergedPerDevPerMonth: 10.87,
       },
     ],
     ...overrides,
@@ -75,8 +80,8 @@ describe("RoiSection", () => {
     expect(screen.getByText("$10.87")).toBeInTheDocument();
     expect(screen.getByText("$43.49")).toBeInTheDocument();
 
-    expect(screen.getByText("4.0")).toBeInTheDocument();
-    expect(screen.getByText("10.0")).toBeInTheDocument();
+    expect(screen.getByText("4.3")).toBeInTheDocument();
+    expect(screen.getByText("10.9")).toBeInTheDocument();
     expect(screen.getByText("400 merged total")).toBeInTheDocument();
   });
 
@@ -103,7 +108,7 @@ describe("RoiSection", () => {
     // Cost/dev/month and % Payroll/month for both groups.
     expect(screen.getAllByText("—")).toHaveLength(4);
     // PR metrics still render.
-    expect(screen.getByText("4.0")).toBeInTheDocument();
+    expect(screen.getByText("4.3")).toBeInTheDocument();
   });
 
   it("degrades gracefully when merged PR data is missing from older synced data", () => {
@@ -139,6 +144,17 @@ describe("RoiSection", () => {
     expect(screen.getByText("0.07%")).toBeInTheDocument();
   });
 
+  it("shows the custom salary control when a persisted custom salary is restored", async () => {
+    window.localStorage.setItem(SALARY_STORAGE_KEY, "180000");
+    render(<RoiSection data={makeResponse()} />);
+
+    const customButton = screen.getByRole("button", { name: "Custom" });
+    const customInput = await screen.findByLabelText("Custom annual salary");
+
+    expect(customButton).toHaveAttribute("aria-pressed", "true");
+    expect(customInput).toHaveValue(180000);
+  });
+
   it("summarizes the delivery lift and the extra spend behind it", () => {
     render(<RoiSection data={makeResponse()} />);
 
@@ -153,9 +169,15 @@ describe("RoiSection", () => {
     expect(screen.getByText(/salary band is a modeling input/)).toBeInTheDocument();
     unmount();
 
-    render(<RoiSection data={makeResponse({ costSource: "credits" })} />);
+    const credits = render(<RoiSection data={makeResponse({ costSource: "credits" })} />);
     expect(screen.getByText(/estimated from AI credit consumption/)).toBeInTheDocument();
     expect(screen.getByText(/treat them as directional/)).toBeInTheDocument();
+    credits.unmount();
+
+    render(<RoiSection data={makeResponse({ costSource: "none" })} />);
+    expect(screen.getByText(/Cost figures are unavailable for this selection/)).toBeInTheDocument();
+    // The non-cost caveats must survive regardless of source.
+    expect(screen.getByText(/salary band is a modeling input/)).toBeInTheDocument();
+    expect(screen.getByText(/populations can differ slightly/)).toBeInTheDocument();
   });
 });
-
