@@ -4,7 +4,15 @@
 // either because they predate those columns or the CSV omitted them. Copy the
 // values across. Idempotent: only touches rows still at aic_quantity=0.
 // Usage: node --experimental-sqlite scripts/backfill-aic-quantity.mjs [dbPath]
-import { DatabaseSync } from "node:sqlite";
+const [nodeMajor] = process.versions.node.split(".").map(Number);
+if (nodeMajor < 22) {
+  console.error(
+    `This script requires Node 22+ for the built-in node:sqlite module (current: ${process.version}). ` +
+      `Run with Node 22+ (add --experimental-sqlite on Node 22/23).`,
+  );
+  process.exit(1);
+}
+const { DatabaseSync } = await import("node:sqlite");
 
 const path = process.argv[2] || ".next/standalone/data/copilot-metrics.db";
 const db = new DatabaseSync(path);

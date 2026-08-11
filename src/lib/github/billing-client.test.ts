@@ -324,10 +324,22 @@ describe("billingClient", () => {
       const records = billingClient.parseAiCreditCSV(csv);
       expect(records).toHaveLength(1);
       expect(records[0].unit_type).toBe("ai-credits");
-      expect(records[0].quantity).toBe(288.89);
+      expect(records[0].quantity).toBeCloseTo(288.89, 5);
       // aic_* columns empty → derived from quantity/gross_amount
-      expect(records[0].aic_quantity).toBe(288.89);
-      expect(records[0].aic_gross_amount).toBe(2.8889);
+      expect(records[0].aic_quantity).toBeCloseTo(288.89, 5);
+      expect(records[0].aic_gross_amount).toBeCloseTo(2.8889, 5);
+    });
+
+    it("preserves an explicit aic_quantity of 0 for ai-credits rows (no fallback)", () => {
+      const csv = [
+        "date,username,product,sku,model,quantity,unit_type,applied_cost_per_quantity,gross_amount,discount_amount,net_amount,total_monthly_quota,organization,cost_center_name,aic_quantity,aic_gross_amount",
+        "2026-08-11,dave,copilot,copilot_ai_credit,Claude,288.89,ai-credits,0.01,2.8889,0,0,1000,my-org,,0,0",
+      ].join("\n");
+      const records = billingClient.parseAiCreditCSV(csv);
+      expect(records).toHaveLength(1);
+      // explicit 0 must not be overwritten by quantity
+      expect(records[0].aic_quantity).toBe(0);
+      expect(records[0].aic_gross_amount).toBe(0);
     });
   });
 

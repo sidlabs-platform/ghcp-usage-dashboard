@@ -295,8 +295,11 @@ function parseAiCreditCSV(
     const parsedAic = parseFloat(r.aic_quantity || "0") || 0;
     const parsedAicGross = parseFloat(r.aic_gross_amount || "0") || 0;
     // For `ai-credits` rows GitHub reports the credit amount in `quantity` and
-    // often leaves the dedicated aic_* columns empty, so fall back to it.
+    // often leaves the dedicated aic_* columns empty. Fall back only when the
+    // raw column is blank so an explicit `0` is preserved.
     const isAiCredit = unit_type === "ai-credits";
+    const aicBlank = (r.aic_quantity ?? "").trim() === "";
+    const aicGrossBlank = (r.aic_gross_amount ?? "").trim() === "";
     return {
       date: r.date || "",
       product: r.product || "",
@@ -317,8 +320,8 @@ function parseAiCreditCSV(
       output_tokens: 0,
       cached_tokens: 0,
       cost_center_name: r.cost_center_name || "",
-      aic_quantity: isAiCredit ? parsedAic || quantity : parsedAic,
-      aic_gross_amount: isAiCredit ? parsedAicGross || gross_amount : parsedAicGross,
+      aic_quantity: isAiCredit && aicBlank ? quantity : parsedAic,
+      aic_gross_amount: isAiCredit && aicGrossBlank ? gross_amount : parsedAicGross,
     };
   });
 }
