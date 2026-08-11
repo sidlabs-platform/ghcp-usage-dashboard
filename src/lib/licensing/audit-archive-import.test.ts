@@ -12,7 +12,7 @@ beforeAll(() => {
 });
 
 afterAll(() => {
-  fs.rmSync(FIXTURE_DIR, { recursive: true, force: true });
+  fs.rmSync(FIXTURE_DIR, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
 function writeFixture(name: string, content: string): string {

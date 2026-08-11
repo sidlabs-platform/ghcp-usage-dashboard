@@ -1,10 +1,10 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from "vitest";
-import Database from "better-sqlite3";
+import Database from "./sqlite-database";
 import path from "path";
 import fs from "fs";
 import * as aggregationQueriesModule from "./aggregation-queries";
 
-let db: Database.Database;
+let db: Database;
 
 vi.mock("./database", () => ({
   getDb: () => db,

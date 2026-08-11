@@ -6,7 +6,7 @@
 // previously stored `raw_json` snapshot. Never drops or recreates tables, never
 // requires a re-sync, and is safe to invoke on every `getDb()` call.
 
-import type Database from "better-sqlite3";
+import type { SqliteDatabase } from "./sqlite-database";
 
 /** Tables this migration ever touches. Never derived from user input. */
 const TARGET_TABLES = ["enterprise_daily_metrics", "org_daily_metrics", "user_daily_metrics"] as const;
@@ -121,12 +121,12 @@ const BACKFILL_MIGRATIONS: readonly BackfillMigration[] = [
   },
 ];
 
-function tableExists(db: Database.Database, table: TargetTable): boolean {
+function tableExists(db: SqliteDatabase, table: TargetTable): boolean {
   const row = db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`).get(table);
   return !!row;
 }
 
-function columnExists(db: Database.Database, table: TargetTable, column: string): boolean {
+function columnExists(db: SqliteDatabase, table: TargetTable, column: string): boolean {
   // PRAGMA does not support bound parameters; `table` is only ever one of the
   // fixed TARGET_TABLES literals above, never a value derived from user input.
   const columns = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
@@ -139,7 +139,7 @@ function columnExists(db: Database.Database, table: TargetTable, column: string)
  * call repeatedly: column additions are skipped once present, and backfills
  * only ever update rows where the target column is still NULL.
  */
-export function migrateCopilotAppMetrics(db: Database.Database): void {
+export function migrateCopilotAppMetrics(db: SqliteDatabase): void {
   const existingTables = new Map<TargetTable, boolean>();
   for (const table of TARGET_TABLES) {
     existingTables.set(table, tableExists(db, table));

@@ -1,15 +1,15 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import Database from "better-sqlite3";
+import Database from "./sqlite-database";
 import { migrateCopilotAppMetrics } from "./copilot-app-migration";
 
-let db: Database.Database;
+let db: Database;
 
 afterEach(() => {
   db.close();
 });
 
 /** Minimal legacy enterprise/org table shape (pre-Copilot-App columns). */
-function createLegacyEnterpriseTable(database: Database.Database): void {
+function createLegacyEnterpriseTable(database: Database): void {
   database.exec(`
     CREATE TABLE enterprise_daily_metrics (
       day TEXT NOT NULL,
@@ -21,7 +21,7 @@ function createLegacyEnterpriseTable(database: Database.Database): void {
   `);
 }
 
-function createLegacyOrgTable(database: Database.Database): void {
+function createLegacyOrgTable(database: Database): void {
   database.exec(`
     CREATE TABLE org_daily_metrics (
       day TEXT NOT NULL,
@@ -33,7 +33,7 @@ function createLegacyOrgTable(database: Database.Database): void {
   `);
 }
 
-function createLegacyUserTable(database: Database.Database): void {
+function createLegacyUserTable(database: Database): void {
   database.exec(`
     CREATE TABLE user_daily_metrics (
       day TEXT NOT NULL,

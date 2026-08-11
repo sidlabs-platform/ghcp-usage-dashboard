@@ -7,11 +7,11 @@
 // bad row doesn't 500 the whole team detail response.
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
-import Database from "better-sqlite3";
+import Database from "@/lib/db/sqlite-database";
 import path from "path";
 import fs from "fs";
 
-let db: Database.Database;
+let db: Database;
 
 vi.mock("@/lib/db/database", () => ({
   getDb: () => db,

@@ -1,5 +1,5 @@
 -- GitHub Copilot Usage Metrics Dashboard - Database Schema
--- Uses SQLite via better-sqlite3
+-- Uses SQLite via Node's built-in node:sqlite module
 
 -- Enterprise-level daily aggregate metrics
 CREATE TABLE IF NOT EXISTS enterprise_daily_metrics (

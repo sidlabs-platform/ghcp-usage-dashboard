@@ -5,7 +5,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 // ordering without depending on wall-clock timing.
 let execCallOrder: string[] = [];
 
-// Fakes for the better-sqlite3 handle. Named with the `mock` prefix so Vitest's
+// Fakes for the SQLite wrapper. Named with the `mock` prefix so Vitest's
 // vi.mock hoisting allows referencing them from the factory below.
 const mockExec = vi.fn((sql: string) => {
   execCallOrder.push(sql);
@@ -28,8 +28,8 @@ const mockPrepare = vi.fn((sql: string) => ({
   run: () => ({ changes: 0 }),
 }));
 // A real `function` (not an arrow function) so it remains constructable via
-// `new Database(...)`, matching how src/lib/db/database.ts uses the import.
-const mockDatabaseCtor = vi.fn(function FakeDatabase() {
+// `new SqliteDatabase(...)`, matching how database.ts uses the import.
+const mockDatabaseCtor = vi.fn(function FakeSqliteDatabase() {
   return {
     exec: mockExec,
     pragma: mockPragma,
@@ -38,8 +38,8 @@ const mockDatabaseCtor = vi.fn(function FakeDatabase() {
   };
 });
 
-vi.mock("better-sqlite3", () => ({
-  default: mockDatabaseCtor,
+vi.mock("./sqlite-database", () => ({
+  SqliteDatabase: mockDatabaseCtor,
 }));
 
 vi.mock("fs", () => ({
@@ -92,7 +92,7 @@ describe("getDb migration failure handling", () => {
     expect(mockDatabaseCtor).toHaveBeenCalledTimes(1);
 
     // A second call must not reuse a partially-initialized handle: it should
-    // attempt a brand-new Database() rather than silently returning the
+    // attempt a brand-new SqliteDatabase() rather than silently returning the
     // handle that failed migration.
     expect(() => getDb()).toThrow(migrationError);
     expect(mockDatabaseCtor).toHaveBeenCalledTimes(2);

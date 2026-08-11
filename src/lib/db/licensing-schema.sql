@@ -1,5 +1,5 @@
 -- Historical licensing / AI-Credit reconciliation schema.
--- Uses SQLite via better-sqlite3.
+-- Uses SQLite via Node's built-in node:sqlite module.
 --
 -- Backward compatibility rules (see the "Backward Compatibility (Hard Rule)"
 -- section of the project's Copilot instructions):
