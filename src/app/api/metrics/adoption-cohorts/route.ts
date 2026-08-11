@@ -5,7 +5,7 @@ import { getDateRange, parseAndClampDays } from "@/lib/utils";
 import { withCache } from "@/lib/cache/with-cache";
 import { withTimeout } from "@/lib/api/timeout";
 import { CACHE_TTL } from "@/lib/cache/memory-cache";
-import { countEffectiveEnterprises } from "@/lib/db/metrics-repo";
+import { countEffectiveEnterprises, getPhaseDeveloperCounts } from "@/lib/db/metrics-repo";
 import type { TotalsByAIAdoptionPhase } from "@/lib/types/metrics";
 
 /** Phase labels used as fallback when API data is missing labels */
@@ -26,6 +26,28 @@ function buildEnterpriseFilter(slugs?: string[]): { clause: string; params: stri
   if (!slugs || slugs.length === 0) return { clause: "", params: [] };
   const placeholders = slugs.map(() => "?").join(",");
   return { clause: ` AND enterprise_slug IN (${placeholders})`, params: slugs };
+}
+
+/**
+ * Distinct users per adoption phase across the whole window, from user-level data.
+ *
+ * The August 2026 impact-dashboard update counts every user active anywhere in
+ * the 28-day window rather than only those active on its final day — a report
+ * ending on a weekend or holiday otherwise showed sharply depressed counts.
+ * Returns `null` when no per-user phase data exists, so callers can fall back to
+ * the enterprise last-day snapshot.
+ */
+function getWindowPhaseCounts(
+  start: string,
+  end: string,
+  enterpriseSlugs?: string[],
+): Record<number, number> | null {
+  const rows = getPhaseDeveloperCounts(start, end, { enterpriseSlugs });
+  if (rows.length === 0) return null;
+
+  const byPhase: Record<number, number> = {};
+  for (const r of rows) byPhase[Number(r.phase)] = r.developers;
+  return byPhase;
 }
 
 /**
@@ -94,13 +116,41 @@ function getEnterpriseAdoptionCohorts(
     latestPhases = phases;
   }
 
-  const totalEngaged = latestPhases.reduce((s, p) => s + (p.engaged_users || 0), 0);
-  const distribution = latestPhases.map((p) => ({
-    phase: p.phase,
-    label: p.label || PHASE_LABELS[p.phase] || `Phase ${p.phase}`,
-    count: p.engaged_users || 0,
-    percentage: totalEngaged > 0 ? ((p.engaged_users || 0) / totalEngaged) * 100 : 0,
-  }));
+  // Prefer window-wide distinct user counts over the last-day snapshot; the
+  // enterprise JSON only carries `engaged_users` for the day it was reported.
+  const windowCounts = getWindowPhaseCounts(start, end, enterpriseSlugs);
+  const countBasis: "window" | "snapshot" = windowCounts ? "window" : "snapshot";
+
+  const countForPhase = (p: { phase: number; engaged_users?: number }) =>
+    windowCounts ? (windowCounts[p.phase] ?? 0) : (p.engaged_users || 0);
+
+  // A phase can appear in the window without being present on the final day
+  // (nobody in it was active that day). Union both sources so those developers
+  // are still counted, otherwise the distribution silently drops them.
+  const distributionPhases: { phase: number; label?: string; engaged_users?: number }[] = [
+    ...latestPhases,
+  ];
+  if (windowCounts) {
+    const seen = new Set(latestPhases.map((p) => p.phase));
+    for (const key of Object.keys(windowCounts)) {
+      const phase = Number(key);
+      if (!seen.has(phase)) {
+        distributionPhases.push({ phase, engaged_users: 0 });
+      }
+    }
+    distributionPhases.sort((a, b) => a.phase - b.phase);
+  }
+
+  const totalEngaged = distributionPhases.reduce((s, p) => s + countForPhase(p), 0);
+  const distribution = distributionPhases.map((p) => {
+    const count = countForPhase(p);
+    return {
+      phase: p.phase,
+      label: p.label || PHASE_LABELS[p.phase] || `Phase ${p.phase}`,
+      count,
+      percentage: totalEngaged > 0 ? (count / totalEngaged) * 100 : 0,
+    };
+  });
 
   // Absolute PRs-merged distribution by phase (delivery impact per cohort).
   const totalMerged = latestPhases.reduce(
@@ -117,7 +167,9 @@ function getEnterpriseAdoptionCohorts(
     };
   });
 
-  // latestDay clarifies that distribution/perPhaseMetrics are a point-in-time snapshot
+  // latestDay clarifies that perPhaseMetrics averages are a point-in-time snapshot.
+  // Distribution counts follow `countBasis` — window-wide when user-level phase
+  // data is available, otherwise the latest day's `engaged_users`.
   const latestDay = rows[rows.length - 1]?.day ?? end;
   return {
     distribution,
@@ -129,6 +181,7 @@ function getEnterpriseAdoptionCohorts(
     totalMerged,
     hasMergeData,
     latestDay,
+    countBasis,
   };
 }
 
@@ -222,6 +275,8 @@ function getUserAdoptionCohorts(
     totalMerged: 0,
     hasMergeData: false,
     latestDay,
+    // This path already counts each user once across the whole range.
+    countBasis: "window" as const,
   };
 }
 
@@ -258,6 +313,7 @@ async function handler(request: NextRequest) {
         mergedTrend: [],
         totalMerged: 0,
         hasMergeData: false,
+        countBasis: "window",
         hasData: false,
         dataAsOf: end,
         daysLoaded: days,
@@ -289,6 +345,7 @@ async function handler(request: NextRequest) {
         mergedTrend: [],
         totalMerged: 0,
         hasMergeData: false,
+        countBasis: "window",
         hasData: false,
         dataAsOf: end,
         daysLoaded: days,

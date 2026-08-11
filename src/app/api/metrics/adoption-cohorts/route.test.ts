@@ -22,8 +22,11 @@ vi.mock("@/lib/api/scope-filter", () => ({
   })),
 }));
 
+const getPhaseDeveloperCountsMock = vi.fn(() => [] as { phase: number; developers: number }[]);
 vi.mock("@/lib/db/metrics-repo", () => ({
   countEffectiveEnterprises: vi.fn(() => 1),
+  getPhaseDeveloperCounts: (...args: unknown[]) =>
+    (getPhaseDeveloperCountsMock as unknown as (...a: unknown[]) => unknown)(...args),
 }));
 
 const allMock = vi.fn();
@@ -62,6 +65,7 @@ function makePhase(phase: number, label: string, engaged: number, merged: number
 
 afterEach(() => {
   vi.clearAllMocks();
+  getPhaseDeveloperCountsMock.mockReturnValue([]);
 });
 
 describe("adoption-cohorts merged-by-phase", () => {
@@ -122,5 +126,95 @@ describe("adoption-cohorts merged-by-phase", () => {
     expect(json.hasMergeData).toBe(false);
     expect(json.totalMerged).toBe(0);
     expect(json.mergedTrend).toHaveLength(0);
+  });
+});
+
+describe("adoption-cohorts window-wide user counts", () => {
+  it("counts every user active in the window, not just the final day", async () => {
+    const phases = [
+      makePhase(1, "Code first", 30, 40),
+      makePhase(2, "Agent first", 10, 10),
+    ];
+    allMock.mockReturnValue([
+      { day: "2026-06-26", totals_by_ai_adoption_phase: JSON.stringify(phases) },
+    ]);
+    // The final day reported 30/10 engaged users, but 45/15 distinct users were
+    // active somewhere in the window — the August 2026 correction.
+    getPhaseDeveloperCountsMock.mockReturnValue([
+      { phase: 1, developers: 45 },
+      { phase: 2, developers: 15 },
+    ]);
+
+    const GET = await getHandler();
+    const res = await GET(new NextRequest("http://localhost/api/metrics/adoption-cohorts?days=28"));
+    const json = await res.json();
+
+    expect(json.countBasis).toBe("window");
+    expect(json.totalEngaged).toBe(60);
+
+    const codeFirst = json.distribution.find((d: { phase: number }) => d.phase === 1);
+    expect(codeFirst.count).toBe(45);
+    expect(codeFirst.percentage).toBeCloseTo(75, 5);
+
+    // Per-phase averages from the API are untouched — only counts change.
+    expect(json.perPhaseMetrics[0].engaged_users).toBe(30);
+  });
+
+  it("falls back to the last-day snapshot when no user-level phase data exists", async () => {
+    const phases = [makePhase(1, "Code first", 30, 40)];
+    allMock.mockReturnValue([
+      { day: "2026-06-26", totals_by_ai_adoption_phase: JSON.stringify(phases) },
+    ]);
+    getPhaseDeveloperCountsMock.mockReturnValue([]);
+
+    const GET = await getHandler();
+    const res = await GET(new NextRequest("http://localhost/api/metrics/adoption-cohorts?days=28"));
+    const json = await res.json();
+
+    expect(json.countBasis).toBe("snapshot");
+    expect(json.totalEngaged).toBe(30);
+    expect(json.distribution[0].count).toBe(30);
+  });
+
+  it("reports a zero count for a phase with no users active in the window", async () => {
+    const phases = [
+      makePhase(1, "Code first", 30, 40),
+      makePhase(3, "Multi-agent", 5, 5),
+    ];
+    allMock.mockReturnValue([
+      { day: "2026-06-26", totals_by_ai_adoption_phase: JSON.stringify(phases) },
+    ]);
+    getPhaseDeveloperCountsMock.mockReturnValue([{ phase: 1, developers: 45 }]);
+
+    const GET = await getHandler();
+    const res = await GET(new NextRequest("http://localhost/api/metrics/adoption-cohorts?days=28"));
+    const json = await res.json();
+
+    const multiAgentZero = json.distribution.find((d: { phase: number }) => d.phase === 3);
+    expect(multiAgentZero.count).toBe(0);
+    expect(json.totalEngaged).toBe(45);
+  });
+
+  it("includes a phase that appears in the window but not on the final day", async () => {
+    // Nobody in phase 3 was active on 2026-06-26, so the enterprise snapshot omits
+    // it entirely — but 12 developers were in that phase earlier in the window.
+    const phases = [makePhase(1, "Code first", 30, 40)];
+    allMock.mockReturnValue([
+      { day: "2026-06-26", totals_by_ai_adoption_phase: JSON.stringify(phases) },
+    ]);
+    getPhaseDeveloperCountsMock.mockReturnValue([
+      { phase: 1, developers: 45 },
+      { phase: 3, developers: 12 },
+    ]);
+
+    const GET = await getHandler();
+    const res = await GET(new NextRequest("http://localhost/api/metrics/adoption-cohorts?days=28"));
+    const json = await res.json();
+
+    expect(json.totalEngaged).toBe(57);
+    const multiAgent = json.distribution.find((d: { phase: number }) => d.phase === 3);
+    expect(multiAgent).toBeDefined();
+    expect(multiAgent.count).toBe(12);
+    expect(multiAgent.label).toBe("Multi-agent");
   });
 });

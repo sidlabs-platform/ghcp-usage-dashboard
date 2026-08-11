@@ -138,6 +138,71 @@ export interface TotalsByAIAdoptionPhase {
   total_pull_requests_merged?: number;
 }
 
+// ── Potential Return on Investment ────────────────────────────────────
+
+/**
+ * Average number of days in a month, used to normalize window totals to a
+ * monthly figure. 365.25 / 12 = 30.4375.
+ */
+export const DAYS_PER_MONTH = 30.44;
+
+/**
+ * Length of the rolling window that the GitHub Copilot usage metrics API uses
+ * for `totals_by_ai_adoption_phase`. Each enterprise/org day row carries the
+ * aggregate for the preceding 28 days, so merged-PR totals must be normalized
+ * against this constant rather than the caller's requested range.
+ */
+export const ENTERPRISE_ROLLING_WINDOW_DAYS = 28;
+
+/**
+ * Which underlying data set produced the ROI cost figures.
+ * - `billing`: actual billed USD from `billing_premium_requests.aic_gross_amount`
+ * - `credits`: estimated from `user_daily_metrics.ai_credits_used` × `creditToUsd`
+ * - `none`: neither source had data for the requested range/scope
+ */
+export type RoiCostSource = "billing" | "credits" | "none";
+
+/** Identifier for the two adoption groups compared in the ROI section. */
+export type RoiGroupKey = "early" | "agent";
+
+/**
+ * One side of the ROI comparison — either the early-phase group (passive users
+ * and Phase 1) or the agent-first group (Phase 2 and Phase 3).
+ */
+export interface RoiGroup {
+  key: RoiGroupKey;
+  label: string;
+  /** Adoption phases folded into this group. */
+  phases: number[];
+  /** Distinct users assigned to these phases anywhere in the window. */
+  developers: number;
+  /** Total Copilot cost attributed to these users across the window. */
+  totalCostUsd: number;
+  /** `totalCostUsd` per developer, normalized to a month. */
+  costPerDevPerMonth: number;
+  /** Absolute pull requests merged by this group (28-day rolling snapshot). */
+  prsMerged: number;
+  /** `prsMerged` per developer, normalized to a month. */
+  prsMergedPerDevPerMonth: number;
+}
+
+/** Response payload for `/api/metrics/roi`. */
+export interface RoiResponse {
+  hasData: boolean;
+  /** True when merged-PR totals were available for at least one group. */
+  hasPrData: boolean;
+  costSource: RoiCostSource;
+  /** ISO currency code the cost figures are expressed in. */
+  currency: string;
+  /** USD value of one AI credit used for the `credits` cost path. */
+  creditToUsd: number;
+  groups: RoiGroup[];
+  windowDays: number;
+  dataAsOf: string;
+  daysLoaded: number;
+  filtered: boolean;
+}
+
 // ── Enterprise/Org aggregate (day_totals) ─────────────────────────────
 
 export interface DayTotal {

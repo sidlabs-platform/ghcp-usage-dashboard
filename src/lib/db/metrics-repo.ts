@@ -1,6 +1,7 @@
 // Metrics repository — CRUD for enterprise/org/user daily metrics in SQLite
 
 import { getDb } from "./database";
+import { buildLoginFilter } from "./aggregation-queries";
 import type { DayTotal, UserDayRecord, TotalsByFeature } from "@/lib/types/metrics";
 
 export interface UserAiCreditsSummary {
@@ -1070,3 +1071,211 @@ export function clearEmptySyncEntries(enterpriseSlugs?: string[]): number {
   `).run(...ef.params);
   return result.changes;
 }
+
+// ── Potential ROI ─────────────────────────────────────────────────────
+
+/** Per-phase developer count and attributed cost, used by `/api/metrics/roi`. */
+export interface PhaseCostRow {
+  phase: number;
+  developers: number;
+  total_cost_usd: number;
+}
+
+export interface RoiCostFilters {
+  allowedLogins?: string[];
+  enterpriseSlugs?: string[];
+}
+
+/**
+ * Build the WHERE fragment selecting the user-day rows that contribute a phase
+ * assignment. Shared by the developer-count and cost queries so both sides of
+ * the ROI calculation always agree on the population.
+ */
+function buildPhaseAssignmentWhere(
+  startDay: string,
+  endDay: string,
+  filters?: RoiCostFilters
+): { clause: string; params: unknown[] } {
+  const params: unknown[] = [startDay, endDay];
+  let clause = "u.day >= ? AND u.day <= ? AND u.ai_adoption_phase IS NOT NULL";
+
+  const ef = buildEnterpriseFilter(filters?.enterpriseSlugs, "u");
+  if (ef.clause) {
+    clause += ef.clause;
+    params.push(...ef.params);
+  }
+
+  if (filters?.allowedLogins !== undefined) {
+    const lf = buildLoginFilter(filters.allowedLogins, "u.user_login", true);
+    if (lf.clause) {
+      clause += ` ${lf.clause}`;
+      params.push(...lf.params);
+    }
+  }
+
+  return { clause, params };
+}
+
+/**
+ * SQL CTE assigning exactly one adoption phase per distinct `user_login`.
+ *
+ * A login can appear on many days, and in multi-enterprise setups under several
+ * `enterprise_slug` values. `ROW_NUMBER()` partitioned by login and ordered by
+ * day descending picks the most recent phase so each developer is counted once —
+ * the same dedupe strategy used by the adoption-cohorts route.
+ */
+const PHASE_ASSIGNMENT_CTE = `
+  phase_assignment AS (
+    SELECT user_login, phase FROM (
+      SELECT
+        u.user_login,
+        json_extract(u.ai_adoption_phase, '$.phase') AS phase,
+        ROW_NUMBER() OVER (PARTITION BY u.user_login ORDER BY u.day DESC) AS rn
+      FROM user_daily_metrics u
+      WHERE {{WHERE}}
+    ) WHERE rn = 1
+  )
+`;
+
+/**
+ * Return the distinct developer count per adoption phase for a window.
+ *
+ * Counts every user active anywhere in the range rather than only on the final
+ * day, matching the August 2026 impact-dashboard correction.
+ */
+export function getPhaseDeveloperCounts(
+  startDay: string,
+  endDay: string,
+  filters?: RoiCostFilters
+): { phase: number; developers: number }[] {
+  const db = getDb();
+  const { clause, params } = buildPhaseAssignmentWhere(startDay, endDay, filters);
+
+  return db.prepare(`
+    WITH ${PHASE_ASSIGNMENT_CTE.replace("{{WHERE}}", clause)}
+    SELECT phase, COUNT(*) AS developers
+    FROM phase_assignment
+    WHERE phase IS NOT NULL
+    GROUP BY phase
+    ORDER BY phase ASC
+  `).all(...params) as { phase: number; developers: number }[];
+}
+
+/**
+ * True when the billing AI-credit table holds at least one costed row that is
+ * attributable to the users currently in scope.
+ *
+ * Applied with the same filters as {@link getPhaseCostFromBilling} so the cost
+ * source is chosen for the population actually being reported. Checking the
+ * unfiltered table instead would select the billed path for a team whose
+ * members have no billing rows, reporting $0 rather than falling back to the
+ * credit estimate.
+ */
+export function hasBillingCostData(
+  startDay: string,
+  endDay: string,
+  filters?: RoiCostFilters
+): boolean {
+  const db = getDb();
+  const ef = buildEnterpriseFilter(filters?.enterpriseSlugs);
+  const params: unknown[] = [startDay, endDay, ...ef.params];
+  let loginClause = "";
+
+  // Billing usernames and metrics logins are not guaranteed to share casing.
+  if (filters?.allowedLogins !== undefined) {
+    if (filters.allowedLogins.length === 0) {
+      loginClause = " AND 1 = 0";
+    } else {
+      const placeholders = filters.allowedLogins.map(() => "?").join(",");
+      loginClause = ` AND LOWER(username) IN (${placeholders})`;
+      params.push(...filters.allowedLogins.map((l) => l.toLowerCase()));
+    }
+  }
+
+  const row = db.prepare(`
+    SELECT 1
+    FROM billing_premium_requests
+    WHERE date >= ? AND date <= ?
+      AND COALESCE(aic_gross_amount, 0) > 0
+      AND COALESCE(username, '') != ''${ef.clause}${loginClause}
+    LIMIT 1
+  `).get(...params);
+  return row !== undefined;
+}
+
+/**
+ * Aggregate developer counts and billed AI-credit cost per adoption phase.
+ *
+ * Joins `billing_premium_requests` to the per-user phase assignment on a
+ * case-insensitive login match — the billing report's `username` and the metrics
+ * API's `user_login` are not guaranteed to share casing. Phases with no billing
+ * rows still appear, with a zero cost, so the developer denominator stays intact.
+ */
+export function getPhaseCostFromBilling(
+  startDay: string,
+  endDay: string,
+  filters?: RoiCostFilters
+): PhaseCostRow[] {
+  const db = getDb();
+  const { clause, params } = buildPhaseAssignmentWhere(startDay, endDay, filters);
+  const ef = buildEnterpriseFilter(filters?.enterpriseSlugs, "b");
+
+  return db.prepare(`
+    WITH ${PHASE_ASSIGNMENT_CTE.replace("{{WHERE}}", clause)},
+    user_cost AS (
+      SELECT
+        LOWER(b.username) AS login_key,
+        COALESCE(SUM(b.aic_gross_amount), 0) AS cost_usd
+      FROM billing_premium_requests b
+      WHERE b.date >= ? AND b.date <= ?
+        AND COALESCE(b.username, '') != ''${ef.clause}
+      GROUP BY LOWER(b.username)
+    )
+    SELECT
+      p.phase AS phase,
+      COUNT(*) AS developers,
+      COALESCE(SUM(c.cost_usd), 0) AS total_cost_usd
+    FROM phase_assignment p
+    LEFT JOIN user_cost c ON c.login_key = LOWER(p.user_login)
+    WHERE p.phase IS NOT NULL
+    GROUP BY p.phase
+    ORDER BY p.phase ASC
+  `).all(...params, startDay, endDay, ...ef.params) as PhaseCostRow[];
+}
+
+/**
+ * Aggregate developer counts and estimated cost per adoption phase from
+ * user-level AI-credit consumption.
+ *
+ * Used when billing reports are not synced. `creditToUsd` comes from the
+ * server-only licensing config and converts credits to a directional cost.
+ */
+export function getPhaseCostFromCredits(
+  startDay: string,
+  endDay: string,
+  creditToUsd: number,
+  filters?: RoiCostFilters
+): PhaseCostRow[] {
+  const db = getDb();
+  const { clause, params } = buildPhaseAssignmentWhere(startDay, endDay, filters);
+
+  return db.prepare(`
+    WITH ${PHASE_ASSIGNMENT_CTE.replace("{{WHERE}}", clause)},
+    user_credits AS (
+      SELECT u.user_login AS user_login, COALESCE(SUM(u.ai_credits_used), 0) AS credits
+      FROM user_daily_metrics u
+      WHERE ${clause}
+      GROUP BY u.user_login
+    )
+    SELECT
+      p.phase AS phase,
+      COUNT(*) AS developers,
+      COALESCE(SUM(c.credits), 0) * ? AS total_cost_usd
+    FROM phase_assignment p
+    LEFT JOIN user_credits c ON c.user_login = p.user_login
+    WHERE p.phase IS NOT NULL
+    GROUP BY p.phase
+    ORDER BY p.phase ASC
+  `).all(...params, ...params, creditToUsd) as PhaseCostRow[];
+}
+
