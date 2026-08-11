@@ -4,11 +4,16 @@
  * These run against a real in-memory SQLite database rather than a mock, because
  * the queries use multi-CTE SQL with positional parameters — a shape that unit
  * mocks cannot validate.
+ *
+ * Uses Node's built-in `node:sqlite` rather than `better-sqlite3` (matching the
+ * other real-SQLite suites in this directory) because the native binding is not
+ * built in CI. The API surface these queries need — `prepare().all()/.get()/
+ * .run()` and `exec()` — is identical between the two.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import Database from "better-sqlite3";
+import { DatabaseSync } from "node:sqlite";
 
-let db: InstanceType<typeof Database>;
+let db: DatabaseSync;
 
 vi.mock("./database", () => ({
   getDb: () => db,
@@ -42,7 +47,7 @@ function insertBilling(date: string, username: string, amount: number, slug = "a
 }
 
 beforeEach(() => {
-  db = new Database(":memory:");
+  db = new DatabaseSync(":memory:");
   db.exec(`
     CREATE TABLE user_daily_metrics (
       day TEXT NOT NULL,
