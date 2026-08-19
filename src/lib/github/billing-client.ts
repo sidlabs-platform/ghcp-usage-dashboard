@@ -249,35 +249,56 @@ function parseUsageCSV(csvContent: string): BillingUsageRecord[] {
 }
 
 /**
+ * Read a numeric CSV cell, trying each candidate column in order and returning
+ * the first that is present and parses to a finite number.
+ */
+function num(...values: (string | undefined)[]): number {
+  for (const v of values) {
+    if (v === undefined || v.trim() === "") continue;
+    const n = parseFloat(v);
+    if (Number.isFinite(n)) return n;
+  }
+  return 0;
+}
+
+/**
  * Parse premium request CSV into typed records.
  */
 function parsePremiumRequestCSV(
   csvContent: string,
 ): BillingPremiumRequestRecord[] {
   const rawRows = parseCSV<PremiumRequestCSVRow>(csvContent);
-  return rawRows.map((r) => ({
-    date: r.date || "",
-    product: r.product || "",
-    sku: r.sku || "",
-    quantity: parseFloat(r.quantity) || 0,
-    unit_type: r.unit_type || "",
-    applied_cost_per_quantity: parseFloat(r.applied_cost_per_quantity) || 0,
-    gross_amount: parseFloat(r.gross_amount) || 0,
-    discount_amount: parseFloat(r.discount_amount) || 0,
-    net_amount: parseFloat(r.net_amount) || 0,
-    username: r.username || "",
-    organization: r.organization || "",
-    model: r.model || "",
-    exceeds_quota: r.exceeds_quota || "FALSE",
-    total_monthly_quota: parseFloat(r.total_monthly_quota || "0") || 0,
-    charge_scope: "user" as const,
-    input_tokens: parseFloat(r.input_tokens || "0") || 0,
-    output_tokens: parseFloat(r.output_tokens || "0") || 0,
-    cached_tokens: parseFloat(r.cached_tokens || "0") || 0,
-    cost_center_name: r.cost_center_name || "",
-    aic_quantity: parseFloat(r.aic_quantity || "0") || 0,
-    aic_gross_amount: parseFloat(r.aic_gross_amount || "0") || 0,
-  }));
+  return rawRows.map((r) => {
+    // Current reports use `input`/`output`/`cache_read`/`cache_write`; older
+    // exports used `input_tokens`/`output_tokens`/`cached_tokens`.
+    const cacheRead = num(r.cache_read, r.cached_tokens);
+    return {
+      date: r.date || "",
+      product: r.product || "",
+      sku: r.sku || "",
+      quantity: num(r.quantity),
+      unit_type: r.unit_type || "",
+      applied_cost_per_quantity: num(r.applied_cost_per_quantity),
+      gross_amount: num(r.gross_amount),
+      discount_amount: num(r.discount_amount),
+      net_amount: num(r.net_amount),
+      username: r.username || "",
+      organization: r.organization || "",
+      repository: r.repository || "",
+      model: r.model || "",
+      exceeds_quota: r.exceeds_quota || "FALSE",
+      total_monthly_quota: num(r.total_monthly_quota),
+      charge_scope: "user" as const,
+      input_tokens: num(r.input, r.input_tokens),
+      output_tokens: num(r.output, r.output_tokens),
+      cached_tokens: cacheRead,
+      cache_read_tokens: cacheRead,
+      cache_write_tokens: num(r.cache_write),
+      cost_center_name: r.cost_center_name || "",
+      aic_quantity: num(r.aic_quantity),
+      aic_gross_amount: num(r.aic_gross_amount),
+    };
+  });
 }
 
 /**
@@ -289,39 +310,44 @@ function parseAiCreditCSV(
 ): BillingPremiumRequestRecord[] {
   const rawRows = parseCSV<AiCreditCSVRow>(csvContent);
   return rawRows.map((r) => {
-    const quantity = parseFloat(r.quantity) || 0;
-    const gross_amount = parseFloat(r.gross_amount) || 0;
+    const quantity = num(r.quantity);
+    const gross_amount = num(r.gross_amount);
     const unit_type = r.unit_type || "";
-    const parsedAic = parseFloat(r.aic_quantity || "0") || 0;
-    const parsedAicGross = parseFloat(r.aic_gross_amount || "0") || 0;
+    const parsedAic = num(r.aic_quantity);
+    const parsedAicGross = num(r.aic_gross_amount);
     // For `ai-credits` rows GitHub reports the credit amount in `quantity` and
-    // often leaves the dedicated aic_* columns empty. Fall back only when the
-    // raw column is blank so an explicit `0` is preserved.
+    // the dedicated aic_* columns carry no usable value — verified against a
+    // live octodemo export where every row had a literal `0` (not a blank) in
+    // both aic_ columns. Fall back whenever the aic_ value is non-positive so
+    // that a literal `0` is treated the same as a blank; for these rows
+    // `quantity` is by definition the credit amount.
     const isAiCredit = unit_type === "ai-credits";
-    const aicBlank = (r.aic_quantity ?? "").trim() === "";
-    const aicGrossBlank = (r.aic_gross_amount ?? "").trim() === "";
+    const cacheRead = num(r.cache_read, r.cached_tokens);
     return {
       date: r.date || "",
       product: r.product || "",
       sku: r.sku || "",
       quantity,
       unit_type,
-      applied_cost_per_quantity: parseFloat(r.applied_cost_per_quantity) || 0,
+      applied_cost_per_quantity: num(r.applied_cost_per_quantity),
       gross_amount,
-      discount_amount: parseFloat(r.discount_amount) || 0,
-      net_amount: parseFloat(r.net_amount) || 0,
+      discount_amount: num(r.discount_amount),
+      net_amount: num(r.net_amount),
       username: r.username || "",
       organization: r.organization || "",
+      repository: r.repository || "",
       model: r.model || "",
       exceeds_quota: "",
-      total_monthly_quota: parseFloat(r.total_monthly_quota || "0") || 0,
+      total_monthly_quota: num(r.total_monthly_quota),
       charge_scope: "user" as const,
-      input_tokens: 0,
-      output_tokens: 0,
-      cached_tokens: 0,
+      input_tokens: num(r.input, r.input_tokens),
+      output_tokens: num(r.output, r.output_tokens),
+      cached_tokens: cacheRead,
+      cache_read_tokens: cacheRead,
+      cache_write_tokens: num(r.cache_write),
       cost_center_name: r.cost_center_name || "",
-      aic_quantity: isAiCredit && aicBlank ? quantity : parsedAic,
-      aic_gross_amount: isAiCredit && aicGrossBlank ? gross_amount : parsedAicGross,
+      aic_quantity: isAiCredit && parsedAic <= 0 ? quantity : parsedAic,
+      aic_gross_amount: isAiCredit && parsedAicGross <= 0 ? gross_amount : parsedAicGross,
     };
   });
 }

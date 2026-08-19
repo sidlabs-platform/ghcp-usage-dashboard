@@ -10,7 +10,7 @@ graph TB
         GH_SEATS["Seats API<br/>(org billing/seats)"]
         GH_TEAMS["Teams API<br/>(org/teams, enterprise/teams)"]
         GH_GHAS["GHAS APIs<br/>(code-scanning, dependabot,<br/>secret-scanning)"]
-        GH_BILLING["Billing API<br/>(metered usage, premium requests)"]
+        GH_BILLING["Billing API<br/>(metered usage, AI usage report<br/>incl. per-model tokens)"]
         GH_AUDIT["Audit Log API<br/>(enterprise audit-log)"]
         GH_IDENTITY["Enterprise/Org SAML identity<br/>+ SCIM membership APIs"]
         GH_ORGBILL["Org Copilot billing summary API"]
@@ -91,7 +91,7 @@ graph TB
             T6["ghas_code_scanning_alerts"]
             T7["ghas_dependabot_alerts"]
             T8["ghas_secret_scanning_alerts"]
-            T9["billing_metered_usage<br/>billing_premium_requests"]
+            T9["billing_metered_usage<br/>billing_premium_requests<br/>(+ per-model token columns)"]
         end
 
         subgraph SummaryTables["Pre-Aggregated Summary Tables"]
@@ -162,7 +162,7 @@ graph TB
         R_TEAMS["/api/teams"]
         R_SEATS["/api/seats"]
         R_SECURITY["/api/security"]
-        R_BILLING["/api/billing, billing-usage<br/>billing-premium"]
+        R_BILLING["/api/billing, billing-usage<br/>billing-premium, billing/tokens"]
         R_SYNC["/api/sync<br/>POST: start sync<br/>GET: status + progress"]
         R_FILTERS["/api/filters<br/>teams, orgs, enterprises"]
         R_CONFIG["/api/config<br/>pageVisibility, licensingHistoryEnabled<br/>(never raw licensing config/paths)"]
@@ -199,7 +199,7 @@ graph TB
             P2["Users / Teams / Seats"]
             P3["Models / IDE & Languages"]
             P4["Security (GHAS)"]
-            P5["Billing / Usage / Premium"]
+            P5["Billing / Usage / AI Credits<br/>Token Usage"]
             P6["CLI / Pull Requests / Chat Modes"]
             P7["License & AI Credits<br/>(Overview / Period Detail / Data Quality)"]
         end

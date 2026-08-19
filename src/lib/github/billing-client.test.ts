@@ -330,16 +330,70 @@ describe("billingClient", () => {
       expect(records[0].aic_gross_amount).toBeCloseTo(2.8889, 5);
     });
 
-    it("preserves an explicit aic_quantity of 0 for ai-credits rows (no fallback)", () => {
+    it("derives credits from quantity when ai-credits rows report a literal 0 in aic_*", () => {
+      // Verified against a live octodemo AI usage report (2026-08-19): every
+      // `ai-credits` row carried a literal "0" in both aic_ columns while
+      // `quantity` held the real credit amount. Preserving the 0 would zero out
+      // every AI-credit figure in the dashboard.
       const csv = [
         "date,username,product,sku,model,quantity,unit_type,applied_cost_per_quantity,gross_amount,discount_amount,net_amount,total_monthly_quota,organization,cost_center_name,aic_quantity,aic_gross_amount",
         "2026-08-11,dave,copilot,copilot_ai_credit,Claude,288.89,ai-credits,0.01,2.8889,0,0,1000,my-org,,0,0",
       ].join("\n");
       const records = billingClient.parseAiCreditCSV(csv);
       expect(records).toHaveLength(1);
-      // explicit 0 must not be overwritten by quantity
-      expect(records[0].aic_quantity).toBe(0);
-      expect(records[0].aic_gross_amount).toBe(0);
+      expect(records[0].aic_quantity).toBeCloseTo(288.89, 5);
+      expect(records[0].aic_gross_amount).toBeCloseTo(2.8889, 5);
+    });
+
+    it("keeps a positive aic_quantity in preference to quantity", () => {
+      const csv = [
+        "date,username,product,sku,model,quantity,unit_type,applied_cost_per_quantity,gross_amount,discount_amount,net_amount,total_monthly_quota,organization,cost_center_name,aic_quantity,aic_gross_amount",
+        "2026-08-11,erin,copilot,copilot_ai_credit,Claude,288.89,ai-credits,0.01,2.8889,0,0,1000,my-org,,42.5,0.425",
+      ].join("\n");
+      const records = billingClient.parseAiCreditCSV(csv);
+      expect(records[0].aic_quantity).toBeCloseTo(42.5, 5);
+      expect(records[0].aic_gross_amount).toBeCloseTo(0.425, 5);
+    });
+
+    it("parses the per-model token breakdown columns", () => {
+      // Header matches the live octodemo AI usage report export.
+      const csv = [
+        "date,username,product,sku,model,quantity,unit_type,applied_cost_per_quantity,gross_amount,discount_amount,net_amount,total_monthly_quota,organization,repository,cost_center_name,aic_quantity,aic_gross_amount,input,output,cache_read,cache_write",
+        "2026-08-05,thedave42,copilot,copilot_ai_credit,Auto: GPT-5.6 Luna,13.492638,ai-credits,0.01,0.13492638,0.13492638,0,3900,octodemo-resources,,Shared Services AI Pool,0,0,13916,8743,2374920,356580",
+      ].join("\n");
+      const records = billingClient.parseAiCreditCSV(csv);
+      expect(records).toHaveLength(1);
+      expect(records[0].input_tokens).toBe(13916);
+      expect(records[0].output_tokens).toBe(8743);
+      expect(records[0].cache_read_tokens).toBe(2374920);
+      expect(records[0].cache_write_tokens).toBe(356580);
+      // legacy alias mirrors cache_read for backward compatibility
+      expect(records[0].cached_tokens).toBe(2374920);
+      expect(records[0].repository).toBe("");
+      expect(records[0].cost_center_name).toBe("Shared Services AI Pool");
+      expect(records[0].aic_quantity).toBeCloseTo(13.492638, 6);
+    });
+
+    it("captures the repository column that disambiguates repo-scoped SKUs", () => {
+      const csv = [
+        "date,username,product,sku,model,quantity,unit_type,applied_cost_per_quantity,gross_amount,discount_amount,net_amount,total_monthly_quota,organization,repository,cost_center_name,aic_quantity,aic_gross_amount,input,output,cache_read,cache_write",
+        "2026-08-05,,copilot,code_quality_ai_credit,Claude Sonnet 4.6,0.13437,ai-credits,0.01,0.0013437,0.0013437,0,3900,adrienpessu-octodemo,python-webgoat,,0,0,100,50,0,0",
+      ].join("\n");
+      const records = billingClient.parseAiCreditCSV(csv);
+      expect(records[0].repository).toBe("python-webgoat");
+    });
+
+    it("tolerates a report with no token columns at all", () => {
+      const csv = [
+        "date,username,product,sku,model,quantity,unit_type,applied_cost_per_quantity,gross_amount,discount_amount,net_amount,total_monthly_quota,organization,cost_center_name,aic_quantity,aic_gross_amount",
+        "2026-04-01,alice,copilot,copilot_ai_credit,Claude,36.34,ai-credits,0.01,0.3634,0.3634,0,1000,my-org,my-cc,36.34,0.3634",
+      ].join("\n");
+      const records = billingClient.parseAiCreditCSV(csv);
+      expect(records[0].input_tokens).toBe(0);
+      expect(records[0].output_tokens).toBe(0);
+      expect(records[0].cache_read_tokens).toBe(0);
+      expect(records[0].cache_write_tokens).toBe(0);
+      expect(records[0].repository).toBe("");
     });
   });
 

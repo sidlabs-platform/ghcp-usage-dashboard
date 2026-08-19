@@ -45,6 +45,7 @@ A comprehensive dashboard for visualizing GitHub Copilot usage metrics, GHAS sec
 | **💰 Billing** | Cost overview, product/org/user breakdowns, cost trends |
 | **📈 Metered Usage** | Detailed metered usage reports by product, org, and user |
 | **⚡ AI Credits** | AI credit consumption, model breakdown, user-level analysis |
+| **🧮 Token Usage** | Per-model input/output/cache token volumes, correlated with AI credits (allowance vs. additional) and dollar cost — see [Token Usage Analytics](#-token-usage-analytics) |
 | **📜 License & AI Credits** | Per-user license lifecycle + AI-credit reconciliation. Live snapshot by default; period-aware historical detail/rollup, data-quality checks, and run history when historical licensing sync is enabled — see [Historical License Reconciliation](#historical-license-reconciliation) |
 | **👤 AI Credits by User** | Sortable user-level AI credit consumption table |
 
@@ -390,6 +391,27 @@ Detailed metered usage reports broken down by product, organization, and user. R
 
 AI credit consumption with model-level breakdown and user-level analysis. Supports both legacy premium requests and the new AI credits billing model (effective June 2026). Requires `billing.premiumRequests: true` or `billing.aiCredits: true`.
 
+### 🧮 Token Usage Analytics
+
+Per-model token breakdown from the AI usage report, correlated against AI credit and dollar consumption. Requires `billing.premiumRequests: true` or `billing.aiCredits: true` (same gating as AI Credits).
+
+**Where the data comes from.** GitHub's [2026-08-11 changelog](https://github.blog/changelog/2026-08-11-per-model-token-breakdown-in-the-usage-report/) added four columns — `input`, `output`, `cache_read`, `cache_write` — to the AI usage report (`ai_credit` report type), summed by `date` + `model` + `username`. The dashboard already synced this report, so no new API surface is required; the columns are now parsed into `billing_premium_requests` as `input_tokens`, `output_tokens`, `cache_read_tokens`, and `cache_write_tokens`. Legacy `premium_request` exports using the older `input_tokens`/`output_tokens`/`cached_tokens` header names still parse; `cached_tokens` is kept populated (mirrored from `cache_read`) so existing queries and exports are unchanged.
+
+**Allowance vs. additional usage.** The `ai_credit` report does not emit `exceeds_quota`, so the split is derived from billing amounts present on every row:
+
+- `discount_amount` — usage covered by the account's included allowance ⇒ **pool**
+- `net_amount` — the billable remainder ⇒ **additional**
+- Credits are apportioned by the `discount_amount / gross_amount` ratio, guarded so a zero-gross row counts as fully pool-covered rather than dividing by zero.
+- When a row still carries a legacy `exceeds_quota` of `TRUE`/`FALSE`, that flag takes precedence over the ratio.
+
+Credits and USD are **different units** — `discount_amount`/`net_amount` are dollars and split directly, while credits are apportioned by the ratio. The canonical expression lives in `POOL_FRACTION_SQL` in `src/lib/db/billing-repo.ts` and is shared by every token query so the two paths cannot drift.
+
+**What the page shows.** Token KPIs by class, a stacked daily token trend with credits overlaid, daily allowance-vs-additional credit bars, a sortable per-model efficiency table (credits per 1M, $ per 1M, output:input ratio, cache hit rate), cache-efficiency estimates, a top-consumer leaderboard with each user's pool/paid split, attribution by organization / cost center / repository, a tokens-vs-credits correlation scatter with the fitted fleet rate, an anomaly list, and CSV export. A compact token strip on the **AI Credits** page links through to it.
+
+**Fitted rates are estimates.** Per-token credit rates are inferred from your own usage with non-negative least squares — they are not published GitHub pricing. Because the four token classes are highly collinear (cache reads routinely outweigh fresh input by an order of magnitude), the cache-savings estimate reports "—" rather than a misleading `0` whenever the fit cannot price cache reads below fresh input.
+
+**Historical days need a backfill.** Incremental sync only fetches days after the stored `billing_sync_state` watermark, so days synced before this feature landed carry zero tokens. The page renders an explicit empty state with a **Refetch billing history** button (`POST /api/billing/tokens/backfill`) that clears only the `ai_credit`/`premium_request` sync-state rows — never usage data — so the next sync refetches the full rolling report window. This is opt-in; normal incremental sync is unchanged and no re-sync is required for the dashboard to remain fully usable.
+
 ### 📜 License & AI Credits
 
 Per-user Copilot license lifecycle (assignment/revocation), negotiated cost, and AI-credit allowance vs. consumption, in three tabs: **Overview** (KPIs, plan/org breakdown, utilization, TCO), **Period Detail** (canonical per-user/org/month rows with identity/provenance columns and filters — only when historical sync has materialized data; otherwise the current live snapshot), and **Data Quality** (coverage, reconciliation checks, unresolved identities, source stats, run history, capability preflight). Requires `billing.premiumRequests: true` or `billing.aiCredits: true` (same rule as AI Credits, for either enabled globally or for any configured enterprise). See [Historical License Reconciliation](#historical-license-reconciliation) for the full data model.
@@ -421,6 +443,7 @@ Which config toggles control the visibility of each sidebar page:
 | Billing | `billing.enabled` + `copilot.enterprise` + `GITHUB_ENTERPRISE` env var |
 | Metered Usage | Billing visible + `billing.meteredUsage` |
 | AI Credits | Billing visible + `billing.premiumRequests` OR `billing.aiCredits` |
+| Token Usage | Billing visible + `billing.premiumRequests` OR `billing.aiCredits` |
 | License & AI Credits | Billing visible + `billing.premiumRequests` OR `billing.aiCredits` (globally, or for any configured enterprise in multi-enterprise mode) |
 | AI Credits by User | `copilot.enabled` + `copilot.userMetrics` |
 
@@ -511,6 +534,8 @@ Per enterprise, in order: preflight → configured imports (audit archive, ident
 ### Backward compatibility and first-run behavior
 
 - `copilot_seats`, `billing_usage_records`, and `billing_premium_requests` are never dropped, renamed, or recreated; every new table/column is additive (`CREATE TABLE IF NOT EXISTS` / `ALTER TABLE ... ADD COLUMN`).
+- The token columns (`repository`, `cache_read_tokens`, `cache_write_tokens`) are added to `billing_premium_requests` by additive `ALTER TABLE ... ADD COLUMN ... DEFAULT 0` migrations. The `billing_premium_requests` dedup index also gained `repository` (`idx_billing_premium_dedup_v2`); widening a UNIQUE index is strictly more permissive, so existing rows can never violate it and no table rebuild occurs. Rows that still collide on the full key are now **summed** before insert rather than overwritten. Verified against live `octodemo` data, where 7,734 report rows would otherwise have collapsed to 5,932.
+- `/api/billing/tokens` returns `hasTokenData: false` with zeroed KPIs and empty arrays when no token detail exists for the selected range — never a 500 — and the Token Usage page renders an explicit empty state instead of misleading zeros.
 - Before any historical sync has ever run (or when `billing.licensing.history.enabled` is unset/`false`), `/api/billing/license-reconciliation` transparently falls back to the existing live-snapshot query, and its response is tagged `coverage.mode: "live_snapshot_only"` / `dataSource: "live_snapshot_only"` — the current reconciliation view keeps working immediately after upgrading, with **no DB reset, no full re-sync, and no config changes required**.
 - A missing/unavailable **optional** source (audit archive, identity map, membership/SCIM, org billing, AI-Credit CSV) degrades to a warning and valid (possibly partial/empty) data — never a 500 and never a failed sync on its own.
 - Existing static `licenseCost`/`aicAllowance` config remains the fallback for any period not covered by a `datedAllowances` window.

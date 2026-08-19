@@ -57,6 +57,7 @@ CREATE TABLE IF NOT EXISTS billing_premium_requests (
   net_amount REAL NOT NULL DEFAULT 0,
   username TEXT DEFAULT '',
   organization TEXT DEFAULT '',
+  repository TEXT DEFAULT '',
   model TEXT DEFAULT '',
   exceeds_quota TEXT DEFAULT 'FALSE',
   total_monthly_quota REAL DEFAULT 0,
@@ -64,15 +65,23 @@ CREATE TABLE IF NOT EXISTS billing_premium_requests (
   input_tokens REAL NOT NULL DEFAULT 0,
   output_tokens REAL NOT NULL DEFAULT 0,
   cached_tokens REAL NOT NULL DEFAULT 0,
+  cache_read_tokens REAL NOT NULL DEFAULT 0,
+  cache_write_tokens REAL NOT NULL DEFAULT 0,
   cost_center_name TEXT DEFAULT '',
   aic_quantity REAL NOT NULL DEFAULT 0,
   aic_gross_amount REAL NOT NULL DEFAULT 0,
   created_at TEXT DEFAULT (datetime('now'))
 );
 
--- Deduplication index — includes enterprise_slug for multi-enterprise
-CREATE UNIQUE INDEX IF NOT EXISTS idx_billing_premium_dedup
-  ON billing_premium_requests(enterprise_slug, date, sku, username, organization, model);
+-- Deduplication index — includes enterprise_slug for multi-enterprise.
+--
+-- `repository` is part of the key: the AI usage report emits separate rows per
+-- repository for repo-scoped SKUs (code_quality_ai_credit, coding_agent_ai_credit).
+-- Without it, a live octodemo export collapsed 1174 rows into 448 via
+-- INSERT OR REPLACE, silently discarding ~14% of AI credits. The older
+-- `idx_billing_premium_dedup` index is dropped in database.ts migrations.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_billing_premium_dedup_v2
+  ON billing_premium_requests(enterprise_slug, date, sku, username, organization, repository, model);
 
 -- Query indexes
 CREATE INDEX IF NOT EXISTS idx_billing_premium_date ON billing_premium_requests(date);
@@ -80,6 +89,9 @@ CREATE INDEX IF NOT EXISTS idx_billing_premium_user ON billing_premium_requests(
 CREATE INDEX IF NOT EXISTS idx_billing_premium_model ON billing_premium_requests(model);
 CREATE INDEX IF NOT EXISTS idx_billing_premium_quota ON billing_premium_requests(exceeds_quota);
 CREATE INDEX IF NOT EXISTS idx_billing_premium_org ON billing_premium_requests(organization);
+-- Supports the per-model token rollups on the Token Usage page
+CREATE INDEX IF NOT EXISTS idx_billing_premium_slug_date_model
+  ON billing_premium_requests(enterprise_slug, date, model);
 
 -- ============================================================================
 -- Daily Aggregate Cache (rebuilt after sync for fast chart queries)

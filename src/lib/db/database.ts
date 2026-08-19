@@ -70,6 +70,14 @@ export function getDb(): SqliteDatabase {
     "ALTER TABLE billing_premium_requests ADD COLUMN cost_center_name TEXT DEFAULT ''",
     "ALTER TABLE billing_premium_requests ADD COLUMN aic_quantity REAL NOT NULL DEFAULT 0",
     "ALTER TABLE billing_premium_requests ADD COLUMN aic_gross_amount REAL NOT NULL DEFAULT 0",
+    // Per-model token breakdown (AI usage report, 2026-08-11) + the `repository`
+    // column that report emits. `repository` must participate in the dedup key,
+    // so the old narrower unique index is dropped here and billing-schema.sql
+    // recreates it as `idx_billing_premium_dedup_v2`.
+    "ALTER TABLE billing_premium_requests ADD COLUMN repository TEXT DEFAULT ''",
+    "ALTER TABLE billing_premium_requests ADD COLUMN cache_read_tokens REAL NOT NULL DEFAULT 0",
+    "ALTER TABLE billing_premium_requests ADD COLUMN cache_write_tokens REAL NOT NULL DEFAULT 0",
+    "DROP INDEX IF EXISTS idx_billing_premium_dedup",
     // Summary tables
     "ALTER TABLE user_period_summary ADD COLUMN enterprise_slug TEXT NOT NULL DEFAULT ''",
     "ALTER TABLE daily_aggregate_cache ADD COLUMN enterprise_slug TEXT NOT NULL DEFAULT ''",
