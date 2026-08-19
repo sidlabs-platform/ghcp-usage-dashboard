@@ -125,6 +125,13 @@ const SEARCH_INDEX: SearchEntry[] = [
     section: "Billing",
   },
   {
+    href: "/dashboard/token-usage",
+    label: "Token Usage",
+    description: "Per-model token breakdown correlated with AI credits and dollar cost",
+    keywords: ["token", "tokens", "input", "output", "cache", "cache read", "cache write", "per-model", "efficiency", "correlation"],
+    section: "Billing",
+  },
+  {
     href: "/dashboard/license-reconciliation",
     label: "License & Credits",
     description: "Per-user license lifecycle, seat cost, and AI-credit allocation vs. consumption",

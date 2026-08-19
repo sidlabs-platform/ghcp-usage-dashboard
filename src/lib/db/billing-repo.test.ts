@@ -31,6 +31,16 @@ import {
   getRepositoryBreakdown,
   getPremiumDailyTrend,
   refreshBillingDailyAggregates,
+  aggregatePremiumRecords,
+  resetBillingSyncState,
+  getTokenKpis,
+  getTokenModelSummary,
+  getTokenDailyTrend,
+  getTokenUserSummary,
+  getTokenAttribution,
+  getTokenModelDailySeries,
+  getTokenUserModelEfficiency,
+  getTokenExportRows,
 } from "./billing-repo";
 import type { BillingPremiumRequestRecord } from "@/lib/types/billing";
 
@@ -41,8 +51,9 @@ function makePremiumRecord(overrides: Partial<BillingPremiumRequestRecord> = {})
     date: "2026-06-10", product: "copilot", sku: "prem1", quantity: 100,
     unit_type: "token", applied_cost_per_quantity: 0.01, gross_amount: 1,
     discount_amount: 0, net_amount: 1, username: "dev1", organization: "org1",
-    model: "gpt-4", exceeds_quota: "FALSE", total_monthly_quota: 500,
+    repository: "", model: "gpt-4", exceeds_quota: "FALSE", total_monthly_quota: 500,
     charge_scope: "user" as const, input_tokens: 0, output_tokens: 0, cached_tokens: 0,
+    cache_read_tokens: 0, cache_write_tokens: 0,
     cost_center_name: "", aic_quantity: 100, aic_gross_amount: 1.6,
     ...overrides,
   };
@@ -820,17 +831,19 @@ describe("premium requests — multi-enterprise isolation", () => {
   const premRecA = {
     date: "2026-06-15", product: "copilot", sku: "prem1", quantity: 100, unit_type: "token",
     applied_cost_per_quantity: 0.04, gross_amount: 4, discount_amount: 0, net_amount: 4,
-    username: "alice", organization: "org-shared", model: "gpt-4",
+    username: "alice", organization: "org-shared", repository: "", model: "gpt-4",
     exceeds_quota: "FALSE", total_monthly_quota: 500, charge_scope: "user" as const,
     input_tokens: 2000, output_tokens: 800, cached_tokens: 500,
+    cache_read_tokens: 500, cache_write_tokens: 100,
     cost_center_name: "", aic_quantity: 100, aic_gross_amount: 6.4,
   };
   const premRecB = {
     date: "2026-06-15", product: "copilot", sku: "prem1", quantity: 60, unit_type: "token",
     applied_cost_per_quantity: 0.04, gross_amount: 2.4, discount_amount: 0, net_amount: 2.4,
-    username: "alice", organization: "org-shared", model: "claude-3",
+    username: "alice", organization: "org-shared", repository: "", model: "claude-3",
     exceeds_quota: "FALSE", total_monthly_quota: 300, charge_scope: "user" as const,
     input_tokens: 1200, output_tokens: 400, cached_tokens: 200,
+    cache_read_tokens: 200, cache_write_tokens: 50,
     cost_center_name: "", aic_quantity: 60, aic_gross_amount: 3.84,
   };
 
@@ -943,5 +956,312 @@ describe("premium requests — multi-enterprise isolation", () => {
     const summary = getPremiumUserSummary("2026-06-01", "2026-06-30", undefined, [entA, entB]);
     expect(summary).toHaveLength(1); // same user/org → grouped
     expect(summary[0].total_requests).toBe(160);
+  });
+});
+
+// ══════════════════════════════════════════════════════════════════════
+// Token Usage Analytics
+// ══════════════════════════════════════════════════════════════════════
+
+describe("aggregatePremiumRecords", () => {
+  it("sums records that collide on the storage dedup key", () => {
+    // The live AI usage report emits several rows sharing
+    // (date, sku, username, organization, repository, model) — they must be
+    // summed, not overwritten, or the credits are silently lost.
+    const result = aggregatePremiumRecords([
+      makePremiumRecord({ quantity: 5, aic_quantity: 5, aic_gross_amount: 0.05, gross_amount: 0.05, input_tokens: 100, cache_read_tokens: 10 }),
+      makePremiumRecord({ quantity: 6, aic_quantity: 6, aic_gross_amount: 0.06, gross_amount: 0.06, input_tokens: 200, cache_read_tokens: 20 }),
+      makePremiumRecord({ quantity: 7, aic_quantity: 7, aic_gross_amount: 0.07, gross_amount: 0.07, input_tokens: 300, cache_read_tokens: 30 }),
+    ]);
+
+    expect(result).toHaveLength(1);
+    expect(result[0].aic_quantity).toBeCloseTo(18, 6);
+    expect(result[0].aic_gross_amount).toBeCloseTo(0.18, 6);
+    expect(result[0].gross_amount).toBeCloseTo(0.18, 6);
+    expect(result[0].input_tokens).toBe(600);
+    expect(result[0].cache_read_tokens).toBe(60);
+  });
+
+  it("keeps records apart when only the repository differs", () => {
+    const result = aggregatePremiumRecords([
+      makePremiumRecord({ repository: "repo-a", aic_quantity: 5 }),
+      makePremiumRecord({ repository: "repo-b", aic_quantity: 7 }),
+    ]);
+    expect(result).toHaveLength(2);
+    expect(result.map((r) => r.repository).sort()).toEqual(["repo-a", "repo-b"]);
+  });
+
+  it("keeps records apart when only the model differs", () => {
+    const result = aggregatePremiumRecords([
+      makePremiumRecord({ model: "gpt-5", aic_quantity: 5 }),
+      makePremiumRecord({ model: "claude-5", aic_quantity: 7 }),
+    ]);
+    expect(result).toHaveLength(2);
+  });
+
+  it("takes the largest monthly quota and escalates exceeds_quota", () => {
+    const result = aggregatePremiumRecords([
+      makePremiumRecord({ total_monthly_quota: 300, exceeds_quota: "FALSE" }),
+      makePremiumRecord({ total_monthly_quota: 900, exceeds_quota: "TRUE" }),
+    ]);
+    expect(result[0].total_monthly_quota).toBe(900);
+    expect(result[0].exceeds_quota).toBe("TRUE");
+  });
+
+  it("returns an empty array for no input", () => {
+    expect(aggregatePremiumRecords([])).toEqual([]);
+  });
+
+  it("does not mutate the caller's records", () => {
+    const original = makePremiumRecord({ aic_quantity: 5 });
+    aggregatePremiumRecords([original, makePremiumRecord({ aic_quantity: 5 })]);
+    expect(original.aic_quantity).toBe(5);
+  });
+});
+
+describe("upsertPremiumRequests dedup", () => {
+  it("persists the full credit total when rows collide on the dedup key", () => {
+    upsertPremiumRequests("ent-dedup", [
+      makePremiumRecord({ date: "2026-07-01", aic_quantity: 5, aic_gross_amount: 0.05, input_tokens: 100 }),
+      makePremiumRecord({ date: "2026-07-01", aic_quantity: 6, aic_gross_amount: 0.06, input_tokens: 200 }),
+      makePremiumRecord({ date: "2026-07-01", aic_quantity: 7, aic_gross_amount: 0.07, input_tokens: 300 }),
+    ]);
+    const kpis = getTokenKpis("2026-07-01", "2026-07-31", undefined, ["ent-dedup"]);
+    expect(kpis.total_credits).toBeCloseTo(18, 6);
+    expect(kpis.input_tokens).toBe(600);
+  });
+
+  it("stores per-repository rows separately", () => {
+    upsertPremiumRequests("ent-repo", [
+      makePremiumRecord({ date: "2026-07-02", repository: "repo-a", aic_quantity: 4, input_tokens: 10 }),
+      makePremiumRecord({ date: "2026-07-02", repository: "repo-b", aic_quantity: 6, input_tokens: 20 }),
+    ]);
+    const attribution = getTokenAttribution("2026-07-01", "2026-07-31", undefined, ["ent-repo"]);
+    const repos = attribution.byRepository.map((r) => r.key).sort();
+    expect(repos).toEqual(["repo-a", "repo-b"]);
+    expect(attribution.byRepository.reduce((a, r) => a + r.total_credits, 0)).toBeCloseTo(10, 6);
+  });
+});
+
+describe("token analytics queries", () => {
+  const ent = "ent-tokens";
+
+  beforeEach(() => {
+    upsertPremiumRequests(ent, [
+      // Fully pool-covered: discount == gross, net == 0
+      makePremiumRecord({
+        date: "2026-07-10", username: "alice", organization: "org1", repository: "repo-a",
+        cost_center_name: "cc-1", model: "gpt-5",
+        aic_quantity: 100, aic_gross_amount: 1, gross_amount: 1, discount_amount: 1, net_amount: 0,
+        input_tokens: 1_000_000, output_tokens: 500_000,
+        cache_read_tokens: 2_000_000, cache_write_tokens: 500_000,
+        exceeds_quota: "",
+      }),
+      // Fully billable: no discount
+      makePremiumRecord({
+        date: "2026-07-11", username: "bob", organization: "org2", repository: "repo-b",
+        cost_center_name: "", model: "claude-5",
+        aic_quantity: 50, aic_gross_amount: 0.5, gross_amount: 0.5, discount_amount: 0, net_amount: 0.5,
+        input_tokens: 400_000, output_tokens: 100_000,
+        cache_read_tokens: 0, cache_write_tokens: 0,
+        exceeds_quota: "",
+      }),
+      // Half pool, half billable
+      makePremiumRecord({
+        date: "2026-07-12", username: "carol", organization: "org1", repository: "repo-a",
+        cost_center_name: "cc-1", model: "gpt-5",
+        aic_quantity: 80, aic_gross_amount: 0.8, gross_amount: 0.8, discount_amount: 0.4, net_amount: 0.4,
+        input_tokens: 200_000, output_tokens: 50_000,
+        cache_read_tokens: 100_000, cache_write_tokens: 0,
+        exceeds_quota: "",
+      }),
+    ]);
+  });
+
+  it("getTokenKpis totals every token class", () => {
+    const k = getTokenKpis("2026-07-01", "2026-07-31", undefined, [ent]);
+    expect(k.input_tokens).toBe(1_600_000);
+    expect(k.output_tokens).toBe(650_000);
+    expect(k.cache_read_tokens).toBe(2_100_000);
+    expect(k.cache_write_tokens).toBe(500_000);
+    expect(k.total_tokens).toBe(4_850_000);
+    expect(k.total_credits).toBeCloseTo(230, 6);
+    expect(k.unique_users).toBe(3);
+    expect(k.unique_models).toBe(2);
+  });
+
+  it("splits credits into pool and additional using the discount ratio", () => {
+    const k = getTokenKpis("2026-07-01", "2026-07-31", undefined, [ent]);
+    // alice 100 pool + bob 0 pool + carol 40 pool = 140
+    expect(k.pool_credits).toBeCloseTo(140, 6);
+    // alice 0 + bob 50 + carol 40 = 90
+    expect(k.paid_credits).toBeCloseTo(90, 6);
+    // pool + paid always reconciles to the total
+    expect(k.pool_credits + k.paid_credits).toBeCloseTo(k.total_credits, 6);
+  });
+
+  it("splits USD directly from discount_amount and net_amount", () => {
+    const k = getTokenKpis("2026-07-01", "2026-07-31", undefined, [ent]);
+    expect(k.pool_usd).toBeCloseTo(1.4, 6);
+    expect(k.paid_usd).toBeCloseTo(0.9, 6);
+  });
+
+  it("treats zero-gross rows as fully pool-covered rather than dividing by zero", () => {
+    upsertPremiumRequests("ent-zero", [
+      makePremiumRecord({
+        date: "2026-07-15", username: "dave", exceeds_quota: "",
+        aic_quantity: 25, aic_gross_amount: 0, gross_amount: 0, discount_amount: 0, net_amount: 0,
+        input_tokens: 1000,
+      }),
+    ]);
+    const k = getTokenKpis("2026-07-01", "2026-07-31", undefined, ["ent-zero"]);
+    expect(k.pool_credits).toBeCloseTo(25, 6);
+    expect(k.paid_credits).toBeCloseTo(0, 6);
+    expect(Number.isFinite(k.pool_credits)).toBe(true);
+  });
+
+  it("lets a legacy exceeds_quota flag override the amount ratio", () => {
+    upsertPremiumRequests("ent-legacy", [
+      // discount says "pool", but the legacy flag says it exceeded quota
+      makePremiumRecord({
+        date: "2026-07-16", username: "erin", exceeds_quota: "TRUE",
+        aic_quantity: 30, gross_amount: 1, discount_amount: 1, net_amount: 0, input_tokens: 1000,
+      }),
+    ]);
+    const k = getTokenKpis("2026-07-01", "2026-07-31", undefined, ["ent-legacy"]);
+    expect(k.paid_credits).toBeCloseTo(30, 6);
+    expect(k.pool_credits).toBeCloseTo(0, 6);
+  });
+
+  it("returns zeroed KPIs for a range with no data", () => {
+    const k = getTokenKpis("2030-01-01", "2030-01-31", undefined, [ent]);
+    expect(k.total_tokens).toBe(0);
+    expect(k.total_credits).toBe(0);
+    expect(k.pool_credits).toBe(0);
+    expect(k.record_count).toBe(0);
+  });
+
+  it("getTokenModelSummary derives efficiency metrics per model", () => {
+    const rows = getTokenModelSummary("2026-07-01", "2026-07-31", undefined, [ent]);
+    const gpt5 = rows.find((r) => r.model === "gpt-5")!;
+    // 180 credits over 4.35M tokens
+    expect(gpt5.total_credits).toBeCloseTo(180, 6);
+    expect(gpt5.total_tokens).toBe(4_350_000);
+    expect(gpt5.credits_per_mtok).toBeCloseTo((180 * 1_000_000) / 4_350_000, 4);
+    // output/input = 550k / 1.2M
+    expect(gpt5.output_input_ratio).toBeCloseTo(550_000 / 1_200_000, 6);
+    // cache_read / (input + cache_read) = 2.1M / 3.3M
+    expect(gpt5.cache_hit_rate).toBeCloseTo((2_100_000 * 100) / 3_300_000, 4);
+    expect(gpt5.unique_users).toBe(2);
+  });
+
+  it("reports zero efficiency instead of NaN when a model has no tokens", () => {
+    upsertPremiumRequests("ent-notok", [
+      makePremiumRecord({ date: "2026-07-17", model: "ghost", aic_quantity: 10, input_tokens: 0, output_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0 }),
+    ]);
+    const rows = getTokenModelSummary("2026-07-01", "2026-07-31", undefined, ["ent-notok"]);
+    expect(rows[0].credits_per_mtok).toBe(0);
+    expect(rows[0].usd_per_mtok).toBe(0);
+    expect(rows[0].output_input_ratio).toBe(0);
+    expect(rows[0].cache_hit_rate).toBe(0);
+  });
+
+  it("getTokenDailyTrend returns one ascending row per day", () => {
+    const trend = getTokenDailyTrend("2026-07-01", "2026-07-31", undefined, [ent]);
+    expect(trend.map((t) => t.day)).toEqual(["2026-07-10", "2026-07-11", "2026-07-12"]);
+    expect(trend[0].cache_read_tokens).toBe(2_000_000);
+    expect(trend[1].total_credits).toBeCloseTo(50, 6);
+  });
+
+  it("getTokenUserSummary ranks users by total tokens", () => {
+    const users = getTokenUserSummary("2026-07-01", "2026-07-31", undefined, [ent]);
+    expect(users[0].username).toBe("alice");
+    expect(users[0].total_tokens).toBe(4_000_000);
+    expect(users[0].pool_credits).toBeCloseTo(100, 6);
+    expect(users[0].paid_credits).toBeCloseTo(0, 6);
+    const bob = users.find((u) => u.username === "bob")!;
+    expect(bob.paid_credits).toBeCloseTo(50, 6);
+  });
+
+  it("respects the user limit", () => {
+    const users = getTokenUserSummary("2026-07-01", "2026-07-31", undefined, [ent], 2);
+    expect(users).toHaveLength(2);
+  });
+
+  it("getTokenAttribution groups by org, cost center and repository", () => {
+    const a = getTokenAttribution("2026-07-01", "2026-07-31", undefined, [ent]);
+    const org1 = a.byOrganization.find((r) => r.key === "org1")!;
+    expect(org1.total_credits).toBeCloseTo(180, 6);
+    expect(org1.unique_users).toBe(2);
+    // Empty cost center is preserved as an explicit unattributed bucket
+    expect(a.byCostCenter.some((r) => r.key === "")).toBe(true);
+    expect(a.byRepository.map((r) => r.key).sort()).toEqual(["repo-a", "repo-b"]);
+  });
+
+  it("getTokenModelDailySeries returns model/day observations", () => {
+    const series = getTokenModelDailySeries("2026-07-01", "2026-07-31", undefined, [ent]);
+    expect(series).toHaveLength(3);
+    expect(series[0].day).toBe("2026-07-10");
+    expect(series[0].model).toBe("gpt-5");
+    expect(series[0].total_tokens).toBe(4_000_000);
+  });
+
+  it("getTokenUserModelEfficiency excludes rows with no tokens", () => {
+    upsertPremiumRequests(ent, [
+      makePremiumRecord({ date: "2026-07-13", username: "zed", model: "gpt-5", aic_quantity: 5, input_tokens: 0, output_tokens: 0, cache_read_tokens: 0, cache_write_tokens: 0 }),
+    ]);
+    const rows = getTokenUserModelEfficiency("2026-07-01", "2026-07-31", undefined, [ent]);
+    expect(rows.some((r) => r.username === "zed")).toBe(false);
+    expect(rows.every((r) => r.total_tokens > 0)).toBe(true);
+  });
+
+  it("getTokenExportRows emits a reconciling pool/paid split per row", () => {
+    const rows = getTokenExportRows("2026-07-01", "2026-07-31", undefined, [ent]);
+    expect(rows).toHaveLength(3);
+    for (const r of rows) {
+      const pool = Number(r.pool_credits);
+      const paid = Number(r.paid_credits);
+      expect(pool + paid).toBeCloseTo(Number(r.total_credits), 4);
+    }
+    const carol = rows.find((r) => r.username === "carol")!;
+    expect(Number(carol.pool_credits)).toBeCloseTo(40, 4);
+    expect(Number(carol.paid_credits)).toBeCloseTo(40, 4);
+  });
+
+  it("filters token queries by organization scope", () => {
+    const k = getTokenKpis("2026-07-01", "2026-07-31", { organization: ["org2"] }, [ent]);
+    expect(k.total_credits).toBeCloseTo(50, 6);
+    expect(k.unique_users).toBe(1);
+  });
+
+  it("returns nothing when the scope resolves to no logins", () => {
+    const k = getTokenKpis("2026-07-01", "2026-07-31", { allowedLogins: [] }, [ent]);
+    expect(k.total_credits).toBe(0);
+    expect(k.record_count).toBe(0);
+  });
+
+  it("isolates token data by enterprise", () => {
+    const k = getTokenKpis("2026-07-01", "2026-07-31", undefined, ["some-other-enterprise"]);
+    expect(k.total_credits).toBe(0);
+  });
+});
+
+describe("resetBillingSyncState", () => {
+  it("removes only the requested report types", () => {
+    updateBillingSyncState("ai_credit", "2026-08-01T00:00:00Z", "2026-07-01", "2026-08-01", "ok", undefined, "ent-reset");
+    updateBillingSyncState("detailed", "2026-08-01T00:00:00Z", "2026-07-01", "2026-08-01", "ok", undefined, "ent-reset");
+
+    const cleared = resetBillingSyncState(["ai_credit"], "ent-reset");
+    expect(cleared).toBe(1);
+    expect(getBillingSyncState("ai_credit", "ent-reset")).toBeNull();
+    expect(getBillingSyncState("detailed", "ent-reset")).not.toBeNull();
+  });
+
+  it("returns 0 when there is nothing to clear", () => {
+    expect(resetBillingSyncState(["ai_credit"], "no-such-enterprise")).toBe(0);
+  });
+
+  it("returns 0 for an empty report type list", () => {
+    expect(resetBillingSyncState([], "ent-reset")).toBe(0);
   });
 });

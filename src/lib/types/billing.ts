@@ -75,13 +75,16 @@ export interface BillingPremiumRequestRecord {
   net_amount: number;
   username: string;
   organization: string;
+  repository: string;            // Present in the AI usage report; disambiguates same-day/model rows
   model: string;
   exceeds_quota: string;         // "TRUE" or "FALSE" — may be empty for ai_credit report rows
   total_monthly_quota: number;
   charge_scope: ChargeScope;     // Always "user" for premium requests
-  input_tokens: number;
-  output_tokens: number;
-  cached_tokens: number;
+  input_tokens: number;          // AI usage report `input` column
+  output_tokens: number;         // AI usage report `output` column
+  cached_tokens: number;         // Legacy alias, mirrors cache_read_tokens
+  cache_read_tokens: number;     // AI usage report `cache_read` column
+  cache_write_tokens: number;    // AI usage report `cache_write` column
   cost_center_name: string;
   aic_quantity: number;          // AI Credit equivalent quantity
   aic_gross_amount: number;      // AI Credit equivalent gross amount
@@ -163,6 +166,8 @@ export interface PremiumRequestUserSummary {
   total_input_tokens: number;
   total_output_tokens: number;
   total_cached_tokens: number;
+  total_cache_read_tokens: number;
+  total_cache_write_tokens: number;
   total_aic_quantity: number;
   total_aic_gross: number;
 }
@@ -175,6 +180,8 @@ export interface PremiumRequestModelSummary {
   total_input_tokens: number;
   total_output_tokens: number;
   total_cached_tokens: number;
+  total_cache_read_tokens: number;
+  total_cache_write_tokens: number;
   total_aic_quantity: number;
   total_aic_gross: number;
 }
@@ -244,8 +251,112 @@ export interface PremiumDailyTrend {
   total_input_tokens: number;
   total_output_tokens: number;
   total_cached_tokens: number;
+  total_cache_read_tokens: number;
+  total_cache_write_tokens: number;
   total_aic_quantity: number;
   total_aic_gross: number;
+}
+
+// ── Token Usage Analytics ─────────────────────────────────────────────
+// Backed by the per-model token breakdown added to the AI usage report on
+// 2026-08-11. All figures come from `billing_premium_requests`.
+//
+// "Pool" vs "additional" credits are derived from billing amounts, since the
+// ai_credit report no longer emits `exceeds_quota`:
+//   - `discount_amount` is usage covered by the account's included allowance
+//   - `net_amount` is the billable remainder
+// Credits are apportioned by the discount/gross ratio. See
+// `POOL_SPLIT_SQL` in `src/lib/db/billing-repo.ts` for the canonical expression.
+
+/** The four token classes reported per model. */
+export interface TokenTotals {
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  cache_write_tokens: number;
+  /** input + output + cache_read + cache_write */
+  total_tokens: number;
+}
+
+export interface TokenKpis extends TokenTotals {
+  total_credits: number;
+  pool_credits: number;
+  paid_credits: number;
+  total_gross_usd: number;
+  pool_usd: number;
+  paid_usd: number;
+  unique_users: number;
+  unique_models: number;
+  record_count: number;
+}
+
+export interface TokenModelSummary extends TokenTotals {
+  model: string;
+  total_credits: number;
+  pool_credits: number;
+  paid_credits: number;
+  total_gross_usd: number;
+  pool_usd: number;
+  paid_usd: number;
+  unique_users: number;
+  record_count: number;
+  /** Credits consumed per 1,000,000 tokens. 0 when no tokens are reported. */
+  credits_per_mtok: number;
+  /** Gross USD per 1,000,000 tokens. 0 when no tokens are reported. */
+  usd_per_mtok: number;
+  /** output / input. 0 when no input tokens are reported. */
+  output_input_ratio: number;
+  /** cache_read / (input + cache_read), as a percentage. */
+  cache_hit_rate: number;
+}
+
+export interface TokenDailyTrendPoint extends TokenTotals {
+  day: string;
+  total_credits: number;
+  pool_credits: number;
+  paid_credits: number;
+  total_gross_usd: number;
+  unique_users: number;
+}
+
+export interface TokenUserSummary extends TokenTotals {
+  username: string;
+  organization: string;
+  total_credits: number;
+  pool_credits: number;
+  paid_credits: number;
+  total_gross_usd: number;
+  pool_usd: number;
+  paid_usd: number;
+  unique_models: number;
+  credits_per_mtok: number;
+  cache_hit_rate: number;
+}
+
+/** A generic token/cost rollup keyed by an attribution dimension. */
+export interface TokenAttributionRow extends TokenTotals {
+  /** Organization, cost center or repository name. Empty string ⇒ unattributed. */
+  key: string;
+  total_credits: number;
+  pool_credits: number;
+  paid_credits: number;
+  total_gross_usd: number;
+  unique_users: number;
+  record_count: number;
+}
+
+export interface TokenAttribution {
+  byOrganization: TokenAttributionRow[];
+  byCostCenter: TokenAttributionRow[];
+  byRepository: TokenAttributionRow[];
+}
+
+/** One model/day observation used for correlation and anomaly analysis. */
+export interface TokenModelDailyPoint extends TokenTotals {
+  day: string;
+  model: string;
+  total_credits: number;
+  total_gross_usd: number;
 }
 
 // ── CSV Row shapes (raw from downloaded report) ───────────────────────
@@ -279,9 +390,16 @@ export interface PremiumRequestCSVRow {
   net_amount: string;
   username?: string;
   organization?: string;
+  repository?: string;
   model?: string;
   exceeds_quota?: string;
   total_monthly_quota?: string;
+  /** Current AI usage report column names (2026-08-11 changelog). */
+  input?: string;
+  output?: string;
+  cache_read?: string;
+  cache_write?: string;
+  /** Legacy column names retained for older reports. */
   input_tokens?: string;
   output_tokens?: string;
   cached_tokens?: string;
@@ -290,7 +408,17 @@ export interface PremiumRequestCSVRow {
   aic_gross_amount?: string;
 }
 
-/** CSV row shape for the ai_credit report type */
+/**
+ * CSV row shape for the ai_credit report type (the "AI usage report").
+ *
+ * Verified against a live `octodemo` export (2026-08-19), whose header is:
+ * `date, username, product, sku, model, quantity, unit_type,
+ *  applied_cost_per_quantity, gross_amount, discount_amount, net_amount,
+ *  total_monthly_quota, organization, repository, cost_center_name,
+ *  aic_quantity, aic_gross_amount, input, output, cache_read, cache_write`
+ *
+ * Note there is no `exceeds_quota` column in this report.
+ */
 export interface AiCreditCSVRow {
   date: string;
   username?: string;
@@ -305,7 +433,17 @@ export interface AiCreditCSVRow {
   net_amount: string;
   total_monthly_quota?: string;
   organization?: string;
+  repository?: string;
   cost_center_name?: string;
   aic_quantity?: string;
   aic_gross_amount?: string;
+  /** Per-model token breakdown (2026-08-11 changelog). */
+  input?: string;
+  output?: string;
+  cache_read?: string;
+  cache_write?: string;
+  /** Legacy aliases, tolerated if an older export is replayed. */
+  input_tokens?: string;
+  output_tokens?: string;
+  cached_tokens?: string;
 }

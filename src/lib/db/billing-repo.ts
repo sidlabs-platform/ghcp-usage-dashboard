@@ -20,6 +20,13 @@ import type {
   PremiumDailyTrend,
   PremiumCostCenterBreakdown,
   PremiumOrgBreakdown,
+  TokenKpis,
+  TokenModelSummary,
+  TokenDailyTrendPoint,
+  TokenUserSummary,
+  TokenAttribution,
+  TokenAttributionRow,
+  TokenModelDailyPoint,
 } from "@/lib/types/billing";
 
 const AI_CREDITS_START_DATE = "2026-06-01";
@@ -237,9 +244,12 @@ const PREMIUM_SORT_COLUMNS = new Set([
   "input_tokens",
   "output_tokens",
   "cached_tokens",
+  "cache_read_tokens",
+  "cache_write_tokens",
   "cost_center_name",
   "aic_quantity",
   "aic_gross_amount",
+  "repository",
 ]);
 
 // ── Upsert Operations ────────────────────────────────────────────────
@@ -278,6 +288,48 @@ export function upsertUsageRecords(enterpriseSlug: string, records: BillingUsage
   tx();
 }
 
+/**
+ * Collapse records that share the storage dedup key by summing their additive
+ * fields.
+ *
+ * The AI usage report can emit several rows with an identical
+ * (date, sku, username, organization, repository, model) tuple — verified
+ * against a live octodemo export. Because persistence uses INSERT OR REPLACE,
+ * writing them one at a time would keep only the last row and silently discard
+ * the rest. Summing first preserves the full quantity, cost and token totals.
+ */
+export function aggregatePremiumRecords(
+  records: BillingPremiumRequestRecord[]
+): BillingPremiumRequestRecord[] {
+  const merged = new Map<string, BillingPremiumRequestRecord>();
+  for (const r of records) {
+    const key = [r.date, r.sku, r.username, r.organization, r.repository, r.model].join("\u0000");
+    const prev = merged.get(key);
+    if (!prev) {
+      merged.set(key, { ...r });
+      continue;
+    }
+    prev.quantity += r.quantity;
+    prev.gross_amount += r.gross_amount;
+    prev.discount_amount += r.discount_amount;
+    prev.net_amount += r.net_amount;
+    prev.input_tokens += r.input_tokens;
+    prev.output_tokens += r.output_tokens;
+    prev.cached_tokens += r.cached_tokens;
+    prev.cache_read_tokens += r.cache_read_tokens;
+    prev.cache_write_tokens += r.cache_write_tokens;
+    prev.aic_quantity += r.aic_quantity;
+    prev.aic_gross_amount += r.aic_gross_amount;
+    // Non-additive fields: keep the largest quota and prefer a populated value.
+    prev.total_monthly_quota = Math.max(prev.total_monthly_quota, r.total_monthly_quota);
+    if (!prev.cost_center_name) prev.cost_center_name = r.cost_center_name;
+    if (!prev.product) prev.product = r.product;
+    if (!prev.unit_type) prev.unit_type = r.unit_type;
+    if (r.exceeds_quota === "TRUE") prev.exceeds_quota = "TRUE";
+  }
+  return [...merged.values()];
+}
+
 export function upsertPremiumRequests(
   enterpriseSlug: string,
   records: BillingPremiumRequestRecord[]
@@ -286,14 +338,15 @@ export function upsertPremiumRequests(
   const stmt = db.prepare(`
     INSERT OR REPLACE INTO billing_premium_requests
       (enterprise_slug, date, product, sku, quantity, unit_type, applied_cost_per_quantity,
-       gross_amount, discount_amount, net_amount, username, organization,
+       gross_amount, discount_amount, net_amount, username, organization, repository,
        model, exceeds_quota, total_monthly_quota, charge_scope,
-       input_tokens, output_tokens, cached_tokens,
+       input_tokens, output_tokens, cached_tokens, cache_read_tokens, cache_write_tokens,
        cost_center_name, aic_quantity, aic_gross_amount)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
+  const deduped = aggregatePremiumRecords(records);
   const tx = db.transaction(() => {
-    for (const r of records) {
+    for (const r of deduped) {
       stmt.run(
         enterpriseSlug,
         r.date,
@@ -307,6 +360,7 @@ export function upsertPremiumRequests(
         r.net_amount,
         r.username,
         r.organization,
+        r.repository ?? "",
         r.model,
         r.exceeds_quota,
         r.total_monthly_quota,
@@ -314,6 +368,8 @@ export function upsertPremiumRequests(
         r.input_tokens,
         r.output_tokens,
         r.cached_tokens,
+        r.cache_read_tokens ?? 0,
+        r.cache_write_tokens ?? 0,
         r.cost_center_name,
         r.aic_quantity,
         r.aic_gross_amount
@@ -678,6 +734,8 @@ export function getPremiumUserSummary(
       COALESCE(SUM(input_tokens), 0)  AS total_input_tokens,
       COALESCE(SUM(output_tokens), 0) AS total_output_tokens,
       COALESCE(SUM(cached_tokens), 0) AS total_cached_tokens,
+      COALESCE(SUM(cache_read_tokens), 0)  AS total_cache_read_tokens,
+      COALESCE(SUM(cache_write_tokens), 0) AS total_cache_write_tokens,
       COALESCE(SUM(aic_quantity), 0)   AS total_aic_quantity,
       COALESCE(SUM(aic_gross_amount), 0) AS total_aic_gross
     FROM billing_premium_requests
@@ -713,6 +771,8 @@ export function getPremiumModelSummary(
       COALESCE(SUM(input_tokens), 0)  AS total_input_tokens,
       COALESCE(SUM(output_tokens), 0) AS total_output_tokens,
       COALESCE(SUM(cached_tokens), 0) AS total_cached_tokens,
+      COALESCE(SUM(cache_read_tokens), 0)  AS total_cache_read_tokens,
+      COALESCE(SUM(cache_write_tokens), 0) AS total_cache_write_tokens,
       COALESCE(SUM(aic_quantity), 0)   AS total_aic_quantity,
       COALESCE(SUM(aic_gross_amount), 0) AS total_aic_gross
     FROM billing_premium_requests
@@ -961,6 +1021,8 @@ export function getPremiumDailyTrend(
       COALESCE(SUM(input_tokens), 0)  AS total_input_tokens,
       COALESCE(SUM(output_tokens), 0) AS total_output_tokens,
       COALESCE(SUM(cached_tokens), 0) AS total_cached_tokens,
+      COALESCE(SUM(cache_read_tokens), 0)  AS total_cache_read_tokens,
+      COALESCE(SUM(cache_write_tokens), 0) AS total_cache_write_tokens,
       COALESCE(SUM(aic_quantity), 0)   AS total_aic_quantity,
       COALESCE(SUM(aic_gross_amount), 0) AS total_aic_gross
     FROM billing_premium_requests
@@ -1058,8 +1120,37 @@ export function updateBillingSyncState(
   );
 }
 
-// ── Filter Options ────────────────────────────────────────────────────
+/**
+ * Clear the stored sync state for the given billing report types so the next
+ * sync refetches their full rolling window from scratch.
+ *
+ * Used by the opt-in token backfill: incremental sync only pulls days after
+ * `last_report_end`, so days synced before the per-model token breakdown
+ * existed would otherwise keep their zeroed token columns forever. Deleting
+ * only the sync-state row is non-destructive — the usage rows themselves are
+ * left in place and get overwritten by the refetch.
+ */
+export function resetBillingSyncState(
+  reportTypes: BillingReportType[],
+  enterpriseSlug?: string
+): number {
+  if (reportTypes.length === 0) return 0;
+  const db = getDb();
+  const placeholders = reportTypes.map(() => "?").join(",");
+  const stmt =
+    enterpriseSlug !== undefined
+      ? db.prepare(
+          `DELETE FROM billing_sync_state WHERE report_type IN (${placeholders}) AND enterprise_slug = ?`
+        )
+      : db.prepare(`DELETE FROM billing_sync_state WHERE report_type IN (${placeholders})`);
+  const result =
+    enterpriseSlug !== undefined
+      ? stmt.run(...reportTypes, enterpriseSlug)
+      : stmt.run(...reportTypes);
+  return Number(result.changes ?? 0);
+}
 
+// ── Filter Options ────────────────────────────────────────────────────
 export function getUsageFilterOptions(
   start: string,
   end: string,
@@ -1149,4 +1240,387 @@ export function getPremiumFilterOptions(
   ).map((r) => r.username);
 
   return { models, organizations, users };
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// Token Usage Analytics
+// ══════════════════════════════════════════════════════════════════════
+//
+// Backed by the per-model token breakdown GitHub added to the AI usage report
+// on 2026-08-11 (`input`, `output`, `cache_read`, `cache_write` columns).
+//
+// Pool vs. additional credits
+// ---------------------------
+// The `ai_credit` report no longer emits `exceeds_quota`, so the split between
+// allowance-covered ("pool") and billable ("additional") usage is derived from
+// the billing amounts that every row carries:
+//
+//   discount_amount → covered by the account's included allowance  → pool
+//   net_amount      → billable remainder                          → additional
+//
+// USD splits directly. Credits are apportioned by the discount/gross ratio,
+// because credits are a *count* while the amounts are USD — the two must never
+// be summed together. Rows with gross_amount = 0 cannot be apportioned and are
+// treated as fully pool-covered (they carry no billable amount by definition).
+//
+// Legacy `premium_request` rows still carry an explicit `exceeds_quota` flag;
+// when present it takes precedence over the amount ratio.
+
+/** Fraction of a row's credits covered by the included allowance. */
+const POOL_FRACTION_SQL = `
+  CASE
+    WHEN exceeds_quota = 'TRUE'  THEN 0.0
+    WHEN exceeds_quota = 'FALSE' THEN 1.0
+    WHEN gross_amount > 0        THEN MIN(1.0, MAX(0.0, discount_amount / gross_amount))
+    ELSE 1.0
+  END`;
+
+const POOL_CREDITS_SQL = `COALESCE(SUM(aic_quantity * (${POOL_FRACTION_SQL})), 0)`;
+const PAID_CREDITS_SQL = `COALESCE(SUM(aic_quantity * (1.0 - (${POOL_FRACTION_SQL}))), 0)`;
+
+/** Column list shared by every token rollup. */
+const TOKEN_SUMS_SQL = `
+  COALESCE(SUM(input_tokens), 0)        AS input_tokens,
+  COALESCE(SUM(output_tokens), 0)       AS output_tokens,
+  COALESCE(SUM(cache_read_tokens), 0)   AS cache_read_tokens,
+  COALESCE(SUM(cache_write_tokens), 0)  AS cache_write_tokens,
+  COALESCE(SUM(input_tokens + output_tokens + cache_read_tokens + cache_write_tokens), 0) AS total_tokens,
+  COALESCE(SUM(aic_quantity), 0)        AS total_credits,
+  ${POOL_CREDITS_SQL}                   AS pool_credits,
+  ${PAID_CREDITS_SQL}                   AS paid_credits,
+  COALESCE(SUM(aic_gross_amount), 0)    AS total_gross_usd`;
+
+/**
+ * Build the shared WHERE clause for token queries.
+ * Mirrors the premium-request filter conventions (scope, org, model, enterprise).
+ */
+function buildTokenQuery(
+  start: string,
+  end: string,
+  filters?: PremiumFilters,
+  enterpriseSlugs?: string[]
+): { where: string; params: unknown[] } {
+  const clauses: string[] = ["date >= ?", "date <= ?", `date >= '${AI_CREDITS_START_DATE}'`];
+  const params: unknown[] = [start, end];
+  const { clause: entClause, params: entParams } = buildEnterpriseFilter(enterpriseSlugs);
+  if (entClause) {
+    clauses.push(entClause.replace(/^\s*AND\s+/, ""));
+    params.push(...entParams);
+  }
+  appendPremiumFilters(clauses, params, filters);
+  return { where: buildWhereClause(clauses), params };
+}
+
+function safeDiv(numerator: number, denominator: number): number {
+  return denominator > 0 ? numerator / denominator : 0;
+}
+
+const MILLION = 1_000_000;
+
+/**
+ * Headline token KPIs for a date range, including the pool vs. additional split.
+ */
+export function getTokenKpis(
+  start: string,
+  end: string,
+  filters?: PremiumFilters,
+  enterpriseSlugs?: string[]
+): TokenKpis {
+  const db = getDb();
+  const { where, params } = buildTokenQuery(start, end, filters, enterpriseSlugs);
+  const row = db
+    .prepare(
+      `
+    SELECT
+      ${TOKEN_SUMS_SQL},
+      COALESCE(SUM(discount_amount), 0) AS pool_usd,
+      COALESCE(SUM(net_amount), 0)      AS paid_usd,
+      COUNT(DISTINCT username)          AS unique_users,
+      COUNT(DISTINCT model)             AS unique_models,
+      COUNT(*)                          AS record_count
+    FROM billing_premium_requests
+    ${where}
+  `
+    )
+    .get(...params) as TokenKpis | undefined;
+
+  return (
+    row ?? {
+      input_tokens: 0,
+      output_tokens: 0,
+      cache_read_tokens: 0,
+      cache_write_tokens: 0,
+      total_tokens: 0,
+      total_credits: 0,
+      pool_credits: 0,
+      paid_credits: 0,
+      total_gross_usd: 0,
+      pool_usd: 0,
+      paid_usd: 0,
+      unique_users: 0,
+      unique_models: 0,
+      record_count: 0,
+    }
+  );
+}
+
+/**
+ * Per-model token totals with derived efficiency metrics
+ * (credits per 1M tokens, USD per 1M tokens, output:input ratio, cache hit rate).
+ */
+export function getTokenModelSummary(
+  start: string,
+  end: string,
+  filters?: PremiumFilters,
+  enterpriseSlugs?: string[]
+): TokenModelSummary[] {
+  const db = getDb();
+  const { where, params } = buildTokenQuery(start, end, filters, enterpriseSlugs);
+  const rows = db
+    .prepare(
+      `
+    SELECT
+      model,
+      ${TOKEN_SUMS_SQL},
+      COALESCE(SUM(discount_amount), 0) AS pool_usd,
+      COALESCE(SUM(net_amount), 0)      AS paid_usd,
+      COUNT(DISTINCT username)          AS unique_users,
+      COUNT(*)                          AS record_count
+    FROM billing_premium_requests
+    ${where}
+    GROUP BY model
+    ORDER BY total_credits DESC, model ASC
+  `
+    )
+    .all(...params) as Omit<
+    TokenModelSummary,
+    "credits_per_mtok" | "usd_per_mtok" | "output_input_ratio" | "cache_hit_rate"
+  >[];
+
+  return rows.map((r) => ({
+    ...r,
+    credits_per_mtok: safeDiv(r.total_credits * MILLION, r.total_tokens),
+    usd_per_mtok: safeDiv(r.total_gross_usd * MILLION, r.total_tokens),
+    output_input_ratio: safeDiv(r.output_tokens, r.input_tokens),
+    cache_hit_rate: safeDiv(r.cache_read_tokens * 100, r.input_tokens + r.cache_read_tokens),
+  }));
+}
+
+/**
+ * Daily token totals for the stacked trend chart.
+ */
+export function getTokenDailyTrend(
+  start: string,
+  end: string,
+  filters?: PremiumFilters,
+  enterpriseSlugs?: string[]
+): TokenDailyTrendPoint[] {
+  const db = getDb();
+  const { where, params } = buildTokenQuery(start, end, filters, enterpriseSlugs);
+  return db
+    .prepare(
+      `
+    SELECT
+      date AS day,
+      ${TOKEN_SUMS_SQL},
+      COUNT(DISTINCT username) AS unique_users
+    FROM billing_premium_requests
+    ${where}
+    GROUP BY date
+    ORDER BY date ASC
+  `
+    )
+    .all(...params) as TokenDailyTrendPoint[];
+}
+
+/**
+ * Top token consumers, with each user's pool vs. additional credit split.
+ */
+export function getTokenUserSummary(
+  start: string,
+  end: string,
+  filters?: PremiumFilters,
+  enterpriseSlugs?: string[],
+  limit = 100
+): TokenUserSummary[] {
+  const db = getDb();
+  const { where, params } = buildTokenQuery(start, end, filters, enterpriseSlugs);
+  const rows = db
+    .prepare(
+      `
+    SELECT
+      username,
+      organization,
+      ${TOKEN_SUMS_SQL},
+      COALESCE(SUM(discount_amount), 0) AS pool_usd,
+      COALESCE(SUM(net_amount), 0)      AS paid_usd,
+      COUNT(DISTINCT model)             AS unique_models
+    FROM billing_premium_requests
+    ${where}
+    GROUP BY username, organization
+    ORDER BY total_tokens DESC, username ASC
+    LIMIT ?
+  `
+    )
+    .all(...params, limit) as Omit<TokenUserSummary, "credits_per_mtok" | "cache_hit_rate">[];
+
+  return rows.map((r) => ({
+    ...r,
+    credits_per_mtok: safeDiv(r.total_credits * MILLION, r.total_tokens),
+    cache_hit_rate: safeDiv(r.cache_read_tokens * 100, r.input_tokens + r.cache_read_tokens),
+  }));
+}
+
+/**
+ * Token and cost attribution grouped by organization, cost center and repository.
+ *
+ * Empty keys are preserved rather than dropped — the UI surfaces them as an
+ * explicit "Unattributed" bucket, matching `getPremiumOrgBreakdown` behaviour.
+ */
+export function getTokenAttribution(
+  start: string,
+  end: string,
+  filters?: PremiumFilters,
+  enterpriseSlugs?: string[],
+  limit = 50
+): TokenAttribution {
+  const db = getDb();
+  const { where, params } = buildTokenQuery(start, end, filters, enterpriseSlugs);
+
+  const query = (column: string): TokenAttributionRow[] =>
+    db
+      .prepare(
+        `
+    SELECT
+      ${column} AS key,
+      ${TOKEN_SUMS_SQL},
+      COUNT(DISTINCT username) AS unique_users,
+      COUNT(*)                 AS record_count
+    FROM billing_premium_requests
+    ${where}
+    GROUP BY ${column}
+    ORDER BY total_credits DESC, key ASC
+    LIMIT ?
+  `
+      )
+      .all(...params, limit) as TokenAttributionRow[];
+
+  return {
+    byOrganization: query("organization"),
+    byCostCenter: query("cost_center_name"),
+    byRepository: query("repository"),
+  };
+}
+
+/**
+ * Per-model, per-day observations feeding correlation and anomaly analysis.
+ * Aggregated in SQL so only a small matrix reaches JS.
+ */
+export function getTokenModelDailySeries(
+  start: string,
+  end: string,
+  filters?: PremiumFilters,
+  enterpriseSlugs?: string[]
+): TokenModelDailyPoint[] {
+  const db = getDb();
+  const { where, params } = buildTokenQuery(start, end, filters, enterpriseSlugs);
+  return db
+    .prepare(
+      `
+    SELECT
+      date AS day,
+      model,
+      COALESCE(SUM(input_tokens), 0)       AS input_tokens,
+      COALESCE(SUM(output_tokens), 0)      AS output_tokens,
+      COALESCE(SUM(cache_read_tokens), 0)  AS cache_read_tokens,
+      COALESCE(SUM(cache_write_tokens), 0) AS cache_write_tokens,
+      COALESCE(SUM(input_tokens + output_tokens + cache_read_tokens + cache_write_tokens), 0) AS total_tokens,
+      COALESCE(SUM(aic_quantity), 0)       AS total_credits,
+      COALESCE(SUM(aic_gross_amount), 0)   AS total_gross_usd
+    FROM billing_premium_requests
+    ${where}
+    GROUP BY date, model
+    ORDER BY date ASC, model ASC
+  `
+    )
+    .all(...params) as TokenModelDailyPoint[];
+}
+
+/**
+ * Per-user, per-model credit efficiency rows used for anomaly detection.
+ */
+export function getTokenUserModelEfficiency(
+  start: string,
+  end: string,
+  filters?: PremiumFilters,
+  enterpriseSlugs?: string[]
+): { username: string; model: string; total_tokens: number; total_credits: number; total_gross_usd: number }[] {
+  const db = getDb();
+  const { where, params } = buildTokenQuery(start, end, filters, enterpriseSlugs);
+  return db
+    .prepare(
+      `
+    SELECT
+      username,
+      model,
+      COALESCE(SUM(input_tokens + output_tokens + cache_read_tokens + cache_write_tokens), 0) AS total_tokens,
+      COALESCE(SUM(aic_quantity), 0)     AS total_credits,
+      COALESCE(SUM(aic_gross_amount), 0) AS total_gross_usd
+    FROM billing_premium_requests
+    ${where}
+    GROUP BY username, model
+    HAVING total_tokens > 0
+    ORDER BY total_credits DESC
+  `
+    )
+    .all(...params) as {
+    username: string;
+    model: string;
+    total_tokens: number;
+    total_credits: number;
+    total_gross_usd: number;
+  }[];
+}
+
+/**
+ * Detailed per-row token records for CSV export.
+ */
+export function getTokenExportRows(
+  start: string,
+  end: string,
+  filters?: PremiumFilters,
+  enterpriseSlugs?: string[],
+  limit = 100_000
+): Record<string, string | number>[] {
+  const db = getDb();
+  const { where, params } = buildTokenQuery(start, end, filters, enterpriseSlugs);
+  return db
+    .prepare(
+      `
+    SELECT
+      date,
+      username,
+      organization,
+      repository,
+      cost_center_name,
+      model,
+      sku,
+      COALESCE(input_tokens, 0)        AS input_tokens,
+      COALESCE(output_tokens, 0)       AS output_tokens,
+      COALESCE(cache_read_tokens, 0)   AS cache_read_tokens,
+      COALESCE(cache_write_tokens, 0)  AS cache_write_tokens,
+      COALESCE(input_tokens + output_tokens + cache_read_tokens + cache_write_tokens, 0) AS total_tokens,
+      COALESCE(aic_quantity, 0)        AS total_credits,
+      ROUND(COALESCE(aic_quantity, 0) * (${POOL_FRACTION_SQL}), 6)         AS pool_credits,
+      ROUND(COALESCE(aic_quantity, 0) * (1.0 - (${POOL_FRACTION_SQL})), 6) AS paid_credits,
+      COALESCE(aic_gross_amount, 0)    AS total_gross_usd,
+      COALESCE(discount_amount, 0)     AS pool_usd,
+      COALESCE(net_amount, 0)          AS paid_usd
+    FROM billing_premium_requests
+    ${where}
+    ORDER BY date ASC, model ASC, username ASC
+    LIMIT ?
+  `
+    )
+    .all(...params, limit) as Record<string, string | number>[];
 }

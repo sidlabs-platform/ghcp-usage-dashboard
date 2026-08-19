@@ -2,6 +2,7 @@
 
 import { Fragment, useEffect, useState, useCallback, useRef, useMemo } from "react";
 import dynamic from "next/dynamic";
+import Link from "next/link";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { MetricCard } from "@/components/cards/MetricCard";
 import { ChartSkeleton } from "@/components/states/ChartSkeleton";
@@ -10,7 +11,7 @@ import { useScope } from "@/contexts/ScopeContext";
 import { Zap, Users, Brain, AlertTriangle, Search, X, Info, Building2, Wallet } from "lucide-react";
 import { safeNum } from "@/lib/utils";
 import { ExportMenu } from "@/components/ui/ExportMenu";
-import type { BillingPremiumRequestRecord, PremiumRequestUserSummary, PremiumRequestModelSummary, PremiumDailyTrend, PremiumCostCenterBreakdown, PremiumOrgBreakdown } from "@/lib/types/billing";
+import type { BillingPremiumRequestRecord, PremiumRequestUserSummary, PremiumRequestModelSummary, PremiumDailyTrend, PremiumCostCenterBreakdown, PremiumOrgBreakdown, TokenKpis } from "@/lib/types/billing";
 
 const PremiumModelUsageChart = dynamic(
   () => import("@/components/charts/PremiumModelUsageChart").then(m => ({ default: m.PremiumModelUsageChart })),
@@ -80,6 +81,15 @@ const fmtCurrency = (v: number) => {
 
 const fmtCredits = (v: number) => safeNum(v).toLocaleString(undefined, { maximumFractionDigits: 2 });
 
+/** Compact token count formatter for the token breakdown strip. */
+const fmtTokenCount = (v: number) => {
+  const n = safeNum(v);
+  return n >= 1_000_000_000 ? `${(n / 1_000_000_000).toFixed(2)}B`
+    : n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M`
+    : n >= 1_000 ? `${(n / 1_000).toFixed(1)}K`
+    : n.toLocaleString();
+};
+
 /**
  * Renders the AI Credits billing dashboard page with KPIs, trends, and detailed usage tables.
  * @returns {JSX.Element} Billing dashboard page content.
@@ -96,6 +106,7 @@ export default function PremiumRequestsPage() {
   const [coverageNote, setCoverageNote] = useState<CoverageNote | null>(null);
   const [metricsAiCreditSummary, setMetricsAiCreditSummary] = useState<MetricsAiCreditUserSummary[]>([]);
   const [records, setRecords] = useState<BillingPremiumRequestRecord[]>([]);
+  const [tokenKpis, setTokenKpis] = useState<TokenKpis | null>(null);
   const [pagination, setPagination] = useState<PaginationInfo>({ page: 1, pageSize: 50, totalItems: 0, totalPages: 0 });
   const [filterOptions, setFilterOptions] = useState<FilterOptions>({ models: [], organizations: [], users: [] });
   const [expandedUsers, setExpandedUsers] = useState<Record<string, boolean>>({});
@@ -185,6 +196,22 @@ export default function PremiumRequestsPage() {
   }, [buildParams, days, selectedModel, selectedOrg, exceedsQuota, buildScopeParams]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
+
+  // Token breakdown strip. Fetched separately so a missing/empty token payload
+  // never blocks the rest of the AI Credits page from rendering.
+  useEffect(() => {
+    let cancelled = false;
+    const p = new URLSearchParams();
+    p.set("days", String(days));
+    buildScopeParams().forEach((v, k) => p.set(k, v));
+    fetch(`/api/billing/tokens?${p.toString()}`)
+      .then((r) => r.json())
+      .then((json) => {
+        if (!cancelled) setTokenKpis(json?.hasTokenData ? (json.kpis as TokenKpis) : null);
+      })
+      .catch(() => { if (!cancelled) setTokenKpis(null); });
+    return () => { cancelled = true; };
+  }, [days, buildScopeParams]);
   useEffect(() => { setPage(1); }, [search, selectedModel, selectedOrg, exceedsQuota, sort, sortDir, hasFilter, selectedEntTeams, selectedOrgTeams, scopeOrgs]);
 
   // Model breakdown rows are cached per user; drop the cache whenever the query
@@ -450,6 +477,39 @@ export default function PremiumRequestsPage() {
                   totals will appear here after user-level metrics synced with the June 2026 API field.
                 </span>
               </p>
+            </div>
+          )}
+
+          {/* Token breakdown entry point (2026-08-11 per-model token columns) */}
+          {tokenKpis && tokenKpis.total_tokens > 0 && (
+            <div className="rounded-xl border bg-[hsl(var(--card))] p-6">
+              <div className="mb-4 flex items-center justify-between gap-4">
+                <div>
+                  <h3 className="text-lg font-semibold">Token Breakdown</h3>
+                  <p className="text-sm text-[hsl(var(--muted-foreground))]">
+                    Per-model token volumes behind these credits
+                  </p>
+                </div>
+                <Link
+                  href="/dashboard/token-usage"
+                  className="shrink-0 text-sm text-[hsl(var(--primary))] hover:underline"
+                >
+                  Token analytics →
+                </Link>
+              </div>
+              <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+                {([
+                  ["Input", tokenKpis.input_tokens],
+                  ["Output", tokenKpis.output_tokens],
+                  ["Cache read", tokenKpis.cache_read_tokens],
+                  ["Cache write", tokenKpis.cache_write_tokens],
+                ] as [string, number][]).map(([label, value]) => (
+                  <div key={label} className="rounded-lg bg-[hsl(var(--accent))] p-3">
+                    <p className="text-xs text-[hsl(var(--muted-foreground))]">{label}</p>
+                    <p className="tabular-nums text-xl font-semibold">{fmtTokenCount(value)}</p>
+                  </div>
+                ))}
+              </div>
             </div>
           )}
 
