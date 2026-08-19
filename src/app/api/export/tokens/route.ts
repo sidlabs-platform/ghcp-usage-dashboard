@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { withTimeout } from "@/lib/api/timeout";
+import { withRateLimit } from "@/lib/api/rate-limit/rate-limiter";
 import { parseScopeFilter } from "@/lib/api/scope-filter";
 import { isBillingSubEnabledForAnyEnterprise } from "@/lib/config/enterprise-config";
 import { getDateRange, parseAndClampDays } from "@/lib/utils";
-import { getTokenExportRows } from "@/lib/db/billing-repo";
+import { getTokenExportRows, TokenExportTooLargeError } from "@/lib/db/billing-repo";
 import type { PremiumFilters } from "@/lib/db/billing-repo";
 import { escapeCSVValue } from "@/lib/export/csv";
 
@@ -72,9 +73,16 @@ async function handler(request: NextRequest) {
       },
     });
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    return NextResponse.json({ error: message }, { status: 500 });
+    // An oversized export is a client-correctable condition, not a server
+    // fault: tell the user how to narrow it rather than truncating silently.
+    if (error instanceof TokenExportTooLargeError) {
+      return NextResponse.json({ error: error.message }, { status: 400 });
+    }
+    // Never surface the raw exception: a SQLite failure names tables, columns
+    // and the database file path.
+    console.error("[api/export/tokens] failed:", error);
+    return NextResponse.json({ error: "Failed to export token usage." }, { status: 500 });
   }
 }
 
-export const GET = withTimeout(handler);
+export const GET = withRateLimit(withTimeout(handler));

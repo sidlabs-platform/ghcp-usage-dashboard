@@ -344,8 +344,45 @@ export function upsertPremiumRequests(
        cost_center_name, aic_quantity, aic_gross_amount)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
+  // Rows written before `repository` joined the dedup key were all stored with
+  // repository = ''. Because INSERT OR REPLACE now matches on the wider key, a
+  // refetched row carrying a real repository no longer replaces its legacy
+  // twin — both would survive and double-count credits, tokens and dollars.
+  //
+  // Only delete a legacy row when the incoming batch has no genuinely
+  // repository-less row for that same key, so SKUs that legitimately report an
+  // empty repository are never touched.
+  const legacyTwin = db.prepare(`
+    DELETE FROM billing_premium_requests
+     WHERE enterprise_slug = ? AND date = ? AND sku = ?
+       AND COALESCE(username, '') = ? AND COALESCE(organization, '') = ?
+       AND COALESCE(model, '') = ? AND COALESCE(repository, '') = ''
+  `);
   const deduped = aggregatePremiumRecords(records);
+  const narrowKey = (r: BillingPremiumRequestRecord) =>
+    [r.date, r.sku, r.username ?? "", r.organization ?? "", r.model ?? ""].join("\u0000");
+  const keysWithEmptyRepo = new Set(
+    deduped.filter((r) => !r.repository).map(narrowKey)
+  );
+  const keysNeedingCleanup = new Map<string, BillingPremiumRequestRecord>();
+  for (const r of deduped) {
+    if (!r.repository) continue;
+    const key = narrowKey(r);
+    if (keysWithEmptyRepo.has(key)) continue;
+    if (!keysNeedingCleanup.has(key)) keysNeedingCleanup.set(key, r);
+  }
+
   const tx = db.transaction(() => {
+    for (const r of keysNeedingCleanup.values()) {
+      legacyTwin.run(
+        enterpriseSlug,
+        r.date,
+        r.sku,
+        r.username ?? "",
+        r.organization ?? "",
+        r.model ?? ""
+      );
+    }
     for (const r of deduped) {
       stmt.run(
         enterpriseSlug,
@@ -1583,7 +1620,29 @@ export function getTokenUserModelEfficiency(
 }
 
 /**
+ * Thrown when a token CSV export would exceed the row limit.
+ *
+ * The export is ordered by `date ASC`, so silently applying `LIMIT` would drop
+ * the *end* of the requested range and hand back a CSV that looks complete but
+ * is not. Callers translate this into a descriptive 400, matching the
+ * license-reconciliation export's behaviour.
+ */
+export class TokenExportTooLargeError extends Error {
+  constructor(
+    public readonly rowCount: number,
+    public readonly limit: number
+  ) {
+    super(
+      `Token export would return ${rowCount.toLocaleString()} rows, above the ${limit.toLocaleString()} row limit. Narrow the date range or add filters.`
+    );
+    this.name = "TokenExportTooLargeError";
+  }
+}
+
+/**
  * Detailed per-row token records for CSV export.
+ *
+ * @throws {TokenExportTooLargeError} when the filtered row count exceeds `limit`.
  */
 export function getTokenExportRows(
   start: string,
@@ -1594,6 +1653,11 @@ export function getTokenExportRows(
 ): Record<string, string | number>[] {
   const db = getDb();
   const { where, params } = buildTokenQuery(start, end, filters, enterpriseSlugs);
+  const counted = db
+    .prepare(`SELECT COUNT(*) AS cnt FROM billing_premium_requests ${where}`)
+    .get(...params) as { cnt: number } | undefined;
+  const rowCount = counted?.cnt ?? 0;
+  if (rowCount > limit) throw new TokenExportTooLargeError(rowCount, limit);
   return db
     .prepare(
       `

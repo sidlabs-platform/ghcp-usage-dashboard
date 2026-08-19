@@ -104,8 +104,10 @@ async function handler(request: NextRequest) {
       }
     );
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    return NextResponse.json({ error: message }, { status: 500 });
+    // Never surface the raw exception: a SQLite failure names tables, columns
+    // and the database file path.
+    console.error("[api/billing/tokens] failed:", err);
+    return NextResponse.json({ error: "Failed to load token analytics." }, { status: 500 });
   }
 }
 

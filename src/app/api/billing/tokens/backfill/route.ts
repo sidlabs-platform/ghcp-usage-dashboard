@@ -1,5 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import { isBillingSubEnabledForAnyEnterprise } from "@/lib/config/enterprise-config";
+import {
+  getEnterpriseSlugs,
+  isBillingSubEnabledForAnyEnterprise,
+} from "@/lib/config/enterprise-config";
+import { withRateLimit } from "@/lib/api/rate-limit/rate-limiter";
 import { resetBillingSyncState } from "@/lib/db/billing-repo";
 import type { BillingReportType } from "@/lib/types/billing";
 
@@ -15,10 +19,14 @@ import type { BillingReportType } from "@/lib/types/billing";
  *
  * This is deliberately a POST the user triggers explicitly — normal incremental
  * sync behaviour is unchanged, and no usage data is deleted.
+ *
+ * The endpoint is rate limited and the optional `enterprise` parameter is
+ * validated against the configured enterprises, so an unrecognised slug fails
+ * loudly with a 400 rather than silently clearing nothing.
  */
 const REPORT_TYPES: BillingReportType[] = ["ai_credit", "premium_request"];
 
-export async function POST(request: NextRequest) {
+async function handler(request: NextRequest) {
   try {
     if (
       !isBillingSubEnabledForAnyEnterprise("premiumRequests") &&
@@ -30,7 +38,22 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const enterprise = request.nextUrl.searchParams.get("enterprise") || undefined;
+    const raw = request.nextUrl.searchParams.get("enterprise");
+    const enterprise = raw && raw.trim() ? raw.trim() : undefined;
+    if (enterprise) {
+      const configured = getEnterpriseSlugs();
+      if (!configured.includes(enterprise)) {
+        return NextResponse.json(
+          {
+            error: `Unknown enterprise "${enterprise}". Configured enterprises: ${
+              configured.join(", ") || "(none)"
+            }`,
+          },
+          { status: 400 }
+        );
+      }
+    }
+
     const cleared = resetBillingSyncState(REPORT_TYPES, enterprise);
 
     return NextResponse.json({
@@ -44,7 +67,11 @@ export async function POST(request: NextRequest) {
           : "No matching sync state found; the next sync will already fetch the full window.",
     });
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    return NextResponse.json({ error: message }, { status: 500 });
+    // Never surface the raw exception: a SQLite failure names tables, columns
+    // and the database file path.
+    console.error("[api/billing/tokens/backfill] failed:", error);
+    return NextResponse.json({ error: "Failed to clear billing sync state." }, { status: 500 });
   }
 }
+
+export const POST = withRateLimit(handler);

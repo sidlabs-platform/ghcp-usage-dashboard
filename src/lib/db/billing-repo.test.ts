@@ -41,6 +41,7 @@ import {
   getTokenModelDailySeries,
   getTokenUserModelEfficiency,
   getTokenExportRows,
+  TokenExportTooLargeError,
 } from "./billing-repo";
 import type { BillingPremiumRequestRecord } from "@/lib/types/billing";
 
@@ -1041,6 +1042,43 @@ describe("upsertPremiumRequests dedup", () => {
     expect(repos).toEqual(["repo-a", "repo-b"]);
     expect(attribution.byRepository.reduce((a, r) => a + r.total_credits, 0)).toBeCloseTo(10, 6);
   });
+
+  it("replaces a legacy empty-repository row when the refetch carries a real repository", () => {
+    const ent = "ent-legacy";
+    // Simulates a row synced before `repository` joined the dedup key.
+    upsertPremiumRequests(ent, [
+      makePremiumRecord({ date: "2026-07-03", repository: "", aic_quantity: 9, input_tokens: 90 }),
+    ]);
+    // The backfill refetches the same usage, now attributed to a repository.
+    upsertPremiumRequests(ent, [
+      makePremiumRecord({ date: "2026-07-03", repository: "repo-a", aic_quantity: 9, input_tokens: 90 }),
+    ]);
+    const kpis = getTokenKpis("2026-07-01", "2026-07-31", undefined, [ent]);
+    expect(kpis.total_credits).toBeCloseTo(9, 6);
+    expect(kpis.input_tokens).toBe(90);
+  });
+
+  it("keeps a genuinely repository-less row when the same batch also reports repositories", () => {
+    const ent = "ent-mixed";
+    upsertPremiumRequests(ent, [
+      makePremiumRecord({ date: "2026-07-04", repository: "", aic_quantity: 3, input_tokens: 30 }),
+      makePremiumRecord({ date: "2026-07-04", repository: "repo-a", aic_quantity: 4, input_tokens: 40 }),
+    ]);
+    const kpis = getTokenKpis("2026-07-01", "2026-07-31", undefined, [ent]);
+    expect(kpis.total_credits).toBeCloseTo(7, 6);
+    expect(kpis.input_tokens).toBe(70);
+  });
+
+  it("scopes legacy cleanup to the enterprise being written", () => {
+    upsertPremiumRequests("ent-a", [
+      makePremiumRecord({ date: "2026-07-05", repository: "", aic_quantity: 5, input_tokens: 50 }),
+    ]);
+    upsertPremiumRequests("ent-b", [
+      makePremiumRecord({ date: "2026-07-05", repository: "repo-a", aic_quantity: 8, input_tokens: 80 }),
+    ]);
+    expect(getTokenKpis("2026-07-01", "2026-07-31", undefined, ["ent-a"]).total_credits).toBeCloseTo(5, 6);
+    expect(getTokenKpis("2026-07-01", "2026-07-31", undefined, ["ent-b"]).total_credits).toBeCloseTo(8, 6);
+  });
 });
 
 describe("token analytics queries", () => {
@@ -1226,6 +1264,27 @@ describe("token analytics queries", () => {
     const carol = rows.find((r) => r.username === "carol")!;
     expect(Number(carol.pool_credits)).toBeCloseTo(40, 4);
     expect(Number(carol.paid_credits)).toBeCloseTo(40, 4);
+  });
+
+  it("getTokenExportRows throws rather than silently truncating an oversized export", () => {
+    expect(() => getTokenExportRows("2026-07-01", "2026-07-31", undefined, [ent], 2)).toThrow(
+      TokenExportTooLargeError
+    );
+    // The limit is inclusive: exactly-at-limit exports still succeed.
+    expect(getTokenExportRows("2026-07-01", "2026-07-31", undefined, [ent], 3)).toHaveLength(3);
+  });
+
+  it("TokenExportTooLargeError reports the real row count and limit", () => {
+    try {
+      getTokenExportRows("2026-07-01", "2026-07-31", undefined, [ent], 1);
+      throw new Error("expected TokenExportTooLargeError");
+    } catch (err) {
+      expect(err).toBeInstanceOf(TokenExportTooLargeError);
+      const e = err as TokenExportTooLargeError;
+      expect(e.rowCount).toBe(3);
+      expect(e.limit).toBe(1);
+      expect(e.message).toMatch(/Narrow the date range/);
+    }
   });
 
   it("filters token queries by organization scope", () => {

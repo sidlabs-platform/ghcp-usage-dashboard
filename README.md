@@ -45,7 +45,7 @@ A comprehensive dashboard for visualizing GitHub Copilot usage metrics, GHAS sec
 | **💰 Billing** | Cost overview, product/org/user breakdowns, cost trends |
 | **📈 Metered Usage** | Detailed metered usage reports by product, org, and user |
 | **⚡ AI Credits** | AI credit consumption, model breakdown, user-level analysis |
-| **🧮 Token Usage** | Per-model input/output/cache token volumes, correlated with AI credits (allowance vs. additional) and dollar cost — see [Token Usage Analytics](#token-usage-analytics) |
+| **🧮 Token Usage** | Per-model input/output/cache token volumes, correlated with AI credits (allowance vs. additional) and dollar cost — see [Token Usage Analytics](#-token-usage-analytics) |
 | **📜 License & AI Credits** | Per-user license lifecycle + AI-credit reconciliation. Live snapshot by default; period-aware historical detail/rollup, data-quality checks, and run history when historical licensing sync is enabled — see [Historical License Reconciliation](#historical-license-reconciliation) |
 | **👤 AI Credits by User** | Sortable user-level AI credit consumption table |
 

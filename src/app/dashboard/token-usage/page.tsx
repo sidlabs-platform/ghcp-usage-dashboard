@@ -112,12 +112,13 @@ export default function TokenUsagePage() {
     return p.toString();
   }, [days, buildScopeParams]);
 
-  const fetchData = useCallback(async () => {
+  const fetchData = useCallback(async (signal?: AbortSignal) => {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`/api/billing/tokens?${queryString()}`);
+      const res = await fetch(`/api/billing/tokens?${queryString()}`, { signal });
       const json: TokenResponse & { error?: string } = await res.json();
+      if (signal?.aborted) return;
       if (json.enabled === false) {
         setEnabled(false);
         return;
@@ -128,14 +129,20 @@ export default function TokenUsagePage() {
       }
       setData(json);
     } catch (err) {
+      // A superseded request is expected, not a failure to surface.
+      if (signal?.aborted || (err instanceof DOMException && err.name === "AbortError")) return;
       setError(err instanceof Error ? err.message : "Failed to load token usage");
     } finally {
-      setLoading(false);
+      if (!signal?.aborted) setLoading(false);
     }
   }, [queryString]);
 
+  // Abort the in-flight request whenever `days` or the scope changes, so a
+  // slow earlier response can never overwrite a newer one.
   useEffect(() => {
-    void fetchData();
+    const controller = new AbortController();
+    void fetchData(controller.signal);
+    return () => controller.abort();
   }, [fetchData]);
 
   const triggerBackfill = useCallback(async () => {

@@ -16,7 +16,12 @@ import type { CorrelationPoint, TokenKind } from "@/lib/analysis/token-credits";
 
 interface TokenCorrelationChartProps {
   points: CorrelationPoint[];
-  /** Fleet-wide fitted credits per 1M tokens, used to draw the reference line. */
+  /**
+   * Fleet-wide fitted credits per 1M tokens, shown as a caption under the
+   * chart. `null` when the fit was not identifiable. This does NOT drive the
+   * reference line — that is the observed overall credits/tokens ratio, which
+   * is always defined whenever there is any usage at all.
+   */
   fleetRatesPerMTok: Record<TokenKind, number> | null;
   overallR: number;
 }
@@ -32,8 +37,10 @@ const fmtTokens = (v: number) =>
 
 /**
  * Scatter of total tokens against AI credits for every model/day observation,
- * with the implied fleet-average rate drawn through it. Points well above the
- * line consume more credits than their token volume alone would suggest.
+ * with the observed fleet-average rate (total credits / total tokens) drawn
+ * through it. Points well above the line consume more credits than their token
+ * volume alone would suggest. The per-kind fitted rates are reported separately
+ * in the caption.
  */
 export function TokenCorrelationChart({ points, fleetRatesPerMTok, overallR }: TokenCorrelationChartProps) {
   if (!points || points.length === 0) {

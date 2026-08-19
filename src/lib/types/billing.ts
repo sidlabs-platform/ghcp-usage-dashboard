@@ -266,7 +266,8 @@ export interface PremiumDailyTrend {
 //   - `discount_amount` is usage covered by the account's included allowance
 //   - `net_amount` is the billable remainder
 // Credits are apportioned by the discount/gross ratio. See
-// `POOL_SPLIT_SQL` in `src/lib/db/billing-repo.ts` for the canonical expression.
+// `POOL_FRACTION_SQL` in `src/lib/db/billing-repo.ts` for the canonical
+// expression.
 
 /** The four token classes reported per model. */
 export interface TokenTotals {
