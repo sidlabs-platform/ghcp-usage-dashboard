@@ -54,7 +54,7 @@ function formatCost(v: number | null): string {
 }
 
 export default function DashboardOverview() {
-  const { days } = useDateRange();
+  const { mode, days, startDate, endDate } = useDateRange();
   const { hasFilter, buildScopeParams, clearAll } = useScope();
   const [data, setData] = useState<OverviewData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -73,6 +73,9 @@ export default function DashboardOverview() {
   const kpiRef = useRef<HTMLDivElement>(null);
   const chartsRef = useRef<HTMLDivElement>(null);
   const securityRef = useRef<HTMLDivElement>(null);
+  const requestIdRef = useRef(0);
+  const dateRangeLabel = mode === "preset" ? `Last ${days} days` : `${startDate} to ${endDate}`;
+  const dateRangeKey = mode === "preset" ? `${days}d` : `${startDate}_${endDate}`;
 
   useEffect(() => {
     fetch("/api/config")
@@ -87,32 +90,52 @@ export default function DashboardOverview() {
       .catch(() => {});
   }, []);
 
-  const fetchData = useCallback(() => {
+  const fetchData = useCallback((requestId: number) => {
     setLoading(true);
-    const params = new URLSearchParams({ days: String(days) });
+    const params = new URLSearchParams();
+    if (mode === "preset") {
+      params.set("days", String(days));
+    } else {
+      params.set("startDate", startDate);
+      params.set("endDate", endDate);
+    }
     const scopeParams = buildScopeParams();
     scopeParams.forEach((value, key) => params.set(key, value));
 
     fetch(`/api/metrics/overview?${params}`)
       .then((res) => res.json())
       .then((json) => {
+        if (requestId !== requestIdRef.current) return;
         if (json.error) setError(json.error);
         else { setData(json); setError(null); }
       })
-      .catch((err) => setError(err.message))
-      .finally(() => setLoading(false));
+      .catch((err) => {
+        if (requestId === requestIdRef.current) setError(err.message);
+      })
+      .finally(() => {
+        if (requestId === requestIdRef.current) setLoading(false);
+      });
 
-    if (securityEnabled) {
-      fetch(`/api/security/overview?days=${days}`)
+    if (securityEnabled && !params.has("teams")) {
+      setSecurityData(null);
+      fetch(`/api/security/overview?${params}`)
         .then((res) => { if (res.ok) return res.json(); })
-        .then((json) => { if (json) setSecurityData(json); })
+        .then((json) => {
+          if (json && requestId === requestIdRef.current) setSecurityData(json);
+        })
         .catch(() => {});
     } else {
       setSecurityData(null);
     }
-  }, [days, buildScopeParams, securityEnabled]);
+  }, [mode, days, startDate, endDate, buildScopeParams, securityEnabled]);
 
-  useEffect(() => { fetchData(); }, [fetchData]);
+  useEffect(() => {
+    const requestId = ++requestIdRef.current;
+    fetchData(requestId);
+    return () => {
+      if (requestIdRef.current === requestId) requestIdRef.current += 1;
+    };
+  }, [fetchData]);
 
   if (loading && !data) {
     return (
@@ -208,10 +231,10 @@ export default function DashboardOverview() {
           pdf={{
             sectionRefs: [kpiRef, ...(securityData?.summary ? [securityRef] : []), chartsRef],
             title: "Executive Overview",
-            filename: `overview-report-${days}d`,
+            filename: `overview-report-${dateRangeKey}`,
             metadata: {
               reportName: "Executive Overview",
-              dateRange: `Last ${days} days`,
+              dateRange: dateRangeLabel,
               teams: buildScopeParams().get("teams") || undefined,
               orgs: buildScopeParams().get("orgs") || undefined,
             },
@@ -295,7 +318,7 @@ export default function DashboardOverview() {
             icon={<DollarSign className="h-4 w-4" />}
             subtitle={
               kpis.billingAvailable
-                ? `Est. based on last ${days} days`
+                ? `Est. based on ${dateRangeLabel.toLowerCase()}`
                 : "Sync billing data to see cost"
             }
             accent="teal"
@@ -311,7 +334,7 @@ export default function DashboardOverview() {
             icon={<Zap className="h-4 w-4" />}
             subtitle={
               kpis.aiCreditsConsumed
-                ? `Last ${days} days`
+                ? dateRangeLabel
                 : "No usage data yet"
             }
             accent="violet"

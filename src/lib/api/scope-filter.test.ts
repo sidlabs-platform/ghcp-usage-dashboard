@@ -2,16 +2,20 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 vi.mock("@/lib/db/teams-repo", () => ({
   resolveFilteredUsers: vi.fn(() => []),
+  resolveFilteredUserScopes: vi.fn(() => []),
 }));
 
 import { filterByScope, parseScopeFilter } from "./scope-filter";
-import { resolveFilteredUsers } from "@/lib/db/teams-repo";
+import { resolveFilteredUsers, resolveFilteredUserScopes } from "@/lib/db/teams-repo";
 
 const mockResolve = resolveFilteredUsers as ReturnType<typeof vi.fn>;
+const mockResolveScopes = resolveFilteredUserScopes as ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
   mockResolve.mockReset();
   mockResolve.mockReturnValue([]);
+  mockResolveScopes.mockReset();
+  mockResolveScopes.mockReturnValue([]);
 });
 
 describe("parseScopeFilter", () => {
@@ -46,6 +50,7 @@ describe("parseScopeFilter", () => {
     const result = parseScopeFilter(new URLSearchParams("teams=ent1:team-x"));
     expect(result.selectedTeams).toEqual(["team-x"]);
     expect(result.allowedLogins).toEqual(new Set(["charlie"]));
+    expect(result.enterpriseSlugs).toEqual(["ent1"]);
     expect(mockResolve).toHaveBeenCalledWith(["team-x"], [], ["ent1"]);
   });
 
@@ -71,10 +76,36 @@ describe("parseScopeFilter", () => {
     expect(mockResolve).toHaveBeenCalledWith(["team-a", "team-b"], [], ["ent1"]);
   });
 
-  it("handles composite teams with org filter", () => {
-    mockResolve.mockReturnValueOnce(["user1"]).mockReturnValueOnce(["user2"]);
+  it("intersects composite team members with organization members", () => {
+    mockResolveScopes.mockReturnValue([
+      { enterpriseSlug: "ent1", userLogin: "shared" },
+    ]);
     const result = parseScopeFilter(new URLSearchParams("teams=ent1:team-a&orgs=org1"));
-    expect(result.allowedLogins).toEqual(new Set(["user1", "user2"]));
+    expect(result.allowedLogins).toEqual(new Set(["shared"]));
+    expect(result.allowedUserScopes).toEqual([
+      { enterpriseSlug: "ent1", userLogin: "shared" },
+    ]);
+  });
+
+  it("intersects plain team members with organization members", () => {
+    mockResolveScopes.mockReturnValue([
+      { enterpriseSlug: "ent1", userLogin: "shared" },
+    ]);
+    const result = parseScopeFilter(new URLSearchParams("teams=team-a&orgs=octodemo"));
+    expect(result.allowedLogins).toEqual(new Set(["shared"]));
+    expect(mockResolveScopes).toHaveBeenCalledWith(["team-a"], ["octodemo"], undefined);
+  });
+
+  it("preserves enterprise identity for same-login intersections", () => {
+    mockResolveScopes.mockReturnValue([]);
+    const result = parseScopeFilter(
+      new URLSearchParams("teams=ent1:team-a&orgs=octodemo"),
+    );
+
+    expect(result.enterpriseSlugs).toEqual(["ent1"]);
+    expect(result.allowedLogins).toEqual(new Set());
+    expect(result.allowedUserScopes).toEqual([]);
+    expect(mockResolveScopes).toHaveBeenCalledWith(["team-a"], ["octodemo"], ["ent1"]);
   });
 });
 

@@ -20,6 +20,7 @@ import {
   getDistinctOrgs,
   getAllTeamsWithMembers,
   resolveFilteredUsers,
+  resolveFilteredUserScopes,
 } from "./teams-repo";
 
 beforeAll(() => {
@@ -176,6 +177,24 @@ describe("teams-repo", () => {
     it("combines team and org filters", () => {
       const logins = resolveFilteredUsers(["frontend"], ["org-b"]);
       expect(logins.sort()).toEqual(["alice", "bob", "dave"]);
+    });
+
+    describe("resolveFilteredUserScopes", () => {
+      it("intersects team and organization membership within one enterprise", () => {
+        try {
+          upsertAllTeams("globex", [
+            { slug: "frontend", name: "Frontend", source: "org", orgSlug: "org-g", members: ["alice"], description: null },
+            { slug: "other", name: "Other", source: "org", orgSlug: "org-a", members: ["zoe"], description: null },
+          ]);
+
+          expect(resolveFilteredUserScopes(["frontend"], ["org-a"])).toEqual([
+            { enterpriseSlug: "acme", userLogin: "alice" },
+            { enterpriseSlug: "acme", userLogin: "bob" },
+          ]);
+        } finally {
+          db.prepare("DELETE FROM team_memberships WHERE enterprise_slug = ?").run("globex");
+        }
+      });
     });
   });
 });

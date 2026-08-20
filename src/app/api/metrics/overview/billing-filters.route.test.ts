@@ -11,8 +11,7 @@ vi.mock("@/lib/api/rate-limit/rate-limiter", () => ({ withRateLimit: (h: unknown
 vi.mock("@/lib/cache/memory-cache", () => ({ CACHE_TTL: { MEDIUM: 300 } }));
 
 vi.mock("@/lib/utils", () => ({
-  parseAndClampDays: () => ({ days: 1 }),
-  getDateRange: () => ({ start: "2026-07-01", end: "2026-07-01" }),
+  parseDateRangeParams: () => ({ start: "2026-07-01", end: "2026-07-01" }),
 }));
 
 vi.mock("@/lib/api/scope-filter", () => ({

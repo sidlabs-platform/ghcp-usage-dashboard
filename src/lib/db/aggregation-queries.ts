@@ -203,7 +203,12 @@ export interface CliUserRow {
  * render a clause that matches zero rows (`AND 1 = 0`) when the caller has
  * explicitly scoped the request down to no allowed logins.
  */
-export type LoginFilterColumn = "user_login" | "u.user_login";
+export type LoginFilterColumn =
+  | "user_login"
+  | "u.user_login"
+  | "m.user_login"
+  | "w.user_login"
+  | "mo.user_login";
 
 export function buildLoginFilter(
   allowedLogins: string[],
@@ -215,6 +220,40 @@ export function buildLoginFilter(
   }
   const placeholders = allowedLogins.map(() => "?").join(",");
   return { clause: `AND ${column} IN (${placeholders})`, params: allowedLogins };
+}
+
+export interface EnterpriseUserScope {
+  enterpriseSlug: string;
+  userLogin: string;
+}
+
+type UserScopeEnterpriseColumn = "enterprise_slug" | "u.enterprise_slug" | "m.enterprise_slug" | "w.enterprise_slug" | "mo.enterprise_slug";
+type UserScopeLoginColumn = "user_login" | "u.user_login" | "m.user_login" | "w.user_login" | "mo.user_login";
+
+/** Build a parameterized enterprise/login pair filter that preserves tenant identity. */
+export function buildUserScopeFilter(
+  scopes: EnterpriseUserScope[],
+  enterpriseColumn: UserScopeEnterpriseColumn = "enterprise_slug",
+  loginColumn: UserScopeLoginColumn = "user_login",
+): { clause: string; params: string[] } {
+  if (scopes.length === 0) return { clause: "AND 1 = 0", params: [] };
+  const tuples = scopes.map(() => "(?, ?)").join(", ");
+  return {
+    clause: `AND (${enterpriseColumn}, ${loginColumn}) IN (${tuples})`,
+    params: scopes.flatMap((scope) => [scope.enterpriseSlug, scope.userLogin]),
+  };
+}
+
+function buildAllowedUserFilter(
+  allowedLogins: string[] | undefined,
+  allowedUserScopes: EnterpriseUserScope[] | undefined,
+  emptyMeansNoRows: boolean,
+  enterpriseColumn: UserScopeEnterpriseColumn = "enterprise_slug",
+  loginColumn: UserScopeLoginColumn = "user_login",
+): { clause: string; params: string[] } {
+  return allowedUserScopes !== undefined
+    ? buildUserScopeFilter(allowedUserScopes, enterpriseColumn, loginColumn)
+    : buildLoginFilter(allowedLogins ?? [], loginColumn, emptyMeansNoRows);
 }
 
 /** `column` is restricted to a fixed literal union of internal SQL
@@ -231,14 +270,21 @@ export function buildEnterpriseFilter(
   return { clause: ` AND ${column} IN (${placeholders})`, params: slugs };
 }
 
+/**
+ * Aggregate chat-mode interactions for a date range.
+ * @param emptyMeansNoRows When true, an empty `allowedLogins` list matches zero rows; otherwise it omits the login filter.
+ * @param allowedUserScopes Enterprise-qualified users that take precedence over `allowedLogins`.
+ */
 export function getChatModeSums(
   startDay: string,
   endDay: string,
   allowedLogins?: string[],
   enterpriseSlugs?: string[],
+  emptyMeansNoRows = false,
+  allowedUserScopes?: EnterpriseUserScope[],
 ): ChatModeSums {
   const db = getDb();
-  const filter = buildLoginFilter(allowedLogins ?? []);
+  const filter = buildAllowedUserFilter(allowedLogins, allowedUserScopes, emptyMeansNoRows);
   const ef = buildEnterpriseFilter(enterpriseSlugs);
   const sql = `
     SELECT
@@ -255,14 +301,21 @@ export function getChatModeSums(
   return row ?? { ask: 0, edit: 0, plan: 0, agent: 0, custom: 0, unknown: 0 };
 }
 
+/**
+ * Aggregate distinct-user adoption statistics for a date range.
+ * @param emptyMeansNoRows When true, an empty `allowedLogins` list matches zero rows; otherwise it omits the login filter.
+ * @param allowedUserScopes Enterprise-qualified users that take precedence over `allowedLogins`.
+ */
 export function getAdoptionStats(
   startDay: string,
   endDay: string,
   allowedLogins?: string[],
   enterpriseSlugs?: string[],
+  emptyMeansNoRows = false,
+  allowedUserScopes?: EnterpriseUserScope[],
 ): AdoptionStats {
   const db = getDb();
-  const filter = buildLoginFilter(allowedLogins ?? []);
+  const filter = buildAllowedUserFilter(allowedLogins, allowedUserScopes, emptyMeansNoRows);
   const ef = buildEnterpriseFilter(enterpriseSlugs);
   const sql = `
     SELECT
@@ -674,15 +727,19 @@ const ROW_COUNT_THRESHOLD = 500_000;
 /**
  * Estimate the number of user_daily_metrics rows for a date range.
  * Returns 400-safe error message if the estimated count exceeds threshold.
+ * @param emptyMeansNoRows When true, an empty `allowedLogins` list matches zero rows; otherwise it omits the login filter.
+ * @param allowedUserScopes Enterprise-qualified users that take precedence over `allowedLogins`.
  */
 export function estimateRowCount(
   startDay: string,
   endDay: string,
   allowedLogins?: string[],
   enterpriseSlugs?: string[],
+  emptyMeansNoRows = false,
+  allowedUserScopes?: EnterpriseUserScope[],
 ): { count: number; exceeds: boolean } {
   const db = getDb();
-  const filter = buildLoginFilter(allowedLogins ?? []);
+  const filter = buildAllowedUserFilter(allowedLogins, allowedUserScopes, emptyMeansNoRows);
   const ef = buildEnterpriseFilter(enterpriseSlugs);
   const sql = `
     SELECT COUNT(*) as cnt FROM user_daily_metrics
@@ -912,15 +969,27 @@ export function getFeatureDailyTrend(
 
 // ── Completion vs Agent vs Copilot App daily trend (SQL via json_each) ─
 
-/** Daily completion vs agent vs copilot_app LOC metrics aggregated via json_each */
+/**
+ * Daily completion vs agent vs copilot_app LOC metrics aggregated via json_each.
+ * @param emptyMeansNoRows When true, an empty `allowedLogins` list matches zero rows; otherwise it omits the login filter.
+ * @param allowedUserScopes Enterprise-qualified users that take precedence over `allowedLogins`.
+ */
 export function getCompletionDailyTrend(
   startDay: string,
   endDay: string,
   allowedLogins?: string[],
   enterpriseSlugs?: string[],
+  emptyMeansNoRows = false,
+  allowedUserScopes?: EnterpriseUserScope[],
 ): CompletionDailyRow[] {
   const db = getDb();
-  const filter = buildLoginFilter(allowedLogins ?? []);
+  const filter = buildAllowedUserFilter(
+    allowedLogins,
+    allowedUserScopes,
+    emptyMeansNoRows,
+    "u.enterprise_slug",
+    "u.user_login",
+  );
   const ef = buildEnterpriseFilter(enterpriseSlugs);
   const sql = `
     SELECT
@@ -960,15 +1029,27 @@ export function getCompletionDailyTrend(
   return db.prepare(sql).all(startDay, endDay, ...filter.params, ...ef.params) as CompletionDailyRow[];
 }
 
-/** Aggregate completion vs agent vs copilot_app totals for the whole period */
+/**
+ * Aggregate completion vs agent vs copilot_app totals for the whole period.
+ * @param emptyMeansNoRows When true, an empty `allowedLogins` list matches zero rows; otherwise it omits the login filter.
+ * @param allowedUserScopes Enterprise-qualified users that take precedence over `allowedLogins`.
+ */
 export function getCompletionTotals(
   startDay: string,
   endDay: string,
   allowedLogins?: string[],
   enterpriseSlugs?: string[],
+  emptyMeansNoRows = false,
+  allowedUserScopes?: EnterpriseUserScope[],
 ): CompletionDailyRow {
   const db = getDb();
-  const filter = buildLoginFilter(allowedLogins ?? []);
+  const filter = buildAllowedUserFilter(
+    allowedLogins,
+    allowedUserScopes,
+    emptyMeansNoRows,
+    "u.enterprise_slug",
+    "u.user_login",
+  );
   const ef = buildEnterpriseFilter(enterpriseSlugs);
   const sql = `
     SELECT
@@ -1388,15 +1469,21 @@ export interface ActiveUsersDailyRow {
   cliUsers: number;
 }
 
-/** Daily active user counts from structured columns */
+/**
+ * Daily active user counts from structured columns.
+ * @param emptyMeansNoRows When true, an empty `allowedLogins` list matches zero rows; otherwise it omits the login filter.
+ * @param allowedUserScopes Enterprise-qualified users that take precedence over `allowedLogins`.
+ */
 export function getActiveUsersDailyTrend(
   startDay: string,
   endDay: string,
   allowedLogins?: string[],
   enterpriseSlugs?: string[],
+  emptyMeansNoRows = false,
+  allowedUserScopes?: EnterpriseUserScope[],
 ): ActiveUsersDailyRow[] {
   const db = getDb();
-  const filter = buildLoginFilter(allowedLogins ?? []);
+  const filter = buildAllowedUserFilter(allowedLogins, allowedUserScopes, emptyMeansNoRows);
   const ef = buildEnterpriseFilter(enterpriseSlugs);
   const sql = `
     SELECT
@@ -1439,15 +1526,40 @@ export interface ActiveUsersRollingRow {
  * - Single-day ranges: Each day has rolling windows constrained to available data
  * - Empty filters: Returns empty result set
  * - Date range start: Earlier days have windows < 7/30 days if fewer historical days exist
+ *
+ * @param emptyMeansNoRows When true, an empty `allowedLogins` list matches zero rows; otherwise it omits the login filter.
+ * @param allowedUserScopes Enterprise-qualified users that take precedence over `allowedLogins`.
  */
 export function getActiveUsersRollingTrend(
   startDay: string,
   endDay: string,
   allowedLogins?: string[],
   enterpriseSlugs?: string[],
+  emptyMeansNoRows = false,
+  allowedUserScopes?: EnterpriseUserScope[],
 ): ActiveUsersRollingRow[] {
   const db = getDb();
-  const filter = buildLoginFilter(allowedLogins ?? []);
+  const outerFilter = buildAllowedUserFilter(
+    allowedLogins,
+    allowedUserScopes,
+    emptyMeansNoRows,
+    "m.enterprise_slug",
+    "m.user_login",
+  );
+  const weeklyFilter = buildAllowedUserFilter(
+    allowedLogins,
+    allowedUserScopes,
+    emptyMeansNoRows,
+    "w.enterprise_slug",
+    "w.user_login",
+  );
+  const monthlyFilter = buildAllowedUserFilter(
+    allowedLogins,
+    allowedUserScopes,
+    emptyMeansNoRows,
+    "mo.enterprise_slug",
+    "mo.user_login",
+  );
   const ef = buildEnterpriseFilter(enterpriseSlugs);
   
   const sql = `
@@ -1458,25 +1570,25 @@ export function getActiveUsersRollingTrend(
       (SELECT COUNT(DISTINCT w.user_login)
        FROM user_daily_metrics w
        WHERE w.day BETWEEN date(m.day, '-6 days') AND m.day${ef.clause}
-       ${filter.clause}
+       ${weeklyFilter.clause}
       ) as weekly,
       -- Rolling 30-day distinct user count (MAU)
       (SELECT COUNT(DISTINCT mo.user_login)
        FROM user_daily_metrics mo
        WHERE mo.day BETWEEN date(m.day, '-29 days') AND m.day${ef.clause}
-       ${filter.clause}
+       ${monthlyFilter.clause}
       ) as monthly,
       COUNT(DISTINCT CASE WHEN m.used_cli = 1 THEN m.user_login END) as cliUsers
     FROM user_daily_metrics m
-    WHERE m.day >= ? AND m.day <= ?${ef.clause}${filter.clause}
+    WHERE m.day >= ? AND m.day <= ?${ef.clause}${outerFilter.clause}
     GROUP BY m.day
     ORDER BY m.day ASC
   `;
   
   return db.prepare(sql).all(
-    ...ef.params, ...filter.params,              // for weekly subquery
-    ...ef.params, ...filter.params,              // for monthly subquery
-    startDay, endDay, ...ef.params, ...filter.params  // for outer WHERE
+    ...ef.params, ...weeklyFilter.params,
+    ...ef.params, ...monthlyFilter.params,
+    startDay, endDay, ...ef.params, ...outerFilter.params
   ) as ActiveUsersRollingRow[];
 }
 
@@ -1498,15 +1610,21 @@ export interface FeatureUsageDailyRow {
   appUsers: number;
 }
 
-/** Daily feature usage from structured columns */
+/**
+ * Daily feature usage from structured columns.
+ * @param emptyMeansNoRows When true, an empty `allowedLogins` list matches zero rows; otherwise it omits the login filter.
+ * @param allowedUserScopes Enterprise-qualified users that take precedence over `allowedLogins`.
+ */
 export function getFeatureUsageDaily(
   startDay: string,
   endDay: string,
   allowedLogins?: string[],
   enterpriseSlugs?: string[],
+  emptyMeansNoRows = false,
+  allowedUserScopes?: EnterpriseUserScope[],
 ): FeatureUsageDailyRow[] {
   const db = getDb();
-  const filter = buildLoginFilter(allowedLogins ?? []);
+  const filter = buildAllowedUserFilter(allowedLogins, allowedUserScopes, emptyMeansNoRows);
   const ef = buildEnterpriseFilter(enterpriseSlugs);
   const sql = `
     SELECT

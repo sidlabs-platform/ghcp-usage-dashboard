@@ -152,3 +152,58 @@ export function resolveFilteredUsers(teamSlugs: string[], orgSlugs: string[], en
   }
   return Array.from(logins).sort();
 }
+
+export interface FilteredUserScope {
+  enterpriseSlug: string;
+  userLogin: string;
+}
+
+interface FilteredUserScopeRow {
+  enterprise_slug: string;
+  user_login: string;
+}
+
+/**
+ * Resolve users that match both selected dimensions while preserving enterprise identity.
+ * Values within the team dimension and within the organization dimension are additive.
+ */
+export function resolveFilteredUserScopes(
+  teamSlugs: string[],
+  orgSlugs: string[],
+  enterpriseSlugs?: string[],
+): FilteredUserScope[] {
+  if (teamSlugs.length === 0 || orgSlugs.length === 0) return [];
+
+  const db = getDb();
+  const teamPlaceholders = teamSlugs.map(() => "?").join(",");
+  const orgPlaceholders = orgSlugs.map(() => "?").join(",");
+  const enterpriseFilter = enterpriseSlugs?.length
+    ? ` AND tm.enterprise_slug IN (${enterpriseSlugs.map(() => "?").join(",")})`
+    : "";
+
+  const rows = db.prepare(`
+    SELECT DISTINCT tm.enterprise_slug, tm.user_login
+    FROM team_memberships tm
+    WHERE EXISTS (
+      SELECT 1
+      FROM team_memberships team_match
+      WHERE team_match.enterprise_slug = tm.enterprise_slug
+        AND team_match.user_login = tm.user_login
+        AND team_match.team_slug IN (${teamPlaceholders})
+    )
+      AND EXISTS (
+        SELECT 1
+        FROM team_memberships org_match
+        WHERE org_match.enterprise_slug = tm.enterprise_slug
+          AND org_match.user_login = tm.user_login
+          AND org_match.org_slug IN (${orgPlaceholders})
+      )
+      ${enterpriseFilter}
+    ORDER BY tm.enterprise_slug, tm.user_login
+  `).all(...teamSlugs, ...orgSlugs, ...(enterpriseSlugs ?? [])) as FilteredUserScopeRow[];
+
+  return rows.map((row) => ({
+    enterpriseSlug: row.enterprise_slug,
+    userLogin: row.user_login,
+  }));
+}

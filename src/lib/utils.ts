@@ -131,8 +131,8 @@ export function parseDateRangeParams(
     }
     // Reject future end dates — data is only available up to yesterday
     const yesterday = new Date();
-    yesterday.setDate(yesterday.getDate() - 1);
-    yesterday.setHours(0, 0, 0, 0);
+    yesterday.setUTCDate(yesterday.getUTCDate() - 1);
+    yesterday.setUTCHours(0, 0, 0, 0);
     if (e > yesterday) {
       return { error: "endDate cannot be in the future. Latest available data is from yesterday." };
     }

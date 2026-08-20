@@ -41,7 +41,28 @@ import {
   estimateRowCount,
   getActiveUsersRollingTrend,
   getModelByLanguageBreakdown,
+  buildLoginFilter,
+  buildUserScopeFilter,
 } from "./aggregation-queries";
+
+describe("aggregation SQL filters", () => {
+  it("uses a row-value IN predicate for enterprise-qualified users", () => {
+    expect(buildUserScopeFilter([
+      { enterpriseSlug: "ent-a", userLogin: "alice" },
+      { enterpriseSlug: "ent-b", userLogin: "bob" },
+    ], "u.enterprise_slug", "u.user_login")).toEqual({
+      clause: "AND (u.enterprise_slug, u.user_login) IN ((?, ?), (?, ?))",
+      params: ["ent-a", "alice", "ent-b", "bob"],
+    });
+  });
+
+  it("preserves whitelisted aliases in login-only filters", () => {
+    expect(buildLoginFilter(["alice"], "m.user_login")).toEqual({
+      clause: "AND m.user_login IN (?)",
+      params: ["alice"],
+    });
+  });
+});
 
 beforeAll(() => {
   db = new Database(":memory:");
