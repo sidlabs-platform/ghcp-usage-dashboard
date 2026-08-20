@@ -203,7 +203,12 @@ export interface CliUserRow {
  * render a clause that matches zero rows (`AND 1 = 0`) when the caller has
  * explicitly scoped the request down to no allowed logins.
  */
-export type LoginFilterColumn = "user_login" | "u.user_login";
+export type LoginFilterColumn =
+  | "user_login"
+  | "u.user_login"
+  | "m.user_login"
+  | "w.user_login"
+  | "mo.user_login";
 
 export function buildLoginFilter(
   allowedLogins: string[],
@@ -232,9 +237,9 @@ export function buildUserScopeFilter(
   loginColumn: UserScopeLoginColumn = "user_login",
 ): { clause: string; params: string[] } {
   if (scopes.length === 0) return { clause: "AND 1 = 0", params: [] };
-  const predicates = scopes.map(() => `(${enterpriseColumn} = ? AND ${loginColumn} = ?)`);
+  const tuples = scopes.map(() => "(?, ?)").join(", ");
   return {
-    clause: `AND (${predicates.join(" OR ")})`,
+    clause: `AND (${enterpriseColumn}, ${loginColumn}) IN (${tuples})`,
     params: scopes.flatMap((scope) => [scope.enterpriseSlug, scope.userLogin]),
   };
 }
@@ -248,7 +253,7 @@ function buildAllowedUserFilter(
 ): { clause: string; params: string[] } {
   return allowedUserScopes !== undefined
     ? buildUserScopeFilter(allowedUserScopes, enterpriseColumn, loginColumn)
-    : buildLoginFilter(allowedLogins ?? [], loginColumn === "u.user_login" ? "u.user_login" : "user_login", emptyMeansNoRows);
+    : buildLoginFilter(allowedLogins ?? [], loginColumn, emptyMeansNoRows);
 }
 
 /** `column` is restricted to a fixed literal union of internal SQL

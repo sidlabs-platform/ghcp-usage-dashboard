@@ -121,7 +121,7 @@ function appendBillingFilters(
     }
     const scopeParts: string[] = [];
     if (hasUserScopes) {
-      scopeParts.push(`(${filters.allowedUserScopes!.map(() => "(enterprise_slug = ? AND username = ?)").join(" OR ")})`);
+      scopeParts.push(`(enterprise_slug, username) IN (${filters.allowedUserScopes!.map(() => "(?, ?)").join(", ")})`);
       params.push(...filters.allowedUserScopes!.flatMap((scope) => [scope.enterpriseSlug, scope.userLogin]));
     }
     if (hasLogins) {
@@ -189,7 +189,7 @@ function appendPremiumFilters(
     }
     const scopeParts: string[] = [];
     if (hasUserScopes) {
-      scopeParts.push(`(${filters.allowedUserScopes!.map(() => "(enterprise_slug = ? AND username = ?)").join(" OR ")})`);
+      scopeParts.push(`(enterprise_slug, username) IN (${filters.allowedUserScopes!.map(() => "(?, ?)").join(", ")})`);
       params.push(...filters.allowedUserScopes!.flatMap((scope) => [scope.enterpriseSlug, scope.userLogin]));
     }
     if (hasLogins) {
