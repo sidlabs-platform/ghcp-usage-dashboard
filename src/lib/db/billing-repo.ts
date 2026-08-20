@@ -27,6 +27,7 @@ import type {
   TokenAttribution,
   TokenAttributionRow,
   TokenModelDailyPoint,
+  CopilotCostBasis,
 } from "@/lib/types/billing";
 
 const AI_CREDITS_START_DATE = "2026-06-01";
@@ -1837,46 +1838,7 @@ const SEAT_SKU_SQL = `sku NOT LIKE '%ai_credit%' AND sku NOT LIKE '%premium_requ
 /** SKUs billed per AI credit (or, pre-June-2026, per premium request). */
 const CREDIT_SKU_SQL = `(sku LIKE '%ai_credit%' OR sku LIKE '%premium_request%')`;
 
-export interface CopilotCostBasis {
-  /** Inclusive bounds these figures were computed over. */
-  startDate: string;
-  endDate: string;
-  /** Calendar period when the bounds are exactly one month, else null. */
-  period: string | null;
-
-  /** Copilot seat licences — net, gross, and billed seat-months. */
-  seatCostNet: number;
-  seatCostGross: number;
-  seatQuantity: number;
-
-  /**
-   * AI credits billed in range, from the detailed usage report. This is the
-   * authoritative total; it covers the full synced history.
-   */
-  creditsBilled: number;
-  /** Net USD charged for those credits (zero while within the pooled allowance). */
-  creditCostNet: number;
-  creditCostGross: number;
-
-  /**
-   * Credits that can be attributed to a named user, from the ai_credit report.
-   * Always <= creditsBilled; frequently far lower for historical months.
-   */
-  creditsAttributed: number;
-  /** Distinct users carrying attributed credits. */
-  attributedUsers: number;
-  /** creditsAttributed / creditsBilled, 0-100. Null when nothing was billed. */
-  attributionCoveragePct: number | null;
-  /**
-   * True when per-user attribution accounts for essentially all billed
-   * credits. When false, per-user credit tables are a sample, not a census,
-   * and must be labelled as such.
-   */
-  attributionComplete: boolean;
-
-  /** Total Copilot cost: seats + credits. */
-  totalCopilotNet: number;
-}
+export type { CopilotCostBasis };
 
 /**
  * Canonical Copilot cost + AI-credit figures for a date range.

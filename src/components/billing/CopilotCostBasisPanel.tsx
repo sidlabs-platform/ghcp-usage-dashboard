@@ -2,28 +2,13 @@
 
 import { AlertTriangle, Check } from "lucide-react";
 import { periodLabel } from "@/lib/date/month-range";
+import type { CopilotCostBasis } from "@/lib/types/billing";
 
 /**
- * Canonical Copilot cost + AI-credit figures for a window, as returned by
- * `getCopilotCostBasis`. Mirrors the repo interface; kept structural so the
- * client bundle does not reach into the server-only repo module.
+ * Re-export the shared billing type so existing page imports stay stable
+ * without coupling this client component to the server-only repository module.
  */
-export interface CopilotCostBasis {
-  startDate: string;
-  endDate: string;
-  period: string | null;
-  seatCostNet: number;
-  seatCostGross: number;
-  seatQuantity: number;
-  creditsBilled: number;
-  creditCostNet: number;
-  creditCostGross: number;
-  creditsAttributed: number;
-  attributedUsers: number;
-  attributionCoveragePct: number | null;
-  attributionComplete: boolean;
-  totalCopilotNet: number;
-}
+export type { CopilotCostBasis };
 
 interface Props {
   basis: CopilotCostBasis | null;
