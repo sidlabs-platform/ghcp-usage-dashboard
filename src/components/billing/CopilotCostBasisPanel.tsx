@@ -54,26 +54,54 @@ export function CopilotCostBasisPanel({ basis, currency = "USD", surface, classN
   const coverage = basis.attributionCoveragePct;
   const showGap = coverage !== null && !basis.attributionComplete;
 
+  // Quantities are only comparable within one unit type, so each billed unit
+  // gets its own figure. A period can carry more than one at once (March 2026
+  // billed AI credits, premium requests and token units), and showing only the
+  // credit count silently dropped the rest.
+  const consumptionFigures: { label: string; value: string; hint: string }[] = [];
+  if (basis.creditsBilled > 0 || basis.requestsBilled <= 0) {
+    consumptionFigures.push({
+      label: "AI credits consumed",
+      value: count(basis.creditsBilled),
+      hint: "From the detailed billing report",
+    });
+  }
+  if (basis.requestsBilled > 0) {
+    consumptionFigures.push({
+      label: "Premium requests",
+      value: count(basis.requestsBilled),
+      hint: "Billed as requests, not credits",
+    });
+  }
+  if (basis.tokenUnitsBilled > 0) {
+    consumptionFigures.push({
+      label: "Token units",
+      value: count(basis.tokenUnitsBilled),
+      hint: "Billed separately from credits",
+    });
+  }
+
+  /** True when the window predates AI credits entirely, so zero credits is expected rather than a gap. */
+  const billedInRequests = basis.creditsBilled <= 0 && basis.requestsBilled > 0;
+
   const figures: { label: string; value: string; hint: string }[] = [
     {
       label: "Copilot seat licences",
       value: money(basis.seatCostNet, currency),
-      hint: `${count(basis.seatQuantity)} billed seat-months`,
+      hint: basis.seatPopulationComplete && basis.seatUsers > 0
+        ? `${count(basis.seatUsers)} users · ${count(basis.seatQuantity)} seat-months`
+        : `${count(basis.seatQuantity)} billed seat-months`,
     },
+    ...consumptionFigures,
     {
-      label: "AI credits consumed",
-      value: count(basis.creditsBilled),
-      hint: "From the detailed billing report",
-    },
-    {
-      label: "AI credit charges",
+      label: "Consumption charges",
       value: money(basis.creditCostNet, currency),
       hint: basis.creditCostNet === 0 ? "Fully within pooled allowance" : "Charged beyond allowance",
     },
     {
       label: "Total Copilot cost",
       value: money(basis.totalCopilotNet, currency),
-      hint: "Seats + credit charges",
+      hint: "Seats + consumption charges",
     },
   ];
 
@@ -98,7 +126,7 @@ export function CopilotCostBasisPanel({ basis, currency = "USD", surface, classN
         </p>
       </div>
 
-      <dl className="mt-4 grid gap-4 grid-cols-2 lg:grid-cols-4">
+      <dl className="mt-4 grid gap-4 grid-cols-2 lg:grid-cols-4 xl:grid-cols-6">
         {figures.map((f) => (
           <div key={f.label}>
             <dt className="text-xs font-medium text-[hsl(var(--muted-foreground))]">{f.label}</dt>
@@ -123,6 +151,14 @@ export function CopilotCostBasisPanel({ basis, currency = "USD", surface, classN
             {count(basis.attributedUsers)} users). GitHub&apos;s per-user AI-credit report only covers a
             recent window, so per-user tables are a partial view of this period — the totals above are
             complete.
+            {basis.creditsUnattributed > 0 && (
+              <>
+                {" "}A further{" "}
+                <span className="tabular-nums">{count(basis.creditsUnattributed)}</span> credits are
+                reported with no username (org- or enterprise-scoped charges) and cannot appear in any
+                per-user table.
+              </>
+            )}
           </span>
         </p>
       ) : coverage !== null ? (
@@ -133,6 +169,18 @@ export function CopilotCostBasisPanel({ basis, currency = "USD", surface, classN
           <Check className="h-3.5 w-3.5 shrink-0 text-emerald-600 dark:text-emerald-400" aria-hidden="true" />
           Per-user attribution accounts for all {count(basis.creditsBilled)} billed credits across{" "}
           {count(basis.attributedUsers)} users.
+        </p>
+      ) : billedInRequests ? (
+        <p
+          role="status"
+          className="mt-4 flex items-start gap-2 text-xs text-[hsl(var(--muted-foreground))]"
+        >
+          <AlertTriangle className="mt-px h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+          <span>
+            This period was billed in premium requests, before AI credits began on 2026-06-01.
+            Per-user AI-credit figures are zero for it by definition — a request is not a credit, so
+            the two are never added together.
+          </span>
         </p>
       ) : null}
     </section>

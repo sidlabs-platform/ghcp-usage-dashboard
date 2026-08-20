@@ -27,9 +27,16 @@ CREATE TABLE IF NOT EXISTS billing_usage_records (
   created_at TEXT DEFAULT (datetime('now'))
 );
 
--- Deduplication index (upsert key) — includes enterprise_slug for multi-enterprise
-CREATE UNIQUE INDEX IF NOT EXISTS idx_billing_usage_dedup
-  ON billing_usage_records(enterprise_slug, date, sku, organization, repository, username, workflow_path, cost_center_name);
+-- Deduplication index (upsert key) — includes enterprise_slug for multi-enterprise.
+--
+-- `product` and `unit_type` are part of the key because a single SKU can be
+-- billed in more than one unit on the same day: `copilot_ai_credit` emits both
+-- `ai-credits` and `token-units` rows. Without them, INSERT OR REPLACE kept only
+-- the last one and silently discarded the other unit's usage. Widening a UNIQUE
+-- index is strictly more permissive, so existing rows can never violate it. The
+-- older narrower `idx_billing_usage_dedup` is dropped in database.ts migrations.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_billing_usage_dedup_v2
+  ON billing_usage_records(enterprise_slug, date, product, sku, unit_type, organization, repository, username, workflow_path, cost_center_name);
 
 -- Query indexes
 CREATE INDEX IF NOT EXISTS idx_billing_usage_date ON billing_usage_records(date);

@@ -52,6 +52,8 @@ export interface LicenseReconciliationRow {
   org_count: number;
   /** Number of seats held (usually 1 per org). */
   seat_count: number;
+  /** Seats with no pending cancellation. A user can hold both an active and a cancelling seat, so this is not derivable from `seat_status`. */
+  active_seat_count: number;
   /** Normalized plan (enterprise takes precedence when multi-plan). */
   plan_type: LicensePlanKey;
   /** Earliest seat created_at (YYYY-MM-DD). */
@@ -100,6 +102,10 @@ export interface LicenseReconciliationRow {
 /** Headline KPIs for the reconciliation view. */
 export interface LicenseReconciliationKPIs {
   totalUsers: number;
+  /** Seats held across all users — the unit GitHub bills, so directly comparable to billed seat-months. */
+  totalSeats: number;
+  /** Seats with no pending cancellation. */
+  activeSeats: number;
   activeUsers: number;
   pendingCancellation: number;
   inactive30d: number;
@@ -113,8 +119,18 @@ export interface LicenseReconciliationKPIs {
   overBudgetUsers: number;
   totalCostOfOwnership: number;
   currency: string;
-  /** Always "live_snapshot_only": this legacy reconciliation is computed live from current `copilot_seats` + billing rows (no historical persistence). See `materialize-license-period.ts`/`license-history-repo.ts` (Task 7) for the materialized-history equivalent, which callers should prefer when available. */
-  dataSource: "live_snapshot_only";
+  /**
+   * Consumption attributed to a login in scope that did not land on any row
+   * above (no current seat, or excluded by the active filters). Reported so
+   * `totalConsumedCredits + unmatchedConsumedCredits` reconciles with the
+   * attributed total on the shared cost-basis strip instead of silently
+   * under-reporting it.
+   */
+  unmatchedConsumedCredits: number;
+  unmatchedConsumedUsd: number;
+  unmatchedUsers: number;
+  /** Which pipeline produced these figures: the live `copilot_seats` + billing snapshot, or materialized period history. */
+  dataSource: "live_snapshot_only" | "historical";
 }
 
 /** Allocation-vs-consumption breakdown by plan or org. */
@@ -207,7 +223,14 @@ export interface LicenseHistoryKPIs {
   /** Distinct resolved logins (falling back to holder_key when unresolved) across matched rows. */
   totalUsers: number;
   activeSeats: number;
+  /** Rows with a non-`active` seat status, including `no_seat` consumption-only rows. */
   inactiveSeats: number;
+  /** Rows holding a genuinely inactive seat — excludes `no_seat` rows, which are not seats at all. */
+  inactiveSeatRows: number;
+  /** Consumption-only rows with no seat behind them (a residual, never a licence). */
+  noSeatRows: number;
+  /** Distinct users holding at least one active seat. */
+  activeUsers: number;
   /** Rows (org/holder/period grain) with zero recorded AI-Credit consumption. */
   zeroConsumptionRows: number;
   totalLicenseCost: number;

@@ -6,6 +6,7 @@ import { PageHeader } from "@/components/layout/PageHeader";
 import { ChartSkeleton } from "@/components/states/ChartSkeleton";
 import { useDateRange } from "@/contexts/DateRangeContext";
 import { useScope } from "@/contexts/ScopeContext";
+import { periodLabel } from "@/lib/date/month-range";
 import { DollarSign, Search, Filter, Building2, Users, ChevronDown, X } from "lucide-react";
 import { safeNum } from "@/lib/utils";
 import { ExportMenu } from "@/components/ui/ExportMenu";
@@ -51,7 +52,7 @@ const fmtCurrency = (v: number) => {
 };
 
 export default function MeteredUsagePage() {
-  const { days } = useDateRange();
+  const { days, mode, period } = useDateRange();
   const { hasFilter, buildScopeParams, selectedEntTeams, selectedOrgTeams, selectedOrgs: scopeOrgs } = useScope();
   const [records, setRecords] = useState<BillingUsageRecord[]>([]);
   const [pagination, setPagination] = useState<PaginationInfo>({ page: 1, pageSize: 50, totalItems: 0, totalPages: 0 });
@@ -79,9 +80,20 @@ export default function MeteredUsagePage() {
   const chartRef = useRef<HTMLDivElement>(null);
   const insightsRef = useRef<HTMLDivElement>(null);
 
+  // Billing is billed by calendar month, so a selected month is the honest
+  // window — and the only basis on which this page can agree with Billing and
+  // License & AI Credits, which are both keyed by month.
+  const activePeriod = mode === "month" && period ? period : null;
+  const windowParam = useMemo<[string, string]>(
+    () => (activePeriod ? ["period", activePeriod] : ["days", String(days)]),
+    [activePeriod, days],
+  );
+  const windowLabel = activePeriod ? periodLabel(activePeriod) : `last ${days} days`;
+  const exportSlug = activePeriod ?? `${days}d`;
+
   const buildParams = useCallback(() => {
     const p = new URLSearchParams();
-    p.set("days", String(days));
+    p.set(...windowParam);
     p.set("page", String(page));
     p.set("pageSize", "50");
     p.set("sort", sort);
@@ -95,14 +107,14 @@ export default function MeteredUsagePage() {
     const scopeParams = buildScopeParams();
     scopeParams.forEach((v, k) => p.set(k, v));
     return p;
-  }, [days, page, sort, sortDir, search, selectedProducts, selectedOrgs, selectedCostCenter, chargeScope, buildScopeParams]);
+  }, [windowParam, page, sort, sortDir, search, selectedProducts, selectedOrgs, selectedCostCenter, chargeScope, buildScopeParams]);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
     try {
       const params = buildParams();
       const trendParams = new URLSearchParams();
-      trendParams.set("days", String(days));
+      trendParams.set(...windowParam);
       trendParams.set("groupBy", "daily");
       if (chargeScope) trendParams.set("chargeScope", chargeScope);
       if (selectedProducts.length) trendParams.set("product", selectedProducts.join(","));
@@ -114,7 +126,7 @@ export default function MeteredUsagePage() {
       scopeParams.forEach((v, k) => trendParams.set(k, v));
 
       const costCenterParams = new URLSearchParams();
-      costCenterParams.set("days", String(days));
+      costCenterParams.set(...windowParam);
       costCenterParams.set("groupBy", "costCenter");
       scopeParams.forEach((v, k) => costCenterParams.set(k, v));
       if (selectedProducts.length) costCenterParams.set("product", selectedProducts.join(","));
@@ -122,7 +134,7 @@ export default function MeteredUsagePage() {
       if (chargeScope) costCenterParams.set("chargeScope", chargeScope);
 
       const repoParams = new URLSearchParams();
-      repoParams.set("days", String(days));
+      repoParams.set(...windowParam);
       repoParams.set("groupBy", "repository");
       scopeParams.forEach((v, k) => repoParams.set(k, v));
       if (selectedProducts.length) repoParams.set("product", selectedProducts.join(","));
@@ -166,7 +178,7 @@ export default function MeteredUsagePage() {
     } finally {
       setLoading(false);
     }
-  }, [buildParams, days, chargeScope, selectedProducts, selectedOrgs, selectedCostCenter, search, buildScopeParams]);
+  }, [buildParams, windowParam, chargeScope, selectedProducts, selectedOrgs, selectedCostCenter, search, buildScopeParams]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
@@ -230,20 +242,20 @@ export default function MeteredUsagePage() {
             extraParams: buildParams(),
             columns: csvColumns,
             dataExtractor: (json) => json.records,
-            filename: `metered-usage-${days}d`,
+            filename: `metered-usage-${exportSlug}`,
             metadata: {
               reportName: "Metered Usage Report",
-              dateRange: `Last ${days} days`,
+              dateRange: activePeriod ? periodLabel(activePeriod) : `Last ${days} days`,
               ...(hasFilter && { teams: [...selectedEntTeams, ...selectedOrgTeams].join(", "), orgs: scopeOrgs.join(", ") }),
             },
           }}
           pdf={{
             sectionRefs: [chartRef, insightsRef, tableRef],
             title: "Metered Usage Report",
-            filename: `metered-usage-${days}d`,
+            filename: `metered-usage-${exportSlug}`,
             metadata: {
               reportName: "Metered Usage Report",
-              dateRange: `Last ${days} days`,
+              dateRange: activePeriod ? periodLabel(activePeriod) : `Last ${days} days`,
               ...(hasFilter && { teams: [...selectedEntTeams, ...selectedOrgTeams].join(", "), orgs: scopeOrgs.join(", ") }),
             },
           }}
@@ -253,7 +265,7 @@ export default function MeteredUsagePage() {
 
       {/* Polite live region for screen readers */}
       <div aria-live="polite" aria-atomic="true" className="sr-only">
-        {!loading && `Updated: ${pagination.totalItems} metered usage records, last ${days} days`}
+        {!loading && `Updated: ${pagination.totalItems} metered usage records, ${windowLabel}`}
       </div>
 
       {/* Filter Bar */}
@@ -366,7 +378,7 @@ export default function MeteredUsagePage() {
       <div ref={tableRef} className="rounded-xl border bg-[hsl(var(--card))] overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
-            <caption className="sr-only">Metered Usage Records — last {days} days</caption>
+            <caption className="sr-only">Metered Usage Records — {windowLabel}</caption>
             <thead className="border-b bg-[hsl(var(--accent))]/30">
               <tr>
                 <SortHeader col="date" label="Date" />

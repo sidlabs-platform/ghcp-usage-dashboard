@@ -70,6 +70,7 @@ vi.mock("@/lib/config/dashboard-config", () => ({
 
 import {
   getLicenseReconciliationRows,
+  getLicenseReconciliationDataset,
   computeLicenseKPIs,
   computePlanBreakdown,
   computeOrgBreakdown,
@@ -107,16 +108,25 @@ function insertSeat(overrides: Record<string, unknown> = {}) {
   ).run(seat);
 }
 
-function insertConsumption(username: string, credits: number, usd: number, date = "2026-06-10", ent = "ent1") {
+function insertConsumption(
+  username: string,
+  credits: number,
+  usd: number,
+  date = "2026-06-10",
+  ent = "ent1",
+  overrides: { unit_type?: string; aic_quantity?: number } = {},
+) {
+  const unitType = overrides.unit_type ?? "ai-credits";
+  const aicQuantity = overrides.aic_quantity ?? credits;
   db.prepare(
     `INSERT INTO billing_premium_requests
      (enterprise_slug, date, product, sku, quantity, unit_type, applied_cost_per_quantity,
       gross_amount, discount_amount, net_amount, username, organization, model, exceeds_quota,
       total_monthly_quota, charge_scope, input_tokens, output_tokens, cached_tokens,
       cost_center_name, aic_quantity, aic_gross_amount)
-     VALUES (?, ?, 'copilot', 'aic', ?, 'ai-credits', 0, ?, 0, ?, ?, 'org1', 'gpt-4', '',
+     VALUES (?, ?, 'copilot', 'aic', ?, ?, 0, ?, 0, ?, ?, 'org1', 'gpt-4', '',
       0, 'user', 0, 0, 0, '', ?, ?)`,
-  ).run(ent, date, credits, usd, usd, username, credits, usd);
+  ).run(ent, date, credits, unitType, usd, usd, username, aicQuantity, usd);
 }
 
 const WINDOW = { start: "2026-06-01", end: "2026-06-30" };
@@ -256,11 +266,49 @@ describe("getLicenseReconciliationRows", () => {
     expect(getLicenseReconciliationRows({ ...WINDOW, filters: { search: "orgy" } })).toHaveLength(1);
   });
 
-  it("excludes consumption dated before the AI-credits start date", () => {
+  it("does not count premium requests as AI credits — a request is not a credit", () => {
+    // GitHub's usage report carries a `unit_type` per row precisely so credits,
+    // requests and token units are aggregated separately. The shared cost basis
+    // reports a pre-June-2026 window under `requestsBilled`, so counting those
+    // rows as credits here would contradict the strip on the same page.
     insertSeat({ user_login: "dev1" });
-    insertConsumption("dev1", 500, 8, "2026-05-15"); // before 2026-06-01
+    insertConsumption("dev1", 500, 8, "2026-05-15", "ent1", { unit_type: "requests", aic_quantity: 0 });
     const r = getLicenseReconciliationRows({ start: "2026-05-01", end: "2026-06-30" })[0];
     expect(r.aic_consumed_credits).toBe(0);
+  });
+
+  it("counts each seat individually when a user holds both an active and a cancelling seat", () => {
+    // `seat_status` is aggregated per user, so it reports
+    // "pending_cancellation" for this user. Deriving active seats from it would
+    // count zero active seats even though one seat is plainly active.
+    insertSeat({ user_login: "dev1", org_slug: "org1" });
+    insertSeat({ user_login: "dev1", org_slug: "org2", pending_cancellation_date: "2026-07-31" });
+
+    const rows = getLicenseReconciliationRows(WINDOW);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].seat_count).toBe(2);
+    expect(rows[0].active_seat_count).toBe(1);
+
+    const kpis = computeLicenseKPIs(rows);
+    expect(kpis.totalSeats).toBe(2);
+    expect(kpis.activeSeats).toBe(1);
+  });
+
+  it("reports consumption that matches no seat as an unmatched residual instead of dropping it", () => {
+    insertSeat({ user_login: "dev1" });
+    insertConsumption("dev1", 100, 1);
+    insertConsumption("ex-employee", 400, 4);
+
+    const { rows, coverage } = getLicenseReconciliationDataset(WINDOW);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].aic_consumed_credits).toBe(100);
+    expect(coverage.attributedCredits).toBe(500);
+    expect(coverage.matchedCredits).toBe(100);
+    expect(coverage.unmatchedCredits).toBe(400);
+    expect(coverage.unmatchedUsers).toBe(1);
+    // The residual exists precisely so rows + residual reconciles with the
+    // attributed total on the cost-basis strip.
+    expect(coverage.matchedCredits + coverage.unmatchedCredits).toBe(coverage.attributedCredits);
   });
 });
 

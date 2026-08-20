@@ -1352,6 +1352,13 @@ export function getMaterializedPeriodKPIs(query: LicensePeriodFilterQuery = {}):
         COUNT(DISTINCT ${groupKey}) AS total_users,
         COALESCE(SUM(CASE WHEN seat_status = 'active' THEN 1 ELSE 0 END), 0) AS active_seats,
         COALESCE(SUM(CASE WHEN seat_status != 'active' THEN 1 ELSE 0 END), 0) AS inactive_seats,
+        -- A no_seat row is consumption with no seat behind it. Those are rows,
+        -- not seats, so they must be excluded from any seat count; counting
+        -- them as inactive seats reported unmatched consumption as licences.
+        COALESCE(SUM(CASE WHEN seat_status = 'inactive' THEN 1 ELSE 0 END), 0) AS inactive_seat_rows,
+        COALESCE(SUM(CASE WHEN seat_status = 'no_seat' THEN 1 ELSE 0 END), 0) AS no_seat_rows,
+        -- Distinct users, not a seat-row count: one user can hold several seats.
+        COUNT(DISTINCT CASE WHEN seat_status = 'active' THEN ${groupKey} END) AS active_users,
         COALESCE(SUM(CASE WHEN aic_consumed_credits <= 0 THEN 1 ELSE 0 END), 0) AS zero_consumption_rows,
         COALESCE(SUM(license_cost), 0) AS total_license_cost,
         COALESCE(SUM(default_aic_credits), 0) AS total_allowance_credits,
@@ -1375,6 +1382,9 @@ export function getMaterializedPeriodKPIs(query: LicensePeriodFilterQuery = {}):
     totalUsers: (row.total_users as number) ?? 0,
     activeSeats: (row.active_seats as number) ?? 0,
     inactiveSeats: (row.inactive_seats as number) ?? 0,
+    inactiveSeatRows: (row.inactive_seat_rows as number) ?? 0,
+    noSeatRows: (row.no_seat_rows as number) ?? 0,
+    activeUsers: (row.active_users as number) ?? 0,
     zeroConsumptionRows: (row.zero_consumption_rows as number) ?? 0,
     totalLicenseCost,
     totalAllowanceCredits: round2((row.total_allowance_credits as number) ?? 0),

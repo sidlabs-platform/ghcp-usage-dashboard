@@ -8,6 +8,7 @@
 // degrades gracefully to empty/zero results when the underlying tables are empty.
 
 import { getDb } from "./database";
+import { getAttributedCreditConsumptionByUser } from "./billing-repo";
 import { getLicensingConfig } from "@/lib/config/dashboard-config";
 import type { ResolvedLicensingConfig, LicensePlanKey } from "@/lib/config/dashboard-config";
 import type {
@@ -18,8 +19,6 @@ import type {
   ActivityStatus,
 } from "@/lib/types/licensing";
 
-/** AI-credit reporting began 2026-06-01; earlier rows are premium_request only. */
-const AI_CREDITS_START_DATE = "2026-06-01";
 const ACTIVE_WINDOW_DAYS = 30;
 
 export interface LicenseReconciliationFilters {
@@ -27,6 +26,8 @@ export interface LicenseReconciliationFilters {
   allowedLogins?: Set<string>;
   /** Restrict to these enterprise slugs. */
   enterpriseSlugs?: string[];
+  /** Restrict billing rows to these org slugs (the scope filter's org selection). */
+  scopeOrgs?: string[];
   /** Case-insensitive substring match on user_login / org. */
   search?: string;
 }
@@ -85,64 +86,88 @@ function deriveActivityStatus(lastActivity: string | null, now: Date): ActivityS
 }
 
 /**
- * Aggregate per-user AI-credit consumption for the window, enterprise-wide.
- * Returns a map keyed by lowercased login → { credits, usd }.
+ * Per-user AI-credit consumption for the window, read through the shared
+ * billing query so this page's per-user total is the same number its cost-basis
+ * strip reports as "attributed". Returns an empty result (never throws) when
+ * billing was never synced.
  */
 function getConsumptionByUser(
   start: string,
   end: string,
-  enterpriseSlugs?: string[],
-): Map<string, { credits: number; usd: number }> {
+  filters?: LicenseReconciliationFilters,
+): ReturnType<typeof getAttributedCreditConsumptionByUser> {
   const db = getDb();
-  const map = new Map<string, { credits: number; usd: number }>();
+  const empty = { byLogin: new Map<string, { credits: number; usd: number }>(), totalCredits: 0, totalUsd: 0, unattributedCredits: 0 };
 
   // billing_premium_requests may not exist if billing was never synced.
   const exists = db
     .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='billing_premium_requests'")
     .get();
-  if (!exists) return map;
+  if (!exists) return empty;
 
-  const clauses = ["date >= ?", "date <= ?", "date >= ?"];
-  const params: unknown[] = [start, end, AI_CREDITS_START_DATE];
-  const ent = buildEnterpriseFilter(enterpriseSlugs, "AND");
-  if (ent.clause) {
-    clauses.push(ent.clause.replace(/^\s*AND\s+/, ""));
-    params.push(...ent.params);
-  }
+  return getAttributedCreditConsumptionByUser(
+    start,
+    end,
+    {
+      // Identical scoping to `getCopilotCostBasis`, so the per-user total this
+      // returns is the same "attributed" figure the cost-basis strip shows.
+      allowedLogins: filters?.allowedLogins ? [...filters.allowedLogins] : undefined,
+      scopeOrgs: filters?.scopeOrgs?.length ? filters.scopeOrgs : undefined,
+    },
+    filters?.enterpriseSlugs,
+  );
+}
 
-  const rows = db
-    .prepare(
-      `SELECT LOWER(username) AS ul,
-              COALESCE(SUM(aic_quantity), 0)     AS credits,
-              COALESCE(SUM(aic_gross_amount), 0) AS usd
-       FROM billing_premium_requests
-       WHERE ${clauses.join(" AND ")}
-       GROUP BY LOWER(username)`,
-    )
-    .all(...params) as { ul: string; credits: number; usd: number }[];
+/** How much of the window's attributed AI-credit consumption landed on a seat row. */
+export interface LicenseConsumptionCoverage {
+  /** Total attributed to a login in scope — equals `CopilotCostBasis.creditsAttributed`. */
+  attributedCredits: number;
+  attributedUsd: number;
+  /** The part that joined onto an emitted (seat-holding, filter-matching) row. */
+  matchedCredits: number;
+  matchedUsd: number;
+  /** The remainder: consumption by logins with no seat in scope, or excluded by the active filters. */
+  unmatchedCredits: number;
+  unmatchedUsd: number;
+  unmatchedUsers: number;
+}
 
-  for (const r of rows) {
-    if (!r.ul) continue;
-    map.set(r.ul, { credits: r.credits, usd: r.usd });
-  }
-  return map;
+/** The live-snapshot reconciliation dataset plus the consumption residual it could not place on a row. */
+export interface LicenseReconciliationDataset {
+  rows: LicenseReconciliationRow[];
+  coverage: LicenseConsumptionCoverage;
 }
 
 /**
  * Build the full per-user reconciliation dataset (unpaginated). Seats are the
  * driver, so the result set is bounded by the number of licensed users.
+ *
+ * Consumption that cannot be placed on a seat row is not discarded — it is
+ * returned as `coverage`, so callers can state the difference between what the
+ * per-user table shows and what was actually billed instead of quietly
+ * reporting a smaller number.
  */
-export function getLicenseReconciliationRows(
+export function getLicenseReconciliationDataset(
   opts: LicenseReconciliationOptions,
-): LicenseReconciliationRow[] {
+): LicenseReconciliationDataset {
   const db = getDb();
   const cfg: ResolvedLicensingConfig = getLicensingConfig();
   const { start, end, filters } = opts;
 
+  const emptyCoverage: LicenseConsumptionCoverage = {
+    attributedCredits: 0,
+    attributedUsd: 0,
+    matchedCredits: 0,
+    matchedUsd: 0,
+    unmatchedCredits: 0,
+    unmatchedUsd: 0,
+    unmatchedUsers: 0,
+  };
+
   const seatsTableExists = db
     .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='copilot_seats'")
     .get();
-  if (!seatsTableExists) return [];
+  if (!seatsTableExists) return { rows: [], coverage: emptyCoverage };
 
   const ent = buildEnterpriseFilter(filters?.enterpriseSlugs, "WHERE");
   const seats = db
@@ -153,7 +178,7 @@ export function getLicenseReconciliationRows(
     )
     .all(...ent.params) as SeatRow[];
 
-  const consumption = getConsumptionByUser(start, end, filters?.enterpriseSlugs);
+  const consumption = getConsumptionByUser(start, end, filters);
   const now = new Date();
 
   // Group seats by user_login.
@@ -161,6 +186,8 @@ export function getLicenseReconciliationRows(
     login: string;
     orgs: Set<string>;
     seatCount: number;
+    /** Seats with no pending cancellation. Counted per seat, not per user: a user can hold one active and one cancelling seat. */
+    activeSeatCount: number;
     plan: LicensePlanKey;
     assignedDate: string | null;
     lastActivity: string | null;
@@ -183,6 +210,7 @@ export function getLicenseReconciliationRows(
         login: s.user_login,
         orgs: new Set<string>(),
         seatCount: 0,
+        activeSeatCount: 0,
         plan: "unknown",
         assignedDate: null,
         lastActivity: null,
@@ -223,11 +251,13 @@ export function getLicenseReconciliationRows(
       if (rev && (!acc.revokedDate || rev > acc.revokedDate)) acc.revokedDate = rev;
     } else {
       acc.anyActive = true;
+      acc.activeSeatCount += 1;
     }
   }
 
   const searchLower = filters?.search?.trim().toLowerCase();
   const rows: LicenseReconciliationRow[] = [];
+  const matchedLogins = new Set<string>();
 
   for (const acc of byUser.values()) {
     if (filters?.allowedLogins && !filters.allowedLogins.has(acc.login)) continue;
@@ -238,7 +268,9 @@ export function getLicenseReconciliationRows(
       if (!inLogin && !inOrg) continue;
     }
 
-    const consumed = consumption.get(acc.login.toLowerCase()) ?? { credits: 0, usd: 0 };
+    const loginKey = acc.login.toLowerCase();
+    const consumed = consumption.byLogin.get(loginKey) ?? { credits: 0, usd: 0 };
+    if (consumption.byLogin.has(loginKey)) matchedLogins.add(loginKey);
     const defaultCredits = cfg.aicAllowance[acc.plan] ?? cfg.aicAllowance.unknown ?? 0;
     const defaultUsd = defaultCredits * cfg.creditToUsd;
 
@@ -267,6 +299,7 @@ export function getLicenseReconciliationRows(
       orgs: [...acc.orgs].sort(),
       org_count: acc.orgs.size,
       seat_count: acc.seatCount,
+      active_seat_count: acc.activeSeatCount,
       plan_type: acc.plan,
       license_assigned_date: acc.assignedDate,
       last_activity_at: acc.lastActivity,
@@ -290,7 +323,36 @@ export function getLicenseReconciliationRows(
     });
   }
 
-  return rows;
+  let matchedCredits = 0;
+  let matchedUsd = 0;
+  for (const login of matchedLogins) {
+    const c = consumption.byLogin.get(login)!;
+    matchedCredits += c.credits;
+    matchedUsd += c.usd;
+  }
+
+  return {
+    rows,
+    coverage: {
+      attributedCredits: round2(consumption.totalCredits),
+      attributedUsd: round2(consumption.totalUsd),
+      matchedCredits: round2(matchedCredits),
+      matchedUsd: round2(matchedUsd),
+      unmatchedCredits: round2(Math.max(consumption.totalCredits - matchedCredits, 0)),
+      unmatchedUsd: round2(Math.max(consumption.totalUsd - matchedUsd, 0)),
+      unmatchedUsers: consumption.byLogin.size - matchedLogins.size,
+    },
+  };
+}
+
+/**
+ * Backward-compatible view of {@link getLicenseReconciliationDataset} that
+ * returns only the rows.
+ */
+export function getLicenseReconciliationRows(
+  opts: LicenseReconciliationOptions,
+): LicenseReconciliationRow[] {
+  return getLicenseReconciliationDataset(opts).rows;
 }
 
 function round2(n: number): number {
@@ -300,8 +362,11 @@ function round2(n: number): number {
 /** Compute headline KPIs from a reconciliation dataset. */
 export function computeLicenseKPIs(
   rows: LicenseReconciliationRow[],
+  coverage?: LicenseConsumptionCoverage,
 ): LicenseReconciliationKPIs {
   const cfg = getLicensingConfig();
+  let totalSeats = 0;
+  let activeSeats = 0;
   let activeUsers = 0;
   let pendingCancellation = 0;
   let inactive30d = 0;
@@ -314,6 +379,8 @@ export function computeLicenseKPIs(
   let overBudgetUsers = 0;
 
   for (const r of rows) {
+    totalSeats += r.seat_count;
+    activeSeats += r.active_seat_count;
     if (r.user_status === "active") activeUsers += 1;
     if (r.seat_status === "pending_cancellation") pendingCancellation += 1;
     if (r.activity_status !== "active_30d") inactive30d += 1;
@@ -331,6 +398,8 @@ export function computeLicenseKPIs(
 
   return {
     totalUsers: rows.length,
+    totalSeats,
+    activeSeats,
     activeUsers,
     pendingCancellation,
     inactive30d,
@@ -344,6 +413,9 @@ export function computeLicenseKPIs(
     overBudgetUsers,
     totalCostOfOwnership: round2(totalLicenseCost + totalConsumedUsd),
     currency: cfg.currency,
+    unmatchedConsumedCredits: round2(coverage?.unmatchedCredits ?? 0),
+    unmatchedConsumedUsd: round2(coverage?.unmatchedUsd ?? 0),
+    unmatchedUsers: coverage?.unmatchedUsers ?? 0,
     dataSource: "live_snapshot_only",
   };
 }

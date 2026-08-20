@@ -443,6 +443,18 @@ describe("additional API route coverage", { timeout: 15000 }, () => {
     }));
     vi.doMock("@/lib/db/license-repo", () => ({
       getLicenseReconciliationRows: vi.fn(() => []),
+      getLicenseReconciliationDataset: vi.fn(() => ({
+        rows: [],
+        coverage: {
+          attributedCredits: 0,
+          attributedUsd: 0,
+          matchedCredits: 0,
+          matchedUsd: 0,
+          unmatchedCredits: 0,
+          unmatchedUsd: 0,
+          unmatchedUsers: 0,
+        },
+      })),
       computeLicenseKPIs: vi.fn(() => ({ totalUsers: 0 })),
       computePlanBreakdown: vi.fn(() => []),
       computeOrgBreakdown: vi.fn(() => []),

@@ -275,23 +275,61 @@ export interface CopilotCostBasis {
   /** Copilot seat licences — net, gross, and billed seat-months. */
   seatCostNet: number;
   seatCostGross: number;
+  /**
+   * Billed seat-**months**, a duration, not a seat count: one seat held for a
+   * whole month is 1.0, and for 11 days is ~0.35. Never compare it directly to
+   * a headcount — use {@link seatUsers} / {@link seatAssignments} for that.
+   */
   seatQuantity: number;
+  /** Distinct users billed for a Copilot seat in this window. The period-accurate licensed-user count. */
+  seatUsers: number;
+  /** Distinct (user, org) seat assignments billed in this window — a multi-org user holds several. */
+  seatAssignments: number;
+  /** Days in the window whose seat rows carry a username (GitHub omits it on older/aggregate rows). */
+  seatNamedDays: number;
+  /** Days in the window with any seat row at all. Compare against {@link seatNamedDays} to judge coverage. */
+  seatDays: number;
+  /**
+   * True when, on the days GitHub named users, those named rows account for
+   * essentially all of that day's billed seats — i.e. {@link seatUsers} is a
+   * complete census rather than a subset of orgs. When false, treat
+   * {@link seatUsers} as a lower bound and do not headline it.
+   */
+  seatPopulationComplete: boolean;
 
   /**
    * AI credits billed in range, from the detailed usage report. This is the
    * authoritative total; it covers the full synced history.
+   *
+   * Counts `unit_type = 'ai-credits'` rows only. Premium requests and token
+   * units are billed under different units and are reported separately —
+   * summing them would produce a figure that reproduces no GitHub report.
    */
   creditsBilled: number;
-  /** Net USD charged for those credits (zero while within the pooled allowance). */
+  /** Premium requests billed in range (`unit_type = 'requests'`), the pre-June-2026 consumption unit. */
+  requestsBilled: number;
+  /** Premium requests in the per-user report that carry a username. */
+  requestsAttributed: number;
+  /** Token units billed in range (`unit_type = 'token-units'`). */
+  tokenUnitsBilled: number;
+  /** Net USD charged for all consumption units (zero while within the pooled allowance). */
   creditCostNet: number;
   creditCostGross: number;
 
   /**
    * Credits that can be attributed to a named user, from the ai_credit report.
    * Always <= creditsBilled; frequently far lower for historical months.
+   *
+   * Counts only rows carrying a username. Rows in the per-user report with no
+   * username (org- or enterprise-scoped charges) are billed but not
+   * attributable, and are reported separately as {@link creditsUnattributed} —
+   * folding them in here would claim an attribution that no per-user table can
+   * reproduce.
    */
   creditsAttributed: number;
-  /** Distinct users carrying attributed credits. */
+  /** Credits present in the per-user report but carrying no username, so attributable to no one. */
+  creditsUnattributed: number;
+  /** Distinct users carrying attributed credits (`ai-credits` rows only, matching {@link creditsAttributed}). */
   attributedUsers: number;
   /** creditsAttributed / creditsBilled, 0-100. Null when nothing was billed. */
   attributionCoveragePct: number | null;
