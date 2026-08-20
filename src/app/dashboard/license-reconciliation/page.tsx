@@ -16,6 +16,8 @@ import { Card } from "@/components/ui/card";
 import { ChartSkeleton } from "@/components/states/ChartSkeleton";
 import { ExportMenu } from "@/components/ui/ExportMenu";
 import { useDateRange } from "@/contexts/DateRangeContext";
+
+import { CopilotCostBasisPanel, type CopilotCostBasis } from "@/components/billing/CopilotCostBasisPanel";
 import { useScope } from "@/contexts/ScopeContext";
 import { safeNum } from "@/lib/utils";
 import { LicensePeriodFilters } from "@/components/licensing/LicensePeriodFilters";
@@ -83,7 +85,7 @@ function ZeroConsumptionNotice({ kpis }: Readonly<{ kpis: LicenseReconciliationK
 }
 
 export default function LicenseReconciliationPage() {
-  const { mode: dateMode, days, startDate, endDate } = useDateRange();
+  const { mode: dateMode, days, startDate, endDate, period: selectedPeriod } = useDateRange();
   const { hasFilter, buildScopeParams, selectedEntTeams, selectedOrgTeams, selectedOrgs, selectedEnterprises, filterOptions } =
     useScope();
 
@@ -94,6 +96,7 @@ export default function LicenseReconciliationPage() {
   // ── Query state (owned by the page; components are fully controlled) ──
   const [view, setView] = useState<"detail" | "rollup">("detail");
   const [periods, setPeriods] = useState<string[]>([]);
+  const [costBasis, setCostBasis] = useState<CopilotCostBasis | null>(null);
   const [search, setSearch] = useState("");
   const [planTypes, setPlanTypes] = useState<string[]>([]);
   const [accountStates, setAccountStates] = useState<string[]>([]);
@@ -155,7 +158,12 @@ export default function LicenseReconciliationPage() {
   const buildParams = useCallback(() => {
     const p = new URLSearchParams();
     if (periods.length > 0) {
+      // An explicit in-page period selection always wins.
       p.set("periods", periods.join(","));
+    } else if (dateMode === "month" && selectedPeriod) {
+      // Share the globally-selected month so this page and Billing resolve to
+      // identical bounds rather than each deriving a window of its own.
+      p.set("periods", selectedPeriod);
     } else if (dateMode === "custom") {
       p.set("startDate", startDate);
       p.set("endDate", endDate);
@@ -178,6 +186,7 @@ export default function LicenseReconciliationPage() {
   }, [
     periods,
     dateMode,
+    selectedPeriod,
     startDate,
     endDate,
     days,
@@ -220,6 +229,7 @@ export default function LicenseReconciliationPage() {
       setCoverage(data.coverage || null);
       setDataSource(data.dataSource || "historical");
       setWarnings(data.warnings || []);
+      setCostBasis(data.costBasis ?? null);
       if (data.config?.currency) setCurrency(data.config.currency);
     } catch {
       if (fetchRequestSeq.current !== requestSeq) return;
@@ -535,6 +545,9 @@ export default function LicenseReconciliationPage() {
         </div>
       )}
 
+      {/* Shared basis — identical figures render on the Billing page. */}
+      <CopilotCostBasisPanel basis={costBasis} currency={currency} surface="licensing" />
+
       {error && (
         <div role="alert" className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-800 dark:border-red-900 dark:bg-red-950/40 dark:text-red-300">
           <span>{error}</span>
@@ -571,8 +584,8 @@ export default function LicenseReconciliationPage() {
               <div className="grid gap-4 grid-cols-2 lg:grid-cols-4">
                 <MetricCard title="Licensed Users" value={kpis.totalUsers} accent="blue" icon={<Users className="h-5 w-5" />} subtitle={`${fmtNum(kpis.activeUsers)} active`} />
                 <MetricCard title="Monthly License Cost" value={fmtMoney(kpis.totalLicenseCost)} format="raw" accent="teal" icon={<CreditCard className="h-5 w-5" />} subtitle="Negotiated seat pricing" />
-                <MetricCard title="AI Credits Consumed" value={fmtNum(kpis.totalConsumedCredits)} accent="violet" icon={<Zap className="h-5 w-5" />} subtitle={`${fmtMoney(kpis.totalConsumedUsd)} spend`} />
-                <MetricCard title="Credit Utilization" value={`${safeNum(kpis.overallUtilizationPct).toFixed(1)}%`} format="raw" accent="amber" icon={<Gauge className="h-5 w-5" />} subtitle={`${fmtNum(kpis.totalConsumedCredits)} of ${fmtNum(kpis.totalAllowanceCredits)} allocated`} />
+                <MetricCard title="AI Credits (attributed)" value={fmtNum(kpis.totalConsumedCredits)} accent="violet" icon={<Zap className="h-5 w-5" />} subtitle={`${fmtMoney(kpis.totalConsumedUsd)} spend · per-user report`} />
+                <MetricCard title="Credit Utilization" value={`${safeNum(kpis.overallUtilizationPct).toFixed(1)}%`} format="raw" accent="amber" icon={<Gauge className="h-5 w-5" />} subtitle={`${fmtNum(kpis.totalConsumedCredits)} attributed of ${fmtNum(kpis.totalAllowanceCredits)} allocated`} />
               </div>
               <div className="grid gap-4 grid-cols-2 lg:grid-cols-4">
                 <MetricCard title="Total Cost of Ownership" value={fmtMoney(kpis.totalCostOfOwnership)} format="raw" accent="green" icon={<Wallet className="h-5 w-5" />} subtitle="License + credit spend" />
@@ -641,14 +654,18 @@ export default function LicenseReconciliationPage() {
                 </h3>
                 <div className="overflow-x-auto">
                   <table className="w-full text-sm">
+                    <caption className="sr-only">
+                      Copilot license cost and AI-credit consumption per organization, for the
+                      selected period and scope.
+                    </caption>
                     <thead>
                       <tr className="border-b">
-                        <th className="px-3 py-2 text-left text-xs font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wider">Organization</th>
-                        <th className="px-3 py-2 text-right text-xs font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wider">Seats</th>
-                        <th className="px-3 py-2 text-right text-xs font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wider">License Cost</th>
-                        <th className="px-3 py-2 text-right text-xs font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wider">Consumed (cr)</th>
-                        <th className="px-3 py-2 text-right text-xs font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wider">Consumed</th>
-                        <th className="px-3 py-2 text-right text-xs font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wider">Utilization</th>
+                        <th scope="col" className="px-3 py-2 text-left text-xs font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wider">Organization</th>
+                        <th scope="col" className="px-3 py-2 text-right text-xs font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wider">Seats</th>
+                        <th scope="col" className="px-3 py-2 text-right text-xs font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wider">License Cost</th>
+                        <th scope="col" className="px-3 py-2 text-right text-xs font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wider">Consumed (cr)</th>
+                        <th scope="col" className="px-3 py-2 text-right text-xs font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wider">Consumed</th>
+                        <th scope="col" className="px-3 py-2 text-right text-xs font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wider">Utilization</th>
                       </tr>
                     </thead>
                     <tbody>

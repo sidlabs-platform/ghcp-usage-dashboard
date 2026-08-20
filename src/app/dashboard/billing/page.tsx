@@ -7,6 +7,9 @@ import { MetricCard } from "@/components/cards/MetricCard";
 import { ChartSkeleton } from "@/components/states/ChartSkeleton";
 import { useDateRange } from "@/contexts/DateRangeContext";
 import { useScope } from "@/contexts/ScopeContext";
+
+import { CopilotCostBasisPanel, type CopilotCostBasis } from "@/components/billing/CopilotCostBasisPanel";
+import { periodLabel } from "@/lib/date/month-range";
 import { Receipt, DollarSign, TrendingDown, Building2, Users, Package } from "lucide-react";
 import { safeNum } from "@/lib/utils";
 import { ExportMenu } from "@/components/ui/ExportMenu";
@@ -52,7 +55,7 @@ const fmtCurrency = (v: number) => {
 };
 
 export default function BillingOverviewPage() {
-  const { days } = useDateRange();
+  const { days, mode, period } = useDateRange();
   const { hasFilter, buildScopeParams, selectedEntTeams, selectedOrgTeams, selectedOrgs: scopeOrgs } = useScope();
   const [kpis, setKpis] = useState<BillingOverviewKPIs | null>(null);
   const [dailyTrend, setDailyTrend] = useState<DailyTrend[]>([]);
@@ -60,8 +63,16 @@ export default function BillingOverviewPage() {
   const [orgBreakdown, setOrgBreakdown] = useState<BillingOrgBreakdown[]>([]);
   const [userBreakdown, setUserBreakdown] = useState<BillingUserBreakdown[]>([]);
   const [costCenterBreakdown, setCostCenterBreakdown] = useState<BillingCostCenterBreakdown[]>([]);
+  const [costBasis, setCostBasis] = useState<CopilotCostBasis | null>(null);
   const [loading, setLoading] = useState(true);
   const [enabled, setEnabled] = useState(true);
+
+  // Billing is billed by calendar month, so a selected month is the honest
+  // window; it is also the only basis on which this page can agree with
+  // License & AI Credits, which is keyed by month throughout.
+  const activePeriod = mode === "month" && period ? period : null;
+  const windowLabel = activePeriod ? periodLabel(activePeriod) : `Last ${days} days`;
+  const exportSlug = activePeriod ?? `${days}d`;
 
   const kpiRef = useRef<HTMLDivElement>(null);
   const chartsRef = useRef<HTMLDivElement>(null);
@@ -71,7 +82,9 @@ export default function BillingOverviewPage() {
   const fetchData = useCallback(async () => {
     setLoading(true);
     try {
-      const params = new URLSearchParams({ days: String(days) });
+      const params = new URLSearchParams(
+        activePeriod ? { period: activePeriod } : { days: String(days) }
+      );
       const scopeParams = buildScopeParams();
       scopeParams.forEach((v, k) => params.set(k, v));
 
@@ -87,12 +100,13 @@ export default function BillingOverviewPage() {
       setOrgBreakdown(data.orgBreakdown || []);
       setUserBreakdown(data.userBreakdown || []);
       setCostCenterBreakdown(data.costCenterBreakdown || []);
+      setCostBasis(data.costBasis ?? null);
     } catch (err) {
       console.error("Failed to load billing overview:", err);
     } finally {
       setLoading(false);
     }
-  }, [days, buildScopeParams]);
+  }, [activePeriod, days, buildScopeParams]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
@@ -132,10 +146,10 @@ export default function BillingOverviewPage() {
           pdf={{
             sectionRefs: [kpiRef, chartsRef, breakdownRef, insightsRef],
             title: "Billing Overview",
-            filename: `billing-overview-${days}d`,
+            filename: `billing-overview-${exportSlug}`,
             metadata: {
               reportName: "Billing Overview",
-              dateRange: `Last ${days} days`,
+              dateRange: windowLabel,
               ...(hasFilter && { teams: [...selectedEntTeams, ...selectedOrgTeams].join(", "), orgs: scopeOrgs.join(", ") }),
             },
           }}
@@ -157,6 +171,9 @@ export default function BillingOverviewPage() {
 
       {hasData && kpis && (
         <>
+          {/* Shared basis — identical figures render on License & AI Credits. */}
+          <CopilotCostBasisPanel basis={costBasis} surface="billing" />
+
           {/* KPI Cards */}
           <div ref={kpiRef} className="grid gap-4 grid-cols-2 lg:grid-cols-4">
             <MetricCard
@@ -164,7 +181,7 @@ export default function BillingOverviewPage() {
               value={fmtCurrency(kpis.totalNet)}
               format="raw"
               icon={<DollarSign className="h-4 w-4" />}
-              subtitle={`Last ${days} days`}
+              subtitle={windowLabel}
             />
             <MetricCard
               title="Total Gross"

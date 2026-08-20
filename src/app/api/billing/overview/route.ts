@@ -8,7 +8,9 @@ import {
   getOrgBreakdown,
   getUserBreakdown,
   getCostCenterBreakdown,
+  getCopilotCostBasis,
 } from "@/lib/db/billing-repo";
+import { isValidPeriod, monthBounds, monthDayCount } from "@/lib/date/month-range";
 import type { BillingFilters } from "@/lib/db/billing-repo";
 import { resolveFilteredUsers } from "@/lib/db/teams-repo";
 import { withCache } from "@/lib/cache/with-cache";
@@ -22,12 +24,35 @@ async function handler(request: NextRequest) {
     }
 
     const params = request.nextUrl.searchParams;
-    const daysResult = parseAndClampDays(params.get("days"), 28);
-    if ("error" in daysResult) {
-      return NextResponse.json({ error: daysResult.error }, { status: 400 });
+
+    // A `period` ("YYYY-MM") pins the window to a calendar month. Billing is
+    // billed monthly and the licensing tables are keyed by month, so this is
+    // the only basis on which the Billing and License & AI Credits pages can
+    // be expected to agree. A rolling `days` window remains the default.
+    const periodParam = params.get("period");
+    let period: string | null = null;
+    let start: string;
+    let end: string;
+    let days: number;
+
+    if (periodParam) {
+      if (!isValidPeriod(periodParam)) {
+        return NextResponse.json(
+          { error: `Invalid period "${periodParam}": expected format YYYY-MM` },
+          { status: 400 }
+        );
+      }
+      period = periodParam;
+      ({ startDate: start, endDate: end } = monthBounds(period));
+      days = monthDayCount(period);
+    } else {
+      const daysResult = parseAndClampDays(params.get("days"), 28);
+      if ("error" in daysResult) {
+        return NextResponse.json({ error: daysResult.error }, { status: 400 });
+      }
+      days = daysResult.days;
+      ({ start, end } = getDateRange(days));
     }
-    const days = daysResult.days;
-    const { start, end } = getDateRange(days);
 
     // Parse scope filter (teams/orgs/enterprises)
     const teamsParam = params.get("teams");
@@ -51,6 +76,15 @@ async function handler(request: NextRequest) {
     const orgBreakdown = getOrgBreakdown(start, end, filters, enterpriseSlugs);
     const userBreakdown = getUserBreakdown(start, end, filters, enterpriseSlugs);
     const costCenterBreakdown = getCostCenterBreakdown(start, end, filters, enterpriseSlugs);
+    // Shared with /api/billing/license-reconciliation so both surfaces quote
+    // the same seat cost and credit total for the same window.
+    let costBasis = null;
+    try {
+      costBasis = getCopilotCostBasis(start, end, filters, enterpriseSlugs);
+    } catch (err) {
+      // Never fail the page over the reconciliation strip.
+      console.error("Failed to compute Copilot cost basis:", err);
+    }
 
     // Build daily cost trend (aggregate across products per day)
     const dailyMap = new Map<string, { day: string; total_net: number; user_net: number; org_net: number }>();
@@ -71,7 +105,11 @@ async function handler(request: NextRequest) {
       orgBreakdown,
       userBreakdown,
       costCenterBreakdown,
+      costBasis,
       daysLoaded: days,
+      period,
+      startDate: start,
+      endDate: end,
     }, {
       headers: { "Cache-Control": "private, max-age=300, stale-while-revalidate=60" },
     });

@@ -64,6 +64,13 @@ vi.mock("@/lib/api/scope-filter", () => ({
   parseScopeFilter: (...args: unknown[]) => scopeState.parseScopeFilter(...args),
 }));
 
+// The route imports getCopilotCostBasis for the shared Billing/Licensing cost
+// strip. Without this mock the import reaches a real SQLite connection and runs
+// schema migrations, which blows the 5s test timeout.
+vi.mock("@/lib/db/billing-repo", () => ({
+  getCopilotCostBasis: () => null,
+}));
+
 vi.mock("@/lib/db/license-repo", () => ({
   getLicenseReconciliationRows: (...a: unknown[]) => repoState.getLicenseReconciliationRows(...a),
   computeLicenseKPIs: (...a: unknown[]) => repoState.computeLicenseKPIs(...a),

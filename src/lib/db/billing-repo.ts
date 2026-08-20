@@ -1771,3 +1771,171 @@ export function getAiCreditsReconciliation(
     billingThrough: (row?.billing_through as string | null) ?? null,
   };
 }
+
+// ── Shared cost basis (Billing ↔ License & AI Credits) ───────────────
+//
+// The Billing page and the License & AI Credits page are both expected to
+// answer "what did Copilot cost, and how many AI credits did we burn?" for a
+// given calendar month. They previously disagreed, for two independent
+// reasons:
+//
+//  1. Different windows. Billing used a rolling "last N days"; licensing
+//     resolved a "YYYY-MM" period. Those only coincide by accident.
+//  2. Different sources. Seat cost and billed credits live in
+//     `billing_usage_records` (the detailed report, synced over the full
+//     history). Per-user credit attribution lives in
+//     `billing_premium_requests` (the ai_credit report, which GitHub only
+//     serves for a short recent window). Reading a *total* off the per-user
+//     table therefore under-reports every historical month — by 60% for one
+//     observed month, and by 100% for a month the report never covered.
+//
+// This function is the single answer to that question. Both pages call it with
+// identical bounds, so their headline figures agree by construction rather
+// than by two implementations happening to round the same way. Attribution
+// coverage is reported alongside, so a partially-attributable month is visible
+// as a gap instead of silently shrinking the total.
+
+/** SKUs billed per seat rather than per unit of consumption. */
+const SEAT_SKU_SQL = `sku NOT LIKE '%ai_credit%' AND sku NOT LIKE '%premium_request%'`;
+/** SKUs billed per AI credit (or, pre-June-2026, per premium request). */
+const CREDIT_SKU_SQL = `(sku LIKE '%ai_credit%' OR sku LIKE '%premium_request%')`;
+
+export interface CopilotCostBasis {
+  /** Inclusive bounds these figures were computed over. */
+  startDate: string;
+  endDate: string;
+  /** Calendar period when the bounds are exactly one month, else null. */
+  period: string | null;
+
+  /** Copilot seat licences — net, gross, and billed seat-months. */
+  seatCostNet: number;
+  seatCostGross: number;
+  seatQuantity: number;
+
+  /**
+   * AI credits billed in range, from the detailed usage report. This is the
+   * authoritative total; it covers the full synced history.
+   */
+  creditsBilled: number;
+  /** Net USD charged for those credits (zero while within the pooled allowance). */
+  creditCostNet: number;
+  creditCostGross: number;
+
+  /**
+   * Credits that can be attributed to a named user, from the ai_credit report.
+   * Always <= creditsBilled; frequently far lower for historical months.
+   */
+  creditsAttributed: number;
+  /** Distinct users carrying attributed credits. */
+  attributedUsers: number;
+  /** creditsAttributed / creditsBilled, 0-100. Null when nothing was billed. */
+  attributionCoveragePct: number | null;
+  /**
+   * True when per-user attribution accounts for essentially all billed
+   * credits. When false, per-user credit tables are a sample, not a census,
+   * and must be labelled as such.
+   */
+  attributionComplete: boolean;
+
+  /** Total Copilot cost: seats + credits. */
+  totalCopilotNet: number;
+}
+
+/**
+ * Canonical Copilot cost + AI-credit figures for a date range.
+ *
+ * Both the Billing and License & AI Credits surfaces render from this, so the
+ * two pages cannot drift.
+ */
+export function getCopilotCostBasis(
+  start: string,
+  end: string,
+  filters?: BillingFilters,
+  enterpriseSlugs?: string[]
+): CopilotCostBasis {
+  const db = getDb();
+  const { clause: entClause, params: entParams } = buildEnterpriseFilter(enterpriseSlugs);
+  const entWhere = entClause.replace(/^\s*AND\s+/, "");
+
+  const usageClauses: string[] = ["date >= ?", "date <= ?", "product = 'copilot'"];
+  const usageParams: unknown[] = [start, end];
+  if (entWhere) { usageClauses.push(entWhere); usageParams.push(...entParams); }
+  appendBillingFilters(usageClauses, usageParams, filters);
+
+  const usage = db
+    .prepare(
+      `
+    SELECT
+      COALESCE(SUM(CASE WHEN ${SEAT_SKU_SQL}   THEN net_amount   END), 0) AS seatNet,
+      COALESCE(SUM(CASE WHEN ${SEAT_SKU_SQL}   THEN gross_amount END), 0) AS seatGross,
+      COALESCE(SUM(CASE WHEN ${SEAT_SKU_SQL}   THEN quantity     END), 0) AS seatQty,
+      COALESCE(SUM(CASE WHEN ${CREDIT_SKU_SQL} THEN quantity     END), 0) AS creditQty,
+      COALESCE(SUM(CASE WHEN ${CREDIT_SKU_SQL} THEN net_amount   END), 0) AS creditNet,
+      COALESCE(SUM(CASE WHEN ${CREDIT_SKU_SQL} THEN gross_amount END), 0) AS creditGross
+    FROM billing_usage_records
+    ${buildWhereClause(usageClauses)}
+  `
+    )
+    .get(...usageParams) as Record<string, number> | undefined;
+
+  // Per-user attribution comes from the ai_credit report. `aic_quantity` can
+  // legitimately be 0 on legacy premium_request rows, where `quantity` carries
+  // the credits — so take whichever is populated rather than trusting one.
+  const premClauses: string[] = ["date >= ?", "date <= ?"];
+  const premParams: unknown[] = [start, end];
+  if (entWhere) { premClauses.push(entWhere); premParams.push(...entParams); }
+  if (filters?.allowedLogins?.length || filters?.scopeOrgs?.length) {
+    appendPremiumFilters(premClauses, premParams, {
+      allowedLogins: filters.allowedLogins,
+      scopeOrgs: filters.scopeOrgs,
+    });
+  }
+
+  const prem = db
+    .prepare(
+      `
+    SELECT
+      COALESCE(SUM(CASE WHEN COALESCE(aic_quantity, 0) > 0
+                        THEN aic_quantity ELSE COALESCE(quantity, 0) END), 0) AS credits,
+      COUNT(DISTINCT CASE WHEN TRIM(COALESCE(username, '')) <> ''
+                          THEN LOWER(username) END)                            AS users
+    FROM billing_premium_requests
+    ${buildWhereClause(premClauses)}
+  `
+    )
+    .get(...premParams) as Record<string, number> | undefined;
+
+  const seatCostNet = Number(usage?.seatNet ?? 0);
+  const creditsBilled = Number(usage?.creditQty ?? 0);
+  const creditCostNet = Number(usage?.creditNet ?? 0);
+  const creditsAttributed = Number(prem?.credits ?? 0);
+
+  const coverage = creditsBilled > 0
+    ? Math.min(100, (creditsAttributed / creditsBilled) * 100)
+    : null;
+
+  return {
+    startDate: start,
+    endDate: end,
+    period: derivePeriod(start, end),
+    seatCostNet,
+    seatCostGross: Number(usage?.seatGross ?? 0),
+    seatQuantity: Number(usage?.seatQty ?? 0),
+    creditsBilled,
+    creditCostNet,
+    creditCostGross: Number(usage?.creditGross ?? 0),
+    creditsAttributed,
+    attributedUsers: Number(prem?.users ?? 0),
+    attributionCoveragePct: coverage,
+    // 99% rather than 100% because the two reports round independently; a
+    // sub-1% delta is float noise, not a coverage gap worth alarming on.
+    attributionComplete: coverage !== null && coverage >= 99,
+    totalCopilotNet: seatCostNet + creditCostNet,
+  };
+}
+
+/** The "YYYY-MM" period covered, when the bounds sit inside a single month. */
+function derivePeriod(start: string, end: string): string | null {
+  if (start.length < 7 || end.length < 7) return null;
+  return start.slice(0, 7) === end.slice(0, 7) ? start.slice(0, 7) : null;
+}
