@@ -186,6 +186,10 @@ export function LicenseDataQualityPanel({
           </span>
         </div>
         <table className="w-full text-sm">
+          <caption className="sr-only">
+            Data-quality checks for the most recent licence reconciliation run, with each
+            check&apos;s status and detail.
+          </caption>
           <thead>
             <tr className="border-b text-left text-xs uppercase tracking-wider text-[hsl(var(--muted-foreground))]">
               <th scope="col" className="py-1">Check</th>

@@ -163,14 +163,15 @@ export default function TeamDetailPage() {
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
+                <caption className="sr-only">Team Members — {team.name}</caption>
                 <thead>
                   <tr className="border-b text-left">
-                    <th className="pb-2 font-medium">Login</th>
-                    <th className="pb-2 font-medium text-right">Active Days</th>
-                    <th className="pb-2 font-medium text-right">LoC Added</th>
-                    <th className="pb-2 font-medium text-right">Interactions</th>
-                    <th className="pb-2 font-medium text-right">Acceptance %</th>
-                    <th className="pb-2 font-medium">Features</th>
+                    <th scope="col" className="pb-2 font-medium">Login</th>
+                    <th scope="col" className="pb-2 font-medium text-right">Active Days</th>
+                    <th scope="col" className="pb-2 font-medium text-right">LoC Added</th>
+                    <th scope="col" className="pb-2 font-medium text-right">Interactions</th>
+                    <th scope="col" className="pb-2 font-medium text-right">Acceptance %</th>
+                    <th scope="col" className="pb-2 font-medium">Features</th>
                   </tr>
                 </thead>
                 <tbody>

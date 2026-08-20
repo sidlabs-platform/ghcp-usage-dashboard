@@ -284,10 +284,11 @@ export default function CLIPage() {
             ) : (
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
+                  <caption className="sr-only">GitHub Copilot CLI Version Distribution</caption>
                   <thead>
                     <tr className="border-b text-left text-[hsl(var(--muted-foreground))]">
-                      <th className="py-2 pr-4 font-medium">Version</th>
-                      <th className="py-2 text-right font-medium">Users</th>
+                      <th scope="col" className="py-2 pr-4 font-medium">Version</th>
+                      <th scope="col" className="py-2 text-right font-medium">Users</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -318,6 +319,7 @@ export default function CLIPage() {
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
+                <caption className="sr-only">Top GitHub Copilot CLI Users</caption>
                 <thead>
                   <tr className="border-b text-left text-[hsl(var(--muted-foreground))]">
                     <SortableHeader label="User" field={"login" as CLISortField} sortField={cliSortField} sortAsc={cliSortAsc} onSort={handleCliSort} />
@@ -348,7 +350,7 @@ export default function CLIPage() {
 
       {/* Related Analytics */}
       <section className="mt-8 pt-6 border-t">
-        <h3 className="text-sm font-medium text-[hsl(var(--muted-foreground))] mb-3">Related Analytics</h3>
+        <h2 className="text-sm font-medium text-[hsl(var(--muted-foreground))] mb-3">Related Analytics</h2>
         <div className="flex flex-wrap gap-3">
           <Link href="/dashboard/chat-modes" className="text-sm text-[hsl(var(--primary))] hover:underline">
             Copilot Features →

@@ -21,14 +21,6 @@
   --input: 220 13% 91%;
   --ring: 220 70% 50%;
   --radius: 0.5rem;
-  --chart-1: 220 70% 50%;
-  --chart-2: 262 83% 58%;
-  --chart-3: 270 76% 72%;
-  --chart-4: 210 98% 58%;
-  --chart-5: 330 81% 60%;
-  --chart-6: 160 84% 39%;
-  --chart-7: 38 92% 50%;
-  --chart-8: 0 72% 51%;
   --card-hover-shadow: 0 8px 30px rgba(0,0,0,0.06);
   --tooltip-bg: 0 0% 100%;
   --tooltip-border: 220 13% 91%;
@@ -54,15 +46,10 @@
   --destructive-foreground: 210 20% 98%;
   --border: 215 28% 17%;
   --input: 215 28% 17%;
-  --ring: 224 64% 33%;
-  --chart-1: 220 70% 60%;
-  --chart-2: 262 83% 68%;
-  --chart-3: 270 76% 78%;
-  --chart-4: 210 98% 68%;
-  --chart-5: 330 81% 70%;
-  --chart-6: 160 84% 49%;
-  --chart-7: 38 92% 60%;
-  --chart-8: 0 72% 61%;
+  /* Focus ring: raised to 70% lightness (matching light-mode) so it meets the
+     3:1 non-text contrast requirement against --background (224 71% 4%) and
+     --card (224 50% 8%) in dark mode. */
+  --ring: 220 70% 70%;
   --card-hover-shadow: 0 8px 30px rgba(0,0,0,0.3);
   --tooltip-bg: 224 50% 12%;
   --tooltip-border: 215 28% 22%;
@@ -116,11 +103,12 @@ body {
   animation: shimmer 1.5s ease-in-out infinite;
 }
 
+/* Tooltip/overlay surface — opaque to keep data readouts legible.
+   Glassmorphism (translucent blur) is excluded per the project design brief. */
 .glass {
-  background: hsl(var(--tooltip-bg) / 0.85);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
+  background: hsl(var(--popover));
   border: 1px solid hsl(var(--tooltip-border));
+  box-shadow: 0 4px 16px rgba(0,0,0,0.12);
 }
 
 @media (prefers-reduced-motion: reduce) {

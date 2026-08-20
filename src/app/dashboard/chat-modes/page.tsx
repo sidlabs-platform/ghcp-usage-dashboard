@@ -383,6 +383,7 @@ export default function CopilotFeaturesPage() {
         <CardContent>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
+              <caption className="sr-only">Feature Detail — interactions, acceptances, and LoC added per feature</caption>
               <thead>
                 <tr className="border-b text-left text-[hsl(var(--muted-foreground))]">
                   <SortableHeader label="Feature" field={"feature" as FeatureSortField} sortField={featureSortField} sortAsc={featureSortAsc} onSort={handleFeatureSort} />
@@ -408,7 +409,7 @@ export default function CopilotFeaturesPage() {
 
       {/* Related Analytics */}
       <section className="mt-8 pt-6 border-t">
-        <h3 className="text-sm font-medium text-[hsl(var(--muted-foreground))] mb-3">Related Analytics</h3>
+        <h2 className="text-sm font-medium text-[hsl(var(--muted-foreground))] mb-3">Related Analytics</h2>
         <div className="flex flex-wrap gap-3">
           <Link href="/dashboard/cli" className="text-sm text-[hsl(var(--primary))] hover:underline">
             CLI Analytics →

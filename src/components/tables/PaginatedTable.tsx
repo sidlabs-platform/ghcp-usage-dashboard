@@ -45,6 +45,12 @@ interface PaginatedTableProps<T> {
   pageSizeOptions?: number[];
   /** Called when total items count changes */
   onTotalChange?: (total: number) => void;
+  /**
+   * Accessible caption for the table (WCAG 1.3.1).
+   * Rendered as a visually-hidden `<caption>` element. Should name the
+   * table and, where relevant, the current scope or date range.
+   */
+  caption?: string;
 }
 
 export function PaginatedTable<T>({
@@ -60,6 +66,7 @@ export function PaginatedTable<T>({
   searchPlaceholder = "Search...",
   pageSizeOptions = [25, 50, 100],
   onTotalChange,
+  caption,
 }: PaginatedTableProps<T>) {
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(pageSizeOptions[1] || 50);
@@ -173,28 +180,35 @@ export function PaginatedTable<T>({
       {!error && rows.length > 0 && (
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b text-left text-[hsl(var(--muted-foreground))]">
-                {columns.map((col, idx) => (
-                  col.sortable !== false ? (
-                    <SortableHeader
-                      key={col.key}
-                      label={col.label}
-                      field={col.key}
-                      sortField={sortField}
-                      sortAsc={sortDir === "asc"}
-                      onSort={handleSort}
-                      align={col.align}
-                      last={idx === columns.length - 1}
-                    />
-                  ) : (
-                    <th key={col.key} className={`pb-3 font-medium ${col.align === "right" ? "text-right" : ""}`}>
-                      {col.label}
-                    </th>
-                  )
-                ))}
-              </tr>
-            </thead>
+              {caption && (
+                <caption className="sr-only">{caption}</caption>
+              )}
+              <thead>
+                <tr className="border-b text-left text-[hsl(var(--muted-foreground))]">
+                  {columns.map((col, idx) => (
+                    col.sortable !== false ? (
+                      <SortableHeader
+                        key={col.key}
+                        label={col.label}
+                        field={col.key}
+                        sortField={sortField}
+                        sortAsc={sortDir === "asc"}
+                        onSort={handleSort}
+                        align={col.align}
+                        last={idx === columns.length - 1}
+                      />
+                    ) : (
+                      <th
+                        key={col.key}
+                        scope="col"
+                        className={`pb-3 font-medium ${col.align === "right" ? "text-right" : ""}`}
+                      >
+                        {col.label}
+                      </th>
+                    )
+                  ))}
+                </tr>
+              </thead>
             <tbody>
               {rows.map((row) => (
                 <tr key={rowKey(row)} className="border-b last:border-0">

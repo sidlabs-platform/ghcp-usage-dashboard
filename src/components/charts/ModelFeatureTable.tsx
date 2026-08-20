@@ -66,9 +66,11 @@ export function ModelFeatureTable({ data }: ModelFeatureTableProps) {
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
+              <caption className="sr-only">Model × Feature Breakdown — interactions by model and Copilot feature</caption>
               <thead>
                 <tr className="border-b text-left text-[hsl(var(--muted-foreground))]">
                   <th
+                    scope="col"
                     className="pb-3 pr-4 font-medium cursor-pointer select-none hover:text-[hsl(var(--foreground))] transition-colors"
                     onClick={() => handleSort("model")}
                   >
@@ -77,6 +79,7 @@ export function ModelFeatureTable({ data }: ModelFeatureTableProps) {
                   {features.map((f) => (
                     <th
                       key={f}
+                      scope="col"
                       className="pb-3 pr-4 font-medium text-right cursor-pointer select-none hover:text-[hsl(var(--foreground))] transition-colors"
                       onClick={() => handleSort(f)}
                     >
@@ -84,6 +87,7 @@ export function ModelFeatureTable({ data }: ModelFeatureTableProps) {
                     </th>
                   ))}
                   <th
+                    scope="col"
                     className="pb-3 font-medium text-right cursor-pointer select-none hover:text-[hsl(var(--foreground))] transition-colors"
                     onClick={() => handleSort("total")}
                   >

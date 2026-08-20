@@ -24,6 +24,7 @@ export function SortableHeader<K extends string>({
 
   return (
     <th
+      scope="col"
       aria-sort={ariaSort}
       className={`pb-3 font-medium transition-colors ${
         align === "right" ? "text-right" : "text-left"

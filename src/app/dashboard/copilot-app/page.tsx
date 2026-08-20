@@ -146,7 +146,7 @@ export default function CopilotAppPage() {
         <ScopeFilter />
         <div className="rounded-xl border bg-[hsl(var(--card))] p-12 text-center">
           <AlertTriangle className="h-12 w-12 mx-auto text-[hsl(var(--muted-foreground))] mb-4" />
-          <h3 className="text-lg font-semibold mb-2">Error loading data</h3>
+          <h2 className="text-lg font-semibold mb-2">Error loading data</h2>
           <p className="text-sm text-[hsl(var(--muted-foreground))] max-w-md mx-auto mb-4">
             {error instanceof Error ? error.message : "Failed to load Copilot App metrics."}
           </p>
@@ -176,7 +176,7 @@ export default function CopilotAppPage() {
         </div>
         <div className="rounded-xl border bg-[hsl(var(--card))] p-12 text-center">
           <Code2 className="h-12 w-12 mx-auto text-[hsl(var(--muted-foreground))] mb-4" />
-          <h3 className="text-lg font-semibold mb-2">No Copilot App data</h3>
+          <h2 className="text-lg font-semibold mb-2">No Copilot App data</h2>
           <p className="text-sm text-[hsl(var(--muted-foreground))] max-w-md mx-auto">
             No Copilot App metrics are present in the selected synced range. Try a range on or after{" "}
             {COPILOT_APP_ROLLUP_NOTE.effectiveDate}, or a broader scope.
@@ -418,7 +418,7 @@ export default function CopilotAppPage() {
 
       {/* Related Analytics */}
       <section className="mt-8 pt-6 border-t">
-        <h3 className="text-sm font-medium text-[hsl(var(--muted-foreground))] mb-3">Related Analytics</h3>
+        <h2 className="text-sm font-medium text-[hsl(var(--muted-foreground))] mb-3">Related Analytics</h2>
         <div className="flex flex-wrap gap-3">
           <Link href="/dashboard/models" className="text-sm text-[hsl(var(--primary))] hover:underline">
             Model Statistics →

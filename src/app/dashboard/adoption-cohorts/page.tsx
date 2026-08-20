@@ -130,7 +130,7 @@ export default function AdoptionCohortsPage() {
         <ScopeFilter />
         <div className="rounded-xl border bg-[hsl(var(--card))] p-12 text-center">
           <TrendingUp className="h-12 w-12 mx-auto text-[hsl(var(--muted-foreground))] mb-4" />
-          <h3 className="text-lg font-semibold mb-2">Error loading data</h3>
+          <h2 className="text-lg font-semibold mb-2">Error loading data</h2>
           <p className="text-sm text-[hsl(var(--muted-foreground))] max-w-md mx-auto">{error}</p>
         </div>
       </div>
@@ -144,7 +144,7 @@ export default function AdoptionCohortsPage() {
         <ScopeFilter />
         <div className="rounded-xl border bg-[hsl(var(--card))] p-12 text-center">
           <TrendingUp className="h-12 w-12 mx-auto text-[hsl(var(--muted-foreground))] mb-4" />
-          <h3 className="text-lg font-semibold mb-2">No adoption cohort data available</h3>
+          <h2 className="text-lg font-semibold mb-2">No adoption cohort data available</h2>
           <p className="text-sm text-[hsl(var(--muted-foreground))] max-w-md mx-auto">
             Adoption cohort data will appear after your next sync. This feature requires data from
             the latest GitHub Copilot usage metrics API (announced May 2026).
@@ -183,6 +183,11 @@ export default function AdoptionCohortsPage() {
       </PageHeader>
 
       <ScopeFilter />
+
+      {/* Polite live region for screen readers */}
+      <div aria-live="polite" aria-atomic="true" className="sr-only">
+        {!loading && data && `Updated: ${data.totalEngaged} engaged users, last ${data.daysLoaded} days`}
+      </div>
 
       {/* KPI Cards — one per phase */}
       <Section title="Phase Distribution">
@@ -276,18 +281,19 @@ export default function AdoptionCohortsPage() {
         <Section title="Per-Phase Metrics" className="mt-6">
           <div className="overflow-x-auto rounded-xl border bg-[hsl(var(--card))]">
             <table className="w-full text-sm">
+              <caption className="sr-only">Per-Phase Metrics — AI adoption cohort averages and totals</caption>
               <thead>
                 <tr className="border-b text-left text-[hsl(var(--muted-foreground))]">
-                  <th className="px-4 py-3 font-medium">Phase</th>
-                  <th className="px-4 py-3 font-medium text-right">Engaged Users</th>
-                  <th className="px-4 py-3 font-medium text-right">Avg Interactions</th>
-                  <th className="px-4 py-3 font-medium text-right">Avg Code Gen</th>
-                  <th className="px-4 py-3 font-medium text-right">Avg Acceptance</th>
-                  <th className="px-4 py-3 font-medium text-right">Avg LoC Added</th>
-                  <th className="px-4 py-3 font-medium text-right">Avg PRs Created</th>
-                  <th className="px-4 py-3 font-medium text-right">Avg PRs Merged</th>
-                  <th className="px-4 py-3 font-medium text-right">Total PRs Merged</th>
-                  <th className="px-4 py-3 font-medium text-right">Avg Merge Time</th>
+                  <th scope="col" className="px-4 py-3 font-medium">Phase</th>
+                  <th scope="col" className="px-4 py-3 font-medium text-right">Engaged Users</th>
+                  <th scope="col" className="px-4 py-3 font-medium text-right">Avg Interactions</th>
+                  <th scope="col" className="px-4 py-3 font-medium text-right">Avg Code Gen</th>
+                  <th scope="col" className="px-4 py-3 font-medium text-right">Avg Acceptance</th>
+                  <th scope="col" className="px-4 py-3 font-medium text-right">Avg LoC Added</th>
+                  <th scope="col" className="px-4 py-3 font-medium text-right">Avg PRs Created</th>
+                  <th scope="col" className="px-4 py-3 font-medium text-right">Avg PRs Merged</th>
+                  <th scope="col" className="px-4 py-3 font-medium text-right">Total PRs Merged</th>
+                  <th scope="col" className="px-4 py-3 font-medium text-right">Avg Merge Time</th>
                 </tr>
               </thead>
               <tbody>

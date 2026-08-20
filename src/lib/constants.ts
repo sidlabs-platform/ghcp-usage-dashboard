@@ -1,50 +1,65 @@
-// Consistent chart color palette used across all dashboard pages
+/**
+ * Chart colour palette — one semantic meaning per hex.
+ *
+ * Organised into domain sub-palettes so reuse across domains is explicit, not
+ * accidental.  Within each sub-palette every entry has a distinct hue or
+ * lightness so series remain separable at small sizes and under deuteranopia.
+ *
+ * Chat-mode palette rationale (deuteranopia safety):
+ *   ask  = blue  (H 217) — safe anchor
+ *   edit = teal  (H 172) — large blue-green gap, unambiguous under deutan
+ *   plan = amber (H 38)  — yellow-orange, maximally distant from blue/teal
+ *   agent= rose  (H 351) — red-pink, separable from all above
+ *   custom & unknown retain pink/slate as they are already well-separated.
+ */
 export const CHART_COLORS = {
-  // Chat modes
-  ask: "#3b82f6",       // blue-500
-  edit: "#8b5cf6",      // violet-500
-  plan: "#a855f7",      // purple-500
-  agent: "#6366f1",     // indigo-500
-  custom: "#ec4899",    // pink-500
-  unknown: "#94a3b8",   // slate-400
+  // ── Chat modes (span the colour wheel; deutan-safe) ─────────────────────
+  ask:     "#3b82f6",  // blue-500   H 217
+  edit:    "#14b8a6",  // teal-500   H 172  (was violet-500 — deutan-collision fixed)
+  plan:    "#f59e0b",  // amber-500  H  38  (was purple-500 — deutan-collision fixed)
+  agent:   "#f43f5e",  // rose-500   H 351  (was indigo-500 — deutan-collision fixed)
+  custom:  "#ec4899",  // pink-500   H 330
+  unknown: "#94a3b8",  // slate-400
 
-  // Features
-  completions: "#0ea5e9", // sky-500
-  chat: "#8b5cf6",        // violet-500
-  cli: "#10b981",         // emerald-500
-  codeReview: "#f59e0b",  // amber-500
+  // ── Feature-level series ─────────────────────────────────────────────────
+  completions: "#0ea5e9", // sky-500    H 199  (completion suggestions)
+  chat:        "#6366f1", // indigo-500 H 239  (chat-panel aggregate; distinct from completions)
+  cli:         "#10b981", // emerald-500 H 152
+  codeReview:  "#f59e0b", // amber-500  H  38
 
-  // General
-  primary: "#3b82f6",
-  secondary: "#8b5cf6",
-  success: "#10b981",
-  warning: "#f59e0b",
-  danger: "#ef4444",
-  info: "#06b6d4",
+  // ── General / semantic tokens ────────────────────────────────────────────
+  primary:   "#3b82f6",  // blue-500
+  secondary: "#6366f1",  // indigo-500 (distinct from primary)
+  success:   "#10b981",  // emerald-500
+  warning:   "#f59e0b",  // amber-500
+  danger:    "#ef4444",  // red-500
+  info:      "#06b6d4",  // cyan-500
 
-  // Lines of code
-  locAdded: "#10b981",    // emerald-500
-  locDeleted: "#ef4444",  // red-500
-  locSuggested: "#3b82f6",// blue-500
-  locAccepted: "#8b5cf6", // violet-500
+  // ── Lines-of-code series ─────────────────────────────────────────────────
+  locAdded:     "#10b981", // emerald-500  — completions accepted
+  locDeleted:   "#ef4444", // red-500
+  locSuggested: "#0ea5e9", // sky-500      (was blue-500 — distinct from locAdded)
+  locAccepted:  "#6366f1", // indigo-500   (was violet-500 — distinct from sky)
 
-  // IDE
-  vscode: "#007acc",
-  jetbrains: "#fe315d",
-  xcode: "#147efb",
-  neovim: "#57a143",
+  // ── IDE series ───────────────────────────────────────────────────────────
+  vscode:       "#007acc",
+  jetbrains:    "#fe315d",
+  xcode:        "#147efb",
+  neovim:       "#57a143",
   visualStudio: "#5c2d91",
 
-  // Copilot actors
-  human: "#3b82f6",
-  copilot: "#8b5cf6",
-  copilotReviewed: "#f59e0b",  // amber-500 — Copilot-reviewed PRs
+  // ── PR / code-review actors ──────────────────────────────────────────────
+  human:          "#3b82f6",  // blue-500
+  copilot:        "#6366f1",  // indigo-500 (was violet-500; now unambiguous vs human)
+  copilotReviewed: "#f59e0b", // amber-500 — Copilot-reviewed PRs
 
-  // Copilot App surface (distinct from completion/agent, per code-generation classification)
-  copilotApp: "#f97316",  // orange-500
-  // App "Deleted" series — a distinct, accessible/differentiable named color
-  // (not a lightened tint of copilotApp) so it doesn't read as a washed-out
-  // duplicate of the "added" series; paired with a dashed stroke in charts.
+  // ── Copilot App surface ──────────────────────────────────────────────────
+  /** Orange-500: distinct from all completion/agent/feature series. */
+  copilotApp:        "#f97316", // orange-500
+  /**
+   * App "Deleted" series — orange-800 (not a tint of copilotApp) so it reads
+   * as a separate series; always paired with a dashed stroke in charts.
+   */
   copilotAppDeleted: "#c2410c", // orange-800
 } as const;
 
@@ -96,9 +111,15 @@ export const CHAT_MODE_ICONS: Record<string, string> = {
   unknown: "HelpCircle",
 };
 
+/**
+ * Available date-range presets.
+ *
+ * 1-day and 2-day presets are intentionally omitted: the Copilot Usage Metrics
+ * API delivers rolling-window products (e.g. 28-day PR counts, AI adoption
+ * phase) that are meaningless at sub-week resolution, and several derived
+ * metrics require at least 7 days of history to be interpretable.
+ */
 export const DATE_PRESETS = [
-  { label: "1 day", days: 1 },
-  { label: "2 days", days: 2 },
   { label: "7 days", days: 7 },
   { label: "14 days", days: 14 },
   { label: "28 days", days: 28 },

@@ -253,6 +253,13 @@ export function LicenseReconciliationTable(props: LicenseReconciliationTableProp
     <div className="space-y-3">
       <div className="overflow-x-auto rounded-lg border">
         <table className="w-full text-sm">
+          <caption className="sr-only">
+            {props.view === "rollup"
+              ? "Copilot licence cost and AI-credit consumption per user, rolled up across organizations and periods."
+              : props.view === "detail"
+                ? "Copilot licence cost and AI-credit consumption per user, per organization and billing period."
+                : "Copilot licence cost and AI-credit consumption per user."}
+          </caption>
           <thead>
             <tr className="border-b bg-[hsl(var(--muted))]/40">
               {columns.map((col, colIdx) => (
