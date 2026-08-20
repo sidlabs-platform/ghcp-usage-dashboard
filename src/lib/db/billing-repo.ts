@@ -719,6 +719,7 @@ export function getPremiumRequestsPaginated(
       `
     SELECT date, product, sku, quantity, unit_type, applied_cost_per_quantity,
            gross_amount, discount_amount, net_amount, username, organization,
+           COALESCE(repository, '') AS repository,
            model, exceeds_quota, total_monthly_quota, charge_scope,
            COALESCE(input_tokens, 0) AS input_tokens,
            COALESCE(output_tokens, 0) AS output_tokens,
