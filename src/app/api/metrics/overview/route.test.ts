@@ -129,6 +129,25 @@ describe("overview route — scoped billing KPI regression", () => {
     const json = await res.json();
     expect(json.kpis.monthlyNetCost).toBe(360);
   });
+
+  it("does not surface unfiltered AI credit totals when a scoped allowlist is empty", async () => {
+    const testDay = yesterday();
+    db.prepare(`
+      INSERT INTO user_daily_metrics (
+        day, enterprise_id, enterprise_slug, user_id, user_login,
+        ai_credits_used, used_agent, used_chat, used_cli, used_copilot_app
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(testDay, "ent1", "ent1", 1, "alice", 99, 0, 0, 0, 0);
+
+    const GET = await getHandler();
+    const res = await GET(new NextRequest(
+      "http://localhost/api/metrics/overview?days=1&teams=no-members&enterprises=ent1",
+    ));
+
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    expect(json.kpis.aiCreditsConsumed).toBeNull();
+  });
 });
 
 describe("overview route — completion allowlist regression", { timeout: 10000 }, () => {

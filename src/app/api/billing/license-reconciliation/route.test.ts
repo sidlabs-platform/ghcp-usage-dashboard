@@ -8,6 +8,7 @@ const repoState = vi.hoisted(() => ({
   computeOrgBreakdown: vi.fn(),
   computeUtilizationBuckets: vi.fn(),
   sortLicenseRows: vi.fn(),
+  getCopilotCostBasis: vi.fn(),
 }));
 
 const historyRepoState = vi.hoisted(() => ({
@@ -68,7 +69,7 @@ vi.mock("@/lib/api/scope-filter", () => ({
 // strip. Without this mock the import reaches a real SQLite connection and runs
 // schema migrations, which blows the 5s test timeout.
 vi.mock("@/lib/db/billing-repo", () => ({
-  getCopilotCostBasis: () => null,
+  getCopilotCostBasis: (...a: unknown[]) => repoState.getCopilotCostBasis(...a),
 }));
 
 vi.mock("@/lib/db/license-repo", () => ({
@@ -152,6 +153,7 @@ beforeEach(() => {
   repoState.computeOrgBreakdown.mockReturnValue([]);
   repoState.computeUtilizationBuckets.mockReturnValue([]);
   repoState.sortLicenseRows.mockReturnValue([]);
+  repoState.getCopilotCostBasis.mockReturnValue(null);
   historyRepoState.hasMaterializedRows.mockReturnValue(false);
   historyRepoState.queryLicensePeriodRows.mockReturnValue({
     view: "detail",
@@ -227,6 +229,29 @@ describe("license reconciliation route", () => {
     expect(res.status).toBe(200);
     await expect(res.json()).resolves.toEqual({ enabled: false });
     expect(configState.getLicensingConfig).not.toHaveBeenCalled();
+  });
+
+  it("passes org scope to the shared Copilot cost basis query", async () => {
+    scopeState.parseScopeFilter.mockReturnValue({
+      selectedTeams: [],
+      selectedOrgs: ["octo-org"],
+      selectedEnterprises: ["acme"],
+      hasFilter: true,
+      allowedLogins: new Set(["alice"]),
+      enterpriseSlugs: ["acme"],
+    });
+
+    const res = await GET(
+      req("http://localhost/api/billing/license-reconciliation?periods=2026-07&orgs=octo-org&enterprises=acme"),
+    );
+
+    expect(res.status).toBe(200);
+    expect(repoState.getCopilotCostBasis).toHaveBeenCalledWith(
+      "2026-07-01",
+      "2026-07-31",
+      { allowedLogins: ["alice"], scopeOrgs: ["octo-org"] },
+      ["acme"],
+    );
   });
 
   describe("backward-compatible live fallback (no materialized history)", () => {

@@ -275,7 +275,11 @@ async function handler(request: NextRequest) {
     // AI credits consumed from usage API (ai_credits_used column on user_daily_metrics)
     let aiCreditsConsumed: number | null = null;
     try {
-      const loginF = buildLoginFilter(allowedLoginsArray ?? []);
+      const loginF = buildLoginFilter(
+        allowedLoginsArray ?? [],
+        "user_login",
+        allowedLoginsArray !== undefined,
+      );
       const entF = buildEnterpriseFilter(enterpriseSlugs);
       const acRow = getDb()
         .prepare(
@@ -294,7 +298,7 @@ async function handler(request: NextRequest) {
     let billingAvailable = false;
     try {
       const billingFilters = hasFilter
-        ? { allowedLogins: allowedLoginsArray ?? [], scopeOrgs: filter.selectedOrgs }
+        ? { allowedLogins: allowedLoginsArray, scopeOrgs: filter.selectedOrgs }
         : undefined;
       const billingKpis = getOverviewKPIs(start, end, billingFilters, enterpriseSlugs);
       // totalNet already combines metered + premium; only mark available when cost is non-zero.

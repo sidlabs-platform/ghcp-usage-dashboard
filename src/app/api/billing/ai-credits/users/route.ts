@@ -5,7 +5,7 @@ import {
   getUserAiCreditsUsersPaginated,
   type UserAiCreditsFilters,
 } from "@/lib/db/metrics-repo";
-import { getAiCreditsReconciliation } from "@/lib/db/billing-repo";
+import { getAiCreditsReconciliation, type PremiumFilters } from "@/lib/db/billing-repo";
 import { parseDateRangeParams } from "@/lib/utils";
 import { withCache } from "@/lib/cache/with-cache";
 import { withTimeout } from "@/lib/api/timeout";
@@ -34,6 +34,13 @@ async function handler(request: NextRequest) {
       allowedLogins: scope.allowedLogins ? Array.from(scope.allowedLogins) : undefined,
       search,
     };
+    const reconciliationFilters: PremiumFilters | undefined =
+      filters.allowedLogins !== undefined || scope.selectedOrgs.length > 0
+        ? {
+            allowedLogins: filters.allowedLogins,
+            scopeOrgs: scope.selectedOrgs.length > 0 ? scope.selectedOrgs : undefined,
+          }
+        : undefined;
 
     const result = getUserAiCreditsUsersPaginated(
       start,
@@ -54,7 +61,7 @@ async function handler(request: NextRequest) {
     // billing data must not break the page, so this degrades to null.
     let reconciliation = null;
     try {
-      reconciliation = getAiCreditsReconciliation(start, end, undefined, scope.enterpriseSlugs);
+      reconciliation = getAiCreditsReconciliation(start, end, reconciliationFilters, scope.enterpriseSlugs);
     } catch (err) {
       console.warn("[ai-credits/users] reconciliation unavailable:", err);
     }

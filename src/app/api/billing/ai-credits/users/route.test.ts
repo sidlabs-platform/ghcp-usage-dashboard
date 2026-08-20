@@ -41,6 +41,7 @@ beforeEach(() => {
   scopeState.parseScopeFilter.mockReturnValue({
     enterpriseSlugs: ["ent-a"],
     allowedLogins: new Set(["octo", "mona"]),
+    selectedOrgs: ["octo-org"],
   });
   repoState.getUserAiCreditsUsersPaginated.mockReturnValue({
     users: [
@@ -133,6 +134,12 @@ describe("AI Credits users route", () => {
       "2026-07-01",
       "2026-07-28",
       { allowedLogins: ["octo", "mona"], search: "oct" },
+      ["ent-a"],
+    );
+    expect(repoState.getAiCreditsReconciliation).toHaveBeenCalledWith(
+      "2026-07-01",
+      "2026-07-28",
+      { allowedLogins: ["octo", "mona"], scopeOrgs: ["octo-org"] },
       ["ent-a"],
     );
   });

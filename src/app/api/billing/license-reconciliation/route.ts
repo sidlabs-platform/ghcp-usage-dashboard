@@ -354,7 +354,10 @@ async function handler(request: NextRequest) {
         costBasis = getCopilotCostBasis(
           monthBounds(first).startDate,
           monthBounds(last).endDate,
-          { allowedLogins: baseFilterQuery.allowedLogins ? [...baseFilterQuery.allowedLogins] : undefined },
+          {
+            allowedLogins: baseFilterQuery.allowedLogins ? [...baseFilterQuery.allowedLogins] : undefined,
+            scopeOrgs: scope.selectedOrgs.length > 0 ? [...scope.selectedOrgs] : undefined,
+          },
           scope.enterpriseSlugs ? [...scope.enterpriseSlugs] : undefined,
         );
       }
