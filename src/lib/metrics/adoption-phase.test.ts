@@ -1,6 +1,8 @@
 import { describe, it, expect } from "vitest";
+import { DatabaseSync } from "node:sqlite";
 import {
   resolvePhaseNumber,
+  phaseNumberSql,
   phaseLabel,
   normalizePhaseTotals,
   parsePhaseTotals,
@@ -18,6 +20,10 @@ describe("resolvePhaseNumber", () => {
   it("rejects non-finite numbers rather than producing a NaN bucket", () => {
     expect(resolvePhaseNumber(NaN)).toBeNull();
     expect(resolvePhaseNumber(Infinity)).toBeNull();
+  });
+
+  it("rejects non-integer numbers rather than coercing them into a phase", () => {
+    expect(resolvePhaseNumber(2.5)).toBeNull();
   });
 
   it("parses the current API's display strings", () => {
@@ -48,6 +54,137 @@ describe("resolvePhaseNumber", () => {
   });
 });
 
+// ── phaseNumberSql ─────────────────────────────────────────────────────
+
+describe("phaseNumberSql", () => {
+  interface PhaseCase {
+    name: string;
+    raw: Record<string, unknown>;
+    expected: number | null;
+  }
+
+  const cases: PhaseCase[] = [
+    { name: "numeric phase", raw: { phase: 2 }, expected: 2 },
+    { name: "numeric string phase", raw: { phase: "2" }, expected: 2 },
+    { name: "padded numeric string phase", raw: { phase: "  2  " }, expected: 2 },
+    { name: "rejects numeric prefix junk", raw: { phase: "2abc" }, expected: null },
+    { name: "rejects arbitrary text", raw: { phase: "abc" }, expected: null },
+    { name: "rejects empty string", raw: { phase: "" }, expected: null },
+    { name: "display string with one space", raw: { phase: "Phase 2" }, expected: 2 },
+    { name: "lowercase display string", raw: { phase: "phase 2" }, expected: 2 },
+    { name: "display string without whitespace", raw: { phase: "Phase2" }, expected: 2 },
+    { name: "display string with repeated whitespace", raw: { phase: "Phase   2" }, expected: 2 },
+    { name: "rejects display string suffix junk", raw: { phase: "phase 2abc" }, expected: null },
+    { name: "rejects whitespace inside phase digits", raw: { phase: "phase 1 2" }, expected: null },
+    { name: "uppercase display string", raw: { phase: "PHASE 3" }, expected: 3 },
+    { name: "title-case no cohort", raw: { phase: "No Cohort" }, expected: 0 },
+    { name: "space-separated no cohort", raw: { phase: "no cohort" }, expected: 0 },
+    { name: "hyphen-separated no cohort", raw: { phase: "no-cohort" }, expected: 0 },
+    { name: "underscore-separated no cohort", raw: { phase: "no_cohort" }, expected: 0 },
+    { name: "compact no cohort", raw: { phase: "nocohort" }, expected: 0 },
+    { name: "rejects separator inside no prefix", raw: { phase: "n o cohort" }, expected: null },
+    { name: "rejects separator inside cohort suffix", raw: { phase: "nocoh-ort" }, expected: null },
+    { name: "rejects repeated cohort suffix", raw: { phase: "nocohortcohort" }, expected: null },
+    { name: "null phase", raw: { phase: null }, expected: null },
+    { name: "missing phase", raw: {}, expected: null },
+    { name: "explicit phase number wins", raw: { phase: "2abc", phase_number: 1 }, expected: 1 },
+    { name: "explicit zero phase number", raw: { phase: "Phase 3", phase_number: 0 }, expected: 0 },
+    { name: "rejects boolean phase", raw: { phase: true }, expected: null },
+    { name: "rejects object phase", raw: { phase: { value: 2 } }, expected: null },
+    { name: "rejects non-integer numeric phase", raw: { phase: 2.5 }, expected: null },
+    { name: "rejects unicode-padded numeric phase", raw: { phase: "\u20032\u2003" }, expected: null },
+    { name: "rejects unicode phase separator", raw: { phase: "Phase\u00A02" }, expected: null },
+    { name: "rejects unicode no-cohort separator", raw: { phase: "no\u2003cohort" }, expected: null },
+    {
+      name: "rejects invalid explicit phase number without falling back",
+      raw: { phase: "Phase 2", phase_number: "nope" },
+      expected: null,
+    },
+  ];
+
+  it("matches resolvePhaseNumber for representative stored JSON values", () => {
+    const db = new DatabaseSync(":memory:");
+    try {
+      db.exec("CREATE TABLE phases (id INTEGER PRIMARY KEY, payload TEXT NOT NULL)");
+      const insert = db.prepare("INSERT INTO phases (id, payload) VALUES (?, ?)");
+      for (const [index, phaseCase] of cases.entries()) {
+        insert.run(index + 1, JSON.stringify(phaseCase.raw));
+      }
+
+      const select = db.prepare(
+        `SELECT ${phaseNumberSql("payload")} AS phase FROM phases WHERE id = ?`,
+      );
+
+      for (const [index, phaseCase] of cases.entries()) {
+        const jsPhase = resolvePhaseNumber(phaseCase.raw.phase_number ?? phaseCase.raw.phase);
+        const row = select.get(index + 1) as { phase: number | null } | undefined;
+
+        expect(jsPhase, `${phaseCase.name} JS`).toBe(phaseCase.expected);
+        expect(row?.phase ?? null, `${phaseCase.name} SQL`).toBe(phaseCase.expected);
+        expect(row?.phase ?? null, `${phaseCase.name} SQL and JS`).toBe(jsPhase);
+      }
+    } finally {
+      db.close();
+    }
+  });
+
+  it("matches resolvePhaseNumber across deterministic focused fuzz inputs", () => {
+    const fragments = ["no", "cohort", "phase", "0", "2", "12", "-", "_", " ", "\t", "", "\u00A0"];
+    const generated = new Set<string>();
+
+    function appendCombinations(prefix: string, depth: number): void {
+      generated.add(prefix);
+      if (depth === 0) return;
+      for (const fragment of fragments) {
+        appendCombinations(`${prefix}${fragment}`, depth - 1);
+      }
+    }
+
+    appendCombinations("", 4);
+
+    const rawCases: Record<string, unknown>[] = [];
+    for (const value of generated) {
+      rawCases.push(
+        { phase: value },
+        { phase_number: value },
+        { phase: "Phase 2", phase_number: value },
+        { phase: value, phase_number: null },
+      );
+    }
+
+    const db = new DatabaseSync(":memory:");
+    try {
+      db.exec("CREATE TABLE phases (id INTEGER PRIMARY KEY, payload TEXT NOT NULL)");
+      const insert = db.prepare("INSERT INTO phases (id, payload) VALUES (?, ?)");
+      for (const [index, raw] of rawCases.entries()) {
+        insert.run(index + 1, JSON.stringify(raw));
+      }
+
+      const select = db.prepare(
+        `SELECT ${phaseNumberSql("payload")} AS phase FROM phases WHERE id = ?`,
+      );
+
+      for (const [index, raw] of rawCases.entries()) {
+        const jsPhase = resolvePhaseNumber(raw.phase_number ?? raw.phase);
+        const row = select.get(index + 1) as { phase: number | null } | undefined;
+        const sqlPhase = row?.phase ?? null;
+
+        expect(sqlPhase, `raw=${JSON.stringify(raw)} js=${jsPhase} sql=${sqlPhase}`).toBe(jsPhase);
+      }
+    } finally {
+      db.close();
+    }
+  });
+
+  it("keeps the SQL fragment small enough for per-row use on user_daily_metrics", () => {
+    const expression = phaseNumberSql("payload");
+
+    expect(expression.length).toBeLessThan(1_500);
+    expect(expression.match(/replace\(/g) ?? []).toHaveLength(8);
+    expect(expression.match(/char\(/g) ?? []).toHaveLength(15);
+  });
+});
+
 // ── phaseLabel ────────────────────────────────────────────────────────
 
 describe("phaseLabel", () => {
@@ -62,6 +199,7 @@ describe("phaseLabel", () => {
     expect(phaseLabel(null)).toBe("Unknown phase");
     expect(phaseLabel(undefined)).toBe("Unknown phase");
     expect(phaseLabel(NaN)).toBe("Unknown phase");
+    expect(phaseLabel(2.5)).toBe("Unknown phase");
   });
 
   it("falls back to the bare number for a phase the API adds later", () => {

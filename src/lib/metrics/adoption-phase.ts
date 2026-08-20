@@ -46,60 +46,116 @@ export const MAX_PHASE = 3;
 /**
  * Resolve a phase identifier from either shape into its number.
  *
- * Accepts a number (`2`), a numeric string (`"2"`), the current API's display
- * string (`"Phase 2"`), and the zero-cohort spelling in either casing
- * (`"No Cohort"` / `"No cohort"`). Returns `null` for anything else so callers
- * can drop the row rather than fold it into a bogus bucket.
+ * Accepts an integer (`2`), a numeric string (`"2"`), the current API's
+ * display string (`"Phase 2"`), and the zero-cohort spelling in either casing
+ * (`"No Cohort"` / `"No cohort"`). The grammar is deliberately ASCII-only
+ * because the upstream API emits ASCII phase values; exotic Unicode whitespace
+ * is rejected rather than normalized. Returns `null` for anything else so
+ * callers can drop the row rather than fold it into a bogus bucket.
  */
 export function resolvePhaseNumber(value: unknown): number | null {
   if (typeof value === "number") {
-    return Number.isFinite(value) ? value : null;
+    return Number.isInteger(value) ? value : null;
   }
   if (typeof value !== "string") return null;
 
-  const trimmed = value.trim();
+  const trimmed = trimAsciiPhaseWhitespace(value);
   if (trimmed === "") return null;
 
   // "2"
   if (/^\d+$/.test(trimmed)) return Number(trimmed);
 
   // "Phase 2"
-  const match = /^phase\s*(\d+)$/i.exec(trimmed);
+  const match = /^phase[\t\n\v\f\r ]*(\d+)$/i.exec(trimmed);
   if (match) return Number(match[1]);
 
   // "No Cohort" / "No cohort" / "no-cohort"
-  if (/^no[\s_-]*cohort$/i.test(trimmed)) return 0;
+  if (/^no[\t\n\v\f\r _-]*cohort$/i.test(trimmed)) return 0;
 
   return null;
 }
 
+const ASCII_PHASE_EDGE_WHITESPACE_RE = /^[\t\n\v\f\r ]+|[\t\n\v\f\r ]+$/g;
+
+function trimAsciiPhaseWhitespace(value: string): string {
+  return value.replace(ASCII_PHASE_EDGE_WHITESPACE_RE, "");
+}
+
+const ASCII_WHITESPACE_SQL_CHARS = [
+  "char(9)",
+  "char(10)",
+  "char(11)",
+  "char(12)",
+  "char(13)",
+  "' '",
+];
+const ASCII_WHITESPACE_SQL = ASCII_WHITESPACE_SQL_CHARS.join("||");
+
+function trimAsciiWhitespaceSql(value: string): string {
+  return `trim(${value},${ASCII_WHITESPACE_SQL})`;
+}
+
+function ltrimAsciiWhitespaceSql(value: string): string {
+  return `ltrim(${value},${ASCII_WHITESPACE_SQL})`;
+}
+
+function removeAsciiWhitespaceSql(value: string): string {
+  return ASCII_WHITESPACE_SQL_CHARS.reduce(
+    (expression, char) => `replace(${expression}, ${char}, '')`,
+    value,
+  );
+}
+
+function removeNoCohortMiddleSeparatorsSql(value: string): string {
+  return `replace(replace(${removeAsciiWhitespaceSql(value)}, '-', ''), '_', '')`;
+}
+
 /** Display name for a phase, falling back to the bare number if unrecognized. */
 export function phaseLabel(phase: number | null | undefined): string {
-  if (phase == null || !Number.isFinite(phase)) return "Unknown phase";
+  if (phase == null || !Number.isInteger(phase)) return "Unknown phase";
   return PHASE_LABELS[phase] ?? `Phase ${phase}`;
 }
 
 /**
  * SQL expression resolving `<column>`'s adoption phase to an INTEGER, applying
- * the same precedence as {@link resolvePhaseNumber}: the explicit
- * `phase_number` first, then `phase` as a number, then `"Phase N"`, then
- * `"No Cohort"`. Evaluates to NULL when none match, so callers can filter the
- * row out with a plain `IS NOT NULL`.
+ * the same grammar as {@link resolvePhaseNumber}. The explicit `phase_number`
+ * is used first when present and non-null; otherwise `phase` is resolved as an
+ * integer, a numeric string, `"Phase N"` with optional ASCII whitespace before
+ * `N`, or `"No Cohort"` with optional ASCII whitespace, hyphens, or underscores.
+ * The upstream API emits ASCII phase values, so SQL intentionally mirrors the
+ * narrower JS grammar rather than paying per row to normalize every ECMAScript
+ * whitespace code point. Evaluates to NULL when none match, so callers can
+ * filter the row out with a plain `IS NOT NULL`.
  *
  * Kept as a shared fragment rather than inlined, so the JS and SQL paths cannot
  * drift apart.
  */
 export function phaseNumberSql(column: string): string {
-  const phase = `json_extract(${column}, '$.phase')`;
-  return `CAST(COALESCE(
-    json_extract(${column}, '$.phase_number'),
-    CASE
-      WHEN typeof(${phase}) IN ('integer', 'real') THEN ${phase}
-      WHEN ${phase} GLOB '[0-9]*' THEN ${phase}
-      WHEN lower(${phase}) GLOB 'phase [0-9]*' THEN substr(${phase}, 7)
-      WHEN lower(replace(${phase}, ' ', '')) = 'nocohort' THEN 0
-    END
-  ) AS INTEGER)`;
+  const phaseNumberPresent = "a IS NOT NULL AND a<>'null'";
+  const phaseSuffix = ltrimAsciiWhitespaceSql("substr(lower(z),6)");
+  const noCohortMiddle = removeNoCohortMiddleSeparatorsSql(
+    "substr(lower(z),3,length(lower(z))-8)",
+  );
+
+  return `(WITH r(a,b,c,d) AS (
+    SELECT json_type(${column},'$.phase_number'),json_extract(${column},'$.phase_number'),
+           json_type(${column},'$.phase'),json_extract(${column},'$.phase')
+  ), x(t,v) AS (
+    SELECT CASE WHEN ${phaseNumberPresent} THEN a ELSE c END,
+           CASE WHEN ${phaseNumberPresent} THEN b ELSE d END FROM r
+  ), s(t,v,z) AS (
+    SELECT t,v,${trimAsciiWhitespaceSql("v")} FROM x
+  ), n(t,v,z,l,p,q) AS (
+    SELECT t,v,z,lower(z),${phaseSuffix},${noCohortMiddle} FROM s
+  )
+  SELECT CASE
+    WHEN t IN ('integer','real') AND CAST(v AS INTEGER)=v THEN CAST(v AS INTEGER)
+    WHEN t='text' AND z<>'' AND z NOT GLOB '*[^0-9]*' THEN CAST(z AS INTEGER)
+    WHEN t='text' AND substr(l,1,5)='phase' AND p<>'' AND p NOT GLOB '*[^0-9]*'
+      THEN CAST(p AS INTEGER)
+    WHEN t='text' AND length(l)>=8 AND substr(l,1,2)='no'
+      AND substr(l,length(l)-5)='cohort' AND q='' THEN 0
+  END FROM n)`;
 }
 
 /** A `totals_by_ai_adoption_phase` entry in either shape, before normalization. */
