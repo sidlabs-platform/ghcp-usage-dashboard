@@ -236,9 +236,10 @@ export function getChatModeSums(
   endDay: string,
   allowedLogins?: string[],
   enterpriseSlugs?: string[],
+  emptyMeansNoRows = false,
 ): ChatModeSums {
   const db = getDb();
-  const filter = buildLoginFilter(allowedLogins ?? []);
+  const filter = buildLoginFilter(allowedLogins ?? [], "user_login", emptyMeansNoRows);
   const ef = buildEnterpriseFilter(enterpriseSlugs);
   const sql = `
     SELECT
@@ -260,9 +261,10 @@ export function getAdoptionStats(
   endDay: string,
   allowedLogins?: string[],
   enterpriseSlugs?: string[],
+  emptyMeansNoRows = false,
 ): AdoptionStats {
   const db = getDb();
-  const filter = buildLoginFilter(allowedLogins ?? []);
+  const filter = buildLoginFilter(allowedLogins ?? [], "user_login", emptyMeansNoRows);
   const ef = buildEnterpriseFilter(enterpriseSlugs);
   const sql = `
     SELECT
@@ -680,9 +682,10 @@ export function estimateRowCount(
   endDay: string,
   allowedLogins?: string[],
   enterpriseSlugs?: string[],
+  emptyMeansNoRows = false,
 ): { count: number; exceeds: boolean } {
   const db = getDb();
-  const filter = buildLoginFilter(allowedLogins ?? []);
+  const filter = buildLoginFilter(allowedLogins ?? [], "user_login", emptyMeansNoRows);
   const ef = buildEnterpriseFilter(enterpriseSlugs);
   const sql = `
     SELECT COUNT(*) as cnt FROM user_daily_metrics
@@ -918,9 +921,10 @@ export function getCompletionDailyTrend(
   endDay: string,
   allowedLogins?: string[],
   enterpriseSlugs?: string[],
+  emptyMeansNoRows = false,
 ): CompletionDailyRow[] {
   const db = getDb();
-  const filter = buildLoginFilter(allowedLogins ?? []);
+  const filter = buildLoginFilter(allowedLogins ?? [], "user_login", emptyMeansNoRows);
   const ef = buildEnterpriseFilter(enterpriseSlugs);
   const sql = `
     SELECT
@@ -966,9 +970,10 @@ export function getCompletionTotals(
   endDay: string,
   allowedLogins?: string[],
   enterpriseSlugs?: string[],
+  emptyMeansNoRows = false,
 ): CompletionDailyRow {
   const db = getDb();
-  const filter = buildLoginFilter(allowedLogins ?? []);
+  const filter = buildLoginFilter(allowedLogins ?? [], "user_login", emptyMeansNoRows);
   const ef = buildEnterpriseFilter(enterpriseSlugs);
   const sql = `
     SELECT
@@ -1394,9 +1399,10 @@ export function getActiveUsersDailyTrend(
   endDay: string,
   allowedLogins?: string[],
   enterpriseSlugs?: string[],
+  emptyMeansNoRows = false,
 ): ActiveUsersDailyRow[] {
   const db = getDb();
-  const filter = buildLoginFilter(allowedLogins ?? []);
+  const filter = buildLoginFilter(allowedLogins ?? [], "user_login", emptyMeansNoRows);
   const ef = buildEnterpriseFilter(enterpriseSlugs);
   const sql = `
     SELECT
@@ -1445,9 +1451,10 @@ export function getActiveUsersRollingTrend(
   endDay: string,
   allowedLogins?: string[],
   enterpriseSlugs?: string[],
+  emptyMeansNoRows = false,
 ): ActiveUsersRollingRow[] {
   const db = getDb();
-  const filter = buildLoginFilter(allowedLogins ?? []);
+  const filter = buildLoginFilter(allowedLogins ?? [], "user_login", emptyMeansNoRows);
   const ef = buildEnterpriseFilter(enterpriseSlugs);
   
   const sql = `
@@ -1504,9 +1511,10 @@ export function getFeatureUsageDaily(
   endDay: string,
   allowedLogins?: string[],
   enterpriseSlugs?: string[],
+  emptyMeansNoRows = false,
 ): FeatureUsageDailyRow[] {
   const db = getDb();
-  const filter = buildLoginFilter(allowedLogins ?? []);
+  const filter = buildLoginFilter(allowedLogins ?? [], "user_login", emptyMeansNoRows);
   const ef = buildEnterpriseFilter(enterpriseSlugs);
   const sql = `
     SELECT

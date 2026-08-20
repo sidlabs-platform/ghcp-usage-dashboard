@@ -3,17 +3,19 @@ import { getCodeScanningDaily, getDependabotDaily, getSecretScanningDaily, getSe
 import { computeSecuritySummary, formatMTTR } from "@/lib/aggregation/ghas-aggregation";
 import { isMetricEnabled, isEnterpriseEnabled, getResolvedOrgs } from "@/lib/config/dashboard-config";
 import { resolveDefaultScope } from "@/lib/config/enterprise-config";
-import { getDateRange, parseAndClampDays } from "@/lib/utils";
+import { parseDateRangeParams } from "@/lib/utils";
 
 export async function GET(request: NextRequest) {
   try {
     const params = request.nextUrl.searchParams;
-    const daysResult = parseAndClampDays(params.get("days"), 28);
-    if ("error" in daysResult) {
-      return NextResponse.json({ error: daysResult.error }, { status: 400 });
+    const rangeResult = parseDateRangeParams(params, 28);
+    if ("error" in rangeResult) {
+      return NextResponse.json({ error: rangeResult.error }, { status: 400 });
     }
-    const days = daysResult.days;
-    const { start, end } = getDateRange(days);
+    const { start, end } = rangeResult;
+    const days = Math.round(
+      (Date.parse(`${end}T00:00:00Z`) - Date.parse(`${start}T00:00:00Z`)) / 86_400_000,
+    ) + 1;
 
     // Resolve scope: use query params, then enterprise config, then first org
     let scope = params.get("scope") || "";

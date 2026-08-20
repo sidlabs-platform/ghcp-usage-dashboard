@@ -81,14 +81,69 @@ async function getHandler() {
   return route.GET;
 }
 
-// The overview route always computes its date range relative to "yesterday"
-// (see getDateRange in lib/utils.ts) rather than accepting explicit
-// startDate/endDate params, so test fixtures must target that same day.
 function yesterday(): string {
   const d = new Date();
   d.setDate(d.getDate() - 1);
   return d.toISOString().split("T")[0];
 }
+
+describe("overview route — explicit date range regression", () => {
+  it("loads only data inside the selected calendar range", async () => {
+    const { upsertEnterpriseDayMetrics } = await import("@/lib/db/metrics-repo");
+    const totals_by_feature = [
+      {
+        feature: "code_completion",
+        code_generation_activity_count: 10,
+        code_acceptance_activity_count: 5,
+        loc_added_sum: 5,
+        loc_deleted_sum: 0,
+        loc_suggested_to_add_sum: 10,
+        loc_suggested_to_delete_sum: 0,
+        user_initiated_interaction_count: 0,
+      },
+    ];
+
+    for (const [day, users] of [["2026-06-30", 99], ["2026-07-01", 3], ["2026-07-31", 7]] as const) {
+      upsertEnterpriseDayMetrics("ent1", {
+        day,
+        enterprise_id: "ent1",
+        daily_active_users: users,
+        weekly_active_users: users,
+        monthly_active_users: users,
+        monthly_active_agent_users: 0,
+        monthly_active_chat_users: 0,
+        daily_active_cli_users: 0,
+        daily_active_copilot_app_users: null,
+        code_generation_activity_count: 10,
+        code_acceptance_activity_count: 5,
+        user_initiated_interaction_count: 0,
+        loc_suggested_to_add_sum: 10,
+        loc_suggested_to_delete_sum: 0,
+        loc_added_sum: 5,
+        loc_deleted_sum: 0,
+        totals_by_ide: [],
+        totals_by_feature,
+        totals_by_language_feature: [],
+        totals_by_model_feature: [],
+        totals_by_language_model: [],
+      });
+    }
+
+    const GET = await getHandler();
+    const res = await GET(new NextRequest(
+      "http://localhost/api/metrics/overview?startDate=2026-07-01&endDate=2026-07-31",
+    ));
+
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    expect(json.activeUsersTrend.map((row: { day: string }) => row.day)).toEqual([
+      "2026-07-01",
+      "2026-07-31",
+    ]);
+    expect(json.kpis.dailyActiveUsers).toBe(7);
+    expect(json.daysLoaded).toBe(2);
+  });
+});
 
 describe("overview route — scoped billing KPI regression", () => {
   it("passes active team and org scope filters to getOverviewKPIs", async () => {
@@ -123,7 +178,7 @@ describe("overview route — scoped billing KPI regression", () => {
     expect(mockGetOverviewKPIs).toHaveBeenCalledWith(
       testDay,
       testDay,
-      { allowedLogins: ["alice"], scopeOrgs: ["octo-org"] },
+      { allowedLogins: ["alice"], scopeOrgs: undefined },
       ["ent1"],
     );
     const json = await res.json();
@@ -146,6 +201,33 @@ describe("overview route — scoped billing KPI regression", () => {
 
     expect(res.status).toBe(200);
     const json = await res.json();
+    expect(json.kpis.aiCreditsConsumed).toBeNull();
+  });
+
+  it("returns empty metrics when organization and team selections do not overlap", async () => {
+    const testDay = yesterday();
+    db.prepare(`
+      INSERT INTO team_memberships (enterprise_slug, team_slug, team_name, source, org_slug, user_login, updated_at)
+      VALUES
+        ('ent1', 'platform', 'Platform', 'org', 'octo-org', 'alice', ?),
+        ('ent1', 'security', 'Security', 'org', 'other-org', 'bob', ?)
+    `).run(`${testDay}T00:00:00Z`, `${testDay}T00:00:00Z`);
+    db.prepare(`
+      INSERT INTO user_daily_metrics (
+        day, enterprise_id, enterprise_slug, user_id, user_login,
+        ai_credits_used, used_agent, used_chat, used_cli, used_copilot_app
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(testDay, "ent1", "ent1", 1, "alice", 99, 1, 1, 0, 0);
+
+    const GET = await getHandler();
+    const res = await GET(new NextRequest(
+      "http://localhost/api/metrics/overview?days=1&teams=security&orgs=octo-org&enterprises=ent1",
+    ));
+
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    expect(json.activeUsersTrend).toEqual([]);
+    expect(json.kpis.periodActiveUsers).toBe(0);
     expect(json.kpis.aiCreditsConsumed).toBeNull();
   });
 });

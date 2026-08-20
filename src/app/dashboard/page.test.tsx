@@ -13,12 +13,19 @@ const mockScope = vi.hoisted(() => ({
   buildScopeParams: () => new URLSearchParams(),
 }));
 
+const mockDateRange = vi.hoisted(() => ({
+  mode: "month" as "preset" | "custom" | "month",
+  days: 31,
+  startDate: "2026-07-01",
+  endDate: "2026-07-31",
+}));
+
 vi.mock("next/dynamic", () => ({
   default: () => () => <div data-testid="dynamic-chart" />,
 }));
 
 vi.mock("@/contexts/DateRangeContext", () => ({
-  useDateRange: () => ({ days: 28 }),
+  useDateRange: () => mockDateRange,
 }));
 
 vi.mock("@/contexts/ScopeContext", () => ({
@@ -47,8 +54,48 @@ describe("DashboardOverview", { timeout: 20000 }, () => {
     cleanup();
     mockScope.hasFilter = false;
     mockScope.clearAll.mockReset();
+    mockDateRange.mode = "month";
+    mockDateRange.days = 31;
+    mockDateRange.startDate = "2026-07-01";
+    mockDateRange.endDate = "2026-07-31";
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
+  });
+
+  it("refetches an explicit calendar range when changing between equal-length months", async () => {
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      if (String(input) === "/api/config") {
+        return Promise.resolve({
+          json: async () => ({ metrics: {} }),
+        } as Response);
+      }
+      if (String(input).startsWith("/api/metrics/overview?")) {
+        return Promise.resolve({
+          json: async () => ({ error: "No fixture data required." }),
+        } as Response);
+      }
+      throw new Error(`Unexpected fetch: ${String(input)}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const Page = (await import("./page")).default;
+    const { rerender } = render(<Page />);
+
+    await vi.waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/metrics/overview?startDate=2026-07-01&endDate=2026-07-31",
+      );
+    });
+
+    mockDateRange.startDate = "2026-08-01";
+    mockDateRange.endDate = "2026-08-31";
+    rerender(<Page />);
+
+    await vi.waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/metrics/overview?startDate=2026-08-01&endDate=2026-08-31",
+      );
+    });
   });
 
   it("renders the error state with the server error message", async () => {

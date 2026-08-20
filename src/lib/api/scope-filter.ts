@@ -43,11 +43,11 @@ export function parseScopeFilter(searchParams: URLSearchParams): ParsedScopeFilt
   // Resolve enterprise slugs for SQL filtering (undefined = all)
   const enterpriseSlugs = selectedEnterprises.length > 0 ? selectedEnterprises : undefined;
 
-  let allowedLogins: Set<string> | undefined;
+  let teamLogins: Set<string> | undefined;
 
   if (compositeTeams.length > 0) {
     // Multi-enterprise: resolve members per-enterprise to avoid cross-enterprise slug collisions
-    allowedLogins = new Set<string>();
+    teamLogins = new Set<string>();
 
     const byEnterprise = new Map<string, string[]>();
     for (const ct of compositeTeams) {
@@ -58,27 +58,30 @@ export function parseScopeFilter(searchParams: URLSearchParams): ParsedScopeFilt
 
     for (const [entSlug, teamSlugs] of byEnterprise) {
       for (const login of resolveFilteredUsers(teamSlugs, [], [entSlug])) {
-        allowedLogins.add(login);
+        teamLogins.add(login);
       }
     }
 
     // Handle any remaining plain team slugs
     if (plainTeams.length > 0) {
       for (const login of resolveFilteredUsers(plainTeams, [], enterpriseSlugs)) {
-        allowedLogins.add(login);
+        teamLogins.add(login);
       }
     }
-
-    // Handle org filtering alongside composite teams
-    if (selectedOrgs.length > 0) {
-      for (const login of resolveFilteredUsers([], selectedOrgs, enterpriseSlugs)) {
-        allowedLogins.add(login);
-      }
-    }
-  } else if (selectedTeams.length > 0 || selectedOrgs.length > 0) {
+  } else if (selectedTeams.length > 0) {
     // Single-enterprise backward-compatible path
-    allowedLogins = new Set(resolveFilteredUsers(selectedTeams, selectedOrgs, enterpriseSlugs));
+    teamLogins = new Set(resolveFilteredUsers(selectedTeams, [], enterpriseSlugs));
   }
+
+  const orgLogins = selectedOrgs.length > 0
+    ? new Set(resolveFilteredUsers([], selectedOrgs, enterpriseSlugs))
+    : undefined;
+
+  // Multiple values within one dimension are additive, while selecting both
+  // an organization and a team narrows the result to members matching both.
+  const allowedLogins = teamLogins && orgLogins
+    ? new Set(Array.from(teamLogins).filter((login) => orgLogins.has(login)))
+    : teamLogins ?? orgLogins;
 
   return { selectedTeams, selectedOrgs, selectedEnterprises, hasFilter, allowedLogins, enterpriseSlugs };
 }

@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { afterEach, describe, it, expect, vi } from "vitest";
 import { cn, formatNumber, formatPercent, formatDelta, formatMinutes, safeNum, getDateRange, datesBetween, parseAndClampDays, MAX_DAYS, parseDateRangeParams } from "./utils";
 
 // ── cn ──────────────────────────────────────────────────────────────────
@@ -274,6 +274,10 @@ describe("datesBetween", () => {
 // ── parseDateRangeParams ──────────────────────────────────────────────
 
 describe("parseDateRangeParams", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("falls back to days param when no startDate/endDate", () => {
     const params = new URLSearchParams({ days: "14" });
     const result = parseDateRangeParams(params);
@@ -349,6 +353,20 @@ describe("parseDateRangeParams", () => {
     const result = parseDateRangeParams(params);
     expect("error" in result).toBe(true);
     if ("error" in result) expect(result.error).toContain("future");
+  });
+
+  it("accepts the previous UTC date in positive-offset timezones", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-20T12:00:00Z"));
+    const params = new URLSearchParams({
+      startDate: "2026-08-19",
+      endDate: "2026-08-19",
+    });
+
+    expect(parseDateRangeParams(params)).toEqual({
+      start: "2026-08-19",
+      end: "2026-08-19",
+    });
   });
 
   it("returns error for regex-valid but semantically invalid date (month 00)", () => {

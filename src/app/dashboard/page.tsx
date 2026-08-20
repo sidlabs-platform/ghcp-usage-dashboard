@@ -54,7 +54,7 @@ function formatCost(v: number | null): string {
 }
 
 export default function DashboardOverview() {
-  const { days } = useDateRange();
+  const { mode, days, startDate, endDate } = useDateRange();
   const { hasFilter, buildScopeParams, clearAll } = useScope();
   const [data, setData] = useState<OverviewData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -89,7 +89,13 @@ export default function DashboardOverview() {
 
   const fetchData = useCallback(() => {
     setLoading(true);
-    const params = new URLSearchParams({ days: String(days) });
+    const params = new URLSearchParams();
+    if (mode === "preset") {
+      params.set("days", String(days));
+    } else {
+      params.set("startDate", startDate);
+      params.set("endDate", endDate);
+    }
     const scopeParams = buildScopeParams();
     scopeParams.forEach((value, key) => params.set(key, value));
 
@@ -103,14 +109,14 @@ export default function DashboardOverview() {
       .finally(() => setLoading(false));
 
     if (securityEnabled) {
-      fetch(`/api/security/overview?days=${days}`)
+      fetch(`/api/security/overview?${params}`)
         .then((res) => { if (res.ok) return res.json(); })
         .then((json) => { if (json) setSecurityData(json); })
         .catch(() => {});
     } else {
       setSecurityData(null);
     }
-  }, [days, buildScopeParams, securityEnabled]);
+  }, [mode, days, startDate, endDate, buildScopeParams, securityEnabled]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
 

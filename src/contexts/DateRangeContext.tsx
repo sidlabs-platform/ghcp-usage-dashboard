@@ -154,7 +154,9 @@ export function DateRangeProvider({ children }: { children: ReactNode }) {
 
   const resolved = useMemo(() => {
     if (mode === "month" && isValidPeriod(month)) {
-      const { startDate, endDate } = monthBounds(month);
+      const latestAvailable = new Date();
+      latestAvailable.setUTCDate(latestAvailable.getUTCDate() - 1);
+      const { startDate, endDate } = monthBounds(month, latestAvailable);
       return { startDate, endDate, days: spanDays(startDate, endDate), period: month };
     }
     if (mode === "custom" && customStart && customEnd) {

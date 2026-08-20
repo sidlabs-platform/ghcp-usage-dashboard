@@ -71,10 +71,22 @@ describe("parseScopeFilter", () => {
     expect(mockResolve).toHaveBeenCalledWith(["team-a", "team-b"], [], ["ent1"]);
   });
 
-  it("handles composite teams with org filter", () => {
-    mockResolve.mockReturnValueOnce(["user1"]).mockReturnValueOnce(["user2"]);
+  it("intersects composite team members with organization members", () => {
+    mockResolve
+      .mockReturnValueOnce(["user1", "shared"])
+      .mockReturnValueOnce(["shared", "user2"]);
     const result = parseScopeFilter(new URLSearchParams("teams=ent1:team-a&orgs=org1"));
-    expect(result.allowedLogins).toEqual(new Set(["user1", "user2"]));
+    expect(result.allowedLogins).toEqual(new Set(["shared"]));
+  });
+
+  it("intersects plain team members with organization members", () => {
+    mockResolve
+      .mockReturnValueOnce(["team-only", "shared"])
+      .mockReturnValueOnce(["shared", "org-only"]);
+    const result = parseScopeFilter(new URLSearchParams("teams=team-a&orgs=octodemo"));
+    expect(result.allowedLogins).toEqual(new Set(["shared"]));
+    expect(mockResolve).toHaveBeenNthCalledWith(1, ["team-a"], [], undefined);
+    expect(mockResolve).toHaveBeenNthCalledWith(2, [], ["octodemo"], undefined);
   });
 });
 
