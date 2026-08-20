@@ -178,7 +178,11 @@ describe("overview route — scoped billing KPI regression", () => {
     expect(mockGetOverviewKPIs).toHaveBeenCalledWith(
       testDay,
       testDay,
-      { allowedLogins: ["alice"], scopeOrgs: undefined },
+      {
+        allowedLogins: ["alice"],
+        allowedUserScopes: [{ enterpriseSlug: "ent1", userLogin: "alice" }],
+        scopeOrgs: undefined,
+      },
       ["ent1"],
     );
     const json = await res.json();
@@ -228,6 +232,37 @@ describe("overview route — scoped billing KPI regression", () => {
     const json = await res.json();
     expect(json.activeUsersTrend).toEqual([]);
     expect(json.kpis.periodActiveUsers).toBe(0);
+    expect(json.kpis.aiCreditsConsumed).toBeNull();
+  });
+
+  it("does not reuse an allowed login in a different enterprise", async () => {
+    const testDay = yesterday();
+    db.prepare(`
+      INSERT INTO team_memberships (enterprise_slug, team_slug, team_name, source, org_slug, user_login, updated_at)
+      VALUES
+        ('ent1', 'platform', 'Platform', 'org', 'octodemo', 'alice', ?),
+        ('ent2', 'security', 'Security', 'org', 'octodemo', 'bob', ?)
+    `).run(`${testDay}T00:00:00Z`, `${testDay}T00:00:00Z`);
+    const insertMetric = db.prepare(`
+      INSERT INTO user_daily_metrics (
+        day, enterprise_id, enterprise_slug, user_id, user_login,
+        ai_credits_used, used_agent, used_chat, used_cli, used_copilot_app
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    insertMetric.run(testDay, "ent1", "ent1", 1, "alice", 0, 0, 0, 0, 0);
+    insertMetric.run(testDay, "ent2", "ent2", 2, "bob", 0, 0, 0, 0, 0);
+    insertMetric.run(testDay, "ent2", "ent2", 3, "alice", 99, 0, 0, 0, 0);
+
+    const GET = await getHandler();
+    const res = await GET(new NextRequest(
+      "http://localhost/api/metrics/overview?days=1&teams=ent1:platform,ent2:security&orgs=octodemo",
+    ));
+
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    expect(json.activeUsersTrend).toEqual([
+      { day: testDay, daily: 2, weekly: 2, monthly: 2 },
+    ]);
     expect(json.kpis.aiCreditsConsumed).toBeNull();
   });
 });

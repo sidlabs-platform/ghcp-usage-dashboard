@@ -4,6 +4,7 @@ import { computeSecuritySummary, formatMTTR } from "@/lib/aggregation/ghas-aggre
 import { isMetricEnabled, isEnterpriseEnabled, getResolvedOrgs } from "@/lib/config/dashboard-config";
 import { resolveDefaultScope } from "@/lib/config/enterprise-config";
 import { parseDateRangeParams } from "@/lib/utils";
+import { parseScopeFilter } from "@/lib/api/scope-filter";
 
 export async function GET(request: NextRequest) {
   try {
@@ -16,10 +17,34 @@ export async function GET(request: NextRequest) {
     const days = Math.round(
       (Date.parse(`${end}T00:00:00Z`) - Date.parse(`${start}T00:00:00Z`)) / 86_400_000,
     ) + 1;
+    const dashboardScope = parseScopeFilter(params);
+    if (dashboardScope.selectedTeams.length > 0) {
+      return NextResponse.json(
+        { error: "Security metrics do not support team filters. Clear the team selection to view security data." },
+        { status: 400 },
+      );
+    }
+    if (dashboardScope.selectedOrgs.length > 1 || dashboardScope.selectedEnterprises.length > 1) {
+      return NextResponse.json(
+        { error: "Security metrics support only one organization or enterprise at a time." },
+        { status: 400 },
+      );
+    }
+    if (dashboardScope.selectedOrgs.length > 0 && dashboardScope.selectedEnterprises.length > 0) {
+      return NextResponse.json(
+        { error: "Security metrics support either one organization or one enterprise, not both." },
+        { status: 400 },
+      );
+    }
 
     // Resolve scope: use query params, then enterprise config, then first org
-    let scope = params.get("scope") || "";
-    let scopeId = params.get("scopeId") || "";
+    let scope = dashboardScope.selectedOrgs.length === 1
+      ? "org"
+      : (dashboardScope.selectedEnterprises.length === 1 ? "enterprise" : (params.get("scope") || ""));
+    let scopeId = dashboardScope.selectedOrgs[0]
+      ?? dashboardScope.selectedEnterprises[0]
+      ?? params.get("scopeId")
+      ?? "";
     if (!scope || !scopeId) {
       if (isEnterpriseEnabled()) {
         const defaults = resolveDefaultScope();

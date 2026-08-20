@@ -13,6 +13,7 @@ import {
   estimateRowCount,
   buildLoginFilter,
   buildEnterpriseFilter,
+  buildUserScopeFilter,
 } from "@/lib/db/aggregation-queries";
 import { getDb } from "@/lib/db/database";
 import { parseDateRangeParams } from "@/lib/utils";
@@ -41,6 +42,7 @@ async function handler(request: NextRequest) {
     const hasFilter = filter.selectedTeams.length > 0 || filter.selectedOrgs.length > 0;
     const allowedLoginsSet = filter.allowedLogins;
     const allowedLoginsArray = allowedLoginsSet ? Array.from(allowedLoginsSet) : undefined;
+    const allowedUserScopes = filter.allowedUserScopes;
     const emptyScopeMeansNoRows = allowedLoginsArray !== undefined;
 
     // Row-count guard
@@ -50,6 +52,7 @@ async function handler(request: NextRequest) {
       allowedLoginsArray,
       enterpriseSlugs,
       emptyScopeMeansNoRows,
+      allowedUserScopes,
     );
     if (estimate.exceeds) {
       return NextResponse.json(
@@ -81,6 +84,7 @@ async function handler(request: NextRequest) {
       allowedLoginsArray,
       enterpriseSlugs,
       emptyScopeMeansNoRows,
+      allowedUserScopes,
     );
     const featureByDay = new Map(featureRows.map((r) => [r.day, r]));
 
@@ -99,6 +103,7 @@ async function handler(request: NextRequest) {
         allowedLoginsArray,
         enterpriseSlugs,
         emptyScopeMeansNoRows,
+        allowedUserScopes,
       );
 
       if (hasFilter) {
@@ -109,6 +114,7 @@ async function handler(request: NextRequest) {
           allowedLoginsArray,
           enterpriseSlugs,
           emptyScopeMeansNoRows,
+          allowedUserScopes,
         );
         activeUsersTrend = rollingTrendRows.map((r) => ({
           day: r.day,
@@ -141,6 +147,7 @@ async function handler(request: NextRequest) {
         allowedLoginsArray,
         enterpriseSlugs,
         emptyScopeMeansNoRows,
+        allowedUserScopes,
       );
       const compTrendByDay = new Map(compTrendRows.map((r) => [r.day, r]));
 
@@ -298,6 +305,7 @@ async function handler(request: NextRequest) {
       allowedLoginsArray,
       enterpriseSlugs,
       emptyScopeMeansNoRows,
+      allowedUserScopes,
     );
 
     // Adoption stats via SQL aggregation
@@ -307,6 +315,7 @@ async function handler(request: NextRequest) {
       allowedLoginsArray,
       enterpriseSlugs,
       emptyScopeMeansNoRows,
+      allowedUserScopes,
     );
 
     // Period-wide completion acceptance rate — single aggregated query, consistent
@@ -317,6 +326,7 @@ async function handler(request: NextRequest) {
       allowedLoginsArray,
       enterpriseSlugs,
       emptyScopeMeansNoRows,
+      allowedUserScopes,
     );
     const completionAcceptanceRate =
       completionTotals.compGenCount > 0
@@ -326,11 +336,13 @@ async function handler(request: NextRequest) {
     // AI credits consumed from usage API (ai_credits_used column on user_daily_metrics)
     let aiCreditsConsumed: number | null = null;
     try {
-      const loginF = buildLoginFilter(
-        allowedLoginsArray ?? [],
-        "user_login",
-        allowedLoginsArray !== undefined,
-      );
+      const loginF = allowedUserScopes !== undefined
+        ? buildUserScopeFilter(allowedUserScopes)
+        : buildLoginFilter(
+            allowedLoginsArray ?? [],
+            "user_login",
+            allowedLoginsArray !== undefined,
+          );
       const entF = buildEnterpriseFilter(enterpriseSlugs);
       const acRow = getDb()
         .prepare(
@@ -351,8 +363,9 @@ async function handler(request: NextRequest) {
       const billingFilters = hasFilter
         ? {
             allowedLogins: allowedLoginsArray,
-            scopeOrgs: filter.selectedTeams.length === 0 ? filter.selectedOrgs : undefined,
-          }
+          allowedUserScopes,
+          scopeOrgs: filter.selectedTeams.length === 0 ? filter.selectedOrgs : undefined,
+        }
         : undefined;
       const billingKpis = getOverviewKPIs(start, end, billingFilters, enterpriseSlugs);
       // totalNet already combines metered + premium; only mark available when cost is non-zero.

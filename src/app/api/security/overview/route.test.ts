@@ -3,6 +3,15 @@ import { NextRequest } from "next/server";
 
 const getCodeScanningDaily = vi.hoisted(() => vi.fn(() => []));
 
+vi.mock("@/lib/api/scope-filter", () => ({
+  parseScopeFilter: (params: URLSearchParams) => ({
+    selectedTeams: params.get("teams")?.split(",").filter(Boolean) ?? [],
+    selectedOrgs: params.get("orgs")?.split(",").filter(Boolean) ?? [],
+    selectedEnterprises: params.get("enterprises")?.split(",").filter(Boolean) ?? [],
+    hasFilter: false,
+  }),
+}));
+
 vi.mock("@/lib/db/ghas-repo", () => ({
   getCodeScanningDaily,
   getDependabotDaily: vi.fn(() => []),
@@ -48,6 +57,43 @@ describe("security overview date range", () => {
     expect(await response.json()).toMatchObject({
       dataAsOf: "2026-07-31",
       daysLoaded: 31,
+    });
+  });
+
+  it("uses a single selected organization as the security scope", async () => {
+    const response = await GET(new NextRequest(
+      "http://localhost/api/security/overview?days=7&orgs=selected-org",
+    ));
+
+    expect(response.status).toBe(200);
+    expect(getCodeScanningDaily).toHaveBeenCalledWith(
+      "org",
+      "selected-org",
+      expect.any(String),
+      expect.any(String),
+    );
+  });
+
+  it("rejects team filters because GHAS data cannot be filtered by user membership", async () => {
+    const response = await GET(new NextRequest(
+      "http://localhost/api/security/overview?days=7&teams=ent1:platform&orgs=octodemo",
+    ));
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({
+      error: "Security metrics do not support team filters. Clear the team selection to view security data.",
+    });
+    expect(getCodeScanningDaily).not.toHaveBeenCalled();
+  });
+
+  it("rejects simultaneous organization and enterprise selections", async () => {
+    const response = await GET(new NextRequest(
+      "http://localhost/api/security/overview?days=7&orgs=octodemo&enterprises=ent1",
+    ));
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({
+      error: "Security metrics support either one organization or one enterprise, not both.",
     });
   });
 });

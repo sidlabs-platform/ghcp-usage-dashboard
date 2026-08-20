@@ -1,6 +1,10 @@
 // Shared utility for parsing team/org/enterprise filter params in API routes
 
-import { resolveFilteredUsers } from "@/lib/db/teams-repo";
+import {
+  resolveFilteredUsers,
+  resolveFilteredUserScopes,
+  type FilteredUserScope,
+} from "@/lib/db/teams-repo";
 
 interface ParsedScopeFilter {
   selectedTeams: string[];
@@ -9,13 +13,19 @@ interface ParsedScopeFilter {
   hasFilter: boolean;
   /** Set of allowed user logins when team/org filter is active; undefined when no filter */
   allowedLogins?: Set<string>;
+  /** Enterprise-qualified users when team and organization dimensions are intersected. */
+  allowedUserScopes?: FilteredUserScope[];
   /** Enterprise slugs to filter by; undefined means all enterprises */
   enterpriseSlugs?: string[];
 }
 
 /**
- * Parse `teams`, `orgs`, and `enterprises` query parameters from a request
- * and resolve them to filter criteria.
+ * Parse `teams`, `orgs`, and `enterprises` query parameters into SQL-ready scope criteria.
+ *
+ * Multiple values within one dimension are additive. When both teams and
+ * organizations are selected, users must match both dimensions in the same
+ * enterprise. A disjoint intersection returns empty allowed-login and
+ * enterprise-qualified user collections so callers can deliberately match no rows.
  */
 export function parseScopeFilter(searchParams: URLSearchParams): ParsedScopeFilter {
   const teamsParam = searchParams.get("teams");
@@ -40,8 +50,53 @@ export function parseScopeFilter(searchParams: URLSearchParams): ParsedScopeFilt
   const selectedTeams = [...plainTeams, ...compositeTeams.map((c) => c.team)];
   const hasFilter = selectedTeams.length > 0 || selectedOrgs.length > 0 || selectedEnterprises.length > 0;
 
-  // Resolve enterprise slugs for SQL filtering (undefined = all)
-  const enterpriseSlugs = selectedEnterprises.length > 0 ? selectedEnterprises : undefined;
+  const compositeEnterpriseSlugs = Array.from(
+    new Set(compositeTeams.map((team) => team.enterprise)),
+  );
+  // A composite team carries its enterprise identity even when the UI omits
+  // the separate enterprises parameter.
+  const enterpriseSlugs = selectedEnterprises.length > 0
+    ? selectedEnterprises
+    : (compositeEnterpriseSlugs.length > 0 ? compositeEnterpriseSlugs : undefined);
+
+  if (selectedTeams.length > 0 && selectedOrgs.length > 0) {
+    let allowedUserScopes: FilteredUserScope[];
+    if (compositeTeams.length > 0) {
+      const scopes = new Map<string, FilteredUserScope>();
+      const byEnterprise = new Map<string, string[]>();
+      for (const team of compositeTeams) {
+        const slugs = byEnterprise.get(team.enterprise) ?? [];
+        slugs.push(team.team);
+        byEnterprise.set(team.enterprise, slugs);
+      }
+      for (const [enterpriseSlug, teamSlugs] of byEnterprise) {
+        for (const scope of resolveFilteredUserScopes(
+          [...plainTeams, ...teamSlugs],
+          selectedOrgs,
+          [enterpriseSlug],
+        )) {
+          scopes.set(`${scope.enterpriseSlug}\0${scope.userLogin}`, scope);
+        }
+      }
+      allowedUserScopes = Array.from(scopes.values());
+    } else {
+      allowedUserScopes = resolveFilteredUserScopes(
+        selectedTeams,
+        selectedOrgs,
+        enterpriseSlugs,
+      );
+    }
+
+    return {
+      selectedTeams,
+      selectedOrgs,
+      selectedEnterprises,
+      hasFilter,
+      allowedLogins: new Set(allowedUserScopes.map((scope) => scope.userLogin)),
+      allowedUserScopes,
+      enterpriseSlugs,
+    };
+  }
 
   let teamLogins: Set<string> | undefined;
 
@@ -77,11 +132,7 @@ export function parseScopeFilter(searchParams: URLSearchParams): ParsedScopeFilt
     ? new Set(resolveFilteredUsers([], selectedOrgs, enterpriseSlugs))
     : undefined;
 
-  // Multiple values within one dimension are additive, while selecting both
-  // an organization and a team narrows the result to members matching both.
-  const allowedLogins = teamLogins && orgLogins
-    ? new Set(Array.from(teamLogins).filter((login) => orgLogins.has(login)))
-    : teamLogins ?? orgLogins;
+  const allowedLogins = teamLogins ?? orgLogins;
 
   return { selectedTeams, selectedOrgs, selectedEnterprises, hasFilter, allowedLogins, enterpriseSlugs };
 }

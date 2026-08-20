@@ -43,6 +43,8 @@ export interface BillingFilters {
   costCenter?: string;
   /** Scope filter: resolved user logins from team/org selection */
   allowedLogins?: string[];
+  /** Enterprise-qualified users; takes precedence over `allowedLogins`. */
+  allowedUserScopes?: { enterpriseSlug: string; userLogin: string }[];
   /** Scope filter: selected organization slugs for org-level charges */
   scopeOrgs?: string[];
 }
@@ -54,6 +56,8 @@ export interface PremiumFilters {
   exceedsQuota?: boolean;
   /** Scope filter: resolved user logins from team/org selection */
   allowedLogins?: string[];
+  /** Enterprise-qualified users; takes precedence over `allowedLogins`. */
+  allowedUserScopes?: { enterpriseSlug: string; userLogin: string }[];
   /** Scope filter: selected organization slugs for org-level charges */
   scopeOrgs?: string[];
 }
@@ -106,15 +110,20 @@ function appendBillingFilters(
   // Scope filter: team/org filtering via resolved logins + org slugs
   // Skip scopeOrgs in the OR clause if page-level org filter already intersected above
   const scopeOrgsHandled = filters.organization?.length && filters.scopeOrgs?.length;
-  if (filters.allowedLogins !== undefined || (filters.scopeOrgs?.length && !scopeOrgsHandled)) {
+  if (filters.allowedUserScopes !== undefined || filters.allowedLogins !== undefined || (filters.scopeOrgs?.length && !scopeOrgsHandled)) {
     // Short-circuit: if scope is active but resolved to nothing, match nothing
-    const hasLogins = filters.allowedLogins && filters.allowedLogins.length > 0;
+    const hasUserScopes = filters.allowedUserScopes && filters.allowedUserScopes.length > 0;
+    const hasLogins = filters.allowedUserScopes === undefined && filters.allowedLogins && filters.allowedLogins.length > 0;
     const hasOrgs = filters.scopeOrgs && filters.scopeOrgs.length > 0 && !scopeOrgsHandled;
-    if (!hasLogins && !hasOrgs) {
+    if (!hasUserScopes && !hasLogins && !hasOrgs) {
       clauses.push("1 = 0");
       return;
     }
     const scopeParts: string[] = [];
+    if (hasUserScopes) {
+      scopeParts.push(`(${filters.allowedUserScopes!.map(() => "(enterprise_slug = ? AND username = ?)").join(" OR ")})`);
+      params.push(...filters.allowedUserScopes!.flatMap((scope) => [scope.enterpriseSlug, scope.userLogin]));
+    }
     if (hasLogins) {
       scopeParts.push(
         `username IN (${filters.allowedLogins!.map(() => "?").join(",")})`
@@ -170,14 +179,19 @@ function appendPremiumFilters(
   }
   // Scope filter: team/org filtering via resolved logins + org slugs
   const scopeOrgsHandled = filters.organization?.length && filters.scopeOrgs?.length;
-  if (filters.allowedLogins !== undefined || (filters.scopeOrgs?.length && !scopeOrgsHandled)) {
-    const hasLogins = filters.allowedLogins && filters.allowedLogins.length > 0;
+  if (filters.allowedUserScopes !== undefined || filters.allowedLogins !== undefined || (filters.scopeOrgs?.length && !scopeOrgsHandled)) {
+    const hasUserScopes = filters.allowedUserScopes && filters.allowedUserScopes.length > 0;
+    const hasLogins = filters.allowedUserScopes === undefined && filters.allowedLogins && filters.allowedLogins.length > 0;
     const hasOrgs = filters.scopeOrgs && filters.scopeOrgs.length > 0 && !scopeOrgsHandled;
-    if (!hasLogins && !hasOrgs) {
+    if (!hasUserScopes && !hasLogins && !hasOrgs) {
       clauses.push("1 = 0");
       return;
     }
     const scopeParts: string[] = [];
+    if (hasUserScopes) {
+      scopeParts.push(`(${filters.allowedUserScopes!.map(() => "(enterprise_slug = ? AND username = ?)").join(" OR ")})`);
+      params.push(...filters.allowedUserScopes!.flatMap((scope) => [scope.enterpriseSlug, scope.userLogin]));
+    }
     if (hasLogins) {
       scopeParts.push(
         `username IN (${filters.allowedLogins!.map(() => "?").join(",")})`
@@ -456,9 +470,10 @@ export function getOverviewKPIs(
   const premParams: unknown[] = [start, end];
   if (entClause) { premClauses.push(entClause.replace(/^\s*AND\s+/, "")); premParams.push(...entParams); }
   // Apply only scope filters to premium
-  if (filters && (filters.allowedLogins !== undefined || Boolean(filters.scopeOrgs?.length))) {
+  if (filters && (filters.allowedUserScopes !== undefined || filters.allowedLogins !== undefined || Boolean(filters.scopeOrgs?.length))) {
     appendPremiumFilters(premClauses, premParams, {
       allowedLogins: filters.allowedLogins,
+      allowedUserScopes: filters.allowedUserScopes,
       scopeOrgs: filters.scopeOrgs,
     });
   }

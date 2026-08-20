@@ -162,6 +162,26 @@ describe("getOverviewKPIs", () => {
     expect(kpis.totalNet).toBe(100);
   });
 
+  it("filters enterprise-qualified users without creating a cross product", () => {
+    upsertUsageRecords("ent-a", [
+      { date: "2026-06-01", product: "copilot", sku: "s1", quantity: 1, unit_type: "seat", applied_cost_per_quantity: 10, gross_amount: 10, discount_amount: 0, net_amount: 10, organization: "org1", repository: "", username: "alice", workflow_path: "", cost_center_name: "", charge_scope: "user" },
+    ]);
+    upsertUsageRecords("ent-b", [
+      { date: "2026-06-01", product: "copilot", sku: "s1", quantity: 1, unit_type: "seat", applied_cost_per_quantity: 20, gross_amount: 20, discount_amount: 0, net_amount: 20, organization: "org2", repository: "", username: "bob", workflow_path: "", cost_center_name: "", charge_scope: "user" },
+      { date: "2026-06-01", product: "copilot", sku: "s2", quantity: 1, unit_type: "seat", applied_cost_per_quantity: 99, gross_amount: 99, discount_amount: 0, net_amount: 99, organization: "org2", repository: "", username: "alice", workflow_path: "", cost_center_name: "", charge_scope: "user" },
+    ]);
+
+    const kpis = getOverviewKPIs("2026-06-01", "2026-06-01", {
+      allowedLogins: ["alice", "bob"],
+      allowedUserScopes: [
+        { enterpriseSlug: "ent-a", userLogin: "alice" },
+        { enterpriseSlug: "ent-b", userLogin: "bob" },
+      ],
+    }, ["ent-a", "ent-b"]);
+
+    expect(kpis.totalNet).toBe(30);
+  });
+
   it("applies scopeOrgs filter to premium KPIs", () => {
     upsertPremiumRequests("ent1", [
       makePremiumRecord({ date: "2026-06-05", sku: "p1", quantity: 10, applied_cost_per_quantity: 1, gross_amount: 10, net_amount: 10, username: "u1", organization: "scoped-org", total_monthly_quota: 100 }),

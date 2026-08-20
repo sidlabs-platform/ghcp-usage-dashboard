@@ -109,6 +109,7 @@ export default function DashboardOverview() {
       .finally(() => setLoading(false));
 
     if (securityEnabled) {
+      setSecurityData(null);
       fetch(`/api/security/overview?${params}`)
         .then((res) => { if (res.ok) return res.json(); })
         .then((json) => { if (json) setSecurityData(json); })
