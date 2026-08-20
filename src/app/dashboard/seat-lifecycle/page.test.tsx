@@ -53,18 +53,23 @@ vi.mock("@/components/cards/MetricCard", () => ({
   MetricCard: ({
     title,
     value,
+    format,
     subtitle,
   }: {
     title: string;
-    value: React.ReactNode;
+    value: number | string;
+    format?: "number" | "percent" | "raw";
     subtitle?: string;
-  }) => (
-    <div>
-      <span>{title}</span>
-      <span data-testid={`metric-${title}`}>{value}</span>
-      {subtitle && <span>{subtitle}</span>}
-    </div>
-  ),
+  }) => {
+    const displayValue = typeof value === "number" && format === "percent" ? `${value.toFixed(1)}%` : value;
+    return (
+      <div>
+        <span>{title}</span>
+        <span data-testid={`metric-${title}`}>{displayValue}</span>
+        {subtitle && <span>{subtitle}</span>}
+      </div>
+    );
+  },
 }));
 
 vi.mock("@/components/charts/SeatLifecycleTrendChart", () => ({
@@ -178,12 +183,41 @@ describe("Seat onboarding & offboarding page", () => {
     await waitFor(() => expect(screen.getByTestId("metric-Onboarded")).toHaveTextContent("12"));
     expect(screen.getByTestId("metric-Offboarded")).toHaveTextContent("5");
     expect(screen.getByTestId("metric-Net Change")).toHaveTextContent("7");
-    expect(screen.getByTestId("metric-Churn Rate")).toHaveTextContent("3.4");
+    expect(screen.getByTestId("metric-Churn Rate")).toHaveTextContent("3.4%");
 
     expect(screen.getByTestId("trend-chart")).toHaveTextContent("Trend rows: 2");
     expect(screen.getByRole("link", { name: "alice" })).toHaveAttribute("href", "/dashboard/users/alice");
     expect(screen.getByRole("link", { name: "bob" })).toBeInTheDocument();
     expect(screen.getByText("Seat sync")).toBeInTheDocument();
+  });
+
+  it("renders an empty churn-rate value when there are no seats to compare", async () => {
+    await renderPage(emptyPayload({ stats: { ...emptyPayload().stats, churnRate: null } }));
+
+    await waitFor(() => expect(screen.getByText(/Showing 2025-05-10/i)).toBeInTheDocument());
+    expect(screen.getByTestId("metric-Churn Rate")).toHaveTextContent("—");
+    expect(screen.getByTestId("metric-Churn Rate")).not.toHaveTextContent("0.0%");
+    expect(screen.getByText("No seats to compare")).toBeInTheDocument();
+  });
+
+  it("renders a real zero churn rate distinctly from a missing churn rate", async () => {
+    await renderPage(
+      emptyPayload({
+        stats: {
+          onboardedUsers: 2,
+          offboardedUsers: 0,
+          onboardedEvents: 2,
+          offboardedEvents: 0,
+          netChange: 2,
+          churnRate: 0,
+        },
+        coverage: { source: "sync_diff", trackingStartedAt: "2025-05-01T00:00:00Z", onboardingOnly: false },
+      }),
+    );
+
+    await waitFor(() => expect(screen.getByText("Offboarded / total seats")).toBeInTheDocument());
+    expect(screen.getByTestId("metric-Churn Rate")).toHaveTextContent("0.0%");
+    expect(screen.getByTestId("metric-Churn Rate")).not.toHaveTextContent("—");
   });
 
   it("shows the tracking-start coverage banner for snapshot-diff installs", async () => {

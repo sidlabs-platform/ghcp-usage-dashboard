@@ -305,6 +305,63 @@ describe("projectAuditEventsToLifecycle", () => {
     expect(row.assigning_team_name).toBe("Team A");
   });
 
+  it("keeps distinct audit rows when login is missing but github_user_id is present", () => {
+    insertAuditEvent({
+      event_id: "c1",
+      action: "cancel",
+      observed_login: "",
+      github_user_id: 101,
+      occurred_at: "2026-06-12T00:00:00Z",
+    });
+    insertAuditEvent({
+      event_id: "c2",
+      action: "cancel",
+      observed_login: "",
+      github_user_id: 102,
+      occurred_at: "2026-06-12T00:00:00Z",
+    });
+    projectAuditEventsToLifecycle("ent1");
+
+    const logins = getSeatLifecycleRows({ ...WINDOW }, "offboarded", PAGE).rows.map((r) => r.user_login);
+    expect(logins).toEqual(["user-101", "user-102"]);
+  });
+
+  it("skips audit rows that have no stable user identifier", () => {
+    insertAuditEvent({
+      event_id: "c1",
+      action: "cancel",
+      observed_login: "",
+      github_user_id: null,
+      occurred_at: "2026-06-12T00:00:00Z",
+    });
+    projectAuditEventsToLifecycle("ent1");
+
+    expect(getSeatLifecycleRows({ ...WINDOW }, "offboarded", PAGE).total).toBe(0);
+  });
+
+  it("keeps observed_login and existing seat fallback behavior for audit rows", () => {
+    insertAuditEvent({
+      event_id: "c1",
+      action: "cancel",
+      observed_login: "observed",
+      github_user_id: 101,
+      occurred_at: "2026-06-12T00:00:00Z",
+    });
+    insertSeat({ user_login: "", user_id: 102, plan_type: "enterprise" });
+    insertAuditEvent({
+      event_id: "c2",
+      action: "assign",
+      observed_login: "",
+      github_user_id: 102,
+      occurred_at: "2026-06-13T00:00:00Z",
+    });
+    projectAuditEventsToLifecycle("ent1");
+
+    const rows = getSeatLifecycleExportRows({ ...WINDOW }, "all").rows;
+    expect(rows.map((r) => r.user_login).sort()).toEqual(["", "observed"]);
+    expect(rows.find((r) => r.user_login === "")?.plan_type).toBe("enterprise");
+  });
+
   it("is idempotent across repeated runs", () => {
     insertAuditEvent({ event_id: "a1", action: "assign", occurred_at: "2026-06-05T00:00:00Z" });
     projectAuditEventsToLifecycle("ent1");
@@ -339,6 +396,46 @@ describe("source precedence", () => {
     }]);
     const logins = getSeatLifecycleRows({ ...WINDOW }, "offboarded", PAGE).rows.map((r) => r.user_login);
     expect(logins).toEqual(["diff-only"]);
+  });
+
+  it("serves sync_diff rows when audit_log rows fall after the query window", () => {
+    recordSeatLifecycleEvents("ent1", [{
+      orgSlug: "org1", userLogin: "diff-only", eventType: "offboarded",
+      occurredAt: "2026-06-18T00:00:00Z", source: "sync_diff",
+    }]);
+    insertAuditEvent({
+      event_id: "c1",
+      action: "cancel",
+      observed_login: "later-audit",
+      occurred_at: "2026-07-02T00:00:00Z",
+    });
+    projectAuditEventsToLifecycle("ent1");
+
+    const logins = getSeatLifecycleRows({ ...WINDOW }, "offboarded", PAGE).rows.map((r) => r.user_login);
+    expect(logins).toEqual(["diff-only"]);
+  });
+
+  it("applies audit_log precedence to the whole query window for an enterprise", () => {
+    recordSeatLifecycleEvents("ent1", [
+      {
+        orgSlug: "org1", userLogin: "diff-before", eventType: "offboarded",
+        occurredAt: "2026-06-05T00:00:00Z", source: "sync_diff",
+      },
+      {
+        orgSlug: "org1", userLogin: "diff-after", eventType: "offboarded",
+        occurredAt: "2026-06-20T00:00:00Z", source: "sync_diff",
+      },
+    ]);
+    insertAuditEvent({
+      event_id: "c1",
+      action: "cancel",
+      observed_login: "audited",
+      occurred_at: "2026-06-12T00:00:00Z",
+    });
+    projectAuditEventsToLifecycle("ent1");
+
+    const logins = getSeatLifecycleRows({ ...WINDOW }, "offboarded", PAGE).rows.map((r) => r.user_login);
+    expect(logins).toEqual(["audited"]);
   });
 
   it("scopes the exclusion per enterprise — ent2's diff rows survive ent1's audit data", () => {
@@ -402,6 +499,43 @@ describe("getSeatLifecycleStats", () => {
     insertSeat({ user_login: "c" });
     insertSeat({ user_login: "d" });
     expect(getSeatLifecycleStats({ ...WINDOW }).churnRate).toBe(25);
+  });
+
+  it("applies allowedLogins to the churn denominator", () => {
+    insertSeat({ user_login: "off1" });
+    insertSeat({ user_login: "in-seat" });
+    insertSeat({ user_login: "out-a" });
+    insertSeat({ user_login: "out-b" });
+
+    const stats = getSeatLifecycleStats({ ...WINDOW, allowedLogins: new Set(["OFF1", "IN-SEAT"]) });
+
+    expect(stats.offboardedUsers).toBe(1);
+    expect(stats.churnRate).toBe(50);
+  });
+
+  it("returns null churn and zero counts for an explicit empty allowedLogins scope", () => {
+    insertSeat({ user_login: "off1" });
+    insertSeat({ user_login: "other" });
+
+    const stats = getSeatLifecycleStats({ ...WINDOW, allowedLogins: new Set() });
+
+    expect(stats).toMatchObject({
+      onboardedUsers: 0,
+      offboardedUsers: 0,
+      onboardedEvents: 0,
+      offboardedEvents: 0,
+      netChange: 0,
+      churnRate: null,
+    });
+  });
+
+  it("does not filter the churn denominator when allowedLogins is undefined", () => {
+    insertSeat({ user_login: "off1" });
+    insertSeat({ user_login: "b" });
+    insertSeat({ user_login: "c" });
+    insertSeat({ user_login: "d" });
+
+    expect(getSeatLifecycleStats({ ...WINDOW, allowedLogins: undefined }).churnRate).toBe(25);
   });
 
   it("returns a null churn rate rather than 0 when there are no seats to divide by", () => {

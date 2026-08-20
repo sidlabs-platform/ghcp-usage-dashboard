@@ -222,6 +222,7 @@ export default function SeatLifecyclePage() {
 
   const stats = data?.stats;
   const coverage = data?.coverage;
+  const churnRate = stats?.churnRate;
 
   // The export must cover the whole window, so it deliberately drops the
   // pagination params the table query carries.
@@ -395,10 +396,10 @@ export default function SeatLifecyclePage() {
         />
         <MetricCard
           title="Churn Rate"
-          value={stats?.churnRate ?? 0}
+          value={churnRate == null ? "—" : churnRate}
           format="percent"
           icon={<Percent className="h-4 w-4" />}
-          subtitle={stats?.churnRate == null ? "No seats to compare" : "Offboarded / total seats"}
+          subtitle={churnRate == null ? "No seats to compare" : "Offboarded / total seats"}
         />
       </div>
 

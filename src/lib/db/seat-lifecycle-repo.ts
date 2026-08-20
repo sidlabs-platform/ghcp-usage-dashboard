@@ -20,10 +20,11 @@
 //     is enabled.
 //
 // SOURCE PRECEDENCE is per-enterprise and whole-window, not per-row: if an
-// enterprise has ANY `audit_log` rows, audit rows are served for it and
-// `sync_diff` rows are excluded. Per-row dedup would be fragile, because the
-// audit log and the snapshot diff legitimately disagree on the exact date of
-// the same offboard (the diff can only observe it at the next sync).
+// enterprise has ANY `audit_log` rows in the queried window, audit rows are
+// served for it and `sync_diff` rows are excluded. Per-row dedup would be
+// fragile, because the audit log and the snapshot diff legitimately disagree on
+// the exact date of the same offboard (the diff can only observe it at the next
+// sync).
 
 import { getDb } from "./database";
 
@@ -159,12 +160,23 @@ function inClause(column: string, values: readonly string[]): SqlFragment {
   };
 }
 
+function allowedLoginsClause(column: string, allowedLogins?: Set<string>): SqlFragment {
+  if (!allowedLogins) return { sql: "", params: [] };
+  const logins = Array.from(allowedLogins, normalizeLogin);
+  if (logins.length === 0) return { sql: " AND 1 = 0", params: [] };
+  return {
+    sql: ` AND LOWER(${column}) IN (${logins.map(() => "?").join(",")})`,
+    params: logins,
+  };
+}
+
 /**
  * Build the shared WHERE clause for every lifecycle query.
  *
  * The `sync_diff` exclusion implements per-enterprise source precedence: rows
  * from the snapshot diff are hidden for any enterprise that also has audit-log
- * rows, so the two sources never double-count the same offboard.
+ * rows in the queried window, so the two sources never double-count the same
+ * offboard.
  */
 function buildLifecycleFilter(query: SeatLifecycleQuery): SqlFragment {
   const params: unknown[] = [query.start, query.end];
@@ -182,16 +194,9 @@ function buildLifecycleFilter(query: SeatLifecycleQuery): SqlFragment {
     params.push(...frag.params);
   }
 
-  if (query.allowedLogins) {
-    // An explicit-but-empty scope means "no users are in scope" — it must match
-    // nothing rather than degrade into "no filter".
-    const logins = Array.from(query.allowedLogins, normalizeLogin);
-    if (logins.length === 0) {
-      return { sql: `${sql} AND 1 = 0`, params };
-    }
-    sql += ` AND LOWER(user_login) IN (${logins.map(() => "?").join(",")})`;
-    params.push(...logins);
-  }
+  const loginScope = allowedLoginsClause("user_login", query.allowedLogins);
+  sql += loginScope.sql;
+  params.push(...loginScope.params);
 
   sql += `
     AND NOT (
@@ -200,8 +205,11 @@ function buildLifecycleFilter(query: SeatLifecycleQuery): SqlFragment {
         SELECT 1 FROM copilot_seat_lifecycle_events audit
         WHERE audit.enterprise_slug = copilot_seat_lifecycle_events.enterprise_slug
           AND audit.source = 'audit_log'
+          AND audit.event_date >= ?
+          AND audit.event_date <= ?
       )
     )`;
+  params.push(query.start, query.end);
 
   return { sql, params };
 }
@@ -305,7 +313,7 @@ export function projectAuditEventsToLifecycle(enterpriseSlug: string): number {
       SELECT
         audit.enterprise_slug,
         audit.org_login,
-        COALESCE(NULLIF(audit.observed_login, ''), seat.user_login, 'unknown'),
+        COALESCE(NULLIF(audit.observed_login, ''), seat.user_login, 'user-' || audit.github_user_id),
         COALESCE(audit.github_user_id, seat.user_id),
         CASE WHEN audit.action = 'cancel' THEN 'offboarded' ELSE 'onboarded' END,
         substr(audit.occurred_at, 1, 10),
@@ -325,6 +333,12 @@ export function projectAuditEventsToLifecycle(enterpriseSlug: string): number {
         AND audit.action IN ('assign', 'cancel')
         AND audit.occurred_at IS NOT NULL
         AND length(audit.occurred_at) >= 10
+        -- Without a login, seat match, or GitHub user id, there is no stable PK.
+        AND (
+          NULLIF(audit.observed_login, '') IS NOT NULL
+          OR seat.user_login IS NOT NULL
+          OR audit.github_user_id IS NOT NULL
+        )
     `).run(detectedAt, enterpriseSlug);
     return result.changes;
   } catch {
@@ -466,6 +480,9 @@ export function getSeatLifecycleStats(query: SeatLifecycleQuery): SeatLifecycleS
     seatSql += frag.sql;
     seatParams.push(...frag.params);
   }
+  const loginScope = allowedLoginsClause("user_login", query.allowedLogins);
+  seatSql += loginScope.sql;
+  seatParams.push(...loginScope.params);
   const totalSeats = (db.prepare(seatSql).get(...seatParams) as { total: number } | undefined)?.total ?? 0;
 
   return {
