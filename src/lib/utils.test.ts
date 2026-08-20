@@ -43,7 +43,19 @@ describe("formatNumber", () => {
   it("formats thousands with K suffix", () => {
     expect(formatNumber(1_000)).toBe("1.0K");
     expect(formatNumber(1_500)).toBe("1.5K");
-    expect(formatNumber(999_999)).toBe("1000.0K");
+    expect(formatNumber(999_949)).toBe("999.9K");
+  });
+
+  it("promotes to M at the rounding boundary (K→M)", () => {
+    // 999_950: value/1000 = 999.95 which .toFixed(1) rounds to "1000.0" — must show 1.0M
+    expect(formatNumber(999_950)).toBe("1.0M");
+    expect(formatNumber(999_999)).toBe("1.0M");
+    expect(formatNumber(1_000_000)).toBe("1.0M");
+  });
+
+  it("unit→K boundary: 999 stays as locale, 1_000 becomes 1.0K", () => {
+    expect(formatNumber(999)).toBe("999");
+    expect(formatNumber(1_000)).toBe("1.0K");
   });
 
   it("formats small numbers with locale string", () => {

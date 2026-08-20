@@ -7,8 +7,10 @@ export function cn(...inputs: ClassValue[]) {
 
 export function formatNumber(value: number): string {
   if (value == null || typeof value !== 'number' || isNaN(value)) return "0";
-  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
-  if (value >= 1_000) return `${(value / 1_000).toFixed(1)}K`;
+  // Use 999_950 as the K→M boundary: any value that would round to "1000.0K"
+  // (i.e. value/1000 ≥ 999.95, meaning value ≥ 999_950) is promoted to M.
+  if (value >= 999_950) return `${(value / 1_000_000).toFixed(1)}M`;
+  if (value >= 1_000)   return `${(value / 1_000).toFixed(1)}K`;
   return value.toLocaleString();
 }
 

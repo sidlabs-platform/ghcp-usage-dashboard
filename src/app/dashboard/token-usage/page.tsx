@@ -89,7 +89,7 @@ type ModelSortKey = keyof TokenModelSummary;
  */
 export default function TokenUsagePage() {
   const { days } = useDateRange();
-  const { hasFilter, buildScopeParams, selectedEntTeams, selectedOrgTeams, selectedOrgs: scopeOrgs } = useScope();
+  const { buildScopeParams } = useScope();
 
   const [data, setData] = useState<TokenResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -205,6 +205,7 @@ export default function TokenUsagePage() {
 
   const ModelHeader = ({ col, label, align = "right" }: { col: ModelSortKey; label: string; align?: "left" | "right" }) => (
     <th
+      scope="col"
       className={`px-3 py-3 ${align === "left" ? "text-left" : "text-right"} text-xs font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wider cursor-pointer hover:text-[hsl(var(--foreground))] select-none`}
       onClick={() => handleModelSort(col)}
     >
@@ -260,13 +261,6 @@ export default function TokenUsagePage() {
         </a>
       </PageHeader>
 
-      {hasFilter && (
-        <div className="rounded-lg border border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-950/30 px-4 py-2 text-sm text-blue-700 dark:text-blue-400">
-          📊 Showing filtered results:{" "}
-          <strong>{[...selectedEntTeams, ...selectedOrgTeams, ...scopeOrgs].join(", ")}</strong>
-        </div>
-      )}
-
       {error && (
         <div className="rounded-lg border border-red-200 dark:border-red-900 bg-red-50 dark:bg-red-950/30 px-4 py-3 text-sm text-red-700 dark:text-red-400">
           {error}
@@ -279,7 +273,7 @@ export default function TokenUsagePage() {
             <Info className="h-6 w-6 shrink-0 text-[hsl(var(--muted-foreground))]" />
             <div className="space-y-3">
               <div>
-                <h3 className="font-semibold">No token detail available for this range yet</h3>
+                <h2 className="font-semibold">No token detail available for this range yet</h2>
                 <p className="mt-1 text-sm text-[hsl(var(--muted-foreground))]">
                   GitHub added a per-model token breakdown (input, output, cache read, cache write) to the AI usage
                   report on 2026-08-11. Rows synced before this dashboard read those columns carry zero tokens. Clear
@@ -442,6 +436,7 @@ export default function TokenUsagePage() {
           >
             <Card className="overflow-x-auto">
               <table className="w-full text-sm">
+                <caption className="sr-only">Model Efficiency — token volumes and estimated credit rates per model</caption>
                 <thead className="border-b border-[hsl(var(--border))]">
                   <tr>
                     <ModelHeader col="model" label="Model" align="left" />
@@ -519,18 +514,19 @@ export default function TokenUsagePage() {
           <Section title="Top Consumers" description="Users ranked by total token volume, with their allowance/billable split">
             <Card className="overflow-x-auto">
               <table className="w-full text-sm">
+                <caption className="sr-only">Top Token Consumers — users ranked by total token volume</caption>
                 <thead className="border-b border-[hsl(var(--border))]">
                   <tr>
-                    <th className="px-3 py-3 text-left text-xs font-medium uppercase tracking-wider text-[hsl(var(--muted-foreground))]">User</th>
-                    <th className="px-3 py-3 text-left text-xs font-medium uppercase tracking-wider text-[hsl(var(--muted-foreground))]">Org</th>
-                    <th className="px-3 py-3 text-right text-xs font-medium uppercase tracking-wider text-[hsl(var(--muted-foreground))]">Total tokens</th>
-                    <th className="px-3 py-3 text-right text-xs font-medium uppercase tracking-wider text-[hsl(var(--muted-foreground))]">Input</th>
-                    <th className="px-3 py-3 text-right text-xs font-medium uppercase tracking-wider text-[hsl(var(--muted-foreground))]">Output</th>
-                    <th className="px-3 py-3 text-right text-xs font-medium uppercase tracking-wider text-[hsl(var(--muted-foreground))]">Cache read</th>
-                    <th className="px-3 py-3 text-right text-xs font-medium uppercase tracking-wider text-[hsl(var(--muted-foreground))]">Credits</th>
-                    <th className="px-3 py-3 text-right text-xs font-medium uppercase tracking-wider text-[hsl(var(--muted-foreground))]">Allowance</th>
-                    <th className="px-3 py-3 text-right text-xs font-medium uppercase tracking-wider text-[hsl(var(--muted-foreground))]">Additional</th>
-                    <th className="px-3 py-3 text-right text-xs font-medium uppercase tracking-wider text-[hsl(var(--muted-foreground))]">Credits / 1M</th>
+                    <th scope="col" className="px-3 py-3 text-left text-xs font-medium uppercase tracking-wider text-[hsl(var(--muted-foreground))]">User</th>
+                    <th scope="col" className="px-3 py-3 text-left text-xs font-medium uppercase tracking-wider text-[hsl(var(--muted-foreground))]">Org</th>
+                    <th scope="col" className="px-3 py-3 text-right text-xs font-medium uppercase tracking-wider text-[hsl(var(--muted-foreground))]">Total tokens</th>
+                    <th scope="col" className="px-3 py-3 text-right text-xs font-medium uppercase tracking-wider text-[hsl(var(--muted-foreground))]">Input</th>
+                    <th scope="col" className="px-3 py-3 text-right text-xs font-medium uppercase tracking-wider text-[hsl(var(--muted-foreground))]">Output</th>
+                    <th scope="col" className="px-3 py-3 text-right text-xs font-medium uppercase tracking-wider text-[hsl(var(--muted-foreground))]">Cache read</th>
+                    <th scope="col" className="px-3 py-3 text-right text-xs font-medium uppercase tracking-wider text-[hsl(var(--muted-foreground))]">Credits</th>
+                    <th scope="col" className="px-3 py-3 text-right text-xs font-medium uppercase tracking-wider text-[hsl(var(--muted-foreground))]">Allowance</th>
+                    <th scope="col" className="px-3 py-3 text-right text-xs font-medium uppercase tracking-wider text-[hsl(var(--muted-foreground))]">Additional</th>
+                    <th scope="col" className="px-3 py-3 text-right text-xs font-medium uppercase tracking-wider text-[hsl(var(--muted-foreground))]">Credits / 1M</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -575,17 +571,18 @@ export default function TokenUsagePage() {
             </div>
             <Card className="overflow-x-auto">
               <table className="w-full text-sm">
+                <caption className="sr-only">Token Attribution by dimension</caption>
                 <thead className="border-b border-[hsl(var(--border))]">
                   <tr>
-                    <th className="px-3 py-3 text-left text-xs font-medium uppercase tracking-wider text-[hsl(var(--muted-foreground))]">Name</th>
-                    <th className="px-3 py-3 text-right text-xs font-medium uppercase tracking-wider text-[hsl(var(--muted-foreground))]">Total tokens</th>
-                    <th className="px-3 py-3 text-right text-xs font-medium uppercase tracking-wider text-[hsl(var(--muted-foreground))]">Input</th>
-                    <th className="px-3 py-3 text-right text-xs font-medium uppercase tracking-wider text-[hsl(var(--muted-foreground))]">Cache read</th>
-                    <th className="px-3 py-3 text-right text-xs font-medium uppercase tracking-wider text-[hsl(var(--muted-foreground))]">Credits</th>
-                    <th className="px-3 py-3 text-right text-xs font-medium uppercase tracking-wider text-[hsl(var(--muted-foreground))]">Allowance</th>
-                    <th className="px-3 py-3 text-right text-xs font-medium uppercase tracking-wider text-[hsl(var(--muted-foreground))]">Additional</th>
-                    <th className="px-3 py-3 text-right text-xs font-medium uppercase tracking-wider text-[hsl(var(--muted-foreground))]">Gross USD</th>
-                    <th className="px-3 py-3 text-right text-xs font-medium uppercase tracking-wider text-[hsl(var(--muted-foreground))]">Users</th>
+                    <th scope="col" className="px-3 py-3 text-left text-xs font-medium uppercase tracking-wider text-[hsl(var(--muted-foreground))]">Name</th>
+                    <th scope="col" className="px-3 py-3 text-right text-xs font-medium uppercase tracking-wider text-[hsl(var(--muted-foreground))]">Total tokens</th>
+                    <th scope="col" className="px-3 py-3 text-right text-xs font-medium uppercase tracking-wider text-[hsl(var(--muted-foreground))]">Input</th>
+                    <th scope="col" className="px-3 py-3 text-right text-xs font-medium uppercase tracking-wider text-[hsl(var(--muted-foreground))]">Cache read</th>
+                    <th scope="col" className="px-3 py-3 text-right text-xs font-medium uppercase tracking-wider text-[hsl(var(--muted-foreground))]">Credits</th>
+                    <th scope="col" className="px-3 py-3 text-right text-xs font-medium uppercase tracking-wider text-[hsl(var(--muted-foreground))]">Allowance</th>
+                    <th scope="col" className="px-3 py-3 text-right text-xs font-medium uppercase tracking-wider text-[hsl(var(--muted-foreground))]">Additional</th>
+                    <th scope="col" className="px-3 py-3 text-right text-xs font-medium uppercase tracking-wider text-[hsl(var(--muted-foreground))]">Gross USD</th>
+                    <th scope="col" className="px-3 py-3 text-right text-xs font-medium uppercase tracking-wider text-[hsl(var(--muted-foreground))]">Users</th>
                   </tr>
                 </thead>
                 <tbody>

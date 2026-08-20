@@ -4,6 +4,7 @@ import { NextRequest } from "next/server";
 const repoState = vi.hoisted(() => ({
   getUserAiCreditsUsersPaginated: vi.fn(),
   getUserAiCreditsTotals: vi.fn(),
+  getAiCreditsReconciliation: vi.fn(),
 }));
 
 const scopeState = vi.hoisted(() => ({
@@ -29,12 +30,18 @@ vi.mock("@/lib/db/metrics-repo", () => ({
   getUserAiCreditsTotals: (...args: unknown[]) => repoState.getUserAiCreditsTotals(...args),
 }));
 
+vi.mock("@/lib/db/billing-repo", () => ({
+  getAiCreditsReconciliation: (...args: unknown[]) =>
+    repoState.getAiCreditsReconciliation(...args),
+}));
+
 import { GET } from "./route";
 
 beforeEach(() => {
   scopeState.parseScopeFilter.mockReturnValue({
     enterpriseSlugs: ["ent-a"],
     allowedLogins: new Set(["octo", "mona"]),
+    selectedOrgs: ["octo-org"],
   });
   repoState.getUserAiCreditsUsersPaginated.mockReturnValue({
     users: [
@@ -53,6 +60,14 @@ beforeEach(() => {
     tracked_users: 1,
     top_user_login: "octo",
     top_user_ai_credits_used: 42.5,
+  });
+  repoState.getAiCreditsReconciliation.mockReturnValue({
+    attributedCredits: 40,
+    unattributedCredits: 10,
+    totalBilledCredits: 50,
+    attributedUsers: 1,
+    unattributedByModel: [{ model: "Code Review model", credits: 10 }],
+    billingThrough: "2026-07-28",
   });
 });
 
@@ -91,6 +106,16 @@ describe("AI Credits users route", () => {
         totalItems: 1,
         totalPages: 1,
       },
+      // With no billing rows present the reconciliation degrades to zeros
+      // rather than failing the request.
+      reconciliation: {
+        attributedCredits: 40,
+        unattributedCredits: 10,
+        totalBilledCredits: 50,
+        attributedUsers: 1,
+        unattributedByModel: [{ model: "Code Review model", credits: 10 }],
+        billingThrough: "2026-07-28",
+      },
     });
 
     expect(scopeState.parseScopeFilter).toHaveBeenCalled();
@@ -111,5 +136,29 @@ describe("AI Credits users route", () => {
       { allowedLogins: ["octo", "mona"], search: "oct" },
       ["ent-a"],
     );
+    expect(repoState.getAiCreditsReconciliation).toHaveBeenCalledWith(
+      "2026-07-01",
+      "2026-07-28",
+      { allowedLogins: ["octo", "mona"], scopeOrgs: ["octo-org"] },
+      ["ent-a"],
+    );
+  });
+
+  it("still returns user data when reconciliation is unavailable", async () => {
+    // Installs synced before the billing report existed have no billing rows.
+    // The page must degrade to a null reconciliation, never a 500.
+    repoState.getAiCreditsReconciliation.mockImplementation(() => {
+      throw new Error("no such table: billing_premium_requests");
+    });
+
+    const res = await GET(
+      new NextRequest("http://localhost/api/billing/ai-credits/users?days=28"),
+    );
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.reconciliation).toBeNull();
+    expect(body.users).toHaveLength(1);
+    expect(body.totals.total_ai_credits_used).toBe(42.5);
   });
 });

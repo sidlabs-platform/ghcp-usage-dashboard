@@ -2,7 +2,6 @@
 
 import { useEffect, useState, useCallback, useRef } from "react";
 import dynamic from "next/dynamic";
-import Link from "next/link";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { MetricCard } from "@/components/cards/MetricCard";
 import { ScopeFilter } from "@/components/filters/ScopeFilter";
@@ -34,23 +33,47 @@ const CLIvsIDEChart = dynamic(
   () => import("@/components/charts/CLIvsIDEChart").then(m => ({ default: m.CLIvsIDEChart })),
   { ssr: false, loading: () => <ChartSkeleton /> }
 );
-import { Users, UserCheck, Bot, Terminal, CreditCard, Activity, Eye, GitPullRequest, ShieldAlert, TrendingDown, Sparkles, Code2, Brain, Monitor, Receipt, Calendar, AppWindow } from "lucide-react";
+import {
+  Users,
+  CheckSquare,
+  KeyRound,
+  Activity,
+  ShieldAlert,
+  TrendingDown,
+  Sparkles,
+  DollarSign,
+  Zap,
+  Link,
+} from "lucide-react";
+import NextLink from "next/link";
+
+/** Format a USD amount for display, e.g. 1234.5 → "$1,235" */
+function formatCost(v: number | null): string {
+  if (v === null) return "—";
+  return "$" + Math.round(v).toLocaleString();
+}
 
 export default function DashboardOverview() {
   const { days } = useDateRange();
-  const { hasFilter, buildScopeParams } = useScope();
+  const { hasFilter, buildScopeParams, clearAll } = useScope();
   const [data, setData] = useState<OverviewData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [securityData, setSecurityData] = useState<any>(null);
+  const [securityData, setSecurityData] = useState<{
+    summary?: {
+      totalOpenAlerts: number;
+      criticalAlerts: number;
+      overallFixRate: number;
+      fixedLast30d: number;
+      autofixAdoptionRate: number;
+    };
+  } | null>(null);
   const [securityEnabled, setSecurityEnabled] = useState(false);
-  const [pageVisibility, setPageVisibility] = useState<Record<string, boolean>>({});
 
   const kpiRef = useRef<HTMLDivElement>(null);
   const chartsRef = useRef<HTMLDivElement>(null);
   const securityRef = useRef<HTMLDivElement>(null);
 
-  // Fetch config once
   useEffect(() => {
     fetch("/api/config")
       .then((r) => r.json())
@@ -60,7 +83,6 @@ export default function DashboardOverview() {
           config?.metrics?.dependabot?.enabled ||
           config?.metrics?.secretScanning?.enabled;
         setSecurityEnabled(enabled);
-        if (config?.pageVisibility) setPageVisibility(config.pageVisibility);
       })
       .catch(() => {});
   }, []);
@@ -80,14 +102,11 @@ export default function DashboardOverview() {
       .catch((err) => setError(err.message))
       .finally(() => setLoading(false));
 
-    // Fetch security overview separately so failures don't break the main dashboard
     if (securityEnabled) {
-      try {
-        fetch(`/api/security/overview?days=${days}`)
-          .then((res) => { if (res.ok) return res.json(); })
-          .then((json) => { if (json) setSecurityData(json); })
-          .catch(() => { /* Security metrics may not be available */ });
-      } catch { /* Security metrics may not be available */ }
+      fetch(`/api/security/overview?days=${days}`)
+        .then((res) => { if (res.ok) return res.json(); })
+        .then((json) => { if (json) setSecurityData(json); })
+        .catch(() => {});
     } else {
       setSecurityData(null);
     }
@@ -98,16 +117,12 @@ export default function DashboardOverview() {
   if (loading && !data) {
     return (
       <div>
-        <PageHeader title="Executive Overview" description="Loading metrics..." />
-        <div className={`grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4 mb-8 ${hasFilter ? "xl:grid-cols-9" : "xl:grid-cols-10"}`}>
-          {Array.from({ length: hasFilter ? 9 : 10 }).map((_, i) => (
-            <KPISkeleton key={i} />
-          ))}
+        <PageHeader title="Overview" description="Loading metrics..." />
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 mb-8">
+          {Array.from({ length: 6 }).map((_, i) => <KPISkeleton key={i} />)}
         </div>
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-          {Array.from({ length: 4 }).map((_, i) => (
-            <ChartSkeleton key={i} />
-          ))}
+          {Array.from({ length: 4 }).map((_, i) => <ChartSkeleton key={i} />)}
         </div>
       </div>
     );
@@ -116,45 +131,82 @@ export default function DashboardOverview() {
   if (error && !data) {
     return (
       <div>
-        <PageHeader title="Executive Overview" description="GitHub Copilot usage across your enterprise" />
+        <PageHeader title="Overview" description="GitHub Copilot usage across your enterprise" />
         <ScopeFilter />
         <div className="rounded-xl border bg-[hsl(var(--card))] p-12 text-center">
           <Activity className="h-12 w-12 mx-auto text-[hsl(var(--muted-foreground))] mb-4" />
           <h3 className="text-lg font-semibold mb-2">
-            {error ? "Error loading data" : "No data available"}
+            Error loading data
           </h3>
           <p className="text-sm text-[hsl(var(--muted-foreground))] max-w-md mx-auto">
-            {error || "Click the Sync button in the header to fetch metrics from GitHub. This will backfill 90 days of data using the enterprise-1-day API endpoint."}
+            {error}
+          </p>
+          <p className="mt-2 text-sm text-[hsl(var(--muted-foreground))] max-w-md mx-auto">
+            If metrics have not been synced yet, click the Sync button in the header.
           </p>
         </div>
       </div>
     );
   }
 
-  if (!data) return null;
+  if (!data) {
+    return (
+      <div>
+        <PageHeader title="Overview" description="GitHub Copilot usage across your enterprise" />
+        <ScopeFilter />
+        <div className="rounded-xl border bg-[hsl(var(--card))] p-12 text-center">
+          <Activity className="h-12 w-12 mx-auto text-[hsl(var(--muted-foreground))] mb-4" />
+          <h3 className="text-lg font-semibold mb-2">
+            No data available
+          </h3>
+          <p className="text-sm text-[hsl(var(--muted-foreground))] max-w-md mx-auto">
+            {hasFilter
+              ? "No data matches the current filters."
+              : "Click the Sync button in the header to fetch metrics from GitHub."}
+          </p>
+          {hasFilter && (
+            <button
+              type="button"
+              onClick={clearAll}
+              className="mt-4 rounded-md border border-[hsl(var(--border))] px-3 py-1.5 text-sm font-medium text-[hsl(var(--foreground))] transition-colors hover:bg-[hsl(var(--accent))] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[hsl(var(--ring))]"
+            >
+              Clear filters
+            </button>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   const { kpis, activeUsersTrend, acceptanceRateTrend, chatModes, featureUsage, cliVsIde } = data;
   const dailyTrendValues = data.dailyTrendValues ?? [];
   const isFiltered = data.filtered || hasFilter;
 
-  const chatModeDonutData= [
-    { name: "Ask", value: chatModes.ask, color: CHART_COLORS.ask },
-    { name: "Edit", value: chatModes.edit, color: CHART_COLORS.edit },
-    { name: "Plan", value: chatModes.plan, color: CHART_COLORS.plan },
-    { name: "Agent", value: chatModes.agent, color: CHART_COLORS.agent },
-    { name: "Custom", value: chatModes.custom, color: CHART_COLORS.custom },
+  const chatModeDonutData = [
+    { name: "Ask",     value: chatModes.ask,     color: CHART_COLORS.ask },
+    { name: "Edit",    value: chatModes.edit,    color: CHART_COLORS.edit },
+    { name: "Plan",    value: chatModes.plan,    color: CHART_COLORS.plan },
+    { name: "Agent",   value: chatModes.agent,   color: CHART_COLORS.agent },
+    { name: "Custom",  value: chatModes.custom,  color: CHART_COLORS.custom },
     { name: "Unknown", value: chatModes.unknown, color: CHART_COLORS.unknown },
   ].filter((d) => d.value > 0);
+
+  // Show inactive-seat ratio only when not filtered (seat data is enterprise-wide)
+  const inactiveSeats  = isFiltered ? null : (kpis.inactiveSeats ?? 0);
+  const totalSeats     = isFiltered ? null : (kpis.totalSeats ?? 0);
+  const inactivePct    = totalSeats && totalSeats > 0 ? Math.round(((inactiveSeats ?? 0) / totalSeats) * 100) : null;
+
+  const licenseUtil    = isFiltered ? null : kpis.licenseUtilization;
 
   return (
     <div>
       <PageHeader
-        title="Executive Overview"
+        title="Overview"
         description={`GitHub Copilot usage metrics — ${data.daysLoaded} days loaded (as of ${data.dataAsOf})`}
       >
         <ExportMenu
           pdf={{
-            sectionRefs: [kpiRef, chartsRef, ...(securityData?.summary ? [securityRef] : [])],
+            sectionRefs: [kpiRef, ...(securityData?.summary ? [securityRef] : []), chartsRef],
             title: "Executive Overview",
             filename: `overview-report-${days}d`,
             metadata: {
@@ -170,103 +222,143 @@ export default function DashboardOverview() {
 
       <ScopeFilter />
 
-      {/* KPI Cards */}
-      <Section title="Key Metrics">
-        <div ref={kpiRef} className={`grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4 ${isFiltered ? "xl:grid-cols-9" : "xl:grid-cols-10"}`}>
+      {/* ── KPI Row: ≤6 cards, answering the 4 program-owner questions ── */}
+      {/* Call sites where accent should become value-derived (TODO for MetricCard wiring):
+          1. Completion Acceptance — threshold already wired below (good ≥70, bad <40)
+          2. License Utilization  — threshold already wired below (good ≥80, bad <60)
+          3. Inactive Seats       — intentionally neutral (absolute count, no universal threshold)
+          4. Active Users         — neutral (count metric, no good/bad direction)
+      */}
+      <Section title="Program Health">
+        <div
+          ref={kpiRef}
+          className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6"
+        >
+          {/* 1. Active Users — answers "Are we getting value?" */}
           <MetricCard
-            title="Period Active Users"
+            title="Active Users"
             value={kpis.periodActiveUsers ?? 0}
-            icon={<Calendar className="h-4 w-4" />}
-            subtitle={`Unique in last ${days} day${days !== 1 ? "s" : ""}`}
-            accent="teal"
+            icon={<Users className="h-4 w-4" />}
+            subtitle={`DAU ${kpis.dailyActiveUsers} · Period total`}
+            accent="blue"
             stagger={1}
             trend={dailyTrendValues}
           />
+
+          {/* 2. Completion Acceptance — answers "Are we getting value?" */}
           <MetricCard
-            title="Daily Active Users"
-            value={kpis.dailyActiveUsers}
-            icon={<Users className="h-4 w-4" />}
-            delta={kpis.deltas.dau !== 0 ? { value: kpis.deltas.dau } : undefined}
-            subtitle="Yesterday"
-            accent="blue"
+            title="Acceptance Rate"
+            value={kpis.completionAcceptanceRate ?? 0}
+            format="percent"
+            icon={<CheckSquare className="h-4 w-4" />}
+            subtitle="Completion events accepted"
+            thresholds={{ good: 70, bad: 40, higherIsBetter: true }}
             stagger={2}
-            trend={dailyTrendValues}
           />
+
+          {/* 3. License Utilization — answers "Who isn't using it?" */}
           <MetricCard
-            title="Weekly Active Users"
-            value={kpis.weeklyActiveUsers}
-            icon={<UserCheck className="h-4 w-4" />}
-            subtitle={`${days}-day average`}
-            accent="violet"
+            title="License Utilization"
+            value={licenseUtil ?? 0}
+            format="percent"
+            icon={<KeyRound className="h-4 w-4" />}
+            subtitle={
+              licenseUtil === null
+                ? "N/A when filtered"
+                : `${totalSeats ?? 0} total seats`
+            }
+            thresholds={{ good: 80, bad: 60, higherIsBetter: true }}
             stagger={3}
-            trend={dailyTrendValues}
           />
+
+          {/* 4. Inactive Seats — answers "Who isn't using it?" */}
           <MetricCard
-            title="Monthly Active Users"
-            value={kpis.monthlyActiveUsers}
+            title="Inactive Seats"
+            value={inactiveSeats ?? 0}
             icon={<Users className="h-4 w-4" />}
-            subtitle={`${days}-day average`}
-            accent="green"
+            subtitle={
+              inactiveSeats === null
+                ? "N/A when filtered"
+                : inactivePct !== null
+                ? `${inactivePct}% of total — no activity 30 d`
+                : "No seat data"
+            }
+            accent="amber"
             stagger={4}
           />
+
+          {/* 5. Monthly Net Cost — answers "What is it costing us?" */}
           <MetricCard
-            title="Agent Adoption"
-            value={kpis.agentAdoption}
-            format="percent"
-            icon={<Bot className="h-4 w-4" />}
-            subtitle="% of active users"
-            accent="amber"
+            title="Monthly Net Cost"
+            value={formatCost(kpis.monthlyNetCost ?? null)}
+            format="raw"
+            icon={<DollarSign className="h-4 w-4" />}
+            subtitle={
+              kpis.billingAvailable
+                ? `Est. based on last ${days} days`
+                : "Sync billing data to see cost"
+            }
+            accent="teal"
             stagger={5}
           />
+
+          {/* 6. AI Credits Used — answers "What is it costing us?" */}
           <MetricCard
-            title="Coding Agent"
-            value={kpis.codingAgentAdoption}
-            format="percent"
-            icon={<GitPullRequest className="h-4 w-4" />}
-            subtitle="% using coding agent"
-            accent="amber"
+            title="AI Credits Used"
+            value={kpis.aiCreditsConsumed !== null && kpis.aiCreditsConsumed !== undefined
+              ? kpis.aiCreditsConsumed
+              : 0}
+            icon={<Zap className="h-4 w-4" />}
+            subtitle={
+              kpis.aiCreditsConsumed
+                ? `Last ${days} days`
+                : "No usage data yet"
+            }
+            accent="violet"
             stagger={6}
           />
-          <MetricCard
-            title="Code Review"
-            value={kpis.codeReviewAdoption}
-            format="percent"
-            icon={<Eye className="h-4 w-4" />}
-            subtitle="% with active review"
-            accent="teal"
-            stagger={7}
-          />
-          <MetricCard
-            title="CLI Users"
-            value={kpis.cliUsers}
-            icon={<Terminal className="h-4 w-4" />}
-            subtitle="Yesterday"
-            accent="green"
-            stagger={8}
-          />
-          <MetricCard
-            title="Copilot App Users"
-            value={kpis.copilotAppUsers ?? 0}
-            icon={<AppWindow className="h-4 w-4" />}
-            subtitle="Yesterday"
-            accent="violet"
-            stagger={9}
-          />
-          {!isFiltered && (
-            <MetricCard
-              title="License Utilization"
-              value={kpis.licenseUtilization}
-              format="percent"
-              icon={<CreditCard className="h-4 w-4" />}
-              subtitle="Active / total seats"
-              accent="red"
-              stagger={10}
-            />
-          )}
         </div>
       </Section>
 
-      {/* Charts grid */}
+      {/* ── Security summary — promoted above charts (#100) ── */}
+      {securityData?.summary && (
+        <Section title="Security Overview">
+          <div ref={securityRef} className="grid gap-4 grid-cols-2 lg:grid-cols-4">
+            <MetricCard
+              title="Open Alerts"
+              value={securityData.summary.totalOpenAlerts}
+              icon={<ShieldAlert className="h-4 w-4" />}
+              subtitle={`${securityData.summary.criticalAlerts} critical`}
+              thresholds={{ good: 0, bad: 10, higherIsBetter: false }}
+            />
+            <MetricCard
+              title="Fix Rate"
+              value={securityData.summary.overallFixRate}
+              format="percent"
+              icon={<TrendingDown className="h-4 w-4" />}
+              subtitle={`${securityData.summary.fixedLast30d} fixed last 30d`}
+              thresholds={{ good: 70, bad: 30, higherIsBetter: true }}
+            />
+            <MetricCard
+              title="Autofix Adoption"
+              value={securityData.summary.autofixAdoptionRate}
+              format="percent"
+              icon={<Sparkles className="h-4 w-4" />}
+              subtitle="Copilot Autofix"
+              thresholds={{ good: 50, bad: 10, higherIsBetter: true }}
+            />
+            <NextLink
+              href="/dashboard/security"
+              className="flex items-center justify-center rounded-xl border border-dashed border-[hsl(var(--border))] p-6 text-sm text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--accent))] hover:text-[hsl(var(--foreground))] transition-colors gap-2"
+            >
+              <Link className="h-4 w-4" />
+              View Full Security Dashboard
+            </NextLink>
+          </div>
+        </Section>
+      )}
+
+      {/* ── Charts ── */}
       <Section title="Trends & Analytics">
         <div ref={chartsRef} className="grid grid-cols-1 gap-6 lg:grid-cols-2 animate-fade-in-up">
           <ActiveUsersTrendChart data={activeUsersTrend} />
@@ -278,78 +370,6 @@ export default function DashboardOverview() {
           </div>
         </div>
       </Section>
-
-      {/* Quick Links to Analytics */}
-      {(() => {
-        const isVisible = (key: string) => Object.keys(pageVisibility).length === 0 || pageVisibility[key] !== false;
-        const quickLinks = [
-          { href: "/dashboard/code-generation", visKey: "codeGeneration", icon: <Code2 className="h-4 w-4 text-[hsl(var(--primary))]" />, label: "Code Generation", desc: "LoC suggested vs accepted, language breakdown" },
-          { href: "/dashboard/chat-modes", visKey: "chatModes", icon: <Sparkles className="h-4 w-4 text-violet-500" />, label: "Copilot Features", desc: "Chat, Agent, and feature adoption trends" },
-          { href: "/dashboard/models", visKey: "models", icon: <Brain className="h-4 w-4 text-amber-500" />, label: "Model Statistics", desc: "AI model usage across features and languages" },
-          { href: "/dashboard/cli", visKey: "cli", icon: <Terminal className="h-4 w-4 text-emerald-500" />, label: "CLI Analytics", desc: "Session activity, users, and token consumption" },
-          { href: "/dashboard/pull-requests", visKey: "pullRequests", icon: <GitPullRequest className="h-4 w-4 text-orange-500" />, label: "Pull Requests", desc: "Copilot-authored and reviewed PR metrics" },
-          { href: "/dashboard/teams", visKey: "teams", icon: <Users className="h-4 w-4 text-sky-500" />, label: "Team Analytics", desc: "Adoption and usage leaderboard by team" },
-          { href: "/dashboard/ide-languages", visKey: "ideLanguages", icon: <Monitor className="h-4 w-4 text-indigo-500" />, label: "IDE & Languages", desc: "Editor and programming language breakdown" },
-          { href: "/dashboard/billing", visKey: "billing", icon: <Receipt className="h-4 w-4 text-rose-500" />, label: "Billing", desc: "Cost summary and spend breakdown" },
-          { href: "/dashboard/copilot-app", visKey: "copilotApp", icon: <AppWindow className="h-4 w-4 text-violet-500" />, label: "Copilot App", desc: "Mobile/App adoption, sessions, and code impact" },
-        ].filter((l) => isVisible(l.visKey));
-        if (quickLinks.length === 0) return null;
-        return (
-          <Section title="Explore Analytics">
-            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
-              {quickLinks.map((link) => (
-                <Link
-                  key={link.href}
-                  href={link.href}
-                  className="group rounded-xl border p-4 transition-all duration-200 hover:bg-[hsl(var(--accent))] hover:-translate-y-0.5 hover:shadow-[var(--card-hover-shadow)]"
-                >
-                  <div className="flex items-center gap-2.5 mb-1.5">
-                    <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-[hsl(var(--muted))] group-hover:bg-[hsl(var(--background))] transition-colors">
-                      {link.icon}
-                    </div>
-                    <span className="text-sm font-semibold">{link.label}</span>
-                  </div>
-                  <p className="text-xs text-[hsl(var(--muted-foreground))] leading-relaxed pl-[42px]">{link.desc}</p>
-                </Link>
-              ))}
-            </div>
-          </Section>
-        );
-      })()}
-
-      {/* Security Summary */}
-      {securityData?.summary && (
-        <Section title="Security Overview">
-          <div ref={securityRef} className="grid gap-4 grid-cols-2 lg:grid-cols-4">
-            <MetricCard
-              title="Open Alerts"
-              value={securityData.summary.totalOpenAlerts}
-              icon={<ShieldAlert className="h-4 w-4" />}
-              subtitle={`${securityData.summary.criticalAlerts} critical`}
-            />
-            <MetricCard
-              title="Fix Rate"
-              value={securityData.summary.overallFixRate}
-              format="percent"
-              icon={<TrendingDown className="h-4 w-4" />}
-              subtitle={`${securityData.summary.fixedLast30d} fixed last 30d`}
-            />
-            <MetricCard
-              title="Autofix Adoption"
-              value={securityData.summary.autofixAdoptionRate}
-              format="percent"
-              icon={<Sparkles className="h-4 w-4" />}
-              subtitle="Copilot Autofix"
-            />
-            <Link
-              href="/dashboard/security"
-              className="flex items-center justify-center rounded-xl border border-dashed border-[hsl(var(--border))] p-6 text-sm text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--accent))] hover:text-[hsl(var(--foreground))] transition-colors"
-            >
-              View Full Security Dashboard →
-            </Link>
-          </div>
-        </Section>
-      )}
     </div>
   );
 }

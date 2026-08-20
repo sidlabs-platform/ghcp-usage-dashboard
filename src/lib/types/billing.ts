@@ -257,6 +257,55 @@ export interface PremiumDailyTrend {
   total_aic_gross: number;
 }
 
+// ── Copilot Cost Basis ─────────────────────────────────────────────────
+
+/**
+ * Canonical Copilot cost + AI-credit figures for a window.
+ *
+ * Both the Billing and License & AI Credits surfaces render from this shape, so
+ * the two pages cannot drift when the repository calculation changes.
+ */
+export interface CopilotCostBasis {
+  /** Inclusive bounds these figures were computed over. */
+  startDate: string;
+  endDate: string;
+  /** Calendar period when the bounds are exactly one month, else null. */
+  period: string | null;
+
+  /** Copilot seat licences — net, gross, and billed seat-months. */
+  seatCostNet: number;
+  seatCostGross: number;
+  seatQuantity: number;
+
+  /**
+   * AI credits billed in range, from the detailed usage report. This is the
+   * authoritative total; it covers the full synced history.
+   */
+  creditsBilled: number;
+  /** Net USD charged for those credits (zero while within the pooled allowance). */
+  creditCostNet: number;
+  creditCostGross: number;
+
+  /**
+   * Credits that can be attributed to a named user, from the ai_credit report.
+   * Always <= creditsBilled; frequently far lower for historical months.
+   */
+  creditsAttributed: number;
+  /** Distinct users carrying attributed credits. */
+  attributedUsers: number;
+  /** creditsAttributed / creditsBilled, 0-100. Null when nothing was billed. */
+  attributionCoveragePct: number | null;
+  /**
+   * True when per-user attribution accounts for essentially all billed
+   * credits. When false, per-user credit tables are a sample, not a census,
+   * and must be labelled as such.
+   */
+  attributionComplete: boolean;
+
+  /** Total Copilot cost: seats + credits. */
+  totalCopilotNet: number;
+}
+
 // ── Token Usage Analytics ─────────────────────────────────────────────
 // Backed by the per-model token breakdown added to the AI usage report on
 // 2026-08-11. All figures come from `billing_premium_requests`.

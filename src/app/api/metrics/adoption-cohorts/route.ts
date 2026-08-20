@@ -6,26 +6,22 @@ import { withCache } from "@/lib/cache/with-cache";
 import { withTimeout } from "@/lib/api/timeout";
 import { CACHE_TTL } from "@/lib/cache/memory-cache";
 import { countEffectiveEnterprises, getPhaseDeveloperCounts } from "@/lib/db/metrics-repo";
+import { parsePhaseTotals, phaseLabel, phaseNumberSql } from "@/lib/metrics/adoption-phase";
 import type { TotalsByAIAdoptionPhase } from "@/lib/types/metrics";
 
-/** Phase labels used as fallback when API data is missing labels */
-const PHASE_LABELS: Record<number, string> = {
-  0: "No cohort",
-  1: "Code first",
-  2: "Agent first",
-  3: "Multi-agent",
-};
+/** Resolved adoption phase per user row, shared by every user-level query here. */
+const USER_PHASE_SQL = phaseNumberSql("u.ai_adoption_phase");
 
-function buildLoginFilter(logins: string[]): { clause: string; params: string[] } {
+function buildLoginFilter(logins: string[], alias = ""): { clause: string; params: string[] } {
   if (logins.length === 0) return { clause: "", params: [] };
   const placeholders = logins.map(() => "?").join(",");
-  return { clause: ` AND user_login IN (${placeholders})`, params: logins };
+  return { clause: ` AND ${alias}user_login IN (${placeholders})`, params: logins };
 }
 
-function buildEnterpriseFilter(slugs?: string[]): { clause: string; params: string[] } {
+function buildEnterpriseFilter(slugs?: string[], alias = ""): { clause: string; params: string[] } {
   if (!slugs || slugs.length === 0) return { clause: "", params: [] };
   const placeholders = slugs.map(() => "?").join(",");
-  return { clause: ` AND enterprise_slug IN (${placeholders})`, params: slugs };
+  return { clause: ` AND ${alias}enterprise_slug IN (${placeholders})`, params: slugs };
 }
 
 /**
@@ -80,7 +76,7 @@ function getEnterpriseAdoptionCohorts(
   let hasMergeData = false;
 
   for (const row of rows) {
-    const phases: TotalsByAIAdoptionPhase[] = JSON.parse(row.totals_by_ai_adoption_phase || "[]");
+    const phases = parsePhaseTotals(row.totals_by_ai_adoption_phase);
     if (phases.length === 0) continue;
 
     const byPhase: Record<number, number> = { 0: 0, 1: 0, 2: 0, 3: 0 };
@@ -146,7 +142,7 @@ function getEnterpriseAdoptionCohorts(
     const count = countForPhase(p);
     return {
       phase: p.phase,
-      label: p.label || PHASE_LABELS[p.phase] || `Phase ${p.phase}`,
+      label: phaseLabel(p.phase),
       count,
       percentage: totalEngaged > 0 ? (count / totalEngaged) * 100 : 0,
     };
@@ -161,7 +157,7 @@ function getEnterpriseAdoptionCohorts(
     const merged = typeof p.total_pull_requests_merged === "number" ? p.total_pull_requests_merged : 0;
     return {
       phase: p.phase,
-      label: p.label || PHASE_LABELS[p.phase] || `Phase ${p.phase}`,
+      label: phaseLabel(p.phase),
       count: merged,
       percentage: totalMerged > 0 ? (merged / totalMerged) * 100 : 0,
     };
@@ -196,37 +192,37 @@ function getUserAdoptionCohorts(
   enterpriseSlugs?: string[],
 ) {
   const db = getDb();
-  const lf = buildLoginFilter(allowedLogins ?? []);
-  const ef = buildEnterpriseFilter(enterpriseSlugs);
+  const lf = buildLoginFilter(allowedLogins ?? [], "u.");
+  const ef = buildEnterpriseFilter(enterpriseSlugs, "u.");
 
   // Get latest phase per user. Uses ROW_NUMBER to pick exactly one row per
   // user_login (the most recent day), avoiding duplicates in multi-enterprise
   // scenarios where the same login appears under different enterprise_slugs.
-  // label is selected deterministically via MIN() so the outer GROUP BY phase
-  // always picks a consistent label.
+  // The phase is resolved to an integer in SQL via the shared expression, since
+  // the stored JSON carries it either as a number or as a display string.
   const rows = db.prepare(`
-    SELECT phase, MIN(label) as label, COUNT(*) as user_count FROM (
-      SELECT user_login, phase, label FROM (
+    SELECT phase, COUNT(*) as user_count FROM (
+      SELECT user_login, phase FROM (
         SELECT
           u.user_login,
-          json_extract(u.ai_adoption_phase, '$.phase') as phase,
-          json_extract(u.ai_adoption_phase, '$.label') as label,
+          ${USER_PHASE_SQL} as phase,
           ROW_NUMBER() OVER (PARTITION BY u.user_login ORDER BY u.day DESC) as rn
         FROM user_daily_metrics u
         WHERE u.day >= ? AND u.day <= ?
           AND u.ai_adoption_phase IS NOT NULL${lf.clause}${ef.clause}
       ) WHERE rn = 1
     )
+    WHERE phase IS NOT NULL
     GROUP BY phase
     ORDER BY phase ASC
-  `).all(start, end, ...lf.params, ...ef.params) as { phase: number; label: string; user_count: number }[];
+  `).all(start, end, ...lf.params, ...ef.params) as { phase: number; user_count: number }[];
 
   if (rows.length === 0) return null;
 
   const totalUsers = rows.reduce((s, r) => s + r.user_count, 0);
   const distribution = rows.map((r) => ({
     phase: r.phase,
-    label: r.label || PHASE_LABELS[r.phase] || `Phase ${r.phase}`,
+    label: phaseLabel(r.phase),
     count: r.user_count,
     percentage: totalUsers > 0 ? (r.user_count / totalUsers) * 100 : 0,
   }));
@@ -234,14 +230,15 @@ function getUserAdoptionCohorts(
   // Daily trend from user-level data
   const trendRows = db.prepare(`
     SELECT
-      day,
-      json_extract(ai_adoption_phase, '$.phase') as phase,
-      COUNT(DISTINCT user_login) as user_count
-    FROM user_daily_metrics
-    WHERE day >= ? AND day <= ?
-      AND ai_adoption_phase IS NOT NULL${lf.clause}${ef.clause}
-    GROUP BY day, json_extract(ai_adoption_phase, '$.phase')
-    ORDER BY day ASC
+      u.day as day,
+      ${USER_PHASE_SQL} as phase,
+      COUNT(DISTINCT u.user_login) as user_count
+    FROM user_daily_metrics u
+    WHERE u.day >= ? AND u.day <= ?
+      AND u.ai_adoption_phase IS NOT NULL${lf.clause}${ef.clause}
+    GROUP BY u.day, phase
+    HAVING phase IS NOT NULL
+    ORDER BY u.day ASC
   `).all(start, end, ...lf.params, ...ef.params) as { day: string; phase: number; user_count: number }[];
 
   const trendMap = new Map<string, { day: string; phase0: number; phase1: number; phase2: number; phase3: number }>();

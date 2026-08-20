@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { CreditCard, Zap } from "lucide-react";
+import { Bot, CreditCard, Users, Zap } from "lucide-react";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { MetricCard } from "@/components/cards/MetricCard";
 import { ScopeFilter } from "@/components/filters/ScopeFilter";
@@ -12,7 +12,7 @@ import { PaginatedTable, type ColumnDef } from "@/components/tables/PaginatedTab
 import { useDateRange } from "@/contexts/DateRangeContext";
 import { useScope } from "@/contexts/ScopeContext";
 import { safeNum } from "@/lib/utils";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 interface AiCreditsUserRow {
   user_login: string;
@@ -80,6 +80,15 @@ const exportColumns = [
   { key: "last_active_day", label: "Last Active Day" },
 ];
 
+interface Reconciliation {
+  attributedCredits: number;
+  unattributedCredits: number;
+  totalBilledCredits: number;
+  attributedUsers: number;
+  unattributedByModel: { model: string; credits: number }[];
+  billingThrough: string | null;
+}
+
 /**
  * Renders a sortable per-user AI Credit consumption dashboard.
  */
@@ -87,6 +96,8 @@ export default function AiCreditsUsersPage() {
   const { mode, days, startDate, endDate } = useDateRange();
   const { hasFilter, buildScopeParams } = useScope();
   const [totalUsers, setTotalUsers] = useState(0);
+  const [metricsCredits, setMetricsCredits] = useState<number | null>(null);
+  const [recon, setRecon] = useState<Reconciliation | null>(null);
 
   const extraParams = new URLSearchParams();
   if (mode === "custom") {
@@ -99,6 +110,26 @@ export default function AiCreditsUsersPage() {
   scopeParams.forEach((value, key) => extraParams.set(key, value));
 
   const dateLabel = mode === "custom" ? `${startDate} to ${endDate}` : `Last ${days} days`;
+
+  const queryString = extraParams.toString();
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`/api/billing/ai-credits/users?${queryString}&pageSize=1`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((json) => {
+        if (cancelled || !json) return;
+        setMetricsCredits(json.totals?.total_ai_credits_used ?? null);
+        setRecon(json.reconciliation ?? null);
+      })
+      .catch(() => {
+        /* Reconciliation is supplementary; the table below still works. */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [queryString]);
+
+  const topSurfaces = recon?.unattributedByModel.slice(0, 2).map((m) => m.model).join(", ");
 
   return (
     <div>
@@ -125,21 +156,94 @@ export default function AiCreditsUsersPage() {
       <ScopeFilter />
       <DateFilter />
 
-      <div className="mb-8 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+      <div className="mb-4 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <MetricCard
+          title="Attributed to Users"
+          value={recon ? formatCredits(recon.attributedCredits) : "—"}
+          format="raw"
+          icon={<Zap className="h-4 w-4" />}
+          accent="violet"
+          subtitle={recon ? `Across ${recon.attributedUsers} developers` : "Billing report"}
+        />
+        <MetricCard
+          title="Unattributed"
+          value={recon ? formatCredits(recon.unattributedCredits) : "—"}
+          format="raw"
+          icon={<Bot className="h-4 w-4" />}
+          accent="amber"
+          subtitle={topSurfaces ? `Mostly ${topSurfaces}` : "No user attribution"}
+        />
+        <MetricCard
+          title="Total Billed"
+          value={recon ? formatCredits(recon.totalBilledCredits) : "—"}
+          format="raw"
+          icon={<CreditCard className="h-4 w-4" />}
+          accent="blue"
+          subtitle={recon?.billingThrough ? `Billed through ${recon.billingThrough}` : dateLabel}
+        />
         <MetricCard
           title="Users with AI Credits"
           value={totalUsers}
-          icon={<CreditCard className="h-4 w-4" />}
+          icon={<Users className="h-4 w-4" />}
+          accent="teal"
           subtitle={hasFilter ? "In selected scope" : dateLabel}
         />
-        <MetricCard
-          title="Metric Source"
-          value="Usage API"
-          format="raw"
-          icon={<Zap className="h-4 w-4" />}
-          subtitle="user_daily_metrics.ai_credits_used"
-        />
       </div>
+
+      {recon && recon.unattributedCredits > 0 && (
+        <div
+          role="note"
+          className="mb-8 space-y-2 rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--muted))]/40 px-4 py-3 text-sm text-[hsl(var(--muted-foreground))]"
+        >
+          <p>
+            <strong className="text-[hsl(var(--foreground))]">
+              {formatCredits(recon.attributedCredits)}
+            </strong>{" "}
+            attributed{" "}
+            <span aria-hidden="true">+</span>
+            <span className="sr-only">plus</span>{" "}
+            <strong className="text-[hsl(var(--foreground))]">
+              {formatCredits(recon.unattributedCredits)}
+            </strong>{" "}
+            unattributed{" "}
+            <span aria-hidden="true">=</span>
+            <span className="sr-only">equals</span>{" "}
+            <strong className="text-[hsl(var(--foreground))]">
+              {formatCredits(recon.totalBilledCredits)}
+            </strong>{" "}
+            total, the same figure shown on{" "}
+            <Link
+              href="/dashboard/token-usage"
+              className="text-[hsl(var(--primary))] underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[hsl(var(--ring))]"
+            >
+              Token Usage
+            </Link>{" "}
+            and{" "}
+            <Link
+              href="/dashboard/billing-premium"
+              className="text-[hsl(var(--primary))] underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[hsl(var(--ring))]"
+            >
+              AI Credits
+            </Link>
+            . The unattributed portion is billed to the enterprise rather than to a
+            developer — automated surfaces such as{" "}
+            {recon.unattributedByModel.slice(0, 3).map((m) => m.model).join(", ")} — so it
+            can never appear in the table below.
+          </p>
+          {metricsCredits !== null && (
+            <p>
+              The table itself sums to{" "}
+              <strong className="text-[hsl(var(--foreground))]">
+                {formatCredits(metricsCredits)}
+              </strong>
+              , measured by the Usage Metrics API rather than the billing report. The two
+              agree per user; any remaining difference is reporting lag between the
+              sources
+              {recon.billingThrough ? `, with billing current through ${recon.billingThrough}` : ""}.
+            </p>
+          )}
+        </div>
+      )}
 
       <Card>
         <CardHeader>

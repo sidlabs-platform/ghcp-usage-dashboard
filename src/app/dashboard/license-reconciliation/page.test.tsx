@@ -263,7 +263,7 @@ describe("License reconciliation page", () => {
     render(<Page />);
     await screen.findByText("Licensed Users");
     expect(screen.getByText("Monthly License Cost")).toBeInTheDocument();
-    expect(screen.getByText("AI Credits Consumed")).toBeInTheDocument();
+    expect(screen.getByText("AI Credits (attributed)")).toBeInTheDocument();
     expect(screen.getByText("Credit Utilization")).toBeInTheDocument();
     expect(screen.getByText(/utilization distribution is unavailable/i)).toBeInTheDocument();
   });

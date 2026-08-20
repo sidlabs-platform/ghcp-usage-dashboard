@@ -42,6 +42,8 @@ import {
   getTokenUserModelEfficiency,
   getTokenExportRows,
   TokenExportTooLargeError,
+  getAiCreditsReconciliation,
+  getCopilotCostBasis,
 } from "./billing-repo";
 import type { BillingPremiumRequestRecord } from "@/lib/types/billing";
 
@@ -167,6 +169,84 @@ describe("getOverviewKPIs", () => {
     ]);
     const kpis = getOverviewKPIs("2026-06-05", "2026-06-05", { scopeOrgs: ["scoped-org"] });
     expect(kpis.totalNet).toBeGreaterThanOrEqual(10);
+  });
+});
+
+describe("getAiCreditsReconciliation", () => {
+  it("falls back to quantity for legacy rows so attributed and unattributed credits add up to total", () => {
+    upsertPremiumRequests("ent1", [
+      makePremiumRecord({
+        date: "2026-06-10",
+        username: "alice",
+        model: "gpt-4.1",
+        quantity: 25,
+        unit_type: "ai-credits",
+        aic_quantity: 0,
+        net_amount: 2.5,
+        gross_amount: 2.5,
+      }),
+      makePremiumRecord({
+        date: "2026-06-10",
+        username: "",
+        model: "automation",
+        quantity: 75,
+        unit_type: "ai-credits",
+        aic_quantity: 0,
+        net_amount: 7.5,
+        gross_amount: 7.5,
+      }),
+      makePremiumRecord({
+        date: "2026-06-10",
+        username: "",
+        model: "legacy-premium",
+        quantity: 5,
+        unit_type: "requests",
+        aic_quantity: 0,
+        net_amount: 0.5,
+        gross_amount: 0.5,
+      }),
+    ]);
+
+    const result = getAiCreditsReconciliation("2026-06-01", "2026-06-30");
+
+    expect(result.attributedCredits).toBe(25);
+    expect(result.unattributedCredits).toBe(75);
+    expect(result.totalBilledCredits).toBe(100);
+    expect(result.attributedCredits + result.unattributedCredits).toBe(result.totalBilledCredits);
+    expect(result.unattributedByModel).toEqual([{ model: "automation", credits: 75 }]);
+  });
+
+  it("counts legacy request rows in cost basis attribution, matching the billed side", () => {
+    // CREDIT_SKU_SQL counts premium_request SKUs as consumption, so the
+    // attributed side must count those rows too. Excluding them here would
+    // report a phantom attribution gap for pre-June-2026 months.
+    upsertUsageRecords("ent1", [
+      { date: "2026-06-10", product: "copilot", sku: "copilot_ai_credit", quantity: 20, unit_type: "ai-credits", applied_cost_per_quantity: 0.1, gross_amount: 2, discount_amount: 0, net_amount: 2, organization: "org1", repository: "", username: "", workflow_path: "", cost_center_name: "", charge_scope: "user" },
+      { date: "2026-06-10", product: "copilot", sku: "copilot_premium_request", quantity: 5, unit_type: "requests", applied_cost_per_quantity: 0.1, gross_amount: 0.5, discount_amount: 0, net_amount: 0.5, organization: "org1", repository: "", username: "", workflow_path: "", cost_center_name: "", charge_scope: "user" },
+    ]);
+    upsertPremiumRequests("ent1", [
+      makePremiumRecord({
+        date: "2026-06-10",
+        username: "alice",
+        quantity: 20,
+        unit_type: "ai-credits",
+        aic_quantity: 0,
+      }),
+      makePremiumRecord({
+        date: "2026-06-10",
+        username: "bob",
+        quantity: 5,
+        unit_type: "requests",
+        aic_quantity: 0,
+      }),
+    ]);
+
+    const result = getCopilotCostBasis("2026-06-01", "2026-06-30");
+
+    expect(result.creditsBilled).toBe(25);
+    expect(result.creditsAttributed).toBe(25);
+    expect(result.attributionCoveragePct).toBe(100);
+    expect(result.attributionComplete).toBe(true);
   });
 });
 
@@ -724,6 +804,17 @@ describe("appendBillingFilters edge cases", () => {
     ]);
     const result = getOverviewKPIs("2026-06-01", "2026-06-30", { allowedLogins: [] });
     expect(result.totalNet).toBe(0);
+  });
+
+  it("applies an empty allowedLogins scope to premium totals", () => {
+    upsertPremiumRequests("ent1", [
+      makePremiumRecord({ date: "2026-06-10", username: "u1", net_amount: 10, gross_amount: 10 }),
+    ]);
+
+    const result = getOverviewKPIs("2026-06-01", "2026-06-30", { allowedLogins: [] });
+
+    expect(result.totalNet).toBe(0);
+    expect(result.totalGross).toBe(0);
   });
 
   it("filters by scopeOrgs alone without page-level org filter", () => {

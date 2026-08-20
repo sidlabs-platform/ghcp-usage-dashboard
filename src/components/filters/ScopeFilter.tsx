@@ -114,7 +114,7 @@ function FilterDropdown({
                   placeholder="Search…"
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
-                  className="h-8 w-full rounded-md border border-[hsl(var(--border))] bg-transparent pl-8 pr-3 text-sm outline-none focus:ring-1 focus:ring-[hsl(var(--ring))]"
+                  className="h-8 w-full rounded-md border border-[hsl(var(--border))] bg-transparent pl-8 pr-3 text-sm outline-none focus-visible:ring-1 focus-visible:ring-[hsl(var(--ring))]"
                 />
                 {search && (
                   <button type="button" onClick={() => setSearch("")} className="absolute right-2 top-1/2 -translate-y-1/2 text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))]">

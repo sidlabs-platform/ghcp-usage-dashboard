@@ -27,6 +27,7 @@ import type {
   TokenAttribution,
   TokenAttributionRow,
   TokenModelDailyPoint,
+  CopilotCostBasis,
 } from "@/lib/types/billing";
 
 const AI_CREDITS_START_DATE = "2026-06-01";
@@ -455,7 +456,7 @@ export function getOverviewKPIs(
   const premParams: unknown[] = [start, end];
   if (entClause) { premClauses.push(entClause.replace(/^\s*AND\s+/, "")); premParams.push(...entParams); }
   // Apply only scope filters to premium
-  if (filters?.allowedLogins?.length || filters?.scopeOrgs?.length) {
+  if (filters && (filters.allowedLogins !== undefined || Boolean(filters.scopeOrgs?.length))) {
     appendPremiumFilters(premClauses, premParams, {
       allowedLogins: filters.allowedLogins,
       scopeOrgs: filters.scopeOrgs,
@@ -1315,6 +1316,43 @@ const POOL_FRACTION_SQL = `
     ELSE 1.0
   END`;
 
+/**
+ * Strict AI-credit quantity, in credits only.
+ *
+ * Deliberately mirrors `parseAiCreditCSV`: only `unit_type = 'ai-credits'` rows
+ * fall back to `quantity` when `aic_quantity` is a literal 0, because for those
+ * rows GitHub reports the credit amount in `quantity` and leaves 0 in the aic_
+ * columns. Legacy `requests` rows are excluded because their `quantity` is a
+ * count of premium requests, not a credit amount.
+ *
+ * Use this for anything scoped to the AI-credits era (June 2026 onward), where
+ * mixing in a request count would conflate two different units. For figures
+ * that span the premium-request era, use {@link BILLED_UNIT_QUANTITY_SQL}.
+ */
+const AI_CREDIT_QUANTITY_SQL = `
+  CASE
+    WHEN COALESCE(aic_quantity, 0) > 0 THEN aic_quantity
+    WHEN unit_type = 'ai-credits'      THEN COALESCE(quantity, 0)
+    ELSE 0
+  END`;
+
+/**
+ * Billed consumption quantity in whatever unit the period was billed in.
+ *
+ * This is the per-user counterpart to {@link CREDIT_SKU_SQL}, which counts both
+ * `ai_credit` and `premium_request` SKUs as consumption. Before June 2026 the
+ * billed unit was the premium request; after it, the AI credit. Attribution
+ * coverage compares this against the billed total, so both sides must count the
+ * same rows -- applying the stricter {@link AI_CREDIT_QUANTITY_SQL} here would
+ * drop legacy request rows from the attributed side only and report a phantom
+ * attribution gap for historical months.
+ */
+const BILLED_UNIT_QUANTITY_SQL = `
+  CASE
+    WHEN COALESCE(aic_quantity, 0) > 0 THEN aic_quantity
+    ELSE COALESCE(quantity, 0)
+  END`;
+
 const POOL_CREDITS_SQL = `COALESCE(SUM(aic_quantity * (${POOL_FRACTION_SQL})), 0)`;
 const PAID_CREDITS_SQL = `COALESCE(SUM(aic_quantity * (1.0 - (${POOL_FRACTION_SQL}))), 0)`;
 
@@ -1690,4 +1728,214 @@ export function getTokenExportRows(
   `
     )
     .all(...params, limit) as Record<string, string | number>[];
+}
+
+/**
+ * Reconciles the two AI-credit totals the dashboard reports.
+ *
+ * "AI Credits by User" sums `user_daily_metrics.ai_credits_used` (the Usage
+ * Metrics API), while Token Usage and AI Credits sum the `ai_credit` billing
+ * report. The two disagree, which reads as a data bug but is not one: verified
+ * against production data over an identical window, the per-user attributed
+ * totals match to the decimal. The entire difference is billed credits that
+ * GitHub attributes to no user — Code Review, `code_quality`, and other
+ * automated surfaces that bill to the enterprise rather than to a developer.
+ *
+ * Returning the unattributed remainder alongside the attributed total lets the
+ * UI state the identity `attributed + unattributed = total billed` instead of
+ * leaving two irreconcilable headline numbers on adjacent pages.
+ */
+export interface AiCreditsReconciliation {
+  /** Billed credits carrying a username. */
+  attributedCredits: number;
+  /** Billed credits with no username — automated and enterprise-level surfaces. */
+  unattributedCredits: number;
+  /** Every billed credit in range: attributed + unattributed. */
+  totalBilledCredits: number;
+  /** Distinct users carrying attributed credits. */
+  attributedUsers: number;
+  /** Top unattributed surfaces by credit volume, for explaining the remainder. */
+  unattributedByModel: { model: string; credits: number }[];
+  /** Latest billing date in range — the billing report can lead or lag metrics. */
+  billingThrough: string | null;
+}
+
+/**
+ * Split billed AI credits into user-attributed and unattributed buckets.
+ */
+export function getAiCreditsReconciliation(
+  start: string,
+  end: string,
+  filters?: PremiumFilters,
+  enterpriseSlugs?: string[]
+): AiCreditsReconciliation {
+  const db = getDb();
+  const { where, params } = buildTokenQuery(start, end, filters, enterpriseSlugs);
+  const HAS_USER = `TRIM(COALESCE(username, '')) <> ''`;
+
+  const row = db
+    .prepare(
+      `
+    SELECT
+      COALESCE(SUM(CASE WHEN ${HAS_USER} THEN (${AI_CREDIT_QUANTITY_SQL}) END), 0)     AS attributed,
+      COALESCE(SUM(CASE WHEN NOT ${HAS_USER} THEN (${AI_CREDIT_QUANTITY_SQL}) END), 0) AS unattributed,
+      COALESCE(SUM(${AI_CREDIT_QUANTITY_SQL}), 0)                                      AS total,
+      COUNT(DISTINCT CASE WHEN ${HAS_USER} THEN LOWER(username) END)                   AS users,
+      MAX(date)                                                                        AS billing_through
+    FROM billing_premium_requests
+    ${where}
+  `
+    )
+    .get(...params) as Record<string, number | string | null>;
+
+  const byModel = db
+    .prepare(
+      `
+    SELECT COALESCE(NULLIF(TRIM(model), ''), 'Unknown') AS model,
+           COALESCE(SUM(${AI_CREDIT_QUANTITY_SQL}), 0)  AS credits
+    FROM billing_premium_requests
+    ${where} AND NOT ${HAS_USER}
+    GROUP BY 1
+    HAVING credits > 0
+    ORDER BY credits DESC
+    LIMIT 5
+  `
+    )
+    .all(...params) as { model: string; credits: number }[];
+
+  return {
+    attributedCredits: Number(row?.attributed ?? 0),
+    unattributedCredits: Number(row?.unattributed ?? 0),
+    totalBilledCredits: Number(row?.total ?? 0),
+    attributedUsers: Number(row?.users ?? 0),
+    unattributedByModel: byModel.map((r) => ({ model: r.model, credits: Number(r.credits) })),
+    billingThrough: (row?.billing_through as string | null) ?? null,
+  };
+}
+
+// ── Shared cost basis (Billing ↔ License & AI Credits) ───────────────
+//
+// The Billing page and the License & AI Credits page are both expected to
+// answer "what did Copilot cost, and how many AI credits did we burn?" for a
+// given calendar month. They previously disagreed, for two independent
+// reasons:
+//
+//  1. Different windows. Billing used a rolling "last N days"; licensing
+//     resolved a "YYYY-MM" period. Those only coincide by accident.
+//  2. Different sources. Seat cost and billed credits live in
+//     `billing_usage_records` (the detailed report, synced over the full
+//     history). Per-user credit attribution lives in
+//     `billing_premium_requests` (the ai_credit report, which GitHub only
+//     serves for a short recent window). Reading a *total* off the per-user
+//     table therefore under-reports every historical month — by 60% for one
+//     observed month, and by 100% for a month the report never covered.
+//
+// This function is the single answer to that question. Both pages call it with
+// identical bounds, so their headline figures agree by construction rather
+// than by two implementations happening to round the same way. Attribution
+// coverage is reported alongside, so a partially-attributable month is visible
+// as a gap instead of silently shrinking the total.
+
+/** SKUs billed per seat rather than per unit of consumption. */
+const SEAT_SKU_SQL = `sku NOT LIKE '%ai_credit%' AND sku NOT LIKE '%premium_request%'`;
+/** SKUs billed per AI credit (or, pre-June-2026, per premium request). */
+const CREDIT_SKU_SQL = `(sku LIKE '%ai_credit%' OR sku LIKE '%premium_request%')`;
+
+export type { CopilotCostBasis };
+
+/**
+ * Canonical Copilot cost + AI-credit figures for a date range.
+ *
+ * Both the Billing and License & AI Credits surfaces render from this, so the
+ * two pages cannot drift.
+ */
+export function getCopilotCostBasis(
+  start: string,
+  end: string,
+  filters?: BillingFilters,
+  enterpriseSlugs?: string[]
+): CopilotCostBasis {
+  const db = getDb();
+  const { clause: entClause, params: entParams } = buildEnterpriseFilter(enterpriseSlugs);
+  const entWhere = entClause.replace(/^\s*AND\s+/, "");
+
+  const usageClauses: string[] = ["date >= ?", "date <= ?", "product = 'copilot'"];
+  const usageParams: unknown[] = [start, end];
+  if (entWhere) { usageClauses.push(entWhere); usageParams.push(...entParams); }
+  appendBillingFilters(usageClauses, usageParams, filters);
+
+  const usage = db
+    .prepare(
+      `
+    SELECT
+      COALESCE(SUM(CASE WHEN ${SEAT_SKU_SQL}   THEN net_amount   END), 0) AS seatNet,
+      COALESCE(SUM(CASE WHEN ${SEAT_SKU_SQL}   THEN gross_amount END), 0) AS seatGross,
+      COALESCE(SUM(CASE WHEN ${SEAT_SKU_SQL}   THEN quantity     END), 0) AS seatQty,
+      COALESCE(SUM(CASE WHEN ${CREDIT_SKU_SQL} THEN quantity     END), 0) AS creditQty,
+      COALESCE(SUM(CASE WHEN ${CREDIT_SKU_SQL} THEN net_amount   END), 0) AS creditNet,
+      COALESCE(SUM(CASE WHEN ${CREDIT_SKU_SQL} THEN gross_amount END), 0) AS creditGross
+    FROM billing_usage_records
+    ${buildWhereClause(usageClauses)}
+  `
+    )
+    .get(...usageParams) as Record<string, number> | undefined;
+
+  // Per-user attribution must count the same unit the billed side counts (see
+  // CREDIT_SKU_SQL): AI credits after June 2026, premium requests before it.
+  const premClauses: string[] = ["date >= ?", "date <= ?"];
+  const premParams: unknown[] = [start, end];
+  if (entWhere) { premClauses.push(entWhere); premParams.push(...entParams); }
+  if (filters?.allowedLogins?.length || filters?.scopeOrgs?.length) {
+    appendPremiumFilters(premClauses, premParams, {
+      allowedLogins: filters.allowedLogins,
+      scopeOrgs: filters.scopeOrgs,
+    });
+  }
+
+  const prem = db
+    .prepare(
+      `
+    SELECT
+      COALESCE(SUM(${BILLED_UNIT_QUANTITY_SQL}), 0)                    AS credits,
+      COUNT(DISTINCT CASE WHEN TRIM(COALESCE(username, '')) <> ''
+                          THEN LOWER(username) END)                  AS users
+    FROM billing_premium_requests
+    ${buildWhereClause(premClauses)}
+  `
+    )
+    .get(...premParams) as Record<string, number> | undefined;
+
+  const seatCostNet = Number(usage?.seatNet ?? 0);
+  const creditsBilled = Number(usage?.creditQty ?? 0);
+  const creditCostNet = Number(usage?.creditNet ?? 0);
+  const creditsAttributed = Number(prem?.credits ?? 0);
+
+  const coverage = creditsBilled > 0
+    ? Math.min(100, (creditsAttributed / creditsBilled) * 100)
+    : null;
+
+  return {
+    startDate: start,
+    endDate: end,
+    period: derivePeriod(start, end),
+    seatCostNet,
+    seatCostGross: Number(usage?.seatGross ?? 0),
+    seatQuantity: Number(usage?.seatQty ?? 0),
+    creditsBilled,
+    creditCostNet,
+    creditCostGross: Number(usage?.creditGross ?? 0),
+    creditsAttributed,
+    attributedUsers: Number(prem?.users ?? 0),
+    attributionCoveragePct: coverage,
+    // 99% rather than 100% because the two reports round independently; a
+    // sub-1% delta is float noise, not a coverage gap worth alarming on.
+    attributionComplete: coverage !== null && coverage >= 99,
+    totalCopilotNet: seatCostNet + creditCostNet,
+  };
+}
+
+/** The "YYYY-MM" period covered, when the bounds sit inside a single month. */
+function derivePeriod(start: string, end: string): string | null {
+  if (start.length < 7 || end.length < 7) return null;
+  return start.slice(0, 7) === end.slice(0, 7) ? start.slice(0, 7) : null;
 }

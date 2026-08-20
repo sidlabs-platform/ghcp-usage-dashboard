@@ -202,7 +202,7 @@ export default function CodeGenerationPage() {
 
       {/* Related Analytics */}
       <section className="mt-8 pt-6 border-t">
-        <h3 className="text-sm font-medium text-[hsl(var(--muted-foreground))] mb-3">Related Analytics</h3>
+        <h2 className="text-sm font-medium text-[hsl(var(--muted-foreground))] mb-3">Related Analytics</h2>
         <div className="flex flex-wrap gap-3">
           <Link href="/dashboard/models" className="text-sm text-[hsl(var(--primary))] hover:underline">
             Model Statistics →

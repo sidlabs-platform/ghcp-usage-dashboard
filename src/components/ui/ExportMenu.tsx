@@ -155,7 +155,7 @@ export function ExportMenu({ csv, pdf, isReady = true }: ExportMenuProps) {
               role="menuitem"
               tabIndex={-1}
               onClick={handleCSV}
-              className="flex w-full items-center gap-2 rounded-sm px-3 py-2 text-sm hover:bg-[hsl(var(--accent))] hover:text-[hsl(var(--accent-foreground))] focus-visible:bg-[hsl(var(--accent))] focus-visible:text-[hsl(var(--accent-foreground))] focus-visible:outline-none"
+              className="flex w-full items-center gap-2 rounded-sm px-3 py-2 text-sm hover:bg-[hsl(var(--accent))] hover:text-[hsl(var(--accent-foreground))] focus-visible:bg-[hsl(var(--accent))] focus-visible:text-[hsl(var(--accent-foreground))] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[hsl(var(--ring))]"
             >
               <Table className="h-4 w-4" />
               Export as CSV
@@ -167,7 +167,7 @@ export function ExportMenu({ csv, pdf, isReady = true }: ExportMenuProps) {
               role="menuitem"
               tabIndex={-1}
               onClick={handlePDF}
-              className="flex w-full items-center gap-2 rounded-sm px-3 py-2 text-sm hover:bg-[hsl(var(--accent))] hover:text-[hsl(var(--accent-foreground))] focus-visible:bg-[hsl(var(--accent))] focus-visible:text-[hsl(var(--accent-foreground))] focus-visible:outline-none"
+              className="flex w-full items-center gap-2 rounded-sm px-3 py-2 text-sm hover:bg-[hsl(var(--accent))] hover:text-[hsl(var(--accent-foreground))] focus-visible:bg-[hsl(var(--accent))] focus-visible:text-[hsl(var(--accent-foreground))] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[hsl(var(--ring))]"
             >
               <FileText className="h-4 w-4" />
               Export as PDF

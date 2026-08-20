@@ -210,6 +210,7 @@ export default function MeteredUsagePage() {
 
   const SortHeader = ({ col, label }: { col: string; label: string }) => (
     <th
+      scope="col"
       className="px-3 py-3 text-left text-xs font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wider cursor-pointer hover:text-[hsl(var(--foreground))] select-none"
       onClick={() => handleSort(col)}
     >
@@ -250,30 +251,32 @@ export default function MeteredUsagePage() {
         />
       </PageHeader>
 
-      {/* Active scope filter indicator */}
-      {hasFilter && (
-        <div className="rounded-lg border border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-950/30 px-4 py-2 text-sm text-blue-700 dark:text-blue-400">
-          📊 Showing filtered results: <strong>{[...selectedEntTeams, ...selectedOrgTeams, ...scopeOrgs].join(", ")}</strong>
-        </div>
-      )}
+      {/* Polite live region for screen readers */}
+      <div aria-live="polite" aria-atomic="true" className="sr-only">
+        {!loading && `Updated: ${pagination.totalItems} metered usage records, last ${days} days`}
+      </div>
 
       {/* Filter Bar */}
       <div className="rounded-xl border bg-[hsl(var(--card))] p-4">
         <div className="flex flex-wrap items-center gap-3">
           {/* Search */}
           <div className="relative flex-1 min-w-[200px]">
+            <label htmlFor="metered-search" className="sr-only">Search product, SKU, org, or user</label>
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-[hsl(var(--muted-foreground))]" />
             <input
+              id="metered-search"
               type="text"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder="Search product, SKU, org, user..."
-              className="w-full pl-9 pr-3 py-2 rounded-lg border bg-transparent text-sm focus:outline-none focus:ring-2 focus:ring-[hsl(var(--primary))]/20"
+              className="w-full pl-9 pr-3 py-2 rounded-lg border bg-transparent text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[hsl(var(--primary))]/20"
             />
           </div>
 
           {/* Product filter */}
+          <label htmlFor="metered-product-filter" className="sr-only">Filter by product</label>
           <select
+            id="metered-product-filter"
             className="rounded-lg border bg-transparent px-3 py-2 text-sm"
             value={selectedProducts[0] || ""}
             onChange={(e) => setSelectedProducts(e.target.value ? [e.target.value] : [])}
@@ -283,7 +286,9 @@ export default function MeteredUsagePage() {
           </select>
 
           {/* Org filter */}
+          <label htmlFor="metered-org-filter" className="sr-only">Filter by organization</label>
           <select
+            id="metered-org-filter"
             className="rounded-lg border bg-transparent px-3 py-2 text-sm"
             value={selectedOrgs[0] || ""}
             onChange={(e) => setSelectedOrgs(e.target.value ? [e.target.value] : [])}
@@ -294,14 +299,18 @@ export default function MeteredUsagePage() {
 
           {/* Cost Center filter */}
           {filterOptions.costCenters.length > 0 && (
-            <select
-              className="rounded-lg border bg-transparent px-3 py-2 text-sm"
-              value={selectedCostCenter}
-              onChange={(e) => setSelectedCostCenter(e.target.value)}
-            >
-              <option value="">All Cost Centers</option>
-              {filterOptions.costCenters.map(cc => <option key={cc} value={cc}>{cc}</option>)}
-            </select>
+            <>
+              <label htmlFor="metered-costcenter-filter" className="sr-only">Filter by cost center</label>
+              <select
+                id="metered-costcenter-filter"
+                className="rounded-lg border bg-transparent px-3 py-2 text-sm"
+                value={selectedCostCenter}
+                onChange={(e) => setSelectedCostCenter(e.target.value)}
+              >
+                <option value="">All Cost Centers</option>
+                {filterOptions.costCenters.map(cc => <option key={cc} value={cc}>{cc}</option>)}
+              </select>
+            </>
           )}
 
           {/* Charge Scope toggle */}
@@ -340,7 +349,7 @@ export default function MeteredUsagePage() {
       {/* Usage Trend Chart */}
       {trendData.length > 0 && (
         <div ref={chartRef} className="rounded-xl border bg-[hsl(var(--card))] p-6">
-          <h3 className="text-lg font-semibold mb-1">Usage Trend</h3>
+          <h2 className="text-lg font-semibold mb-1">Usage Trend</h2>
           <p className="text-sm text-[hsl(var(--muted-foreground))] mb-4">Daily net cost for current filters</p>
           <BillingCostTrendChart data={trendData} />
         </div>
@@ -357,19 +366,20 @@ export default function MeteredUsagePage() {
       <div ref={tableRef} className="rounded-xl border bg-[hsl(var(--card))] overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
+            <caption className="sr-only">Metered Usage Records — last {days} days</caption>
             <thead className="border-b bg-[hsl(var(--accent))]/30">
               <tr>
                 <SortHeader col="date" label="Date" />
                 <SortHeader col="product" label="Product" />
                 <SortHeader col="sku" label="SKU" />
                 <SortHeader col="quantity" label="Qty" />
-                <th className="px-3 py-3 text-left text-xs font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wider">Unit</th>
+                <th scope="col" className="px-3 py-3 text-left text-xs font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wider">Unit</th>
                 <SortHeader col="gross_amount" label="Gross" />
                 <SortHeader col="discount_amount" label="Discount" />
                 <SortHeader col="net_amount" label="Net" />
                 <SortHeader col="organization" label="Org" />
                 <SortHeader col="username" label="User" />
-                <th className="px-3 py-3 text-left text-xs font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wider">Scope</th>
+                <th scope="col" className="px-3 py-3 text-left text-xs font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wider">Scope</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-[hsl(var(--border))]">
@@ -434,14 +444,14 @@ export default function MeteredUsagePage() {
         <div ref={insightsRef} className="grid gap-6 lg:grid-cols-2">
           {costCenterData.length > 0 && (
             <div className="rounded-xl border bg-[hsl(var(--card))] p-6">
-              <h3 className="text-lg font-semibold mb-1">Cost by Cost Center</h3>
+              <h2 className="text-lg font-semibold mb-1">Cost by Cost Center</h2>
               <p className="text-sm text-[hsl(var(--muted-foreground))] mb-4">Spending distribution across cost centers</p>
               <BillingCostCenterChart data={costCenterData} />
             </div>
           )}
           {repoData.length > 0 && (
             <div className="rounded-xl border bg-[hsl(var(--card))] p-6">
-              <h3 className="text-lg font-semibold mb-1">Top Repositories by Cost</h3>
+              <h2 className="text-lg font-semibold mb-1">Top Repositories by Cost</h2>
               <p className="text-sm text-[hsl(var(--muted-foreground))] mb-4">Highest-spending repositories</p>
               <BillingRepoBreakdownChart data={repoData} limit={15} />
             </div>
@@ -451,10 +461,10 @@ export default function MeteredUsagePage() {
 
       {/* Org-Level Charges Info */}
       <div className="rounded-xl border border-emerald-200 dark:border-emerald-900 bg-emerald-50/50 dark:bg-emerald-950/20 p-6">
-        <h3 className="text-lg font-semibold mb-3 text-emerald-700 dark:text-emerald-400 flex items-center gap-2">
+        <h2 className="text-lg font-semibold mb-3 text-emerald-700 dark:text-emerald-400 flex items-center gap-2">
           <Building2 className="h-5 w-5" />
           About Org-Level Charges
-        </h3>
+        </h2>
         <p className="text-sm text-[hsl(var(--muted-foreground))] mb-3">
           The following charges are billed at the <strong>organization level</strong> and are <em>not</em> attributed to specific users:
         </p>

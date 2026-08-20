@@ -337,7 +337,7 @@ export default function CommandPalette() {
             placeholder="Search pages…"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            className="flex-1 bg-transparent py-3 text-sm outline-none placeholder:text-[hsl(var(--muted-foreground))]"
+            className="flex-1 bg-transparent py-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-[hsl(var(--ring))] rounded placeholder:text-[hsl(var(--muted-foreground))]"
             style={{ color: "hsl(var(--foreground))" }}
           />
         </div>

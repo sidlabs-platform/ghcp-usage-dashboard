@@ -374,12 +374,13 @@ export default function IDELanguagesPage() {
             ) : (
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
+                  <caption className="sr-only">Suggestion Effectiveness by IDE / Surface</caption>
                   <thead>
                     <tr className="border-b text-left text-[hsl(var(--muted-foreground))]">
-                      <th className="py-2 pr-4 font-medium">IDE / Surface</th>
-                      <th className="py-2 pr-4 text-right font-medium">LoC Suggested</th>
-                      <th className="py-2 pr-4 text-right font-medium">LoC Added</th>
-                      <th className="py-2 text-right font-medium">Accepted %</th>
+                      <th scope="col" className="py-2 pr-4 font-medium">IDE / Surface</th>
+                      <th scope="col" className="py-2 pr-4 text-right font-medium">LoC Suggested</th>
+                      <th scope="col" className="py-2 pr-4 text-right font-medium">LoC Added</th>
+                      <th scope="col" className="py-2 text-right font-medium">Accepted %</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -417,10 +418,11 @@ export default function IDELanguagesPage() {
             ) : (
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
+                  <caption className="sr-only">Editor Versions and User Counts</caption>
                   <thead>
                     <tr className="border-b text-left text-[hsl(var(--muted-foreground))]">
-                      <th className="py-2 pr-4 font-medium">Version</th>
-                      <th className="py-2 text-right font-medium">Users</th>
+                      <th scope="col" className="py-2 pr-4 font-medium">Version</th>
+                      <th scope="col" className="py-2 text-right font-medium">Users</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -451,11 +453,12 @@ export default function IDELanguagesPage() {
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
+                <caption className="sr-only">Plugin Versions and User Counts</caption>
                 <thead>
                   <tr className="border-b text-left text-[hsl(var(--muted-foreground))]">
-                    <th className="py-2 pr-4 font-medium">Plugin</th>
-                    <th className="py-2 pr-4 font-medium">Version</th>
-                    <th className="py-2 text-right font-medium">Users</th>
+                    <th scope="col" className="py-2 pr-4 font-medium">Plugin</th>
+                    <th scope="col" className="py-2 pr-4 font-medium">Version</th>
+                    <th scope="col" className="py-2 text-right font-medium">Users</th>
                   </tr>
                 </thead>
                 <tbody>

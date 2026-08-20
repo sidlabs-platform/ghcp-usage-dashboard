@@ -27,6 +27,8 @@ import {
   type PaginatedLicenseRows,
 } from "@/lib/db/license-history-repo";
 import type { LicensePeriodFilterQuery } from "@/lib/types/licensing";
+import { getCopilotCostBasis, type CopilotCostBasis } from "@/lib/db/billing-repo";
+import { monthBounds } from "@/lib/date/month-range";
 import type { AccountState } from "@/lib/licensing/identity-resolver";
 import type { SeatLedgerConfidence } from "@/lib/licensing/seat-ledger";
 import { earliestRecoverablePeriod, parseReportMonths, MAX_REPORT_MONTHS } from "@/lib/licensing/periods";
@@ -338,6 +340,32 @@ async function handler(request: NextRequest) {
     const sortDir = params.get("sortDir") === "asc" ? "asc" : "desc";
 
     const cfg = getLicensingConfig();
+
+    // Same shared basis the Billing page renders, over the same window, so the
+    // two surfaces quote identical seat cost and billed-credit figures. The
+    // periods list is already month-aligned, so its bounds are the first day
+    // of the earliest period through the last (clamped) day of the latest.
+    let costBasis: CopilotCostBasis | null = null;
+    try {
+      const sortedPeriods = [...periods].sort();
+      const first = sortedPeriods[0];
+      const last = sortedPeriods[sortedPeriods.length - 1];
+      if (first && last) {
+        costBasis = getCopilotCostBasis(
+          monthBounds(first).startDate,
+          monthBounds(last).endDate,
+          {
+            allowedLogins: baseFilterQuery.allowedLogins ? [...baseFilterQuery.allowedLogins] : undefined,
+            scopeOrgs: scope.selectedOrgs.length > 0 ? [...scope.selectedOrgs] : undefined,
+          },
+          scope.enterpriseSlugs ? [...scope.enterpriseSlugs] : undefined,
+        );
+      }
+    } catch (err) {
+      // The reconciliation strip is supplementary — never fail the page over it.
+      console.error("Failed to compute Copilot cost basis:", err);
+    }
+
     const earliestMaterialized = getEarliestMaterializedPeriod({
       enterpriseSlugs: baseFilterQuery.enterpriseSlugs,
       allowedLogins: baseFilterQuery.allowedLogins,
@@ -442,6 +470,7 @@ async function handler(request: NextRequest) {
           dataSource: "live_snapshot_only",
           qualitySummary,
           kpis,
+          costBasis,
           rows,
           planBreakdown,
           orgBreakdown,
@@ -492,6 +521,7 @@ async function handler(request: NextRequest) {
         dataSource: "historical",
         qualitySummary,
         kpis,
+        costBasis,
         rows: paginated.rows,
         planBreakdown,
         orgBreakdown,

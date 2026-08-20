@@ -19,9 +19,37 @@ vi.mock("@tanstack/react-query", async () => {
 
 const mockedUseQuery = vi.mocked(useQuery);
 
+// DateRangeProvider/ScopeProvider sync state to the URL, so they call the
+// App Router navigation hooks. Those throw outside a real Next.js render.
+//
+// The mock is deliberately stateful: `useSearchParams`/`useRouter` return
+// stable identities and `replace` feeds the written query string back into
+// `useSearchParams`, exactly as the real router does. A mock that allocated a
+// fresh object per render would re-fire every effect keyed on those hooks and
+// leave the sync components believing the URL never took their write.
+const mockSearchParams = { current: new URLSearchParams() };
+const mockRouter = {
+  replace: vi.fn((url: string) => {
+    const query = url.includes("?") ? url.slice(url.indexOf("?") + 1) : "";
+    mockSearchParams.current = new URLSearchParams(query);
+  }),
+  push: vi.fn(),
+  refresh: vi.fn(),
+  back: vi.fn(),
+  forward: vi.fn(),
+  prefetch: vi.fn(),
+};
+
+vi.mock("next/navigation", () => ({
+  useSearchParams: () => mockSearchParams.current,
+  usePathname: () => "/dashboard",
+  useRouter: () => mockRouter,
+}));
+
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
+  mockSearchParams.current = new URLSearchParams();
 });
 
 function DateRangeConsumer() {

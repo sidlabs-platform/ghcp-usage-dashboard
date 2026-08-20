@@ -310,6 +310,7 @@ export default function PremiumRequestsPage() {
 
   const SortHeader = ({ col, label }: { col: string; label: string }) => (
     <th
+      scope="col"
       className="px-3 py-3 text-left text-xs font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wider cursor-pointer hover:text-[hsl(var(--foreground))] select-none"
       onClick={() => handleSort(col)}
     >
@@ -350,12 +351,10 @@ export default function PremiumRequestsPage() {
         />
       </PageHeader>
 
-      {/* Active scope filter indicator */}
-      {hasFilter && (
-        <div className="rounded-lg border border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-950/30 px-4 py-2 text-sm text-blue-700 dark:text-blue-400">
-          📊 Showing filtered results: <strong>{[...selectedEntTeams, ...selectedOrgTeams, ...scopeOrgs].join(", ")}</strong>
-        </div>
-      )}
+      {/* Polite live region for screen readers */}
+      <div aria-live="polite" aria-atomic="true" className="sr-only">
+        {!loading && kpis && `Updated: AI Credits data, last ${days} days`}
+      </div>
 
       {/* AI credit coverage caveat (2026-07-02 metrics accuracy update) */}
       {coverageNote && (
@@ -423,7 +422,7 @@ export default function PremiumRequestsPage() {
                     <Zap className="h-3.5 w-3.5" />
                     Usage Metrics API insight
                   </div>
-                  <h3 className="mt-4 text-xl font-semibold">AI credits consumed per user</h3>
+                  <h2 className="mt-4 text-xl font-semibold">AI credits consumed per user</h2>
                   <p className="mt-1 max-w-3xl text-sm text-[hsl(var(--muted-foreground))]">
                     User-level reports now include <code className="rounded bg-[hsl(var(--accent))] px-1 py-0.5 text-xs">ai_credits_used</code>,
                     so this view can show per-user consumption directly from Copilot usage metrics, independent of billing export availability.
@@ -443,13 +442,14 @@ export default function PremiumRequestsPage() {
 
               <div className="mt-5 overflow-hidden rounded-xl border bg-[hsl(var(--card))]/80">
                 <table className="w-full text-sm">
+                  <caption className="sr-only">Top AI Credit consumers — user activity summary</caption>
                   <thead className="border-b bg-[hsl(var(--accent))]/30">
                     <tr>
-                      <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-[hsl(var(--muted-foreground))]">User</th>
-                      <th className="px-4 py-3 text-right text-xs font-medium uppercase tracking-wider text-[hsl(var(--muted-foreground))]">AI Credits Used</th>
-                      <th className="px-4 py-3 text-right text-xs font-medium uppercase tracking-wider text-[hsl(var(--muted-foreground))]">Avg / Active Day</th>
-                      <th className="px-4 py-3 text-right text-xs font-medium uppercase tracking-wider text-[hsl(var(--muted-foreground))]">Active Days</th>
-                      <th className="px-4 py-3 text-right text-xs font-medium uppercase tracking-wider text-[hsl(var(--muted-foreground))]">Last Seen</th>
+                      <th scope="col" className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-[hsl(var(--muted-foreground))]">User</th>
+                      <th scope="col" className="px-4 py-3 text-right text-xs font-medium uppercase tracking-wider text-[hsl(var(--muted-foreground))]">AI Credits Used</th>
+                      <th scope="col" className="px-4 py-3 text-right text-xs font-medium uppercase tracking-wider text-[hsl(var(--muted-foreground))]">Avg / Active Day</th>
+                      <th scope="col" className="px-4 py-3 text-right text-xs font-medium uppercase tracking-wider text-[hsl(var(--muted-foreground))]">Active Days</th>
+                      <th scope="col" className="px-4 py-3 text-right text-xs font-medium uppercase tracking-wider text-[hsl(var(--muted-foreground))]">Last Seen</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-[hsl(var(--border))]">
@@ -485,7 +485,7 @@ export default function PremiumRequestsPage() {
             <div className="rounded-xl border bg-[hsl(var(--card))] p-6">
               <div className="mb-4 flex items-center justify-between gap-4">
                 <div>
-                  <h3 className="text-lg font-semibold">Token Breakdown</h3>
+                  <h2 className="text-lg font-semibold">Token Breakdown</h2>
                   <p className="text-sm text-[hsl(var(--muted-foreground))]">
                     Per-model token volumes behind these credits
                   </p>
@@ -516,7 +516,7 @@ export default function PremiumRequestsPage() {
           {/* Daily Trend */}
           {dailyTrend.length > 0 && (
             <div ref={trendRef} className="rounded-xl border bg-[hsl(var(--card))] p-6">
-              <h3 className="text-lg font-semibold mb-1">Daily Trend</h3>
+              <h2 className="text-lg font-semibold mb-1">Daily Trend</h2>
               <p className="text-sm text-[hsl(var(--muted-foreground))] mb-4">
                 <span className="text-purple-500">● Credits</span>{" · "}
                 <span className="text-amber-500">● Cost</span>{" · "}
@@ -529,12 +529,12 @@ export default function PremiumRequestsPage() {
           {/* Charts */}
           <div ref={chartsRef} className="grid gap-6 lg:grid-cols-2">
             <div className="rounded-xl border bg-[hsl(var(--card))] p-6">
-              <h3 className="text-lg font-semibold mb-1">Usage by Model</h3>
+              <h2 className="text-lg font-semibold mb-1">Usage by Model</h2>
               <p className="text-sm text-[hsl(var(--muted-foreground))] mb-4">AI credits consumed and cost per model</p>
               <PremiumModelUsageChart data={modelSummary} />
             </div>
             <div className="rounded-xl border bg-[hsl(var(--card))] p-6">
-              <h3 className="text-lg font-semibold mb-1">Quota Utilization</h3>
+              <h2 className="text-lg font-semibold mb-1">Quota Utilization</h2>
               <p className="text-sm text-[hsl(var(--muted-foreground))] mb-4">
                 <span className="text-emerald-500">● Within quota</span>{" · "}
                 <span className="text-red-500">● Over quota</span>
@@ -548,22 +548,23 @@ export default function PremiumRequestsPage() {
             <div className="grid gap-6 lg:grid-cols-2">
               <div className="rounded-xl border bg-[hsl(var(--card))] overflow-hidden">
                 <div className="px-6 py-4 border-b">
-                  <h3 className="flex items-center gap-2 text-lg font-semibold">
+                  <h2 className="flex items-center gap-2 text-lg font-semibold">
                     <Wallet className="h-4 w-4 text-[hsl(var(--muted-foreground))]" />
                     AI Credits by Cost Center
-                  </h3>
+                  </h2>
                   <p className="text-sm text-[hsl(var(--muted-foreground))]">
                     Usage with no assigned cost center appears as <em>Unattributed</em>.
                   </p>
                 </div>
                 <div className="overflow-x-auto">
                   <table className="w-full text-sm">
+                    <caption className="sr-only">AI Credits by Cost Center</caption>
                     <thead className="border-b bg-[hsl(var(--accent))]/30">
                       <tr>
-                        <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-[hsl(var(--muted-foreground))]">Cost Center</th>
-                        <th className="px-4 py-3 text-right text-xs font-medium uppercase tracking-wider text-[hsl(var(--muted-foreground))]">AI Credits</th>
-                        <th className="px-4 py-3 text-right text-xs font-medium uppercase tracking-wider text-[hsl(var(--muted-foreground))]">Cost</th>
-                        <th className="px-4 py-3 text-right text-xs font-medium uppercase tracking-wider text-[hsl(var(--muted-foreground))]">Users</th>
+                        <th scope="col" className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-[hsl(var(--muted-foreground))]">Cost Center</th>
+                        <th scope="col" className="px-4 py-3 text-right text-xs font-medium uppercase tracking-wider text-[hsl(var(--muted-foreground))]">AI Credits</th>
+                        <th scope="col" className="px-4 py-3 text-right text-xs font-medium uppercase tracking-wider text-[hsl(var(--muted-foreground))]">Cost</th>
+                        <th scope="col" className="px-4 py-3 text-right text-xs font-medium uppercase tracking-wider text-[hsl(var(--muted-foreground))]">Users</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-[hsl(var(--border))]">
@@ -590,22 +591,23 @@ export default function PremiumRequestsPage() {
 
               <div className="rounded-xl border bg-[hsl(var(--card))] overflow-hidden">
                 <div className="px-6 py-4 border-b">
-                  <h3 className="flex items-center gap-2 text-lg font-semibold">
+                  <h2 className="flex items-center gap-2 text-lg font-semibold">
                     <Building2 className="h-4 w-4 text-[hsl(var(--muted-foreground))]" />
                     AI Credits by Organization
-                  </h3>
+                  </h2>
                   <p className="text-sm text-[hsl(var(--muted-foreground))]">
                     Org-less usage (now attributed since 2026-07-02) appears as <em>No organization</em>.
                   </p>
                 </div>
                 <div className="overflow-x-auto">
                   <table className="w-full text-sm">
+                    <caption className="sr-only">AI Credits by Organization</caption>
                     <thead className="border-b bg-[hsl(var(--accent))]/30">
                       <tr>
-                        <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-[hsl(var(--muted-foreground))]">Organization</th>
-                        <th className="px-4 py-3 text-right text-xs font-medium uppercase tracking-wider text-[hsl(var(--muted-foreground))]">AI Credits</th>
-                        <th className="px-4 py-3 text-right text-xs font-medium uppercase tracking-wider text-[hsl(var(--muted-foreground))]">Cost</th>
-                        <th className="px-4 py-3 text-right text-xs font-medium uppercase tracking-wider text-[hsl(var(--muted-foreground))]">Users</th>
+                        <th scope="col" className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-[hsl(var(--muted-foreground))]">Organization</th>
+                        <th scope="col" className="px-4 py-3 text-right text-xs font-medium uppercase tracking-wider text-[hsl(var(--muted-foreground))]">AI Credits</th>
+                        <th scope="col" className="px-4 py-3 text-right text-xs font-medium uppercase tracking-wider text-[hsl(var(--muted-foreground))]">Cost</th>
+                        <th scope="col" className="px-4 py-3 text-right text-xs font-medium uppercase tracking-wider text-[hsl(var(--muted-foreground))]">Users</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-[hsl(var(--border))]">
@@ -636,21 +638,22 @@ export default function PremiumRequestsPage() {
           {userSummary.length > 0 && (
             <div className="rounded-xl border bg-[hsl(var(--card))] overflow-hidden">
               <div className="px-6 py-4 border-b">
-                <h3 className="text-lg font-semibold">Per-User Breakdown</h3>
+                <h2 className="text-lg font-semibold">Per-User Breakdown</h2>
                 <p className="text-sm text-[hsl(var(--muted-foreground))]">Expand a user row to see model-wise AI credits and cost</p>
               </div>
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
+                  <caption className="sr-only">Per-User AI Credit Breakdown — credits, quota, and cost per user</caption>
                   <thead className="border-b bg-[hsl(var(--accent))]/30">
                     <tr>
-                      <th className="px-4 py-3 text-left text-xs font-medium text-[hsl(var(--muted-foreground))] uppercase">User</th>
-                      <th className="px-4 py-3 text-left text-xs font-medium text-[hsl(var(--muted-foreground))] uppercase">Org</th>
-                      <th className="px-4 py-3 text-right text-xs font-medium text-[hsl(var(--muted-foreground))] uppercase">AI Credits</th>
-                      <th className="px-4 py-3 text-right text-xs font-medium text-[hsl(var(--muted-foreground))] uppercase">Within Quota</th>
-                      <th className="px-4 py-3 text-right text-xs font-medium text-[hsl(var(--muted-foreground))] uppercase">Over Quota</th>
-                      <th className="px-4 py-3 text-right text-xs font-medium text-[hsl(var(--muted-foreground))] uppercase">Quota Limit</th>
-                      <th className="px-4 py-3 text-right text-xs font-medium text-[hsl(var(--muted-foreground))] uppercase">Utilization</th>
-                      <th className="px-4 py-3 text-right text-xs font-medium text-[hsl(var(--muted-foreground))] uppercase">Cost</th>
+                      <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-[hsl(var(--muted-foreground))] uppercase">User</th>
+                      <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-[hsl(var(--muted-foreground))] uppercase">Org</th>
+                      <th scope="col" className="px-4 py-3 text-right text-xs font-medium text-[hsl(var(--muted-foreground))] uppercase">AI Credits</th>
+                      <th scope="col" className="px-4 py-3 text-right text-xs font-medium text-[hsl(var(--muted-foreground))] uppercase">Within Quota</th>
+                      <th scope="col" className="px-4 py-3 text-right text-xs font-medium text-[hsl(var(--muted-foreground))] uppercase">Over Quota</th>
+                      <th scope="col" className="px-4 py-3 text-right text-xs font-medium text-[hsl(var(--muted-foreground))] uppercase">Quota Limit</th>
+                      <th scope="col" className="px-4 py-3 text-right text-xs font-medium text-[hsl(var(--muted-foreground))] uppercase">Utilization</th>
+                      <th scope="col" className="px-4 py-3 text-right text-xs font-medium text-[hsl(var(--muted-foreground))] uppercase">Cost</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-[hsl(var(--border))]">
@@ -670,7 +673,7 @@ export default function PremiumRequestsPage() {
                                 type="button"
                                 onClick={() => toggleUserExpanded(u.username, u.organization || "")}
                                 aria-expanded={expanded}
-                                className="inline-flex items-center gap-2 rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-[hsl(var(--ring))]"
+                                className="inline-flex items-center gap-2 rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[hsl(var(--ring))]"
                               >
                                 <span aria-hidden="true" className="text-xs text-[hsl(var(--muted-foreground))]">{expanded ? "▾" : "▸"}</span>
                                 {u.username}
@@ -697,11 +700,12 @@ export default function PremiumRequestsPage() {
                                 ) : (
                                   <div className="overflow-x-auto">
                                     <table className="min-w-[420px] text-xs">
+                                      <caption className="sr-only">Model breakdown for user</caption>
                                       <thead>
                                         <tr className="text-[hsl(var(--muted-foreground))]">
-                                          <th className="py-1 pr-6 text-left font-medium">Model</th>
-                                          <th className="py-1 pr-6 text-right font-medium">AI Credits</th>
-                                          <th className="py-1 text-right font-medium">Cost</th>
+                                          <th scope="col" className="py-1 pr-6 text-left font-medium">Model</th>
+                                          <th scope="col" className="py-1 pr-6 text-right font-medium">AI Credits</th>
+                                          <th scope="col" className="py-1 text-right font-medium">Cost</th>
                                         </tr>
                                       </thead>
                                       <tbody>
@@ -730,19 +734,23 @@ export default function PremiumRequestsPage() {
 
           {/* Filter Bar for Detail Records */}
           <div className="rounded-xl border bg-[hsl(var(--card))] p-4">
-            <h3 className="text-sm font-semibold mb-3">Detailed Records</h3>
+            <h2 className="text-sm font-semibold mb-3">Detailed Records</h2>
             <div className="flex flex-wrap items-center gap-3">
               <div className="relative flex-1 min-w-[200px]">
+                <label htmlFor="premium-search" className="sr-only">Search user, org, or model</label>
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-[hsl(var(--muted-foreground))]" />
                 <input
+                  id="premium-search"
                   type="text"
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
                   placeholder="Search user, org, model..."
-                  className="w-full pl-9 pr-3 py-2 rounded-lg border bg-transparent text-sm focus:outline-none focus:ring-2 focus:ring-[hsl(var(--primary))]/20"
+                  className="w-full pl-9 pr-3 py-2 rounded-lg border bg-transparent text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[hsl(var(--primary))]/20"
                 />
               </div>
+              <label htmlFor="premium-model-filter" className="sr-only">Filter by model</label>
               <select
+                id="premium-model-filter"
                 className="rounded-lg border bg-transparent px-3 py-2 text-sm"
                 value={selectedModel[0] || ""}
                 onChange={(e) => setSelectedModel(e.target.value ? [e.target.value] : [])}
@@ -750,7 +758,9 @@ export default function PremiumRequestsPage() {
                 <option value="">All Models</option>
                 {filterOptions.models.map(m => <option key={m} value={m}>{m}</option>)}
               </select>
+              <label htmlFor="premium-org-filter" className="sr-only">Filter by organization</label>
               <select
+                id="premium-org-filter"
                 className="rounded-lg border bg-transparent px-3 py-2 text-sm"
                 value={selectedOrg[0] || ""}
                 onChange={(e) => setSelectedOrg(e.target.value ? [e.target.value] : [])}
@@ -792,6 +802,7 @@ export default function PremiumRequestsPage() {
           <div ref={tableRef} className="rounded-xl border bg-[hsl(var(--card))] overflow-hidden">
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
+                <caption className="sr-only">Detailed AI Credit Records — individual usage entries</caption>
                 <thead className="border-b bg-[hsl(var(--accent))]/30">
                   <tr>
                     <SortHeader col="date" label="Date" />
@@ -801,8 +812,8 @@ export default function PremiumRequestsPage() {
                     <SortHeader col="aic_quantity" label="AI Credits" />
                     <SortHeader col="aic_gross_amount" label="USD" />
                     <SortHeader col="net_amount" label="Legacy Net" />
-                    <th className="px-3 py-3 text-left text-xs font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wider">Exceeds Quota</th>
-                    <th className="px-3 py-3 text-right text-xs font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wider">Monthly Quota</th>
+                    <th scope="col" className="px-3 py-3 text-left text-xs font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wider">Exceeds Quota</th>
+                    <th scope="col" className="px-3 py-3 text-right text-xs font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wider">Monthly Quota</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-[hsl(var(--border))]">
