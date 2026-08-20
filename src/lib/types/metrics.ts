@@ -385,6 +385,25 @@ export interface OverviewKpis {
   // the other adoption KPIs above (see OverviewData.featureUsage.app).
   copilotAppUsers: number;
   deltas: { dau: number };
+  // ── Added in #100 ──────────────────────────────────────────────────────────
+  /** Period-level completion acceptance rate (accept events / generation events × 100). */
+  completionAcceptanceRate: number;
+  /** Seats with no activity in the last 30 days (seatStats.inactive30d). */
+  inactiveSeats: number;
+  /** Total provisioned seats; 0 when seat data is unavailable or filter is active. */
+  totalSeats: number;
+  /**
+   * Monthly-normalised net cost in USD (totalNet × 30 / days).
+   * `null` when no billing data has been synced.
+   */
+  monthlyNetCost: number | null;
+  /**
+   * Total AI credits consumed from usage-API data (`ai_credits_used` column).
+   * `null` when the field is all-zero (no data yet).
+   */
+  aiCreditsConsumed: number | null;
+  /** False when billing tables are empty; drives graceful "—" display in the UI. */
+  billingAvailable: boolean;
 }
 
 export interface OverviewData {

@@ -8,14 +8,21 @@ import {
   getActiveUsersDailyTrend,
   getActiveUsersRollingTrend,
   getCompletionDailyTrend,
+  getCompletionTotals,
   getFeatureUsageDaily,
   estimateRowCount,
+  buildLoginFilter,
+  buildEnterpriseFilter,
 } from "@/lib/db/aggregation-queries";
+import { getDb } from "@/lib/db/database";
 import { getDateRange, parseAndClampDays } from "@/lib/utils";
 import { extractCompletionMetrics, extractAgentMetrics, isCompletionFeature, isAgentFeature } from "@/lib/aggregation/separate-metrics";
 import { withCache } from "@/lib/cache/with-cache";
 import { withTimeout } from "@/lib/api/timeout";
 import { CACHE_TTL } from "@/lib/cache/memory-cache";
+import { getOverviewKPIs } from "@/lib/db/billing-repo";
+
+const DAYS_PER_MONTH = 30;
 
 async function handler(request: NextRequest) {
   try {
@@ -257,6 +264,43 @@ async function handler(request: NextRequest) {
     // Adoption stats via SQL aggregation
     const adoption = getAdoptionStats(start, end, allowedLoginsArray, enterpriseSlugs);
 
+    // Period-wide completion acceptance rate — single aggregated query, consistent
+    // across enterprise/aggregated/filtered paths.
+    const completionTotals = getCompletionTotals(start, end, allowedLoginsArray, enterpriseSlugs);
+    const completionAcceptanceRate =
+      completionTotals.compGenCount > 0
+        ? (completionTotals.compAcceptCount / completionTotals.compGenCount) * 100
+        : 0;
+
+    // AI credits consumed from usage API (ai_credits_used column on user_daily_metrics)
+    let aiCreditsConsumed: number | null = null;
+    try {
+      const loginF = buildLoginFilter(allowedLoginsArray ?? []);
+      const entF = buildEnterpriseFilter(enterpriseSlugs);
+      const acRow = getDb()
+        .prepare(
+          `SELECT COALESCE(SUM(ai_credits_used), 0) AS total
+           FROM user_daily_metrics
+           WHERE day >= ? AND day <= ?
+           ${loginF.clause}${entF.clause}`,
+        )
+        .get(start, end, ...loginF.params, ...entF.params) as { total: number } | undefined;
+      const total = acRow?.total ?? 0;
+      if (total > 0) aiCreditsConsumed = total;
+    } catch { /* usage column unavailable — stay null */ }
+
+    // Monthly net cost from billing tables (graceful degradation: null when not synced)
+    let monthlyNetCost: number | null = null;
+    let billingAvailable = false;
+    try {
+      const billingKpis = getOverviewKPIs(start, end, undefined, enterpriseSlugs);
+      // totalNet already combines metered + premium; only mark available when cost is non-zero.
+      if ((billingKpis?.totalGross ?? 0) > 0) {
+        monthlyNetCost = billingKpis.totalNet * (DAYS_PER_MONTH / days);
+        billingAvailable = true;
+      }
+    } catch { /* billing tables may not exist — stay null */ }
+
     // KPIs
     const latestTrend = activeUsersTrend[activeUsersTrend.length - 1];
     const prevTrend = activeUsersTrend.length > 1 ? activeUsersTrend[activeUsersTrend.length - 2] : null;
@@ -290,6 +334,13 @@ async function handler(request: NextRequest) {
         dau: prevTrend && latestTrend && prevTrend.daily > 0
           ? ((latestTrend.daily - prevTrend.daily) / prevTrend.daily) * 100 : 0,
       },
+      // ── Added in #100 ────────────────────────────────────────────────────
+      completionAcceptanceRate,
+      inactiveSeats: hasFilter ? 0 : (seatStats.inactive30d ?? 0),
+      totalSeats: hasFilter ? 0 : (seatStats.total ?? 0),
+      monthlyNetCost,
+      aiCreditsConsumed,
+      billingAvailable,
     };
 
     const totalDays = activeUsersTrend.length;
