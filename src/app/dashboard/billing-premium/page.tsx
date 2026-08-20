@@ -811,8 +811,8 @@ export default function PremiumRequestsPage() {
                   ) : records.length === 0 ? (
                     <tr><td colSpan={9} className="px-3 py-12 text-center text-[hsl(var(--muted-foreground))]">No records found</td></tr>
                   ) : (
-                    records.map((r) => (
-                      <tr key={`${r.date}-${r.username}-${r.organization}-${r.model}-${r.sku}`} className="hover:bg-[hsl(var(--accent))]/20 transition-colors">
+                    records.map((r, i) => (
+                      <tr key={`${r.date}-${r.username}-${r.organization}-${r.repository}-${r.model}-${r.sku}-${i}`} className="hover:bg-[hsl(var(--accent))]/20 transition-colors">
                         <td className="px-3 py-2.5 whitespace-nowrap font-mono text-xs">{r.date}</td>
                         <td className="px-3 py-2.5 whitespace-nowrap font-medium">{r.username || "—"}</td>
                         <td className="px-3 py-2.5 whitespace-nowrap">{r.organization || "—"}</td>

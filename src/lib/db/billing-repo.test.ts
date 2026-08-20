@@ -385,6 +385,24 @@ describe("getPremiumRequestsPaginated", () => {
     expect(page1.records[0].cached_tokens).toBe(250);
   });
 
+  it("returns repository so the UI can key rows uniquely", () => {
+    upsertPremiumRequests("ent1", [
+      makePremiumRecord({ date: "2026-06-15", sku: "p3", repository: "repo-a" }),
+      makePremiumRecord({ date: "2026-06-15", sku: "p3", repository: "repo-b" }),
+    ]);
+    const result = getPremiumRequestsPaginated("2026-06-15", "2026-06-15", 1, 10, "date", "asc");
+    expect(result.records.map(r => r.repository).sort()).toEqual(["repo-a", "repo-b"]);
+  });
+
+  it("returns cache_read_tokens and cache_write_tokens", () => {
+    upsertPremiumRequests("ent1", [
+      makePremiumRecord({ date: "2026-06-16", sku: "p4", cache_read_tokens: 700, cache_write_tokens: 300 }),
+    ]);
+    const result = getPremiumRequestsPaginated("2026-06-16", "2026-06-16", 1, 10, "date", "asc");
+    expect(result.records[0].cache_read_tokens).toBe(700);
+    expect(result.records[0].cache_write_tokens).toBe(300);
+  });
+
   it("supports search filter", () => {
     upsertPremiumRequests("ent1", [
       makePremiumRecord({ date: "2026-06-12", sku: "p1", quantity: 10, gross_amount: 0.1, net_amount: 0.1, username: "search-user" }),
