@@ -724,6 +724,8 @@ export function getPremiumRequestsPaginated(
            COALESCE(input_tokens, 0) AS input_tokens,
            COALESCE(output_tokens, 0) AS output_tokens,
            COALESCE(cached_tokens, 0) AS cached_tokens,
+           COALESCE(cache_read_tokens, 0) AS cache_read_tokens,
+           COALESCE(cache_write_tokens, 0) AS cache_write_tokens,
            COALESCE(cost_center_name, '') AS cost_center_name,
            COALESCE(aic_quantity, 0) AS aic_quantity,
            COALESCE(aic_gross_amount, 0) AS aic_gross_amount
