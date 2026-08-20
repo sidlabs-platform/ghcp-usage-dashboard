@@ -293,7 +293,10 @@ async function handler(request: NextRequest) {
     let monthlyNetCost: number | null = null;
     let billingAvailable = false;
     try {
-      const billingKpis = getOverviewKPIs(start, end, undefined, enterpriseSlugs);
+      const billingFilters = hasFilter
+        ? { allowedLogins: allowedLoginsArray ?? [], scopeOrgs: filter.selectedOrgs }
+        : undefined;
+      const billingKpis = getOverviewKPIs(start, end, billingFilters, enterpriseSlugs);
       // totalNet already combines metered + premium; only mark available when cost is non-zero.
       if ((billingKpis?.totalGross ?? 0) > 0) {
         monthlyNetCost = billingKpis.totalNet * (DAYS_PER_MONTH / days);

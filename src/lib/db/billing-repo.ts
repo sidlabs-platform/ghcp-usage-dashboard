@@ -455,7 +455,7 @@ export function getOverviewKPIs(
   const premParams: unknown[] = [start, end];
   if (entClause) { premClauses.push(entClause.replace(/^\s*AND\s+/, "")); premParams.push(...entParams); }
   // Apply only scope filters to premium
-  if (filters?.allowedLogins?.length || filters?.scopeOrgs?.length) {
+  if (filters && (filters.allowedLogins !== undefined || Boolean(filters.scopeOrgs?.length))) {
     appendPremiumFilters(premClauses, premParams, {
       allowedLogins: filters.allowedLogins,
       scopeOrgs: filters.scopeOrgs,
@@ -1312,6 +1312,43 @@ const POOL_FRACTION_SQL = `
     ELSE 1.0
   END`;
 
+/**
+ * Strict AI-credit quantity, in credits only.
+ *
+ * Deliberately mirrors `parseAiCreditCSV`: only `unit_type = 'ai-credits'` rows
+ * fall back to `quantity` when `aic_quantity` is a literal 0, because for those
+ * rows GitHub reports the credit amount in `quantity` and leaves 0 in the aic_
+ * columns. Legacy `requests` rows are excluded because their `quantity` is a
+ * count of premium requests, not a credit amount.
+ *
+ * Use this for anything scoped to the AI-credits era (June 2026 onward), where
+ * mixing in a request count would conflate two different units. For figures
+ * that span the premium-request era, use {@link BILLED_UNIT_QUANTITY_SQL}.
+ */
+const AI_CREDIT_QUANTITY_SQL = `
+  CASE
+    WHEN COALESCE(aic_quantity, 0) > 0 THEN aic_quantity
+    WHEN unit_type = 'ai-credits'      THEN COALESCE(quantity, 0)
+    ELSE 0
+  END`;
+
+/**
+ * Billed consumption quantity in whatever unit the period was billed in.
+ *
+ * This is the per-user counterpart to {@link CREDIT_SKU_SQL}, which counts both
+ * `ai_credit` and `premium_request` SKUs as consumption. Before June 2026 the
+ * billed unit was the premium request; after it, the AI credit. Attribution
+ * coverage compares this against the billed total, so both sides must count the
+ * same rows -- applying the stricter {@link AI_CREDIT_QUANTITY_SQL} here would
+ * drop legacy request rows from the attributed side only and report a phantom
+ * attribution gap for historical months.
+ */
+const BILLED_UNIT_QUANTITY_SQL = `
+  CASE
+    WHEN COALESCE(aic_quantity, 0) > 0 THEN aic_quantity
+    ELSE COALESCE(quantity, 0)
+  END`;
+
 const POOL_CREDITS_SQL = `COALESCE(SUM(aic_quantity * (${POOL_FRACTION_SQL})), 0)`;
 const PAID_CREDITS_SQL = `COALESCE(SUM(aic_quantity * (1.0 - (${POOL_FRACTION_SQL}))), 0)`;
 
@@ -1736,11 +1773,11 @@ export function getAiCreditsReconciliation(
     .prepare(
       `
     SELECT
-      COALESCE(SUM(CASE WHEN ${HAS_USER} THEN aic_quantity END), 0)     AS attributed,
-      COALESCE(SUM(CASE WHEN NOT ${HAS_USER} THEN aic_quantity END), 0) AS unattributed,
-      COALESCE(SUM(aic_quantity), 0)                                    AS total,
-      COUNT(DISTINCT CASE WHEN ${HAS_USER} THEN LOWER(username) END)    AS users,
-      MAX(date)                                                         AS billing_through
+      COALESCE(SUM(CASE WHEN ${HAS_USER} THEN (${AI_CREDIT_QUANTITY_SQL}) END), 0)     AS attributed,
+      COALESCE(SUM(CASE WHEN NOT ${HAS_USER} THEN (${AI_CREDIT_QUANTITY_SQL}) END), 0) AS unattributed,
+      COALESCE(SUM(${AI_CREDIT_QUANTITY_SQL}), 0)                                      AS total,
+      COUNT(DISTINCT CASE WHEN ${HAS_USER} THEN LOWER(username) END)                   AS users,
+      MAX(date)                                                                        AS billing_through
     FROM billing_premium_requests
     ${where}
   `
@@ -1751,7 +1788,7 @@ export function getAiCreditsReconciliation(
     .prepare(
       `
     SELECT COALESCE(NULLIF(TRIM(model), ''), 'Unknown') AS model,
-           COALESCE(SUM(aic_quantity), 0)               AS credits
+           COALESCE(SUM(${AI_CREDIT_QUANTITY_SQL}), 0)  AS credits
     FROM billing_premium_requests
     ${where} AND NOT ${HAS_USER}
     GROUP BY 1
@@ -1878,9 +1915,8 @@ export function getCopilotCostBasis(
     )
     .get(...usageParams) as Record<string, number> | undefined;
 
-  // Per-user attribution comes from the ai_credit report. `aic_quantity` can
-  // legitimately be 0 on legacy premium_request rows, where `quantity` carries
-  // the credits — so take whichever is populated rather than trusting one.
+  // Per-user attribution must count the same unit the billed side counts (see
+  // CREDIT_SKU_SQL): AI credits after June 2026, premium requests before it.
   const premClauses: string[] = ["date >= ?", "date <= ?"];
   const premParams: unknown[] = [start, end];
   if (entWhere) { premClauses.push(entWhere); premParams.push(...entParams); }
@@ -1895,10 +1931,9 @@ export function getCopilotCostBasis(
     .prepare(
       `
     SELECT
-      COALESCE(SUM(CASE WHEN COALESCE(aic_quantity, 0) > 0
-                        THEN aic_quantity ELSE COALESCE(quantity, 0) END), 0) AS credits,
+      COALESCE(SUM(${BILLED_UNIT_QUANTITY_SQL}), 0)                    AS credits,
       COUNT(DISTINCT CASE WHEN TRIM(COALESCE(username, '')) <> ''
-                          THEN LOWER(username) END)                            AS users
+                          THEN LOWER(username) END)                  AS users
     FROM billing_premium_requests
     ${buildWhereClause(premClauses)}
   `

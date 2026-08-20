@@ -11,6 +11,18 @@ import fs from "fs";
 
 let db: Database;
 
+const mockGetOverviewKPIs = vi.hoisted(() =>
+  vi.fn(() => ({
+    totalNet: 0,
+    totalGross: 0,
+    totalDiscount: 0,
+    uniqueProducts: 0,
+    uniqueOrgs: 0,
+    userChargesNet: 0,
+    orgChargesNet: 0,
+  })),
+);
+
 vi.mock("@/lib/db/database", () => ({
   getDb: () => db,
 }));
@@ -31,6 +43,10 @@ vi.mock("@/lib/cache/memory-cache", () => ({
   CACHE_TTL: { MEDIUM: 300 },
 }));
 
+vi.mock("@/lib/db/billing-repo", () => ({
+  getOverviewKPIs: mockGetOverviewKPIs,
+}));
+
 beforeAll(() => {
   db = new Database(":memory:");
   db.pragma("journal_mode = WAL");
@@ -45,6 +61,16 @@ afterAll(() => {
 });
 
 beforeEach(() => {
+  mockGetOverviewKPIs.mockClear();
+  mockGetOverviewKPIs.mockReturnValue({
+    totalNet: 0,
+    totalGross: 0,
+    totalDiscount: 0,
+    uniqueProducts: 0,
+    uniqueOrgs: 0,
+    userChargesNet: 0,
+    orgChargesNet: 0,
+  });
   db.exec("DELETE FROM user_daily_metrics");
   db.exec("DELETE FROM enterprise_daily_metrics");
   db.exec("DELETE FROM team_memberships");
@@ -63,6 +89,47 @@ function yesterday(): string {
   d.setDate(d.getDate() - 1);
   return d.toISOString().split("T")[0];
 }
+
+describe("overview route — scoped billing KPI regression", () => {
+  it("passes active team and org scope filters to getOverviewKPIs", async () => {
+    const testDay = yesterday();
+    mockGetOverviewKPIs.mockReturnValue({
+      totalNet: 12,
+      totalGross: 12,
+      totalDiscount: 0,
+      uniqueProducts: 1,
+      uniqueOrgs: 1,
+      userChargesNet: 12,
+      orgChargesNet: 0,
+    });
+
+    db.prepare(`
+      INSERT INTO team_memberships (enterprise_slug, team_slug, team_name, source, org_slug, user_login, updated_at)
+      VALUES ('ent1', 'platform', 'Platform', 'org', 'octo-org', 'alice', ?)
+    `).run(`${testDay}T00:00:00Z`);
+    db.prepare(`
+      INSERT INTO user_daily_metrics (
+        day, enterprise_id, enterprise_slug, user_id, user_login,
+        used_agent, used_chat, used_cli, used_copilot_app
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(testDay, "ent1", "ent1", 1, "alice", 0, 0, 0, 0);
+
+    const GET = await getHandler();
+    const res = await GET(new NextRequest(
+      "http://localhost/api/metrics/overview?days=1&teams=platform&orgs=octo-org&enterprises=ent1",
+    ));
+
+    expect(res.status).toBe(200);
+    expect(mockGetOverviewKPIs).toHaveBeenCalledWith(
+      testDay,
+      testDay,
+      { allowedLogins: ["alice"], scopeOrgs: ["octo-org"] },
+      ["ent1"],
+    );
+    const json = await res.json();
+    expect(json.kpis.monthlyNetCost).toBe(360);
+  });
+});
 
 describe("overview route — completion allowlist regression", { timeout: 10000 }, () => {
   it("enterprise-level branch: App/chat_inline/unknown rows do not alter acceptanceRateTrend[].rate", async () => {
