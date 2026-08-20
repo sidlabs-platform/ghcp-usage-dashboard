@@ -85,6 +85,8 @@ function makeRow(overrides: Record<string, unknown> = {}) {
     org_slug: "org-a",
     user_login: "alice",
     user_id: 1,
+    display_login: overrides.display_login ?? overrides.user_login ?? "alice",
+    login_resolved: false,
     event_type: "onboarded",
     event_date: "2025-06-05",
     occurred_at: "2025-06-05T09:00:00Z",
@@ -189,6 +191,29 @@ describe("Seat onboarding & offboarding page", () => {
     expect(screen.getByRole("link", { name: "alice" })).toHaveAttribute("href", "/dashboard/users/alice");
     expect(screen.getByRole("link", { name: "bob" })).toBeInTheDocument();
     expect(screen.getByText("Seat sync")).toBeInTheDocument();
+  });
+
+  it("links to the resolved login while keeping the stored hash discoverable", async () => {
+    const rawLogin = "3fa85f64-5717-4562-b3fc-2c963f66afa6";
+    await renderPage(
+      emptyPayload({
+        offboarded: {
+          rows: [makeRow({
+            user_login: rawLogin,
+            display_login: "real-dev",
+            login_resolved: true,
+            event_type: "offboarded",
+            source: "sync_diff",
+          })],
+          pagination: { page: 1, pageSize: 25, totalItems: 1, totalPages: 1 },
+        },
+      }),
+    );
+
+    await waitFor(() =>
+      expect(screen.getByRole("link", { name: "real-dev" })).toHaveAttribute("href", "/dashboard/users/real-dev"),
+    );
+    expect(screen.getByText(`Stored: ${rawLogin}`)).toBeInTheDocument();
   });
 
   it("renders an empty churn-rate value when there are no seats to compare", async () => {

@@ -18,6 +18,8 @@ interface LifecycleRow {
   enterprise_slug: string;
   org_slug: string;
   user_login: string;
+  display_login: string;
+  login_resolved: boolean;
   user_id: number | null;
   event_type: EventType;
   event_date: string;
@@ -128,11 +130,16 @@ function LifecycleTable({
                     <td className="py-3 pr-4 whitespace-nowrap">{row.event_date}</td>
                     <td className="py-3 pr-4">
                       <Link
-                        href={`/dashboard/users/${encodeURIComponent(row.user_login)}`}
+                        href={`/dashboard/users/${encodeURIComponent(row.display_login)}`}
                         className="font-medium text-[hsl(var(--primary))] hover:underline"
                       >
-                        {row.user_login}
+                        {row.display_login}
                       </Link>
+                      {row.login_resolved && (
+                        <div className="mt-0.5 text-xs text-[hsl(var(--muted-foreground))]">
+                          Stored: {row.user_login}
+                        </div>
+                      )}
                     </td>
                     <td className="py-3 pr-4">{row.org_slug || "—"}</td>
                     <td className="py-3 pr-4">{row.assigning_team_name ?? row.assigning_team_slug ?? "—"}</td>

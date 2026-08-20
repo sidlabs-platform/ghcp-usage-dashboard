@@ -107,8 +107,12 @@ const MAX_GITHUB_LOGIN_LENGTH = 39;
  * GitHub logins never contain). Used to decide whether a seat-assignee or
  * audit-observed login is trustworthy enough to resolve an identity, or
  * must be skipped in favor of a lower-precedence source.
+ *
+ * Also shared with the seat lifecycle read path, where it detects the opaque
+ * EMU placeholders that removed users are reported under so they can be
+ * resolved for display without rewriting the ledger.
  */
-function looksLikeRealGitHubLogin(value: string | null | undefined): value is string {
+export function looksLikeRealGitHubLogin(value: string | null | undefined): value is string {
   if (!value) return false;
   const trimmed = value.trim();
   if (trimmed.length === 0 || trimmed.length > MAX_GITHUB_LOGIN_LENGTH) return false;

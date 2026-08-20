@@ -25,8 +25,18 @@
 // fragile, because the audit log and the snapshot diff legitimately disagree on
 // the exact date of the same offboard (the diff can only observe it at the next
 // sync).
+//
+// EMU DISPLAY RESOLUTION happens at read time, never at write time. Removed
+// Enterprise Managed Users are frequently reported under an opaque GUID/hash
+// rather than a real login, and the offboarding list is precisely the
+// population most affected. `user_login` is part of the primary key, so
+// rewriting it on write would split one human across two rows and would leave
+// already-stored history wrong until a full re-sync. Resolving on read instead
+// repairs existing rows retroactively and needs no migration. This is a display
+// concern only: the stats/trend aggregates still count the stored login.
 
 import { getDb } from "./database";
+import { looksLikeRealGitHubLogin } from "../licensing/identity-resolver";
 
 // ── Types ────────────────────────────────────────────────────────────────
 
@@ -55,6 +65,8 @@ export interface SeatLifecycleRow {
   enterprise_slug: string;
   org_slug: string;
   user_login: string;
+  display_login: string;
+  login_resolved: boolean;
   user_id: number | null;
   event_type: SeatLifecycleEventType;
   event_date: string;
@@ -153,6 +165,14 @@ interface SqlFragment {
   params: unknown[];
 }
 
+interface LoginResolutionCandidate {
+  enterprise_slug: string;
+  user_id: number;
+  source_rank: number;
+  login: string | null;
+  occurred_at: string | null;
+}
+
 function inClause(column: string, values: readonly string[]): SqlFragment {
   return {
     sql: ` AND ${column} IN (${values.map(() => "?").join(",")})`,
@@ -168,6 +188,145 @@ function allowedLoginsClause(column: string, allowedLogins?: Set<string>): SqlFr
     sql: ` AND LOWER(${column}) IN (${logins.map(() => "?").join(",")})`,
     params: logins,
   };
+}
+
+function isUserIdPlaceholder(login: string, userId: number | null): boolean {
+  return userId != null && login === `user-${userId}`;
+}
+
+function withDefaultDisplayLogins(rows: SeatLifecycleRow[]): SeatLifecycleRow[] {
+  return rows.map((row) => ({
+    ...row,
+    display_login: row.display_login ?? row.user_login,
+    login_resolved: row.login_resolved ?? false,
+  }));
+}
+
+function tableExists(db: ReturnType<typeof getDb>, tableName: string): boolean {
+  const row = db.prepare(`
+    SELECT 1 AS present
+    FROM sqlite_master
+    WHERE type = 'table' AND name = ?
+  `).get(tableName) as { present: number } | undefined;
+  return row !== undefined;
+}
+
+function targetKey(enterpriseSlug: string, userId: number): string {
+  return `${enterpriseSlug}\u0000${userId}`;
+}
+
+function shouldResolveDisplayLogin(row: SeatLifecycleRow): boolean {
+  if (row.user_id == null) return false;
+  return !looksLikeRealGitHubLogin(row.user_login) || isUserIdPlaceholder(row.user_login, row.user_id);
+}
+
+function selectBestLoginCandidate(candidates: LoginResolutionCandidate[]): string | null {
+  const realCandidates = candidates
+    .map((candidate) => {
+      const login = candidate.login?.trim() ?? "";
+      if (!looksLikeRealGitHubLogin(login)) return null;
+      const occurredAtMs = Date.parse(candidate.occurred_at ?? "");
+      return {
+        sourceRank: candidate.source_rank,
+        login: normalizeLogin(login),
+        occurredAtMs: Number.isNaN(occurredAtMs) ? 0 : occurredAtMs,
+      };
+    })
+    .filter((candidate): candidate is { sourceRank: number; login: string; occurredAtMs: number } => candidate !== null);
+
+  if (realCandidates.length === 0) return null;
+  return [...realCandidates].sort((a, b) => {
+    if (a.sourceRank !== b.sourceRank) return a.sourceRank - b.sourceRank;
+    if (a.occurredAtMs !== b.occurredAtMs) return b.occurredAtMs - a.occurredAtMs;
+    return a.login.localeCompare(b.login);
+  })[0].login;
+}
+
+function resolveDisplayLogins(rows: SeatLifecycleRow[]): SeatLifecycleRow[] {
+  const withDefaults = withDefaultDisplayLogins(rows);
+  const targetRows = withDefaults.filter(shouldResolveDisplayLogin);
+  if (targetRows.length === 0) return withDefaults;
+
+  const uniqueTargets = new Map<string, { enterpriseSlug: string; userId: number }>();
+  for (const row of targetRows) {
+    if (row.user_id == null) continue;
+    uniqueTargets.set(targetKey(row.enterprise_slug, row.user_id), {
+      enterpriseSlug: row.enterprise_slug,
+      userId: row.user_id,
+    });
+  }
+  const targets = [...uniqueTargets.values()];
+  if (targets.length === 0) return withDefaults;
+
+  const db = getDb();
+  const hasIdentityRecords = tableExists(db, "license_identity_records");
+  const hasPeriodRows = tableExists(db, "license_period_rows");
+  const hasAuditEvents = tableExists(db, "license_audit_events");
+  if (!hasIdentityRecords && !hasPeriodRows && !hasAuditEvents) return withDefaults;
+
+  const valuesSql = targets.map(() => "(?, ?)").join(",");
+  const targetParams = targets.flatMap((target) => [target.enterpriseSlug, target.userId]);
+  const selects: string[] = [];
+
+  if (hasIdentityRecords) {
+    selects.push(`
+      SELECT target.enterprise_slug, target.user_id, 1 AS source_rank,
+             identity.resolved_login AS login, identity.observed_at AS occurred_at
+      FROM target
+      JOIN license_identity_records identity
+        ON identity.enterprise_slug = target.enterprise_slug
+       AND identity.github_user_id = target.user_id
+      WHERE NULLIF(identity.resolved_login, '') IS NOT NULL
+    `);
+  }
+  if (hasPeriodRows) {
+    selects.push(`
+      SELECT target.enterprise_slug, target.user_id, 2 AS source_rank,
+             period.resolved_user_login AS login, period.billing_period AS occurred_at
+      FROM target
+      JOIN license_period_rows period
+        ON period.enterprise_slug = target.enterprise_slug
+       AND period.github_user_id = target.user_id
+      WHERE NULLIF(period.resolved_user_login, '') IS NOT NULL
+    `);
+  }
+  if (hasAuditEvents) {
+    selects.push(`
+      SELECT target.enterprise_slug, target.user_id, 3 AS source_rank,
+             audit.observed_login AS login, audit.occurred_at AS occurred_at
+      FROM target
+      JOIN license_audit_events audit
+        ON audit.enterprise_slug = target.enterprise_slug
+       AND audit.github_user_id = target.user_id
+      WHERE NULLIF(audit.observed_login, '') IS NOT NULL
+    `);
+  }
+
+  const candidates = db.prepare(`
+    WITH target(enterprise_slug, user_id) AS (VALUES ${valuesSql})
+    ${selects.join("\nUNION ALL\n")}
+  `).all(...targetParams) as LoginResolutionCandidate[];
+
+  const candidatesByTarget = new Map<string, LoginResolutionCandidate[]>();
+  for (const candidate of candidates) {
+    const key = targetKey(candidate.enterprise_slug, candidate.user_id);
+    const list = candidatesByTarget.get(key) ?? [];
+    list.push(candidate);
+    candidatesByTarget.set(key, list);
+  }
+
+  const resolvedByTarget = new Map<string, string>();
+  for (const [key, list] of candidatesByTarget) {
+    const best = selectBestLoginCandidate(list);
+    if (best) resolvedByTarget.set(key, best);
+  }
+
+  return withDefaults.map((row) => {
+    if (row.user_id == null) return row;
+    const resolved = resolvedByTarget.get(targetKey(row.enterprise_slug, row.user_id));
+    if (!resolved || resolved === row.user_login) return row;
+    return { ...row, display_login: resolved, login_resolved: true };
+  });
 }
 
 /**
@@ -547,7 +706,7 @@ export function getSeatLifecycleRows(
     LIMIT ? OFFSET ?
   `).all(...params, pagination.pageSize, offset) as SeatLifecycleRow[];
 
-  return { rows, total };
+  return { rows: resolveDisplayLogins(rows), total };
 }
 
 export function getSeatLifecycleCoverage(
@@ -626,5 +785,5 @@ export function getSeatLifecycleExportRows(
     LIMIT ?
   `).all(...params, SEAT_LIFECYCLE_EXPORT_MAX_ROWS) as SeatLifecycleRow[];
 
-  return { rows, truncated: total > SEAT_LIFECYCLE_EXPORT_MAX_ROWS, total };
+  return { rows: resolveDisplayLogins(rows), truncated: total > SEAT_LIFECYCLE_EXPORT_MAX_ROWS, total };
 }

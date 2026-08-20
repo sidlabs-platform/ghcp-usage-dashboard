@@ -32,6 +32,8 @@ const COLUMNS: CsvColumnDef[] = [
   { label: "last_activity_at", value: (r) => r.last_activity_at },
   { label: "occurred_at", value: (r) => r.occurred_at },
   { label: "source", value: (r) => r.source },
+  { label: "display_login", value: (r) => r.display_login },
+  { label: "login_resolved", value: (r) => r.login_resolved },
 ];
 
 function isEventTypeFilter(value: string): value is SeatLifecycleEventType | "all" {

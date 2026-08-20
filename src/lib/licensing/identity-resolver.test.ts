@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { resolveIdentity, type IdentityResolutionInput } from "./identity-resolver";
+import { looksLikeRealGitHubLogin, resolveIdentity, type IdentityResolutionInput } from "./identity-resolver";
 
 describe("resolveIdentity — precedence", () => {
   it("prefers a real seat-assignee login over every other source", () => {
@@ -89,6 +89,13 @@ describe("resolveIdentity — precedence", () => {
 });
 
 describe("resolveIdentity — GUID/opaque login detection", () => {
+  it("exposes the shared real-login guard for read-time lifecycle display resolution", () => {
+    expect(looksLikeRealGitHubLogin("octocat")).toBe(true);
+    expect(looksLikeRealGitHubLogin("3fa85f64-5717-4562-b3fc-2c963f66afa6")).toBe(false);
+    expect(looksLikeRealGitHubLogin("3fa85f6457174562b3fc2c963f66afa6")).toBe(false);
+    expect(looksLikeRealGitHubLogin("someone@example.com")).toBe(false);
+  });
+
   it("does not treat a GUID-shaped seat login as a real GitHub login", () => {
     const input: IdentityResolutionInput = {
       holderKey: "id:6",

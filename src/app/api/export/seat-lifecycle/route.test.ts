@@ -46,6 +46,8 @@ function makeRow(overrides: Record<string, unknown> = {}) {
     org_slug: "org-a",
     user_login: "alice",
     user_id: 1,
+    display_login: overrides.display_login ?? overrides.user_login ?? "alice",
+    login_resolved: false,
     event_type: "onboarded",
     event_date: "2025-01-05",
     occurred_at: "2025-01-05T09:00:00Z",
@@ -92,7 +94,7 @@ describe("GET /api/export/seat-lifecycle", () => {
     expect(lines[0]).toContain("Seat Onboarding & Offboarding");
     expect(lines[1]).toContain("2025-01-01 to 2025-01-31");
     expect(lines[5]).toBe(
-      "event_type,event_date,user_login,user_id,enterprise,org,plan_type,assigning_team_slug,assigning_team_name,last_activity_at,occurred_at,source",
+      "event_type,event_date,user_login,user_id,enterprise,org,plan_type,assigning_team_slug,assigning_team_name,last_activity_at,occurred_at,source,display_login,login_resolved",
     );
     expect(lines[6]).toContain("alice");
     expect(lines[7]).toContain("bob");
@@ -164,5 +166,23 @@ describe("GET /api/export/seat-lifecycle", () => {
     const csv = await (await GET(req("?days=30"))).text();
 
     expect(csv).toContain('"Team ""A"", EMEA"');
+  });
+
+  it("keeps raw and resolved login columns separate for reconciliation", async () => {
+    state.result = {
+      rows: [makeRow({
+        user_login: "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+        display_login: "real-dev",
+        login_resolved: true,
+      })],
+      truncated: false,
+      total: 1,
+    };
+
+    const GET = await getHandler();
+    const csv = await (await GET(req("?days=30"))).text();
+
+    expect(csv).toContain("3fa85f64-5717-4562-b3fc-2c963f66afa6");
+    expect(csv).toContain("real-dev,true");
   });
 });
