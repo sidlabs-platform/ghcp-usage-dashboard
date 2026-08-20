@@ -280,17 +280,35 @@ export interface CopilotCostBasis {
   /**
    * AI credits billed in range, from the detailed usage report. This is the
    * authoritative total; it covers the full synced history.
+   *
+   * Counts `unit_type = 'ai-credits'` rows only. Premium requests and token
+   * units are billed under different units and are reported separately —
+   * summing them would produce a figure that reproduces no GitHub report.
    */
   creditsBilled: number;
-  /** Net USD charged for those credits (zero while within the pooled allowance). */
+  /** Premium requests billed in range (`unit_type = 'requests'`), the pre-June-2026 consumption unit. */
+  requestsBilled: number;
+  /** Premium requests in the per-user report that carry a username. */
+  requestsAttributed: number;
+  /** Token units billed in range (`unit_type = 'token-units'`). */
+  tokenUnitsBilled: number;
+  /** Net USD charged for all consumption units (zero while within the pooled allowance). */
   creditCostNet: number;
   creditCostGross: number;
 
   /**
    * Credits that can be attributed to a named user, from the ai_credit report.
    * Always <= creditsBilled; frequently far lower for historical months.
+   *
+   * Counts only rows carrying a username. Rows in the per-user report with no
+   * username (org- or enterprise-scoped charges) are billed but not
+   * attributable, and are reported separately as {@link creditsUnattributed} —
+   * folding them in here would claim an attribution that no per-user table can
+   * reproduce.
    */
   creditsAttributed: number;
+  /** Credits present in the per-user report but carrying no username, so attributable to no one. */
+  creditsUnattributed: number;
   /** Distinct users carrying attributed credits. */
   attributedUsers: number;
   /** creditsAttributed / creditsBilled, 0-100. Null when nothing was billed. */

@@ -235,11 +235,12 @@ async function handler(request: NextRequest) {
       // legacy live-snapshot dataset (unpaginated, bounded by licensed user
       // count) mapped onto the shared detail column layout.
       const allRows = getLicenseReconciliationRows({
-        start: resolved.legacyStart,
-        end: resolved.legacyEnd,
+        start: resolved.windowStart,
+        end: resolved.windowEnd,
         filters: {
           allowedLogins: scope.allowedLogins,
           enterpriseSlugs: scope.enterpriseSlugs,
+          scopeOrgs: scope.selectedOrgs?.length ? [...scope.selectedOrgs] : undefined,
           search: resolved.search,
         },
       });

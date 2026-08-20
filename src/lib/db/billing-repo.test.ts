@@ -216,10 +216,11 @@ describe("getAiCreditsReconciliation", () => {
     expect(result.unattributedByModel).toEqual([{ model: "automation", credits: 75 }]);
   });
 
-  it("counts legacy request rows in cost basis attribution, matching the billed side", () => {
-    // CREDIT_SKU_SQL counts premium_request SKUs as consumption, so the
-    // attributed side must count those rows too. Excluding them here would
-    // report a phantom attribution gap for pre-June-2026 months.
+  it("keeps legacy request rows out of the credit totals on both the billed and attributed sides", () => {
+    // GitHub's usage report carries a `unit_type` per row so credits and
+    // requests are aggregated separately. Adding 5 requests to 20 credits to
+    // reach "25 credits" reproduces no GitHub report — and made this figure
+    // disagree with every per-user credit table derived from the same rows.
     upsertUsageRecords("ent1", [
       { date: "2026-06-10", product: "copilot", sku: "copilot_ai_credit", quantity: 20, unit_type: "ai-credits", applied_cost_per_quantity: 0.1, gross_amount: 2, discount_amount: 0, net_amount: 2, organization: "org1", repository: "", username: "", workflow_path: "", cost_center_name: "", charge_scope: "user" },
       { date: "2026-06-10", product: "copilot", sku: "copilot_premium_request", quantity: 5, unit_type: "requests", applied_cost_per_quantity: 0.1, gross_amount: 0.5, discount_amount: 0, net_amount: 0.5, organization: "org1", repository: "", username: "", workflow_path: "", cost_center_name: "", charge_scope: "user" },
@@ -243,10 +244,15 @@ describe("getAiCreditsReconciliation", () => {
 
     const result = getCopilotCostBasis("2026-06-01", "2026-06-30");
 
-    expect(result.creditsBilled).toBe(25);
-    expect(result.creditsAttributed).toBe(25);
+    expect(result.creditsBilled).toBe(20);
+    expect(result.creditsAttributed).toBe(20);
+    expect(result.requestsBilled).toBe(5);
+    expect(result.requestsAttributed).toBe(5);
+    // Coverage compares like with like, so it is still complete.
     expect(result.attributionCoveragePct).toBe(100);
     expect(result.attributionComplete).toBe(true);
+    // USD amounts are unit-agnostic and therefore still additive.
+    expect(result.creditCostNet).toBe(2.5);
   });
 });
 

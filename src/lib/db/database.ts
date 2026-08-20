@@ -78,6 +78,12 @@ export function getDb(): SqliteDatabase {
     "ALTER TABLE billing_premium_requests ADD COLUMN cache_read_tokens REAL NOT NULL DEFAULT 0",
     "ALTER TABLE billing_premium_requests ADD COLUMN cache_write_tokens REAL NOT NULL DEFAULT 0",
     "DROP INDEX IF EXISTS idx_billing_premium_dedup",
+    // A SKU can be billed in more than one unit on the same day
+    // (`copilot_ai_credit` emits both `ai-credits` and `token-units`), so
+    // `product`/`unit_type` must participate in the usage dedup key. The old
+    // narrower index is dropped here and billing-schema.sql recreates it as
+    // `idx_billing_usage_dedup_v2`.
+    "DROP INDEX IF EXISTS idx_billing_usage_dedup",
     // Summary tables
     "ALTER TABLE user_period_summary ADD COLUMN enterprise_slug TEXT NOT NULL DEFAULT ''",
     "ALTER TABLE daily_aggregate_cache ADD COLUMN enterprise_slug TEXT NOT NULL DEFAULT ''",

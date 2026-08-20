@@ -134,6 +134,15 @@ Use `isCompletionFeature()` and `isAgentFeature()` from `src/lib/aggregation/sep
 - The dashboard URL path stays `/dashboard/billing-premium` but the UI label is "AI Credits"
 - Use `aic_quantity` / `aic_gross_amount` for the primary credit-based display; legacy `quantity` / `gross_amount` still available for request-based metrics
 
+### Shared billing window and unit types (cross-page consistency)
+Billing, Metered Usage and License & AI Credits must never present different figures for what a reader takes to be one view. Two rules make that structural:
+
+- **One window.** `resolveBillingWindow()` (`src/lib/api/billing-window.ts`) is the only date-window resolver for `/api/billing/overview`, `/api/billing/usage` and `/api/billing/usage/summary`; `resolveReconciliationFilters()` resolves the same bounds from its `periods` param. A `period`/`periods` selection always wins over the `days` default — `parseDateRangeParams` silently falls back to a rolling 28-day window when no `days` is sent, which is exactly how the reconciliation tiles once reported the last 28 days beside a cost-basis strip reporting the selected month.
+- **One unit per quantity.** GitHub's usage report carries a `unit_type` per row, and the reporting docs are explicit that product metrics come from filtering on `product` **and** `unitType` before aggregating. Classify by `unit_type`, never by SKU name: `user-months` (seats), `ai-credits`, `requests`, `token-units`. **Quantities are only ever summed within one unit type**; amounts (`gross_amount`/`discount_amount`/`net_amount`) are USD and are safe to sum across all of them. March 2026 alone carries 1,477,523 credits + 14,368 requests + 83,136 token units — adding them yielded a "credits" figure that reproduced no GitHub report.
+- `CopilotCostBasis` therefore exposes `creditsBilled`, `requestsBilled` and `tokenUnitsBilled` separately, and `creditsAttributed` counts only `ai-credits` rows **that carry a username** — rows without one are org/enterprise-scoped and surface as `creditsUnattributed`, since no per-user table can ever reproduce them.
+- The License & AI Credits KPIs reconcile by construction: `totalConsumedCredits + unmatchedConsumedCredits === costBasis.creditsAttributed`. `getLicenseReconciliationDataset()` returns that residual so consumption billed to a login with no current seat is named rather than dropped.
+- Seat figures in `live_snapshot_only` mode come from the *current* `copilot_seats` snapshot and are not period-scoped; the page says so explicitly rather than letting a reader compare them to billed seat-months as if they were.
+
 ### Token Usage Analytics
 - Source: the per-model token breakdown GitHub added to the AI usage report on 2026-08-11 (`input`, `output`, `cache_read`, `cache_write`). No new API surface — the `ai_credit` report was already synced.
 - Storage: `billing_premium_requests.input_tokens / output_tokens / cache_read_tokens / cache_write_tokens`, plus `repository`. All added by additive `ALTER TABLE ... ADD COLUMN ... DEFAULT 0` migrations in `database.ts`, which run **before** the schema file is executed (this ordering is load-bearing).

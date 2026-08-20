@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { isBillingSubEnabledForAnyEnterprise } from "@/lib/config/enterprise-config";
-import { getDateRange, parseAndClampDays } from "@/lib/utils";
+import { resolveBillingWindow } from "@/lib/api/billing-window";
 import {
   getProductBreakdown,
   getOrgBreakdown,
@@ -23,12 +23,13 @@ async function handler(request: NextRequest) {
     }
 
     const params = request.nextUrl.searchParams;
-    const daysResult = parseAndClampDays(params.get("days"), 28);
-    if ("error" in daysResult) {
-      return NextResponse.json({ error: daysResult.error }, { status: 400 });
+    // Shared with /api/billing/usage and /api/billing/overview so a selected
+    // month resolves to identical bounds on every billing surface.
+    const window = resolveBillingWindow(params, 28);
+    if ("error" in window) {
+      return NextResponse.json({ error: window.error }, { status: 400 });
     }
-    const days = daysResult.days;
-    const { start, end } = getDateRange(days);
+    const { start, end } = window;
     const groupBy = params.get("groupBy") || "product";
 
     // Parse scope filter (teams/orgs/enterprises)

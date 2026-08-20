@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
 
 const repoState = vi.hoisted(() => ({
-  getLicenseReconciliationRows: vi.fn(),
+  getLicenseReconciliationDataset: vi.fn(),
   computeLicenseKPIs: vi.fn(),
   computePlanBreakdown: vi.fn(),
   computeOrgBreakdown: vi.fn(),
@@ -73,7 +73,7 @@ vi.mock("@/lib/db/billing-repo", () => ({
 }));
 
 vi.mock("@/lib/db/license-repo", () => ({
-  getLicenseReconciliationRows: (...a: unknown[]) => repoState.getLicenseReconciliationRows(...a),
+  getLicenseReconciliationDataset: (...a: unknown[]) => repoState.getLicenseReconciliationDataset(...a),
   computeLicenseKPIs: (...a: unknown[]) => repoState.computeLicenseKPIs(...a),
   computePlanBreakdown: (...a: unknown[]) => repoState.computePlanBreakdown(...a),
   computeOrgBreakdown: (...a: unknown[]) => repoState.computeOrgBreakdown(...a),
@@ -136,6 +136,22 @@ function req(url = "http://localhost/api/billing/license-reconciliation?days=28"
   return new NextRequest(url);
 }
 
+/** The `{ rows, coverage }` shape `getLicenseReconciliationDataset` returns, with a zero residual. */
+function dataset(rows: unknown[]) {
+  return {
+    rows,
+    coverage: {
+      attributedCredits: 0,
+      attributedUsd: 0,
+      matchedCredits: 0,
+      matchedUsd: 0,
+      unmatchedCredits: 0,
+      unmatchedUsd: 0,
+      unmatchedUsers: 0,
+    },
+  };
+}
+
 beforeEach(() => {
   configState.isBillingSubEnabledForAnyEnterprise.mockReturnValue(true);
   configState.getEnterpriseSlugs.mockReturnValue(["acme", "other-ent"]);
@@ -147,7 +163,7 @@ beforeEach(() => {
     allowedLogins: undefined,
     enterpriseSlugs: undefined,
   });
-  repoState.getLicenseReconciliationRows.mockReturnValue([]);
+  repoState.getLicenseReconciliationDataset.mockReturnValue(dataset([]));
   repoState.computeLicenseKPIs.mockReturnValue({});
   repoState.computePlanBreakdown.mockReturnValue([]);
   repoState.computeOrgBreakdown.mockReturnValue([]);
@@ -212,7 +228,7 @@ describe("license reconciliation route", () => {
     // assertion checks for, so this test actually proves the route redacts
     // the thrown error's message rather than passing vacuously regardless of
     // route behavior.
-    repoState.getLicenseReconciliationRows.mockImplementation(() => {
+    repoState.getLicenseReconciliationDataset.mockImplementation(() => {
       throw new Error("db connection exploded: password=hunter2");
     });
 
@@ -251,7 +267,79 @@ describe("license reconciliation route", () => {
       "2026-07-31",
       { allowedLogins: ["alice"], scopeOrgs: ["octo-org"] },
       ["acme"],
+      "2026-07",
     );
+  });
+
+  describe("period window (the per-user rows and the cost basis must describe the same days)", () => {
+    it("computes live-snapshot rows over the selected month, not the days default", async () => {
+      // `parseDateRangeParams` falls back to a rolling 28-day window when no
+      // `days`/`startDate` is sent. A `periods` selection sends neither, so
+      // without an explicit override the per-user tiles reported the last 28
+      // days while the cost-basis strip reported the selected calendar month.
+      const res = await GET(req("http://localhost/api/billing/license-reconciliation?periods=2026-07"));
+      expect(res.status).toBe(200);
+      expect(repoState.getLicenseReconciliationDataset).toHaveBeenCalledWith(
+        expect.objectContaining({ start: "2026-07-01", end: "2026-07-31" }),
+      );
+    });
+
+    it("hands the live query and the cost basis identical bounds, for a month and for a rolling window alike", async () => {
+      for (const query of ["periods=2026-06", "days=7", "startDate=2026-07-02&endDate=2026-07-09"]) {
+        vi.clearAllMocks();
+        configState.isBillingSubEnabledForAnyEnterprise.mockReturnValue(true);
+        configState.getEnterpriseSlugs.mockReturnValue(["acme", "other-ent"]);
+        configState.getLicensingConfig.mockReturnValue({
+          currency: "USD",
+          creditToUsd: 0.01,
+          history: { auditRetentionDays: 400 },
+        });
+        scopeState.parseScopeFilter.mockReturnValue({
+          selectedTeams: [],
+          selectedOrgs: [],
+          selectedEnterprises: [],
+          hasFilter: false,
+          allowedLogins: undefined,
+          enterpriseSlugs: undefined,
+        });
+        repoState.getLicenseReconciliationDataset.mockReturnValue(dataset([]));
+        repoState.computeLicenseKPIs.mockReturnValue({});
+        repoState.computePlanBreakdown.mockReturnValue([]);
+        repoState.computeOrgBreakdown.mockReturnValue([]);
+        repoState.computeUtilizationBuckets.mockReturnValue([]);
+        repoState.sortLicenseRows.mockReturnValue([]);
+        repoState.getCopilotCostBasis.mockReturnValue(null);
+        historyRepoState.hasMaterializedRows.mockReturnValue(false);
+        historyRepoState.getEarliestMaterializedPeriod.mockReturnValue(null);
+        historyRepoState.getLatestLicenseQualitySummary.mockReturnValue({ pass: 0, warning: 0, fail: 0 });
+
+        const res = await GET(req(`http://localhost/api/billing/license-reconciliation?${query}`));
+        expect(res.status).toBe(200);
+
+        const basisArgs = repoState.getCopilotCostBasis.mock.calls[0];
+        const liveArgs = repoState.getLicenseReconciliationDataset.mock.calls[0][0] as {
+          start: string;
+          end: string;
+        };
+        expect([liveArgs.start, liveArgs.end]).toEqual([basisArgs[0], basisArgs[1]]);
+      }
+    });
+
+    it("keeps a rolling `days` window rolling instead of widening it to whole months, and does not label it as a month", async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-08-10T00:00:00Z"));
+      try {
+        const res = await GET(req("http://localhost/api/billing/license-reconciliation?days=7"));
+        expect(res.status).toBe(200);
+        const args = repoState.getCopilotCostBasis.mock.calls[0];
+        expect(args[0]).not.toBe("2026-08-01");
+        // Explicit null, not undefined: a 7-day window sitting inside August is
+        // not "August 2026" and must not be labelled as such.
+        expect(args[4]).toBeNull();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 
   describe("backward-compatible live fallback (no materialized history)", () => {
@@ -262,7 +350,7 @@ describe("license reconciliation route", () => {
       const body = await res.json();
       expect(body.coverage.mode).toBe("live_snapshot_only");
       expect(body.dataSource).toBe("live_snapshot_only");
-      expect(repoState.getLicenseReconciliationRows).toHaveBeenCalledTimes(1);
+      expect(repoState.getLicenseReconciliationDataset).toHaveBeenCalledTimes(1);
       expect(historyRepoState.queryLicensePeriodRows).not.toHaveBeenCalled();
     });
 
@@ -348,7 +436,7 @@ describe("license reconciliation route", () => {
       expect(historyRepoState.getMaterializedPeriodKPIs).toHaveBeenCalledTimes(1);
       expect(historyRepoState.getMaterializedPlanBreakdown).toHaveBeenCalledTimes(1);
       expect(historyRepoState.getMaterializedOrgBreakdown).toHaveBeenCalledTimes(1);
-      expect(repoState.getLicenseReconciliationRows).not.toHaveBeenCalled();
+      expect(repoState.getLicenseReconciliationDataset).not.toHaveBeenCalled();
     });
 
     it("returns a valid empty historical payload (rows [], zero KPIs) when history exists but a narrow filter matches nothing, without falling back", async () => {
@@ -364,7 +452,30 @@ describe("license reconciliation route", () => {
       const body = await res.json();
       expect(body.coverage.mode).toBe("historical");
       expect(body.rows).toEqual([]);
-      expect(body.kpis).toEqual({ totalRows: 0, totalUsers: 0 });
+      // Projected onto the same KPI contract the live-snapshot branch returns,
+      // so the client renders one shape regardless of which pipeline answered.
+      expect(body.kpis).toEqual({
+        totalUsers: 0,
+        totalSeats: 0,
+        activeSeats: 0,
+        activeUsers: 0,
+        pendingCancellation: 0,
+        inactive30d: 0,
+        zeroConsumptionSeats: 0,
+        totalLicenseCost: 0,
+        totalAllowanceCredits: 0,
+        totalAssignedUsd: 0,
+        totalConsumedCredits: 0,
+        totalConsumedUsd: 0,
+        overallUtilizationPct: 0,
+        overBudgetUsers: 0,
+        totalCostOfOwnership: 0,
+        currency: "USD",
+        unmatchedConsumedCredits: 0,
+        unmatchedConsumedUsd: 0,
+        unmatchedUsers: 0,
+        dataSource: "historical",
+      });
       expect(body.planBreakdown).toEqual([]);
     });
 
@@ -672,7 +783,7 @@ describe("license reconciliation route", () => {
       const body = await res.json();
       expect(body.error).toMatch(/bogus-ent/);
       expect(historyRepoState.hasMaterializedRows).not.toHaveBeenCalled();
-      expect(repoState.getLicenseReconciliationRows).not.toHaveBeenCalled();
+      expect(repoState.getLicenseReconciliationDataset).not.toHaveBeenCalled();
     });
 
     it("rejects an unknown enterprise slug derived from a composite team scope param (entSlug:teamSlug)", async () => {
@@ -786,7 +897,7 @@ describe("license reconciliation route", () => {
     it("falls back to total-cost sorting when a historical sort reaches live-snapshot mode", async () => {
       historyRepoState.hasMaterializedRows.mockReturnValue(false);
       const liveRows = [{ user_login: "octocat", total_cost: 10 }];
-      repoState.getLicenseReconciliationRows.mockReturnValue(liveRows);
+      repoState.getLicenseReconciliationDataset.mockReturnValue(dataset(liveRows));
       repoState.sortLicenseRows.mockReturnValue(liveRows);
 
       const res = await GET(req("http://localhost/api/billing/license-reconciliation?view=detail&sort=billing_period"));

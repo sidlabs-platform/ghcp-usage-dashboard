@@ -54,6 +54,15 @@ export function CopilotCostBasisPanel({ basis, currency = "USD", surface, classN
   const coverage = basis.attributionCoveragePct;
   const showGap = coverage !== null && !basis.attributionComplete;
 
+  // Quantities are only comparable within one unit type. A window billed in
+  // premium requests (pre-June-2026) has no credits at all, and reporting its
+  // request count under an "AI credits" label — or worse, adding the two — is
+  // how this strip previously produced figures no GitHub report could confirm.
+  const billedInRequests = basis.creditsBilled <= 0 && basis.requestsBilled > 0;
+  const consumption = billedInRequests
+    ? { label: "Premium requests consumed", value: count(basis.requestsBilled) }
+    : { label: "AI credits consumed", value: count(basis.creditsBilled) };
+
   const figures: { label: string; value: string; hint: string }[] = [
     {
       label: "Copilot seat licences",
@@ -61,19 +70,21 @@ export function CopilotCostBasisPanel({ basis, currency = "USD", surface, classN
       hint: `${count(basis.seatQuantity)} billed seat-months`,
     },
     {
-      label: "AI credits consumed",
-      value: count(basis.creditsBilled),
-      hint: "From the detailed billing report",
+      label: consumption.label,
+      value: consumption.value,
+      hint: basis.tokenUnitsBilled > 0
+        ? `Plus ${count(basis.tokenUnitsBilled)} token units, billed separately`
+        : "From the detailed billing report",
     },
     {
-      label: "AI credit charges",
+      label: "Consumption charges",
       value: money(basis.creditCostNet, currency),
       hint: basis.creditCostNet === 0 ? "Fully within pooled allowance" : "Charged beyond allowance",
     },
     {
       label: "Total Copilot cost",
       value: money(basis.totalCopilotNet, currency),
-      hint: "Seats + credit charges",
+      hint: "Seats + consumption charges",
     },
   ];
 
@@ -123,6 +134,14 @@ export function CopilotCostBasisPanel({ basis, currency = "USD", surface, classN
             {count(basis.attributedUsers)} users). GitHub&apos;s per-user AI-credit report only covers a
             recent window, so per-user tables are a partial view of this period — the totals above are
             complete.
+            {basis.creditsUnattributed > 0 && (
+              <>
+                {" "}A further{" "}
+                <span className="tabular-nums">{count(basis.creditsUnattributed)}</span> credits are
+                reported with no username (org- or enterprise-scoped charges) and cannot appear in any
+                per-user table.
+              </>
+            )}
           </span>
         </p>
       ) : coverage !== null ? (
@@ -133,6 +152,18 @@ export function CopilotCostBasisPanel({ basis, currency = "USD", surface, classN
           <Check className="h-3.5 w-3.5 shrink-0 text-emerald-600 dark:text-emerald-400" aria-hidden="true" />
           Per-user attribution accounts for all {count(basis.creditsBilled)} billed credits across{" "}
           {count(basis.attributedUsers)} users.
+        </p>
+      ) : billedInRequests ? (
+        <p
+          role="status"
+          className="mt-4 flex items-start gap-2 text-xs text-[hsl(var(--muted-foreground))]"
+        >
+          <AlertTriangle className="mt-px h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+          <span>
+            This period was billed in premium requests, before AI credits began on 2026-06-01.
+            Per-user AI-credit figures are zero for it by definition — a request is not a credit, so
+            the two are never added together.
+          </span>
         </p>
       ) : null}
     </section>

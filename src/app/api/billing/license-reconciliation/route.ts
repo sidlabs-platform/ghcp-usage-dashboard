@@ -4,7 +4,7 @@ import { parseDateRangeParams } from "@/lib/utils";
 import { getLicensingConfig, LicensingConfigError, type LicensePlanKey } from "@/lib/config/dashboard-config";
 import { parseScopeFilter } from "@/lib/api/scope-filter";
 import {
-  getLicenseReconciliationRows,
+  getLicenseReconciliationDataset,
   computeLicenseKPIs,
   computePlanBreakdown,
   computeOrgBreakdown,
@@ -26,7 +26,7 @@ import {
   ROLLUP_SORT_COLUMNS,
   type PaginatedLicenseRows,
 } from "@/lib/db/license-history-repo";
-import type { LicensePeriodFilterQuery } from "@/lib/types/licensing";
+import type { LicensePeriodFilterQuery, LicenseHistoryKPIs, LicenseReconciliationKPIs } from "@/lib/types/licensing";
 import { getCopilotCostBasis, type CopilotCostBasis } from "@/lib/db/billing-repo";
 import { monthBounds } from "@/lib/date/month-range";
 import type { AccountState } from "@/lib/licensing/identity-resolver";
@@ -179,6 +179,47 @@ export interface ReconciliationQueryError {
 }
 
 /**
+ * Project materialized-history KPIs onto the shape the page's KPI tiles read.
+ *
+ * The two pipelines count at different grains — history is keyed by
+ * (org, holder, period) rows, the live snapshot by user — and previously
+ * returned differently-named fields for the same tiles, so switching a scope
+ * from live to historical silently blanked several of them. Naming the
+ * projection here keeps one contract for the client.
+ */
+function toReconciliationKPIs(h: LicenseHistoryKPIs): LicenseReconciliationKPIs {
+  const n = (v: number | undefined | null) => (Number.isFinite(v as number) ? (v as number) : 0);
+  const activeSeats = n(h?.activeSeats);
+  const totalUsers = n(h?.totalUsers);
+  return {
+    totalUsers,
+    totalSeats: activeSeats + n(h?.inactiveSeats),
+    activeSeats,
+    // Historical rows carry seat-grain status only; a user is counted active
+    // when any of their seats is, which at this grain is the row count itself.
+    activeUsers: Math.min(activeSeats, totalUsers),
+    pendingCancellation: n(h?.inactiveSeats),
+    inactive30d: 0,
+    zeroConsumptionSeats: n(h?.zeroConsumptionRows),
+    totalLicenseCost: n(h?.totalLicenseCost),
+    totalAllowanceCredits: n(h?.totalAllowanceCredits),
+    totalAssignedUsd: n(h?.totalAssignedUsd),
+    totalConsumedCredits: n(h?.totalConsumedCredits),
+    totalConsumedUsd: n(h?.totalConsumedUsd),
+    overallUtilizationPct: n(h?.overallUtilizationPct),
+    overBudgetUsers: n(h?.overBudgetRows),
+    totalCostOfOwnership: n(h?.totalCostOfOwnership),
+    currency: h?.currency || "USD",
+    // Materialization already emits `consumption_only` rows for consumption
+    // with no matching seat, so nothing is left unplaced here.
+    unmatchedConsumedCredits: 0,
+    unmatchedConsumedUsd: 0,
+    unmatchedUsers: 0,
+    dataSource: "historical",
+  };
+}
+
+/**
  * Pure (no DB access) resolution of every query parameter shared by the JSON
  * reconciliation API and the CSV export endpoint: period selection (with
  * explicit `periods` > custom `startDate`/`endDate` > `days`/default
@@ -189,9 +230,20 @@ export interface ReconciliationQueryError {
 export interface ReconciliationFilterResolution {
   /** Resolved "YYYY-MM" periods driving historical queries. */
   periods: string[];
-  /** Legacy live-query date bounds (YYYY-MM-DD), always resolved regardless of mode. */
-  legacyStart: string;
-  legacyEnd: string;
+  /**
+   * The single date window (inclusive `YYYY-MM-DD`) every figure on this page
+   * is computed over — the live-snapshot per-user query, the shared Copilot
+   * cost basis, and the CSV export alike.
+   *
+   * An explicit `periods` selection resolves to that month's bounds, exactly
+   * as `/api/billing/overview` resolves its `period` param, so the two pages
+   * quote the same month. Everything else keeps the caller's own
+   * `startDate`/`endDate` or `days` window.
+   */
+  windowStart: string;
+  windowEnd: string;
+  /** The calendar period `windowStart`/`windowEnd` represent, or null when the window is not one whole month. */
+  periodHint: string | null;
   view: ReconciliationView;
   scope: ReturnType<typeof parseScopeFilter>;
   search?: string;
@@ -294,10 +346,30 @@ export function resolveReconciliationFilters(
     search,
   };
 
+  // One window for every figure on the page. A month selection is authoritative
+  // — it must not be silently replaced by the `days` default that
+  // `parseDateRangeParams` falls back to when no `days`/`startDate` is sent,
+  // which is what previously made the per-user tiles quote a rolling 28-day
+  // window while the cost-basis strip quoted the selected calendar month.
+  let windowStart = dateRange.start;
+  let windowEnd = dateRange.end;
+  let periodHint: string | null = null;
+  if (explicitPeriods) {
+    const sorted = [...periods].sort((a, b) => a.localeCompare(b));
+    const first = sorted[0];
+    const last = sorted[sorted.length - 1];
+    if (first && last) {
+      windowStart = monthBounds(first).startDate;
+      windowEnd = monthBounds(last).endDate;
+      periodHint = first === last ? first : null;
+    }
+  }
+
   return {
     periods,
-    legacyStart: dateRange.start,
-    legacyEnd: dateRange.end,
+    windowStart,
+    windowEnd,
+    periodHint,
     view,
     scope,
     search,
@@ -322,7 +394,7 @@ async function handler(request: NextRequest) {
     if ("error" in resolved) {
       return NextResponse.json({ error: resolved.error }, { status: resolved.status });
     }
-    const { periods, legacyStart, legacyEnd, view, scope, filterQuery, baseFilterQuery } = resolved;
+    const { periods, windowStart, windowEnd, periodHint, view, scope, filterQuery, baseFilterQuery } = resolved;
 
     const pageResult = parseStrictIntParam(params.get("page"), "page", 1, 1, MAX_PAGE);
     if (typeof pageResult === "object") {
@@ -341,26 +413,21 @@ async function handler(request: NextRequest) {
 
     const cfg = getLicensingConfig();
 
-    // Same shared basis the Billing page renders, over the same window, so the
-    // two surfaces quote identical seat cost and billed-credit figures. The
-    // periods list is already month-aligned, so its bounds are the first day
-    // of the earliest period through the last (clamped) day of the latest.
+    // Same shared basis the Billing page renders, over the *same* window the
+    // per-user rows below are computed from, so every figure on this page
+    // describes one period and the two surfaces cannot disagree.
     let costBasis: CopilotCostBasis | null = null;
     try {
-      const sortedPeriods = [...periods].sort();
-      const first = sortedPeriods[0];
-      const last = sortedPeriods[sortedPeriods.length - 1];
-      if (first && last) {
-        costBasis = getCopilotCostBasis(
-          monthBounds(first).startDate,
-          monthBounds(last).endDate,
-          {
-            allowedLogins: baseFilterQuery.allowedLogins ? [...baseFilterQuery.allowedLogins] : undefined,
-            scopeOrgs: scope.selectedOrgs.length > 0 ? [...scope.selectedOrgs] : undefined,
-          },
-          scope.enterpriseSlugs ? [...scope.enterpriseSlugs] : undefined,
-        );
-      }
+      costBasis = getCopilotCostBasis(
+        windowStart,
+        windowEnd,
+        {
+          allowedLogins: baseFilterQuery.allowedLogins ? [...baseFilterQuery.allowedLogins] : undefined,
+          scopeOrgs: scope.selectedOrgs?.length ? [...scope.selectedOrgs] : undefined,
+        },
+        scope.enterpriseSlugs ? [...scope.enterpriseSlugs] : undefined,
+        periodHint,
+      );
     } catch (err) {
       // The reconciliation strip is supplementary — never fail the page over it.
       console.error("Failed to compute Copilot cost basis:", err);
@@ -413,12 +480,13 @@ async function handler(request: NextRequest) {
       // scope/period base — reuse the exact legacy live query unchanged so
       // existing callers/tests keep working byte-for-byte, and additively
       // mark the response with a `coverage`/`dataSource` indicator.
-      const allRows = getLicenseReconciliationRows({
-        start: legacyStart,
-        end: legacyEnd,
+      const { rows: allRows, coverage: consumptionCoverage } = getLicenseReconciliationDataset({
+        start: windowStart,
+        end: windowEnd,
         filters: {
           allowedLogins: scope.allowedLogins,
           enterpriseSlugs: scope.enterpriseSlugs,
+          scopeOrgs: scope.selectedOrgs?.length ? [...scope.selectedOrgs] : undefined,
           search: resolved.search,
         },
       });
@@ -431,7 +499,7 @@ async function handler(request: NextRequest) {
         );
       }
 
-      const kpis = computeLicenseKPIs(allRows);
+      const kpis = computeLicenseKPIs(allRows, consumptionCoverage);
       const planBreakdown = computePlanBreakdown(allRows);
       const orgBreakdown = computeOrgBreakdown(allRows);
       const utilizationBuckets = computeUtilizationBuckets(allRows);
@@ -496,7 +564,7 @@ async function handler(request: NextRequest) {
         ? queryLicensePeriodRows({ ...filterQuery, view: "rollup", page, pageSize, sortField: sort, sortDir })
         : queryLicensePeriodRows({ ...filterQuery, view: "detail", page, pageSize, sortField: sort, sortDir });
 
-    const kpis = getMaterializedPeriodKPIs(filterQuery);
+    const kpis = toReconciliationKPIs(getMaterializedPeriodKPIs(filterQuery));
     const planBreakdown = getMaterializedPlanBreakdown(filterQuery);
     const orgBreakdown = getMaterializedOrgBreakdown(filterQuery);
     const materializedSet = new Set(getMaterializedPeriods(baseFilterQuery));

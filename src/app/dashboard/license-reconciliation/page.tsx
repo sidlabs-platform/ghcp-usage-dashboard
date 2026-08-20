@@ -18,6 +18,7 @@ import { ExportMenu } from "@/components/ui/ExportMenu";
 import { useDateRange } from "@/contexts/DateRangeContext";
 
 import { CopilotCostBasisPanel, type CopilotCostBasis } from "@/components/billing/CopilotCostBasisPanel";
+import { periodLabel } from "@/lib/date/month-range";
 import { useScope } from "@/contexts/ScopeContext";
 import { safeNum } from "@/lib/utils";
 import { LicensePeriodFilters } from "@/components/licensing/LicensePeriodFilters";
@@ -79,6 +80,71 @@ function ZeroConsumptionNotice({ kpis }: Readonly<{ kpis: LicenseReconciliationK
         <p className="text-xs mt-1 opacity-90">
           All {users} licensed users show zero AI-credit usage. This measures premium AI-credit spend, not Copilot activity &mdash; seats can be active with included features (completions, chat) while consuming zero credits. If you expect consumption, confirm the billing sync has AI-credit data for the selected window (AI Credits began 2026-06-01).
         </p>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * States, in one place, every way the per-user tiles above can legitimately
+ * differ from the billed figures in the cost-basis strip.
+ *
+ * Both sets of numbers now describe the same window, so any remaining gap is
+ * structural (a seat snapshot that is not period-scoped, or credits billed to
+ * a login that holds no seat today) rather than an inconsistency. Naming those
+ * gaps is what stops a reader from treating two correct numbers as a
+ * contradiction.
+ */
+function PeriodBasisNotice({
+  kpis,
+  basis,
+  liveSnapshot,
+  fmtNum,
+}: Readonly<{
+  kpis: LicenseReconciliationKPIs;
+  basis: CopilotCostBasis | null;
+  liveSnapshot: boolean;
+  fmtNum: (v: number) => string;
+}>) {
+  const notes: string[] = [];
+
+  const periodName = basis?.period ? periodLabel(basis.period) : null;
+  if (liveSnapshot) {
+    notes.push(
+      `Seat figures (licensed users, seats, license cost) come from the current seat snapshot, not from ${periodName ?? "the selected window"} — seats added or removed since then are not reflected. Credit figures are period-scoped.`,
+    );
+  }
+
+  const unmatched = safeNum(kpis.unmatchedConsumedCredits);
+  if (unmatched > 0) {
+    notes.push(
+      `${fmtNum(unmatched)} credits (${fmtNum(kpis.unmatchedUsers)} users) were billed to logins with no seat in the current selection, so they are counted in the cost basis above but not in the per-user table.`,
+    );
+  }
+
+  if (basis && safeNum(basis.seatQuantity) > 0 && safeNum(kpis.totalSeats) > 0) {
+    const billed = safeNum(basis.seatQuantity);
+    const held = safeNum(kpis.totalSeats);
+    const deltaPct = Math.abs(held - billed) / billed * 100;
+    if (deltaPct >= 5) {
+      notes.push(
+        `${fmtNum(held)} seats are held today vs ${fmtNum(billed)} billed seat-months in this period — a seat billed for part of a month counts as a fraction of a seat-month.`,
+      );
+    }
+  }
+
+  if (notes.length === 0) return null;
+
+  return (
+    <div role="note" className="flex items-start gap-3 rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--muted))]/30 px-4 py-3 text-sm">
+      <Info className="h-5 w-5 shrink-0 mt-0.5 text-[hsl(var(--muted-foreground))]" />
+      <div>
+        <p className="font-medium">How these tiles relate to the cost basis above</p>
+        <ul className="mt-1 space-y-1 text-xs text-[hsl(var(--muted-foreground))] list-disc pl-4">
+          {notes.map((note) => (
+            <li key={note}>{note}</li>
+          ))}
+        </ul>
       </div>
     </div>
   );
@@ -464,6 +530,27 @@ export default function LicenseReconciliationPage() {
 
   const qualityCoverage: DataQualityCoverage | null = coverage;
 
+  // Tie each seat/credit tile back to the billed figure it should be read
+  // against, so the two blocks are visibly one story rather than two.
+  const billedSeatCost = costBasis ? safeNum(costBasis.seatCostNet) : 0;
+  const licenseCostSubtitle =
+    costBasis && billedSeatCost > 0
+      ? `Negotiated rates · ${fmtMoney(billedSeatCost)} actually billed`
+      : "Negotiated seat pricing";
+
+  const billedCredits = costBasis ? safeNum(costBasis.creditsBilled) : 0;
+  const creditsSubtitle =
+    kpis && billedCredits > 0
+      ? `${fmtMoney(kpis.totalConsumedUsd)} spend · ${((safeNum(kpis.totalConsumedCredits) / billedCredits) * 100).toFixed(0)}% of ${fmtNum(billedCredits)} billed`
+      : kpis
+        ? `${fmtMoney(kpis.totalConsumedUsd)} spend · per-user report`
+        : "";
+
+  const tcoSubtitle =
+    costBasis && safeNum(costBasis.totalCopilotNet) > 0
+      ? `License + credit spend · ${fmtMoney(safeNum(costBasis.totalCopilotNet))} billed`
+      : "License + credit spend";
+
   return (
     <div className="space-y-8">
       <PageHeader
@@ -582,19 +669,25 @@ export default function LicenseReconciliationPage() {
           <>
             <div className="space-y-4">
               <div className="grid gap-4 grid-cols-2 lg:grid-cols-4">
-                <MetricCard title="Licensed Users" value={kpis.totalUsers} accent="blue" icon={<Users className="h-5 w-5" />} subtitle={`${fmtNum(kpis.activeUsers)} active`} />
-                <MetricCard title="Monthly License Cost" value={fmtMoney(kpis.totalLicenseCost)} format="raw" accent="teal" icon={<CreditCard className="h-5 w-5" />} subtitle="Negotiated seat pricing" />
-                <MetricCard title="AI Credits (attributed)" value={fmtNum(kpis.totalConsumedCredits)} accent="violet" icon={<Zap className="h-5 w-5" />} subtitle={`${fmtMoney(kpis.totalConsumedUsd)} spend · per-user report`} />
+                <MetricCard title="Licensed Users" value={kpis.totalUsers} accent="blue" icon={<Users className="h-5 w-5" />} subtitle={`${fmtNum(kpis.totalSeats)} seats · ${fmtNum(kpis.activeSeats)} active`} />
+                <MetricCard title="Monthly License Cost" value={fmtMoney(kpis.totalLicenseCost)} format="raw" accent="teal" icon={<CreditCard className="h-5 w-5" />} subtitle={licenseCostSubtitle} />
+                <MetricCard title="AI Credits (attributed)" value={fmtNum(kpis.totalConsumedCredits)} accent="violet" icon={<Zap className="h-5 w-5" />} subtitle={creditsSubtitle} />
                 <MetricCard title="Credit Utilization" value={`${safeNum(kpis.overallUtilizationPct).toFixed(1)}%`} format="raw" accent="amber" icon={<Gauge className="h-5 w-5" />} subtitle={`${fmtNum(kpis.totalConsumedCredits)} attributed of ${fmtNum(kpis.totalAllowanceCredits)} allocated`} />
               </div>
               <div className="grid gap-4 grid-cols-2 lg:grid-cols-4">
-                <MetricCard title="Total Cost of Ownership" value={fmtMoney(kpis.totalCostOfOwnership)} format="raw" accent="green" icon={<Wallet className="h-5 w-5" />} subtitle="License + credit spend" />
+                <MetricCard title="Total Cost of Ownership" value={fmtMoney(kpis.totalCostOfOwnership)} format="raw" accent="green" icon={<Wallet className="h-5 w-5" />} subtitle={tcoSubtitle} />
                 <MetricCard title="AIC Assigned Budget" value={fmtMoney(kpis.totalAssignedUsd)} format="raw" accent="blue" icon={<BadgeCheck className="h-5 w-5" />} subtitle="Allocated allowance value" />
                 <MetricCard title="Over-Budget Users" value={kpis.overBudgetUsers} accent="red" icon={<AlertTriangle className="h-5 w-5" />} subtitle="Consumption exceeds budget" />
                 <MetricCard title="Zero-Consumption Seats" value={kpis.zeroConsumptionSeats} accent="amber" icon={<AlertTriangle className="h-5 w-5" />} subtitle={`${fmtNum(kpis.pendingCancellation)} pending cancellation`} />
               </div>
 
               <ZeroConsumptionNotice kpis={kpis} />
+              <PeriodBasisNotice
+                kpis={kpis}
+                basis={costBasis}
+                liveSnapshot={dataSource === "live_snapshot_only"}
+                fmtNum={fmtNum}
+              />
             </div>
 
             <div className="grid gap-6 lg:grid-cols-2">

@@ -1325,9 +1325,11 @@ const POOL_FRACTION_SQL = `
  * columns. Legacy `requests` rows are excluded because their `quantity` is a
  * count of premium requests, not a credit amount.
  *
- * Use this for anything scoped to the AI-credits era (June 2026 onward), where
- * mixing in a request count would conflate two different units. For figures
- * that span the premium-request era, use {@link BILLED_UNIT_QUANTITY_SQL}.
+ * This is the only quantity expression used for credit figures. There is no
+ * "billed unit" variant that spans both eras: GitHub's usage report carries a
+ * `unit_type` per row precisely so credits, requests and token units are
+ * aggregated separately, and adding a request count to a credit count produces
+ * a number that reproduces no GitHub report.
  */
 const AI_CREDIT_QUANTITY_SQL = `
   CASE
@@ -1337,20 +1339,15 @@ const AI_CREDIT_QUANTITY_SQL = `
   END`;
 
 /**
- * Billed consumption quantity in whatever unit the period was billed in.
- *
- * This is the per-user counterpart to {@link CREDIT_SKU_SQL}, which counts both
- * `ai_credit` and `premium_request` SKUs as consumption. Before June 2026 the
- * billed unit was the premium request; after it, the AI credit. Attribution
- * coverage compares this against the billed total, so both sides must count the
- * same rows -- applying the stricter {@link AI_CREDIT_QUANTITY_SQL} here would
- * drop legacy request rows from the attributed side only and report a phantom
- * attribution gap for historical months.
+ * Gross charge for a per-user consumption row: the AI-credit gross amount once
+ * the ai_credit report carries one, and the legacy premium-request gross amount
+ * before that. Amounts are USD, so unlike quantities they are safe to read
+ * across eras.
  */
-const BILLED_UNIT_QUANTITY_SQL = `
+const BILLED_UNIT_GROSS_SQL = `
   CASE
-    WHEN COALESCE(aic_quantity, 0) > 0 THEN aic_quantity
-    ELSE COALESCE(quantity, 0)
+    WHEN COALESCE(aic_gross_amount, 0) > 0 THEN aic_gross_amount
+    ELSE COALESCE(gross_amount, 0)
   END`;
 
 const POOL_CREDITS_SQL = `COALESCE(SUM(aic_quantity * (${POOL_FRACTION_SQL})), 0)`;
@@ -1836,10 +1833,33 @@ export function getAiCreditsReconciliation(
 // coverage is reported alongside, so a partially-attributable month is visible
 // as a gap instead of silently shrinking the total.
 
-/** SKUs billed per seat rather than per unit of consumption. */
-const SEAT_SKU_SQL = `sku NOT LIKE '%ai_credit%' AND sku NOT LIKE '%premium_request%'`;
-/** SKUs billed per AI credit (or, pre-June-2026, per premium request). */
-const CREDIT_SKU_SQL = `(sku LIKE '%ai_credit%' OR sku LIKE '%premium_request%')`;
+// ── Unit types (billing usage report) ────────────────────────────────
+//
+// GitHub's usage report reports a `unit_type` per row, and the reporting
+// tutorial is explicit that product-specific metrics come from filtering on
+// `product` *and* `unitType` before aggregating:
+// https://docs.github.com/en/enterprise-cloud@latest/billing/tutorials/automate-usage-reporting
+//
+// This matters more than it looks. Classifying by SKU name instead put three
+// incompatible units in one bucket: March 2026 alone carries 1,477,523
+// `ai-credits`, 14,368 `requests` and 83,136 `token-units` under Copilot
+// consumption SKUs. Adding them produced a headline "credits" number that was
+// not credits, not requests, and not reproducible from any GitHub report.
+//
+// Quantities are only ever summed within one unit type. Amounts (gross,
+// discount, net) are USD and therefore safe to sum across all of them.
+
+/** Copilot seat licences. Quantity is seat-months (a seat held all month = 1). */
+const UNIT_SEAT = "user-months";
+/** AI credits, the billed consumption unit from June 2026 onward. */
+const UNIT_CREDITS = "ai-credits";
+/** Premium requests, the billed consumption unit before June 2026. */
+const UNIT_REQUESTS = "requests";
+/** Token units, billed alongside credits for some models. */
+const UNIT_TOKEN_UNITS = "token-units";
+
+/** A per-user billing row that actually names a user. */
+const HAS_USERNAME_SQL = `TRIM(COALESCE(username, '')) <> ''`;
 
 export type { CopilotCostBasis };
 
@@ -1853,7 +1873,15 @@ export function getCopilotCostBasis(
   start: string,
   end: string,
   filters?: BillingFilters,
-  enterpriseSlugs?: string[]
+  enterpriseSlugs?: string[],
+  /**
+   * The calendar period these bounds represent, when the caller knows it.
+   * Pass `null` to state that the window is *not* a calendar month (a rolling
+   * `days` window that happens to sit inside one month is not July, and
+   * labelling it "July 2026" invites a partial window to be read as a whole
+   * month). Omit to fall back to inferring it from the bounds.
+   */
+  periodHint?: string | null
 ): CopilotCostBasis {
   const db = getDb();
   const { clause: entClause, params: entParams } = buildEnterpriseFilter(enterpriseSlugs);
@@ -1868,20 +1896,20 @@ export function getCopilotCostBasis(
     .prepare(
       `
     SELECT
-      COALESCE(SUM(CASE WHEN ${SEAT_SKU_SQL}   THEN net_amount   END), 0) AS seatNet,
-      COALESCE(SUM(CASE WHEN ${SEAT_SKU_SQL}   THEN gross_amount END), 0) AS seatGross,
-      COALESCE(SUM(CASE WHEN ${SEAT_SKU_SQL}   THEN quantity     END), 0) AS seatQty,
-      COALESCE(SUM(CASE WHEN ${CREDIT_SKU_SQL} THEN quantity     END), 0) AS creditQty,
-      COALESCE(SUM(CASE WHEN ${CREDIT_SKU_SQL} THEN net_amount   END), 0) AS creditNet,
-      COALESCE(SUM(CASE WHEN ${CREDIT_SKU_SQL} THEN gross_amount END), 0) AS creditGross
+      COALESCE(SUM(CASE WHEN unit_type = '${UNIT_SEAT}' THEN net_amount   END), 0) AS seatNet,
+      COALESCE(SUM(CASE WHEN unit_type = '${UNIT_SEAT}' THEN gross_amount END), 0) AS seatGross,
+      COALESCE(SUM(CASE WHEN unit_type = '${UNIT_SEAT}' THEN quantity     END), 0) AS seatQty,
+      COALESCE(SUM(CASE WHEN unit_type = '${UNIT_CREDITS}'     THEN quantity END), 0) AS creditQty,
+      COALESCE(SUM(CASE WHEN unit_type = '${UNIT_REQUESTS}'    THEN quantity END), 0) AS requestQty,
+      COALESCE(SUM(CASE WHEN unit_type = '${UNIT_TOKEN_UNITS}' THEN quantity END), 0) AS tokenUnitQty,
+      COALESCE(SUM(CASE WHEN unit_type <> '${UNIT_SEAT}' THEN net_amount   END), 0) AS creditNet,
+      COALESCE(SUM(CASE WHEN unit_type <> '${UNIT_SEAT}' THEN gross_amount END), 0) AS creditGross
     FROM billing_usage_records
     ${buildWhereClause(usageClauses)}
   `
     )
     .get(...usageParams) as Record<string, number> | undefined;
 
-  // Per-user attribution must count the same unit the billed side counts (see
-  // CREDIT_SKU_SQL): AI credits after June 2026, premium requests before it.
   const premClauses: string[] = ["date >= ?", "date <= ?"];
   const premParams: unknown[] = [start, end];
   if (entWhere) { premClauses.push(entWhere); premParams.push(...entParams); }
@@ -1892,13 +1920,21 @@ export function getCopilotCostBasis(
     });
   }
 
+  // Attribution must count the same unit the billed side counts. Both sides
+  // are restricted to `ai-credits`; premium requests and token units are
+  // reported separately rather than folded in.
   const prem = db
     .prepare(
       `
     SELECT
-      COALESCE(SUM(${BILLED_UNIT_QUANTITY_SQL}), 0)                    AS credits,
-      COUNT(DISTINCT CASE WHEN TRIM(COALESCE(username, '')) <> ''
-                          THEN LOWER(username) END)                  AS users
+      COALESCE(SUM(CASE WHEN unit_type = '${UNIT_CREDITS}' AND ${HAS_USERNAME_SQL}
+                        THEN (${AI_CREDIT_QUANTITY_SQL}) END), 0)          AS credits,
+      COALESCE(SUM(CASE WHEN unit_type = '${UNIT_CREDITS}' AND NOT ${HAS_USERNAME_SQL}
+                        THEN (${AI_CREDIT_QUANTITY_SQL}) END), 0)          AS unattributed,
+      COALESCE(SUM(CASE WHEN unit_type = '${UNIT_REQUESTS}' AND ${HAS_USERNAME_SQL}
+                        THEN COALESCE(quantity, 0) END), 0)                AS requests,
+      COUNT(DISTINCT CASE WHEN ${HAS_USERNAME_SQL}
+                          THEN LOWER(username) END)                        AS users
     FROM billing_premium_requests
     ${buildWhereClause(premClauses)}
   `
@@ -1907,8 +1943,11 @@ export function getCopilotCostBasis(
 
   const seatCostNet = Number(usage?.seatNet ?? 0);
   const creditsBilled = Number(usage?.creditQty ?? 0);
+  const requestsBilled = Number(usage?.requestQty ?? 0);
+  const tokenUnitsBilled = Number(usage?.tokenUnitQty ?? 0);
   const creditCostNet = Number(usage?.creditNet ?? 0);
   const creditsAttributed = Number(prem?.credits ?? 0);
+  const creditsUnattributed = Number(prem?.unattributed ?? 0);
 
   const coverage = creditsBilled > 0
     ? Math.min(100, (creditsAttributed / creditsBilled) * 100)
@@ -1917,14 +1956,18 @@ export function getCopilotCostBasis(
   return {
     startDate: start,
     endDate: end,
-    period: derivePeriod(start, end),
+    period: periodHint === undefined ? derivePeriod(start, end) : periodHint,
     seatCostNet,
     seatCostGross: Number(usage?.seatGross ?? 0),
     seatQuantity: Number(usage?.seatQty ?? 0),
     creditsBilled,
+    requestsBilled,
+    requestsAttributed: Number(prem?.requests ?? 0),
+    tokenUnitsBilled,
     creditCostNet,
     creditCostGross: Number(usage?.creditGross ?? 0),
     creditsAttributed,
+    creditsUnattributed,
     attributedUsers: Number(prem?.users ?? 0),
     attributionCoveragePct: coverage,
     // 99% rather than 100% because the two reports round independently; a
@@ -1938,4 +1981,83 @@ export function getCopilotCostBasis(
 function derivePeriod(start: string, end: string): string | null {
   if (start.length < 7 || end.length < 7) return null;
   return start.slice(0, 7) === end.slice(0, 7) ? start.slice(0, 7) : null;
+}
+
+/** Per-user attributed AI-credit consumption for a window, plus its residuals. */
+export interface AttributedCreditConsumption {
+  /** Lowercased login → AI credits consumed and their gross charge. */
+  byLogin: Map<string, { credits: number; usd: number }>;
+  /** Sum of `byLogin` — identical to `CopilotCostBasis.creditsAttributed` for the same arguments. */
+  totalCredits: number;
+  totalUsd: number;
+  /** AI credits on rows carrying no username; never attributable to a user. */
+  unattributedCredits: number;
+}
+
+/**
+ * Per-user split of the same attributed consumption {@link getCopilotCostBasis}
+ * reports in aggregate, over the same rows, unit, window and scope.
+ *
+ * The License & AI Credits page joins this onto seats. Computing it here rather
+ * than re-deriving a similar query there is deliberate: when the two used
+ * different unit expressions and different date floors, the page's per-user
+ * credit total and its own cost-basis strip disagreed, which is exactly the
+ * kind of contradiction this module exists to prevent.
+ *
+ * Counts `ai-credits` rows only. A window billed in premium requests yields
+ * zero credits here, which is correct — a request is not a credit, and the
+ * billed side reports it under `requestsBilled` for the same reason.
+ */
+export function getAttributedCreditConsumptionByUser(
+  start: string,
+  end: string,
+  filters?: BillingFilters,
+  enterpriseSlugs?: string[]
+): AttributedCreditConsumption {
+  const db = getDb();
+  const { clause: entClause, params: entParams } = buildEnterpriseFilter(enterpriseSlugs);
+  const entWhere = entClause.replace(/^\s*AND\s+/, "");
+
+  const clauses: string[] = ["date >= ?", "date <= ?", `unit_type = '${UNIT_CREDITS}'`];
+  const params: unknown[] = [start, end];
+  if (entWhere) { clauses.push(entWhere); params.push(...entParams); }
+  if (filters?.allowedLogins?.length || filters?.scopeOrgs?.length) {
+    appendPremiumFilters(clauses, params, {
+      allowedLogins: filters.allowedLogins,
+      scopeOrgs: filters.scopeOrgs,
+    });
+  }
+
+  const rows = db
+    .prepare(
+      `
+    SELECT LOWER(COALESCE(username, ''))                 AS login,
+           COALESCE(SUM(${AI_CREDIT_QUANTITY_SQL}), 0)   AS credits,
+           COALESCE(SUM(${BILLED_UNIT_GROSS_SQL}), 0)    AS usd
+    FROM billing_premium_requests
+    ${buildWhereClause(clauses)}
+    GROUP BY 1
+  `
+    )
+    .all(...params) as { login: string; credits: number; usd: number }[];
+
+  const byLogin = new Map<string, { credits: number; usd: number }>();
+  let totalCredits = 0;
+  let totalUsd = 0;
+  let unattributedCredits = 0;
+
+  for (const r of rows) {
+    const login = (r.login ?? "").trim();
+    const credits = Number(r.credits) || 0;
+    const usd = Number(r.usd) || 0;
+    if (!login) {
+      unattributedCredits += credits;
+      continue;
+    }
+    byLogin.set(login, { credits, usd });
+    totalCredits += credits;
+    totalUsd += usd;
+  }
+
+  return { byLogin, totalCredits, totalUsd, unattributedCredits };
 }

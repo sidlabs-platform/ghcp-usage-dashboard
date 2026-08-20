@@ -28,7 +28,7 @@ const configState = vi.hoisted(() => ({
 }));
 
 const repoState = vi.hoisted(() => ({
-  getLicenseReconciliationRows: vi.fn(),
+  getLicenseReconciliationDataset: vi.fn(),
   computeLicenseKPIs: vi.fn(),
   computePlanBreakdown: vi.fn(),
   computeOrgBreakdown: vi.fn(),
@@ -98,7 +98,7 @@ vi.mock("@/lib/db/billing-repo", () => ({
 }));
 
 vi.mock("@/lib/db/license-repo", () => ({
-  getLicenseReconciliationRows: (...a: unknown[]) => repoState.getLicenseReconciliationRows(...a),
+  getLicenseReconciliationDataset: (...a: unknown[]) => repoState.getLicenseReconciliationDataset(...a),
   computeLicenseKPIs: (...a: unknown[]) => repoState.computeLicenseKPIs(...a),
   computePlanBreakdown: (...a: unknown[]) => repoState.computePlanBreakdown(...a),
   computeOrgBreakdown: (...a: unknown[]) => repoState.computeOrgBreakdown(...a),
@@ -155,7 +155,7 @@ beforeEach(() => {
     creditToUsd: 0.01,
     history: { auditRetentionDays: 400 },
   });
-  repoState.getLicenseReconciliationRows.mockReturnValue([]);
+  repoState.getLicenseReconciliationDataset.mockReturnValue({ rows: [], coverage: { attributedCredits: 0, attributedUsd: 0, matchedCredits: 0, matchedUsd: 0, unmatchedCredits: 0, unmatchedUsd: 0, unmatchedUsers: 0 } });
   repoState.computeLicenseKPIs.mockReturnValue({});
   repoState.computePlanBreakdown.mockReturnValue([]);
   repoState.computeOrgBreakdown.mockReturnValue([]);

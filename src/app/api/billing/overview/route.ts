@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { isMetricEnabledForAnyEnterprise } from "@/lib/config/enterprise-config";
-import { getDateRange, parseAndClampDays } from "@/lib/utils";
+import { resolveBillingWindow } from "@/lib/api/billing-window";
 import {
   getOverviewKPIs,
   getDailyAggregates,
@@ -10,7 +10,6 @@ import {
   getCostCenterBreakdown,
   getCopilotCostBasis,
 } from "@/lib/db/billing-repo";
-import { isValidPeriod, monthBounds, monthDayCount } from "@/lib/date/month-range";
 import type { BillingFilters } from "@/lib/db/billing-repo";
 import { resolveFilteredUsers } from "@/lib/db/teams-repo";
 import { withCache } from "@/lib/cache/with-cache";
@@ -27,32 +26,14 @@ async function handler(request: NextRequest) {
 
     // A `period` ("YYYY-MM") pins the window to a calendar month. Billing is
     // billed monthly and the licensing tables are keyed by month, so this is
-    // the only basis on which the Billing and License & AI Credits pages can
-    // be expected to agree. A rolling `days` window remains the default.
-    const periodParam = params.get("period");
-    let period: string | null = null;
-    let start: string;
-    let end: string;
-    let days: number;
-
-    if (periodParam) {
-      if (!isValidPeriod(periodParam)) {
-        return NextResponse.json(
-          { error: `Invalid period "${periodParam}": expected format YYYY-MM` },
-          { status: 400 }
-        );
-      }
-      period = periodParam;
-      ({ startDate: start, endDate: end } = monthBounds(period));
-      days = monthDayCount(period);
-    } else {
-      const daysResult = parseAndClampDays(params.get("days"), 28);
-      if ("error" in daysResult) {
-        return NextResponse.json({ error: daysResult.error }, { status: 400 });
-      }
-      days = daysResult.days;
-      ({ start, end } = getDateRange(days));
+    // the only basis on which the Billing, Metered Usage and License & AI
+    // Credits pages can be expected to agree. A rolling `days` window remains
+    // the default. Resolved by the shared helper so all three match exactly.
+    const window = resolveBillingWindow(params, 28);
+    if ("error" in window) {
+      return NextResponse.json({ error: window.error }, { status: 400 });
     }
+    const { start, end, days, period } = window;
 
     // Parse scope filter (teams/orgs/enterprises)
     const teamsParam = params.get("teams");
@@ -80,7 +61,7 @@ async function handler(request: NextRequest) {
     // the same seat cost and credit total for the same window.
     let costBasis = null;
     try {
-      costBasis = getCopilotCostBasis(start, end, filters, enterpriseSlugs);
+      costBasis = getCopilotCostBasis(start, end, filters, enterpriseSlugs, period);
     } catch (err) {
       // Never fail the page over the reconciliation strip.
       console.error("Failed to compute Copilot cost basis:", err);

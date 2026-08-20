@@ -100,6 +100,10 @@ export interface LicenseReconciliationRow {
 /** Headline KPIs for the reconciliation view. */
 export interface LicenseReconciliationKPIs {
   totalUsers: number;
+  /** Seats held across all users — the unit GitHub bills, so directly comparable to billed seat-months. */
+  totalSeats: number;
+  /** Seats with no pending cancellation. */
+  activeSeats: number;
   activeUsers: number;
   pendingCancellation: number;
   inactive30d: number;
@@ -113,8 +117,18 @@ export interface LicenseReconciliationKPIs {
   overBudgetUsers: number;
   totalCostOfOwnership: number;
   currency: string;
-  /** Always "live_snapshot_only": this legacy reconciliation is computed live from current `copilot_seats` + billing rows (no historical persistence). See `materialize-license-period.ts`/`license-history-repo.ts` (Task 7) for the materialized-history equivalent, which callers should prefer when available. */
-  dataSource: "live_snapshot_only";
+  /**
+   * Consumption attributed to a login in scope that did not land on any row
+   * above (no current seat, or excluded by the active filters). Reported so
+   * `totalConsumedCredits + unmatchedConsumedCredits` reconciles with the
+   * attributed total on the shared cost-basis strip instead of silently
+   * under-reporting it.
+   */
+  unmatchedConsumedCredits: number;
+  unmatchedConsumedUsd: number;
+  unmatchedUsers: number;
+  /** Which pipeline produced these figures: the live `copilot_seats` + billing snapshot, or materialized period history. */
+  dataSource: "live_snapshot_only" | "historical";
 }
 
 /** Allocation-vs-consumption breakdown by plan or org. */
