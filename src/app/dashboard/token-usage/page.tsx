@@ -89,7 +89,7 @@ type ModelSortKey = keyof TokenModelSummary;
  */
 export default function TokenUsagePage() {
   const { days } = useDateRange();
-  const { hasFilter, buildScopeParams, selectedEntTeams, selectedOrgTeams, selectedOrgs: scopeOrgs } = useScope();
+  const { buildScopeParams } = useScope();
 
   const [data, setData] = useState<TokenResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -259,13 +259,6 @@ export default function TokenUsagePage() {
           Export CSV
         </a>
       </PageHeader>
-
-      {hasFilter && (
-        <div className="rounded-lg border border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-950/30 px-4 py-2 text-sm text-blue-700 dark:text-blue-400">
-          📊 Showing filtered results:{" "}
-          <strong>{[...selectedEntTeams, ...selectedOrgTeams, ...scopeOrgs].join(", ")}</strong>
-        </div>
-      )}
 
       {error && (
         <div className="rounded-lg border border-red-200 dark:border-red-900 bg-red-50 dark:bg-red-950/30 px-4 py-3 text-sm text-red-700 dark:text-red-400">

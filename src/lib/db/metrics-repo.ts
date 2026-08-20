@@ -2,6 +2,7 @@
 
 import { getDb } from "./database";
 import { buildLoginFilter } from "./aggregation-queries";
+import { phaseNumberSql } from "@/lib/metrics/adoption-phase";
 import type { DayTotal, UserDayRecord, TotalsByFeature } from "@/lib/types/metrics";
 
 export interface UserAiCreditsSummary {
@@ -1123,13 +1124,19 @@ function buildPhaseAssignmentWhere(
  * `enterprise_slug` values. `ROW_NUMBER()` partitioned by login and ordered by
  * day descending picks the most recent phase so each developer is counted once —
  * the same dedupe strategy used by the adoption-cohorts route.
+ *
+ * The phase is resolved to an INTEGER via the shared expression in
+ * `@/lib/metrics/adoption-phase`, because `ai_adoption_phase.phase` is a display
+ * string ("Phase 3") in current API data and a number in older rows. Reading it
+ * raw yields string keys that match no phase number, which silently zeroes every
+ * downstream ROI group.
  */
 const PHASE_ASSIGNMENT_CTE = `
   phase_assignment AS (
     SELECT user_login, phase FROM (
       SELECT
         u.user_login,
-        json_extract(u.ai_adoption_phase, '$.phase') AS phase,
+        ${phaseNumberSql("u.ai_adoption_phase")} AS phase,
         ROW_NUMBER() OVER (PARTITION BY u.user_login ORDER BY u.day DESC) AS rn
       FROM user_daily_metrics u
       WHERE {{WHERE}}

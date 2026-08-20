@@ -135,6 +135,8 @@ export default function DashboardOverview() {
 
   const { kpis, activeUsersTrend, acceptanceRateTrend, chatModes, featureUsage, cliVsIde } = data;
   const dailyTrendValues = data.dailyTrendValues ?? [];
+  const weeklyTrendValues = data.weeklyTrendValues ?? [];
+  const monthlyTrendValues = data.monthlyTrendValues ?? [];
   const isFiltered = data.filtered || hasFilter;
 
   const chatModeDonutData= [
@@ -180,7 +182,6 @@ export default function DashboardOverview() {
             subtitle={`Unique in last ${days} day${days !== 1 ? "s" : ""}`}
             accent="teal"
             stagger={1}
-            trend={dailyTrendValues}
           />
           <MetricCard
             title="Daily Active Users"
@@ -199,7 +200,7 @@ export default function DashboardOverview() {
             subtitle={`${days}-day average`}
             accent="violet"
             stagger={3}
-            trend={dailyTrendValues}
+            trend={weeklyTrendValues}
           />
           <MetricCard
             title="Monthly Active Users"
@@ -208,6 +209,7 @@ export default function DashboardOverview() {
             subtitle={`${days}-day average`}
             accent="green"
             stagger={4}
+            trend={monthlyTrendValues}
           />
           <MetricCard
             title="Agent Adoption"

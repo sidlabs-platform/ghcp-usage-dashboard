@@ -15,6 +15,7 @@ import {
   type RoiCostFilters,
 } from "@/lib/db/metrics-repo";
 import { getLicensingConfig } from "@/lib/config/dashboard-config";
+import { parsePhaseTotals } from "@/lib/metrics/adoption-phase";
 import {
   DAYS_PER_MONTH,
   ENTERPRISE_ROLLING_WINDOW_DAYS,
@@ -22,7 +23,6 @@ import {
   type RoiGroup,
   type RoiGroupKey,
   type RoiResponse,
-  type TotalsByAIAdoptionPhase,
 } from "@/lib/types/metrics";
 
 /**
@@ -70,12 +70,7 @@ function getMergedByPhase(
 
   if (!row) return null;
 
-  let phases: TotalsByAIAdoptionPhase[];
-  try {
-    phases = JSON.parse(row.totals_by_ai_adoption_phase || "[]");
-  } catch {
-    return null;
-  }
+  const phases = parsePhaseTotals(row.totals_by_ai_adoption_phase);
 
   const byPhase: Record<number, number> = {};
   let sawMergeField = false;

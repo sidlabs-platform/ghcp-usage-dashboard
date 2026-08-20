@@ -350,13 +350,6 @@ export default function PremiumRequestsPage() {
         />
       </PageHeader>
 
-      {/* Active scope filter indicator */}
-      {hasFilter && (
-        <div className="rounded-lg border border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-950/30 px-4 py-2 text-sm text-blue-700 dark:text-blue-400">
-          📊 Showing filtered results: <strong>{[...selectedEntTeams, ...selectedOrgTeams, ...scopeOrgs].join(", ")}</strong>
-        </div>
-      )}
-
       {/* AI credit coverage caveat (2026-07-02 metrics accuracy update) */}
       {coverageNote && (
         <div

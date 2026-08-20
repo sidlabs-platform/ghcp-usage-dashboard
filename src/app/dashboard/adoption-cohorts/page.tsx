@@ -137,7 +137,7 @@ export default function AdoptionCohortsPage() {
     );
   }
 
-  if (!data || !data.hasData) {
+  if (!data || !data.hasData || data.distribution.length === 0) {
     return (
       <div>
         <PageHeader title="AI Adoption Cohorts" description="AI adoption maturity phases" />
@@ -203,7 +203,7 @@ export default function AdoptionCohortsPage() {
                 title={d.label}
                 value={d.count}
                 icon={<Icon className="h-4 w-4" />}
-                subtitle={`${d.percentage.toFixed(1)}% of engaged`}
+                subtitle={`Phase ${d.phase} · ${d.percentage.toFixed(1)}% of engaged`}
                 accent={PHASE_ACCENTS[d.phase] ?? "blue"}
                 stagger={(Math.min(i + 2, 11)) as 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11}
               />
@@ -294,7 +294,10 @@ export default function AdoptionCohortsPage() {
                 {perPhaseMetrics.map((p) => (
                   <tr key={p.phase} className="border-b last:border-0 hover:bg-[hsl(var(--accent))]">
                     <td className="px-4 py-3 font-medium">
-                      {p.label || `Phase ${p.phase}`}
+                      {p.label}
+                      <span className="ml-2 text-xs text-[hsl(var(--muted-foreground))]">
+                        Phase {p.phase}
+                      </span>
                     </td>
                     <td className="px-4 py-3 text-right">{p.engaged_users?.toLocaleString() ?? "—"}</td>
                     <td className="px-4 py-3 text-right">{p.user_initiated_interaction_avg?.toFixed(1) ?? "—"}</td>

@@ -125,10 +125,6 @@ export default function BillingOverviewPage() {
 
   const hasData = kpis && (kpis.totalNet > 0 || kpis.totalGross > 0);
 
-  const scopeLabel = hasFilter
-    ? `Filtered: ${[...selectedEntTeams, ...selectedOrgTeams, ...scopeOrgs].join(", ")}`
-    : undefined;
-
   return (
     <div className="space-y-8">
       <PageHeader title="Billing" description="Cost summary and spend breakdown across products and orgs">
@@ -146,13 +142,6 @@ export default function BillingOverviewPage() {
           isReady={!!hasData}
         />
       </PageHeader>
-
-      {/* Active scope filter indicator */}
-      {hasFilter && (
-        <div className="rounded-lg border border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-950/30 px-4 py-2 text-sm text-blue-700 dark:text-blue-400">
-          📊 Showing filtered results: <strong>{scopeLabel}</strong>
-        </div>
-      )}
 
       {!hasData && (
         <div className="text-center py-16 text-[hsl(var(--muted-foreground))]">

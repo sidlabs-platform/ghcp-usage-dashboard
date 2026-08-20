@@ -296,7 +296,13 @@ async function handler(request: NextRequest) {
 
     return NextResponse.json({
       kpis,
+      // One series per KPI that has one. `periodActiveUsers` is a distinct count
+      // over the whole window, not a daily series, so it deliberately has none —
+      // sharing `dailyTrendValues` across cards drew the same curve under
+      // different numbers.
       dailyTrendValues: activeUsersTrend.map(t => t.daily),
+      weeklyTrendValues: activeUsersTrend.map(t => t.weekly ?? 0),
+      monthlyTrendValues: activeUsersTrend.map(t => t.monthly ?? 0),
       activeUsersTrend,
       acceptanceRateTrend,
       chatModes,

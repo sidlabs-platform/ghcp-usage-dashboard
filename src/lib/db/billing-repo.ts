@@ -1688,3 +1688,86 @@ export function getTokenExportRows(
     )
     .all(...params, limit) as Record<string, string | number>[];
 }
+
+/**
+ * Reconciles the two AI-credit totals the dashboard reports.
+ *
+ * "AI Credits by User" sums `user_daily_metrics.ai_credits_used` (the Usage
+ * Metrics API), while Token Usage and AI Credits sum the `ai_credit` billing
+ * report. The two disagree, which reads as a data bug but is not one: verified
+ * against production data over an identical window, the per-user attributed
+ * totals match to the decimal. The entire difference is billed credits that
+ * GitHub attributes to no user — Code Review, `code_quality`, and other
+ * automated surfaces that bill to the enterprise rather than to a developer.
+ *
+ * Returning the unattributed remainder alongside the attributed total lets the
+ * UI state the identity `attributed + unattributed = total billed` instead of
+ * leaving two irreconcilable headline numbers on adjacent pages.
+ */
+export interface AiCreditsReconciliation {
+  /** Billed credits carrying a username. */
+  attributedCredits: number;
+  /** Billed credits with no username — automated and enterprise-level surfaces. */
+  unattributedCredits: number;
+  /** Every billed credit in range: attributed + unattributed. */
+  totalBilledCredits: number;
+  /** Distinct users carrying attributed credits. */
+  attributedUsers: number;
+  /** Top unattributed surfaces by credit volume, for explaining the remainder. */
+  unattributedByModel: { model: string; credits: number }[];
+  /** Latest billing date in range — the billing report can lead or lag metrics. */
+  billingThrough: string | null;
+}
+
+/**
+ * Split billed AI credits into user-attributed and unattributed buckets.
+ */
+export function getAiCreditsReconciliation(
+  start: string,
+  end: string,
+  filters?: PremiumFilters,
+  enterpriseSlugs?: string[]
+): AiCreditsReconciliation {
+  const db = getDb();
+  const { where, params } = buildTokenQuery(start, end, filters, enterpriseSlugs);
+  const HAS_USER = `TRIM(COALESCE(username, '')) <> ''`;
+
+  const row = db
+    .prepare(
+      `
+    SELECT
+      COALESCE(SUM(CASE WHEN ${HAS_USER} THEN aic_quantity END), 0)     AS attributed,
+      COALESCE(SUM(CASE WHEN NOT ${HAS_USER} THEN aic_quantity END), 0) AS unattributed,
+      COALESCE(SUM(aic_quantity), 0)                                    AS total,
+      COUNT(DISTINCT CASE WHEN ${HAS_USER} THEN LOWER(username) END)    AS users,
+      MAX(date)                                                         AS billing_through
+    FROM billing_premium_requests
+    ${where}
+  `
+    )
+    .get(...params) as Record<string, number | string | null>;
+
+  const byModel = db
+    .prepare(
+      `
+    SELECT COALESCE(NULLIF(TRIM(model), ''), 'Unknown') AS model,
+           COALESCE(SUM(aic_quantity), 0)               AS credits
+    FROM billing_premium_requests
+    ${where} AND NOT ${HAS_USER}
+    GROUP BY 1
+    HAVING credits > 0
+    ORDER BY credits DESC
+    LIMIT 5
+  `
+    )
+    .all(...params) as { model: string; credits: number }[];
+
+  return {
+    attributedCredits: Number(row?.attributed ?? 0),
+    unattributedCredits: Number(row?.unattributed ?? 0),
+    totalBilledCredits: Number(row?.total ?? 0),
+    attributedUsers: Number(row?.users ?? 0),
+    unattributedByModel: byModel.map((r) => ({ model: r.model, credits: Number(r.credits) })),
+    billingThrough: (row?.billing_through as string | null) ?? null,
+  };
+}
