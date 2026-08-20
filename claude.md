@@ -1,7 +1,13 @@
 # Claude AI Coding Instructions — GHCP Usage Dashboard
 
 ## Project Overview
-Next.js 15 (App Router, TypeScript) dashboard for GitHub Copilot usage metrics. Uses SQLite (better-sqlite3) for storage, Recharts for visualization, TailwindCSS for styling, and Vitest for testing.
+Next.js 15 (App Router, TypeScript) dashboard for GitHub Copilot usage metrics. Uses SQLite via Node's built-in **`node:sqlite`** module (`DatabaseSync`) for storage, Recharts for visualization, TailwindCSS for styling, and Vitest for testing.
+
+> **`node:sqlite` — not better-sqlite3.** Built into Node 26+; no install or native rebuild needed. Key differences:
+> - Read-only connections: `new DatabaseSync(path, { readOnly: true })`
+> - API is a subset of better-sqlite3's — `.pluck()` and UDF helpers do not exist
+>
+> **DB path is hardcoded** (`src/lib/db/database.ts:9`): `path.join(process.cwd(), "data", "copilot-metrics.db")` with no env override. Standalone Next.js changes `cwd()` to `.next/standalone/`, yielding a different DB than dev mode (see issue #91). To test against a snapshot, copy the file into place.
 
 ## Architecture
 - **API Routes**: `src/app/api/` — Next.js route handlers returning JSON

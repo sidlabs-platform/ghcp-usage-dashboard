@@ -1,7 +1,14 @@
 # GitHub Copilot Instructions — GHCP Usage Dashboard
 
 ## Project Context
-This is a Next.js 15 (App Router) TypeScript dashboard for GitHub Copilot enterprise usage metrics. It uses SQLite via better-sqlite3, Recharts for charts, and TailwindCSS for styling.
+This is a Next.js 15 (App Router) TypeScript dashboard for GitHub Copilot enterprise usage metrics. It uses SQLite via Node's built-in **`node:sqlite`** module (`DatabaseSync`), Recharts for charts, and TailwindCSS for styling.
+
+> **`node:sqlite` — not better-sqlite3.** The package is built into Node 26+; there is nothing to install and no native rebuild step. Key differences from better-sqlite3:
+> - Read-only connections: `new DatabaseSync(path, { readOnly: true })`
+> - The API is a strict subset — `.pluck()`, user-defined functions, and other better-sqlite3 helpers do **not** exist
+> - Do not generate or suggest code that imports or installs `better-sqlite3`
+>
+> **DB path is hardcoded** (`src/lib/db/database.ts:9`): `path.join(process.cwd(), "data", "copilot-metrics.db")` with no environment override. Pointing a dev server or test run at an alternate database requires copying the file into place. An env-var override (`DB_PATH`/`DATA_DIR`) is tracked in issue #91.
 
 ## Architecture Rules
 
