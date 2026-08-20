@@ -59,6 +59,34 @@ export function parseScopeFilter(searchParams: URLSearchParams): ParsedScopeFilt
     ? selectedEnterprises
     : (compositeEnterpriseSlugs.length > 0 ? compositeEnterpriseSlugs : undefined);
 
+  if (compositeTeams.length > 0 && plainTeams.length === 0 && selectedOrgs.length === 0) {
+    const allowedUserScopes: FilteredUserScope[] = [];
+    const byEnterprise = new Map<string, string[]>();
+    for (const team of compositeTeams) {
+      const slugs = byEnterprise.get(team.enterprise) ?? [];
+      slugs.push(team.team);
+      byEnterprise.set(team.enterprise, slugs);
+    }
+    for (const [enterpriseSlug, teamSlugs] of byEnterprise) {
+      for (const userLogin of resolveFilteredUsers(
+        [...plainTeams, ...teamSlugs],
+        [],
+        [enterpriseSlug],
+      )) {
+        allowedUserScopes.push({ enterpriseSlug, userLogin });
+      }
+    }
+    return {
+      selectedTeams,
+      selectedOrgs,
+      selectedEnterprises,
+      hasFilter,
+      allowedLogins: new Set(allowedUserScopes.map((scope) => scope.userLogin)),
+      allowedUserScopes,
+      enterpriseSlugs,
+    };
+  }
+
   if (selectedTeams.length > 0 && selectedOrgs.length > 0) {
     let allowedUserScopes: FilteredUserScope[];
     if (compositeTeams.length > 0) {

@@ -158,6 +158,11 @@ export interface FilteredUserScope {
   userLogin: string;
 }
 
+interface FilteredUserScopeRow {
+  enterprise_slug: string;
+  user_login: string;
+}
+
 /**
  * Resolve users that match both selected dimensions while preserving enterprise identity.
  * Values within the team dimension and within the organization dimension are additive.
@@ -195,10 +200,7 @@ export function resolveFilteredUserScopes(
       )
       ${enterpriseFilter}
     ORDER BY tm.enterprise_slug, tm.user_login
-  `).all(...teamSlugs, ...orgSlugs, ...(enterpriseSlugs ?? [])) as {
-    enterprise_slug: string;
-    user_login: string;
-  }[];
+  `).all(...teamSlugs, ...orgSlugs, ...(enterpriseSlugs ?? [])) as FilteredUserScopeRow[];
 
   return rows.map((row) => ({
     enterpriseSlug: row.enterprise_slug,

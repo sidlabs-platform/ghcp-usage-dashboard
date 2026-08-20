@@ -357,21 +357,21 @@ describe("parseDateRangeParams", () => {
 
   it("accepts the previous UTC date in positive-offset timezones", () => {
     const previousTimezone = process.env.TZ;
-    process.env.TZ = "Pacific/Auckland";
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-08-20T00:00:00Z"));
-    const params = new URLSearchParams({
-      startDate: "2026-08-19",
-      endDate: "2026-08-19",
-    });
-
     try {
+      process.env.TZ = "Pacific/Auckland";
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-08-20T00:00:00Z"));
+      const params = new URLSearchParams({
+        startDate: "2026-08-19",
+        endDate: "2026-08-19",
+      });
       expect(parseDateRangeParams(params)).toEqual({
         start: "2026-08-19",
         end: "2026-08-19",
       });
     } finally {
-      process.env.TZ = previousTimezone;
+      if (previousTimezone === undefined) delete process.env.TZ;
+      else process.env.TZ = previousTimezone;
     }
   });
 

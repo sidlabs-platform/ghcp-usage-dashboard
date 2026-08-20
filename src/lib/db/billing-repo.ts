@@ -34,6 +34,11 @@ const AI_CREDITS_START_DATE = "2026-06-01";
 
 // ── Filter Interfaces ─────────────────────────────────────────────────
 
+export interface BillingUserScope {
+  enterpriseSlug: string;
+  userLogin: string;
+}
+
 export interface BillingFilters {
   product?: string[];
   sku?: string[];
@@ -44,7 +49,7 @@ export interface BillingFilters {
   /** Scope filter: resolved user logins from team/org selection */
   allowedLogins?: string[];
   /** Enterprise-qualified users; takes precedence over `allowedLogins`. */
-  allowedUserScopes?: { enterpriseSlug: string; userLogin: string }[];
+  allowedUserScopes?: BillingUserScope[];
   /** Scope filter: selected organization slugs for org-level charges */
   scopeOrgs?: string[];
 }
@@ -57,7 +62,7 @@ export interface PremiumFilters {
   /** Scope filter: resolved user logins from team/org selection */
   allowedLogins?: string[];
   /** Enterprise-qualified users; takes precedence over `allowedLogins`. */
-  allowedUserScopes?: { enterpriseSlug: string; userLogin: string }[];
+  allowedUserScopes?: BillingUserScope[];
   /** Scope filter: selected organization slugs for org-level charges */
   scopeOrgs?: string[];
 }
@@ -110,20 +115,30 @@ function appendBillingFilters(
   // Scope filter: team/org filtering via resolved logins + org slugs
   // Skip scopeOrgs in the OR clause if page-level org filter already intersected above
   const scopeOrgsHandled = filters.organization?.length && filters.scopeOrgs?.length;
-  if (filters.allowedUserScopes !== undefined || filters.allowedLogins !== undefined || (filters.scopeOrgs?.length && !scopeOrgsHandled)) {
+  if (filters.allowedUserScopes !== undefined) {
+    if (filters.allowedUserScopes.length === 0) {
+      clauses.push("1 = 0");
+      return;
+    }
+    const qualifiedUsers = `(enterprise_slug, username) IN (${filters.allowedUserScopes.map(() => "(?, ?)").join(", ")})`;
+    params.push(...filters.allowedUserScopes.flatMap((scope) => [scope.enterpriseSlug, scope.userLogin]));
+    if (filters.scopeOrgs?.length && !scopeOrgsHandled) {
+      clauses.push(`(${qualifiedUsers} OR (charge_scope = 'org' AND organization IN (${filters.scopeOrgs.map(() => "?").join(",")})))`);
+      params.push(...filters.scopeOrgs);
+    } else {
+      clauses.push(qualifiedUsers);
+    }
+    return;
+  }
+  if (filters.allowedLogins !== undefined || (filters.scopeOrgs?.length && !scopeOrgsHandled)) {
     // Short-circuit: if scope is active but resolved to nothing, match nothing
-    const hasUserScopes = filters.allowedUserScopes && filters.allowedUserScopes.length > 0;
-    const hasLogins = filters.allowedUserScopes === undefined && filters.allowedLogins && filters.allowedLogins.length > 0;
+    const hasLogins = filters.allowedLogins && filters.allowedLogins.length > 0;
     const hasOrgs = filters.scopeOrgs && filters.scopeOrgs.length > 0 && !scopeOrgsHandled;
-    if (!hasUserScopes && !hasLogins && !hasOrgs) {
+    if (!hasLogins && !hasOrgs) {
       clauses.push("1 = 0");
       return;
     }
     const scopeParts: string[] = [];
-    if (hasUserScopes) {
-      scopeParts.push(`(enterprise_slug, username) IN (${filters.allowedUserScopes!.map(() => "(?, ?)").join(", ")})`);
-      params.push(...filters.allowedUserScopes!.flatMap((scope) => [scope.enterpriseSlug, scope.userLogin]));
-    }
     if (hasLogins) {
       scopeParts.push(
         `username IN (${filters.allowedLogins!.map(() => "?").join(",")})`
@@ -179,19 +194,23 @@ function appendPremiumFilters(
   }
   // Scope filter: team/org filtering via resolved logins + org slugs
   const scopeOrgsHandled = filters.organization?.length && filters.scopeOrgs?.length;
-  if (filters.allowedUserScopes !== undefined || filters.allowedLogins !== undefined || (filters.scopeOrgs?.length && !scopeOrgsHandled)) {
-    const hasUserScopes = filters.allowedUserScopes && filters.allowedUserScopes.length > 0;
-    const hasLogins = filters.allowedUserScopes === undefined && filters.allowedLogins && filters.allowedLogins.length > 0;
+  if (filters.allowedUserScopes !== undefined) {
+    if (filters.allowedUserScopes.length === 0) {
+      clauses.push("1 = 0");
+      return;
+    }
+    clauses.push(`(enterprise_slug, username) IN (${filters.allowedUserScopes.map(() => "(?, ?)").join(", ")})`);
+    params.push(...filters.allowedUserScopes.flatMap((scope) => [scope.enterpriseSlug, scope.userLogin]));
+    return;
+  }
+  if (filters.allowedLogins !== undefined || (filters.scopeOrgs?.length && !scopeOrgsHandled)) {
+    const hasLogins = filters.allowedLogins && filters.allowedLogins.length > 0;
     const hasOrgs = filters.scopeOrgs && filters.scopeOrgs.length > 0 && !scopeOrgsHandled;
-    if (!hasUserScopes && !hasLogins && !hasOrgs) {
+    if (!hasLogins && !hasOrgs) {
       clauses.push("1 = 0");
       return;
     }
     const scopeParts: string[] = [];
-    if (hasUserScopes) {
-      scopeParts.push(`(enterprise_slug, username) IN (${filters.allowedUserScopes!.map(() => "(?, ?)").join(", ")})`);
-      params.push(...filters.allowedUserScopes!.flatMap((scope) => [scope.enterpriseSlug, scope.userLogin]));
-    }
     if (hasLogins) {
       scopeParts.push(
         `username IN (${filters.allowedLogins!.map(() => "?").join(",")})`
@@ -433,6 +452,12 @@ export function upsertPremiumRequests(
 
 // ── Query Operations ──────────────────────────────────────────────────
 
+/**
+ * Return billing KPIs for a date window and optional dashboard scope.
+ *
+ * Enterprise-qualified user scopes take precedence over login-only and
+ * organization fallbacks. An explicitly empty qualified scope matches zero rows.
+ */
 export function getOverviewKPIs(
   start: string,
   end: string,

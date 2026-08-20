@@ -83,7 +83,7 @@ async function getHandler() {
 
 function yesterday(): string {
   const d = new Date();
-  d.setDate(d.getDate() - 1);
+  d.setUTCDate(d.getUTCDate() - 1);
   return d.toISOString().split("T")[0];
 }
 
@@ -264,6 +264,35 @@ describe("overview route — scoped billing KPI regression", () => {
       { day: testDay, daily: 2, weekly: 2, monthly: 2 },
     ]);
     expect(json.kpis.aiCreditsConsumed).toBeNull();
+  });
+
+  it("preserves enterprise identity for composite team-only filters", async () => {
+    const testDay = yesterday();
+    db.prepare(`
+      INSERT INTO team_memberships (enterprise_slug, team_slug, team_name, source, org_slug, user_login, updated_at)
+      VALUES
+        ('ent1', 'platform', 'Platform', 'org', 'org1', 'alice', ?),
+        ('ent2', 'security', 'Security', 'org', 'org2', 'bob', ?)
+    `).run(`${testDay}T00:00:00Z`, `${testDay}T00:00:00Z`);
+    const insertMetric = db.prepare(`
+      INSERT INTO user_daily_metrics (
+        day, enterprise_id, enterprise_slug, user_id, user_login,
+        used_agent, used_chat, used_cli, used_copilot_app
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    insertMetric.run(testDay, "ent1", "ent1", 1, "alice", 0, 0, 0, 0);
+    insertMetric.run(testDay, "ent2", "ent2", 2, "bob", 0, 0, 0, 0);
+    insertMetric.run(testDay, "ent2", "ent2", 3, "alice", 0, 0, 0, 0);
+
+    const GET = await getHandler();
+    const res = await GET(new NextRequest(
+      "http://localhost/api/metrics/overview?days=1&teams=ent1:platform,ent2:security",
+    ));
+    const json = await res.json();
+
+    expect(json.activeUsersTrend).toEqual([
+      { day: testDay, daily: 2, weekly: 2, monthly: 2 },
+    ]);
   });
 });
 
