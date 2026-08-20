@@ -157,6 +157,14 @@ export const SEAT_LIFECYCLE_SORT_COLUMNS: readonly string[] = [
 /** Hard cap on CSV export rows, mirroring the license-reconciliation export. */
 export const SEAT_LIFECYCLE_EXPORT_MAX_ROWS = 5000;
 
+/**
+ * Resolve display logins in chunks so the target CTE stays below SQLite's bound
+ * variable ceiling. Node v26.2.0's SQLite 3.53.1 build allows 32,766 variables,
+ * and this lookup binds two per target (16,383 targets max), so 1,000 targets
+ * keeps a wide margin even if the export cap or SQLite build changes.
+ */
+export const LOGIN_RESOLUTION_TARGET_CHUNK_SIZE = 1000;
+
 // ── Helpers ──────────────────────────────────────────────────────────────
 
 /** Extract the 'YYYY-MM-DD' grain from an ISO timestamp or date string. */
@@ -272,8 +280,6 @@ function resolveDisplayLogins(rows: SeatLifecycleRow[]): SeatLifecycleRow[] {
   const hasAuditEvents = tableExists(db, "license_audit_events");
   if (!hasIdentityRecords && !hasPeriodRows && !hasAuditEvents) return withDefaults;
 
-  const valuesSql = targets.map(() => "(?, ?)").join(",");
-  const targetParams = targets.flatMap((target) => [target.enterpriseSlug, target.userId]);
   const selects: string[] = [];
 
   if (hasIdentityRecords) {
@@ -310,10 +316,19 @@ function resolveDisplayLogins(rows: SeatLifecycleRow[]): SeatLifecycleRow[] {
     `);
   }
 
-  const candidates = db.prepare(`
-    WITH target(enterprise_slug, user_id) AS (VALUES ${valuesSql})
-    ${selects.join("\nUNION ALL\n")}
-  `).all(...targetParams) as LoginResolutionCandidate[];
+  const candidates: LoginResolutionCandidate[] = [];
+  for (let index = 0; index < targets.length; index += LOGIN_RESOLUTION_TARGET_CHUNK_SIZE) {
+    const chunk = targets.slice(index, index + LOGIN_RESOLUTION_TARGET_CHUNK_SIZE);
+    const valuesSql = chunk.map(() => "(?, ?)").join(",");
+    const targetParams = chunk.flatMap((target) => [target.enterpriseSlug, target.userId]);
+    const chunkCandidates = db.prepare(`
+      WITH target(enterprise_slug, user_id) AS (VALUES ${valuesSql})
+      ${selects.join("\nUNION ALL\n")}
+    `).all(...targetParams) as LoginResolutionCandidate[];
+    // Appended in a loop rather than push(...spread): a chunk can return many
+    // candidates per target, and spreading them as arguments risks a RangeError.
+    for (const candidate of chunkCandidates) candidates.push(candidate);
+  }
 
   const candidatesByTarget = new Map<string, LoginResolutionCandidate[]>();
   for (const candidate of candidates) {

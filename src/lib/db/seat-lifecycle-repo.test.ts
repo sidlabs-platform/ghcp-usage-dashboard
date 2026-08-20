@@ -65,6 +65,8 @@ import {
   getSeatLifecycleRows,
   getSeatLifecycleCoverage,
   getSeatLifecycleExportRows,
+  LOGIN_RESOLUTION_TARGET_CHUNK_SIZE,
+  SEAT_LIFECYCLE_EXPORT_MAX_ROWS,
   toEventDate,
   type SeatSnapshotEntry,
 } from "./seat-lifecycle-repo";
@@ -654,6 +656,26 @@ describe("read-time EMU login display resolution", () => {
     }]);
   }
 
+  function recordManyOpaqueLifecycleRows(count: number) {
+    const result = db.prepare(`
+      WITH RECURSIVE seq(n) AS (
+        SELECT 1
+        UNION ALL
+        SELECT n + 1 FROM seq WHERE n < ?
+      )
+      INSERT INTO copilot_seat_lifecycle_events (
+        enterprise_slug, org_slug, user_login, user_id, event_type, event_date,
+        occurred_at, plan_type, assigning_team_slug, assigning_team_name,
+        last_activity_at, source, detected_at
+      )
+      SELECT
+        'ent1', 'org1', printf('%032x', n), n, 'offboarded', '2026-06-12',
+        '2026-06-12T00:00:00Z', NULL, NULL, NULL, NULL, 'sync_diff', '2026-06-12T00:00:00Z'
+      FROM seq
+    `).run(count);
+    expect(result.changes).toBe(count);
+  }
+
   it("resolves a dashed-GUID login from license_identity_records", () => {
     recordOpaqueLifecycleRow(dashedGuid, 101);
     insertIdentityRecord({ github_user_id: 101, resolved_login: "real-dev" });
@@ -788,6 +810,34 @@ describe("read-time EMU login display resolution", () => {
     expect(row.display_login).toBe(dashedGuid);
     expect(row.login_resolved).toBe(false);
   });
+
+  it("resolves opaque logins across chunk boundaries throughout the full CSV export cap", () => {
+    recordManyOpaqueLifecycleRows(SEAT_LIFECYCLE_EXPORT_MAX_ROWS);
+    const boundaryUserId = LOGIN_RESOLUTION_TARGET_CHUNK_SIZE;
+    const afterBoundaryUserId = LOGIN_RESOLUTION_TARGET_CHUNK_SIZE + 1;
+    insertIdentityRecord({ github_user_id: boundaryUserId, resolved_login: "boundary-user" });
+    insertPeriodRow({ github_user_id: boundaryUserId, resolved_user_login: "period-loses-at-boundary" });
+    insertIdentityRecord({ github_user_id: afterBoundaryUserId, resolved_login: "after-boundary-user" });
+    insertAuditEvent({
+      event_id: "audit-after-boundary",
+      github_user_id: afterBoundaryUserId,
+      observed_login: "audit-loses-after-boundary",
+      occurred_at: "2026-06-20T00:00:00Z",
+    });
+    insertIdentityRecord({ github_user_id: SEAT_LIFECYCLE_EXPORT_MAX_ROWS, resolved_login: "last-export-user" });
+
+    const result = getSeatLifecycleExportRows({ ...WINDOW }, "offboarded");
+    const byUserId = new Map(result.rows.map((row) => [row.user_id, row]));
+
+    expect(result.rows).toHaveLength(SEAT_LIFECYCLE_EXPORT_MAX_ROWS);
+    expect(result.truncated).toBe(false);
+    expect(byUserId.get(boundaryUserId)?.display_login).toBe("boundary-user");
+    expect(byUserId.get(boundaryUserId)?.login_resolved).toBe(true);
+    expect(byUserId.get(afterBoundaryUserId)?.display_login).toBe("after-boundary-user");
+    expect(byUserId.get(afterBoundaryUserId)?.login_resolved).toBe(true);
+    expect(byUserId.get(SEAT_LIFECYCLE_EXPORT_MAX_ROWS)?.display_login).toBe("last-export-user");
+    expect(byUserId.get(SEAT_LIFECYCLE_EXPORT_MAX_ROWS)?.login_resolved).toBe(true);
+  }, 30000);
 });
 
 describe("getSeatLifecycleRows", () => {
