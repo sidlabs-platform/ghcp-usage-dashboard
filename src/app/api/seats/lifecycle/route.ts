@@ -13,13 +13,15 @@ import {
 } from "@/lib/db/seat-lifecycle-repo";
 import { parseScopeFilter } from "@/lib/api/scope-filter";
 import { parseSeatLifecycleWindow } from "@/lib/api/seat-lifecycle-window";
-import { withCache } from "@/lib/cache/with-cache";
+import { CACHE_SKIP_HEADER, withCache } from "@/lib/cache/with-cache";
 import { withTimeout } from "@/lib/api/timeout";
 import { withRateLimit } from "@/lib/api/rate-limit/rate-limiter";
 import { CACHE_TTL } from "@/lib/cache/memory-cache";
 
 const DEFAULT_PAGE_SIZE = 25;
 const MAX_PAGE_SIZE = 200;
+const CACHE_HEADERS = { "Cache-Control": "private, max-age=300, stale-while-revalidate=60" };
+const DEGRADED_CACHE_HEADERS = { "Cache-Control": "private, no-cache, no-store, max-age=0", [CACHE_SKIP_HEADER]: "1" };
 
 const EMPTY_STATS: SeatLifecycleStats = {
   onboardedUsers: 0,
@@ -92,7 +94,7 @@ async function handler(request: NextRequest) {
     trend = getSeatLifecycleTrend(query);
     onboarded = getSeatLifecycleRows(query, "onboarded", { page: onboardedPage, pageSize, sort, sortDir });
     offboarded = getSeatLifecycleRows(query, "offboarded", { page: offboardedPage, pageSize, sort, sortDir });
-    coverage = getSeatLifecycleCoverage(filter.enterpriseSlugs);
+    coverage = getSeatLifecycleCoverage(query);
   } catch (err) {
     console.error("[api/seats/lifecycle] Falling back to empty payload:", err);
     available = false;
@@ -125,7 +127,7 @@ async function handler(request: NextRequest) {
       filtered: filter.hasFilter,
       available,
     },
-    { headers: { "Cache-Control": "private, max-age=300, stale-while-revalidate=60" } },
+    { headers: available ? CACHE_HEADERS : DEGRADED_CACHE_HEADERS },
   );
 }
 

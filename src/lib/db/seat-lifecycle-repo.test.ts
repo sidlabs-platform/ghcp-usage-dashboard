@@ -850,18 +850,18 @@ describe("getSeatLifecycleTrend", () => {
 
 describe("getSeatLifecycleCoverage", () => {
   it("reports 'none' when nothing has been tracked", () => {
-    expect(getSeatLifecycleCoverage()).toMatchObject({ source: "none", trackingStartedAt: null });
+    expect(getSeatLifecycleCoverage({ ...WINDOW })).toMatchObject({ source: "none", trackingStartedAt: null });
   });
 
   it("flags onboardingOnly when onboarding rows exist but offboarding is untracked", () => {
     insertSeat({ user_login: "dev1" });
     backfillOnboardingFromSeats("ent1");
-    expect(getSeatLifecycleCoverage()).toMatchObject({ source: "none", onboardingOnly: true });
+    expect(getSeatLifecycleCoverage({ ...WINDOW })).toMatchObject({ source: "none", onboardingOnly: true });
   });
 
   it("reports sync_diff with the tracking start once diffing has run", () => {
     markSeatLifecycleTrackingStarted("ent1", "2026-06-01T00:00:00Z");
-    expect(getSeatLifecycleCoverage()).toMatchObject({
+    expect(getSeatLifecycleCoverage({ ...WINDOW })).toMatchObject({
       source: "sync_diff",
       trackingStartedAt: "2026-06-01T00:00:00Z",
       onboardingOnly: false,
@@ -872,19 +872,42 @@ describe("getSeatLifecycleCoverage", () => {
     markSeatLifecycleTrackingStarted("ent1", "2026-06-01T00:00:00Z");
     insertAuditEvent({ event_id: "a1", action: "assign", occurred_at: "2026-06-05T00:00:00Z" });
     projectAuditEventsToLifecycle("ent1");
-    expect(getSeatLifecycleCoverage().source).toBe("audit_log");
+    expect(getSeatLifecycleCoverage({ ...WINDOW }).source).toBe("audit_log");
+  });
+
+  it("uses sync_diff for windows with only out-of-window audit rows", () => {
+    markSeatLifecycleTrackingStarted("ent1", "2026-06-01T00:00:00Z");
+    insertAuditEvent({ event_id: "a1", action: "cancel", occurred_at: "2026-05-05T00:00:00Z" });
+    projectAuditEventsToLifecycle("ent1");
+    recordSeatLifecycleEvents("ent1", [
+      {
+        orgSlug: "org1",
+        userLogin: "dev1",
+        eventType: "offboarded",
+        occurredAt: "2026-06-10T00:00:00Z",
+        source: "sync_diff",
+      },
+    ]);
+
+    const rows = getSeatLifecycleRows(
+      { ...WINDOW },
+      "offboarded",
+      { page: 1, pageSize: 10, sort: "event_date", sortDir: "desc" },
+    ).rows;
+    expect(rows[0].source).toBe("sync_diff");
+    expect(getSeatLifecycleCoverage({ ...WINDOW }).source).toBe("sync_diff");
   });
 
   it("keeps the earliest tracking start and ignores later re-marks", () => {
     markSeatLifecycleTrackingStarted("ent1", "2026-06-01T00:00:00Z");
     markSeatLifecycleTrackingStarted("ent1", "2026-07-01T00:00:00Z");
-    expect(getSeatLifecycleCoverage().trackingStartedAt).toBe("2026-06-01T00:00:00Z");
+    expect(getSeatLifecycleCoverage({ ...WINDOW }).trackingStartedAt).toBe("2026-06-01T00:00:00Z");
   });
 
   it("scopes to the requested enterprises", () => {
     markSeatLifecycleTrackingStarted("ent2", "2026-06-01T00:00:00Z");
-    expect(getSeatLifecycleCoverage(["ent1"]).source).toBe("none");
-    expect(getSeatLifecycleCoverage(["ent2"]).source).toBe("sync_diff");
+    expect(getSeatLifecycleCoverage({ ...WINDOW, enterpriseSlugs: ["ent1"] }).source).toBe("none");
+    expect(getSeatLifecycleCoverage({ ...WINDOW, enterpriseSlugs: ["ent2"] }).source).toBe("sync_diff");
   });
 });
 

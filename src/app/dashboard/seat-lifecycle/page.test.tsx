@@ -9,10 +9,14 @@ const chartState = vi.hoisted(() => ({
   props: undefined as Record<string, unknown> | undefined,
 }));
 
+const scopeState = vi.hoisted(() => ({
+  query: "",
+}));
+
 vi.mock("@/contexts/ScopeContext", () => ({
   useScope: () => ({
-    hasFilter: false,
-    buildScopeParams: () => new URLSearchParams(),
+    hasFilter: scopeState.query !== "",
+    buildScopeParams: () => new URLSearchParams(scopeState.query),
   }),
 }));
 
@@ -122,6 +126,10 @@ function emptyPayload(overrides: Record<string, unknown> = {}) {
 
 const calls: string[] = [];
 
+function paramsForCall(url: string): URLSearchParams {
+  return new URL(url, "http://localhost").searchParams;
+}
+
 function renderPage(payload: unknown, status = 200) {
   const fetchImpl = vi.fn(async (url: string) => {
     calls.push(String(url));
@@ -134,13 +142,14 @@ function renderPage(payload: unknown, status = 200) {
   vi.stubGlobal("fetch", fetchImpl);
 
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
-  return import("./page").then(({ default: Page }) =>
-    render(
+  return import("./page").then(({ default: Page }) => {
+    const ui = (
       <QueryClientProvider client={queryClient}>
         <Page />
-      </QueryClientProvider>,
-    ),
-  );
+      </QueryClientProvider>
+    );
+    return { ...render(ui), Page, queryClient };
+  });
 }
 
 describe("Seat onboarding & offboarding page", () => {
@@ -149,6 +158,7 @@ describe("Seat onboarding & offboarding page", () => {
     vi.unstubAllGlobals();
     vi.resetModules();
     chartState.props = undefined;
+    scopeState.query = "";
     calls.length = 0;
   });
 
@@ -286,6 +296,75 @@ describe("Seat onboarding & offboarding page", () => {
     fireEvent.click(screen.getByRole("button", { name: "90d" }));
 
     await waitFor(() => expect(calls.some((c) => c.includes("days=90"))).toBe(true));
+  });
+
+  it("resets table pages when the scope filter changes", async () => {
+    const { rerender, Page, queryClient } = await renderPage(
+      emptyPayload({
+        onboarded: {
+          rows: [makeRow()],
+          pagination: { page: 1, pageSize: 25, totalItems: 75, totalPages: 3 },
+        },
+        offboarded: {
+          rows: [makeRow({ user_login: "bob", event_type: "offboarded", source: "sync_diff" })],
+          pagination: { page: 1, pageSize: 25, totalItems: 75, totalPages: 3 },
+        },
+      }),
+    );
+    await waitFor(() => expect(calls.length).toBeGreaterThan(0));
+
+    const nextButtons = await screen.findAllByRole("button", { name: "Next" });
+    fireEvent.click(nextButtons[0]);
+    await waitFor(() =>
+      expect(
+        calls.some((call) => {
+          const params = paramsForCall(call);
+          return params.get("onboardedPage") === "2" && params.get("offboardedPage") === "1";
+        }),
+      ).toBe(true),
+    );
+
+    const updatedNextButtons = await screen.findAllByRole("button", { name: "Next" });
+    fireEvent.click(updatedNextButtons[1]);
+
+    await waitFor(() =>
+      expect(
+        calls.some((call) => {
+          const params = paramsForCall(call);
+          return params.get("onboardedPage") === "2" && params.get("offboardedPage") === "2";
+        }),
+      ).toBe(true),
+    );
+    calls.length = 0;
+
+    scopeState.query = "teams=team-b";
+    rerender(
+      <QueryClientProvider client={queryClient}>
+        <Page />
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() =>
+      expect(
+        calls.some((call) => {
+          const params = paramsForCall(call);
+          return (
+            params.get("teams") === "team-b" &&
+            params.get("onboardedPage") === "1" &&
+            params.get("offboardedPage") === "1"
+          );
+        }),
+      ).toBe(true),
+    );
+    expect(
+      calls.some((call) => {
+        const params = paramsForCall(call);
+        return (
+          params.get("teams") === "team-b" &&
+          (params.get("onboardedPage") !== "1" || params.get("offboardedPage") !== "1")
+        );
+      }),
+    ).toBe(false);
   });
 
   it("switches to an explicit start/end override once both dates are set", async () => {

@@ -189,6 +189,14 @@ export default function SeatLifecyclePage() {
 
   const scopeParams = buildScopeParams();
   const scopeKey = scopeParams.toString();
+  const [lastScopeKey, setLastScopeKey] = useState(scopeKey);
+
+  if (lastScopeKey !== scopeKey) {
+    // Reset during render so React discards the stale-page query before it can fetch.
+    setLastScopeKey(scopeKey);
+    setOnboardedPage(1);
+    setOffboardedPage(1);
+  }
 
   // Both custom dates must be set before the override is applied; a half-filled
   // pair would otherwise make the API 400 on every keystroke.

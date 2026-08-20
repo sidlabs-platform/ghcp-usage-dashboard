@@ -124,6 +124,14 @@ export interface SeatLifecycleQuery {
   allowedLogins?: Set<string>;
 }
 
+export interface SeatLifecycleCoverageQuery {
+  /** Inclusive window start, 'YYYY-MM-DD'. */
+  start: string;
+  /** Inclusive window end, 'YYYY-MM-DD'. */
+  end: string;
+  enterpriseSlugs?: string[];
+}
+
 export interface SeatLifecyclePagination {
   page: number;
   pageSize: number;
@@ -709,10 +717,18 @@ export function getSeatLifecycleRows(
   return { rows: resolveDisplayLogins(rows), total };
 }
 
+/**
+ * Coverage metadata for the selected lifecycle window.
+ *
+ * Audit-log source precedence is window-scoped to match buildLifecycleFilter().
+ * Snapshot-diff tracking start remains ledger metadata and is scoped only by
+ * enterprise, not by the selected date range.
+ */
 export function getSeatLifecycleCoverage(
-  enterpriseSlugs?: string[],
+  query?: SeatLifecycleCoverageQuery,
 ): SeatLifecycleCoverage {
   const db = getDb();
+  const enterpriseSlugs = query?.enterpriseSlugs;
 
   const buildScope = (column: string): SqlFragment => {
     if (!enterpriseSlugs?.length) return { sql: "", params: [] };
@@ -720,14 +736,16 @@ export function getSeatLifecycleCoverage(
   };
 
   const eventScope = buildScope("enterprise_slug");
+  const windowSql = query ? " AND event_date >= ? AND event_date <= ?" : "";
+  const windowParams: unknown[] = query ? [query.start, query.end] : [];
   const counts = db.prepare(`
     SELECT
       COALESCE(SUM(CASE WHEN source = 'audit_log' THEN 1 ELSE 0 END), 0) AS audit_rows,
       COALESCE(SUM(CASE WHEN source = 'sync_diff' THEN 1 ELSE 0 END), 0) AS diff_rows,
       COALESCE(SUM(CASE WHEN event_type = 'onboarded' THEN 1 ELSE 0 END), 0) AS onboarded_rows
     FROM copilot_seat_lifecycle_events
-    WHERE 1 = 1${eventScope.sql}
-  `).get(...eventScope.params) as Record<string, number> | undefined;
+    WHERE 1 = 1${eventScope.sql}${windowSql}
+  `).get(...eventScope.params, ...windowParams) as Record<string, number> | undefined;
 
   const coverageScope = buildScope("enterprise_slug");
   const tracking = db.prepare(`

@@ -24,7 +24,9 @@ const state = vi.hoisted(() => ({
   throwOnRead: false,
 }));
 
-vi.mock("@/lib/cache/with-cache", () => ({ withCache: (h: unknown) => h }));
+const CACHE_SKIP_HEADER = "x-cache-skip";
+
+vi.mock("@/lib/cache/with-cache", () => ({ CACHE_SKIP_HEADER: "x-cache-skip", withCache: (h: unknown) => h }));
 vi.mock("@/lib/api/timeout", () => ({ withTimeout: (h: unknown) => h }));
 vi.mock("@/lib/api/rate-limit/rate-limiter", () => ({ withRateLimit: (h: unknown) => h }));
 vi.mock("@/lib/cache/memory-cache", () => ({ CACHE_TTL: { MEDIUM: 300 } }));
@@ -38,14 +40,14 @@ const getSeatLifecycleStats = vi.fn(() => {
   return state.stats;
 });
 const getSeatLifecycleTrend = vi.fn(() => state.trend);
-const getSeatLifecycleRows = vi.fn((_q: unknown, eventType: string) => state.rows[eventType] ?? { rows: [], total: 0 });
-const getSeatLifecycleCoverage = vi.fn(() => state.coverage);
+const getSeatLifecycleRows = vi.fn((_q: unknown, eventType: string, _pagination: unknown) => state.rows[eventType] ?? { rows: [], total: 0 });
+const getSeatLifecycleCoverage = vi.fn((_query: unknown) => state.coverage);
 
 vi.mock("@/lib/db/seat-lifecycle-repo", () => ({
   getSeatLifecycleStats: (...args: unknown[]) => getSeatLifecycleStats(...(args as [])),
   getSeatLifecycleTrend: (...args: unknown[]) => getSeatLifecycleTrend(...(args as [])),
   getSeatLifecycleRows: (...args: [unknown, string, unknown]) => getSeatLifecycleRows(...args),
-  getSeatLifecycleCoverage: (...args: unknown[]) => getSeatLifecycleCoverage(...(args as [])),
+  getSeatLifecycleCoverage: (query: unknown) => getSeatLifecycleCoverage(query),
   SEAT_LIFECYCLE_SORT_COLUMNS: ["event_date", "user_login", "org_slug", "plan_type", "last_activity_at", "assigning_team_name"],
 }));
 
@@ -100,6 +102,8 @@ describe("GET /api/seats/lifecycle", () => {
     expect(json.coverage.source).toBe("none");
     expect(json.available).toBe(true);
     expect(res.headers.get("Cache-Control")).toContain("max-age=300");
+    expect(res.headers.get("Cache-Control")).not.toContain("no-store");
+    expect(res.headers.get(CACHE_SKIP_HEADER)).toBeNull();
   });
 
   it("never 500s when the ledger tables do not exist yet", async () => {
@@ -114,6 +118,8 @@ describe("GET /api/seats/lifecycle", () => {
     expect(json.available).toBe(false);
     expect(json.stats.onboardedUsers).toBe(0);
     expect(json.coverage.source).toBe("none");
+    expect(res.headers.get("Cache-Control")).toContain("no-store");
+    expect(res.headers.get(CACHE_SKIP_HEADER)).toBe("1");
     errorSpy.mockRestore();
   });
 
@@ -219,7 +225,16 @@ describe("GET /api/seats/lifecycle", () => {
         allowedLogins: new Set(["alice"]),
       }),
     );
-    expect(getSeatLifecycleCoverage).toHaveBeenCalledWith(["ent-a"]);
+    // Coverage must receive the same window the row query uses, otherwise the
+    // banner can claim an audit-log source for a window that actually serves
+    // sync_diff rows.
+    expect(getSeatLifecycleCoverage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        enterpriseSlugs: ["ent-a"],
+        start: json.window.start,
+        end: json.window.end,
+      }),
+    );
   });
 
   it("clamps page size and page number to sane bounds", async () => {
