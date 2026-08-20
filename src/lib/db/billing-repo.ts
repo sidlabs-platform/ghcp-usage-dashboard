@@ -1903,12 +1903,59 @@ export function getCopilotCostBasis(
       COALESCE(SUM(CASE WHEN unit_type = '${UNIT_REQUESTS}'    THEN quantity END), 0) AS requestQty,
       COALESCE(SUM(CASE WHEN unit_type = '${UNIT_TOKEN_UNITS}' THEN quantity END), 0) AS tokenUnitQty,
       COALESCE(SUM(CASE WHEN unit_type <> '${UNIT_SEAT}' THEN net_amount   END), 0) AS creditNet,
-      COALESCE(SUM(CASE WHEN unit_type <> '${UNIT_SEAT}' THEN gross_amount END), 0) AS creditGross
+      COALESCE(SUM(CASE WHEN unit_type <> '${UNIT_SEAT}' THEN gross_amount END), 0) AS creditGross,
+      -- Who actually held a seat *in this window*, straight from the billed
+      -- rows. The copilot_seats snapshot only knows who holds one today, so
+      -- for any past period it is the wrong population entirely.
+      COUNT(DISTINCT CASE WHEN unit_type = '${UNIT_SEAT}' AND ${HAS_USERNAME_SQL}
+                          THEN LOWER(username) END)                            AS seatUsers,
+      COUNT(DISTINCT CASE WHEN unit_type = '${UNIT_SEAT}' AND ${HAS_USERNAME_SQL}
+                          THEN LOWER(username) || CHAR(31) || COALESCE(organization, '') END)
+                                                                               AS seatAssignments,
+      COUNT(DISTINCT CASE WHEN unit_type = '${UNIT_SEAT}' AND ${HAS_USERNAME_SQL}
+                          THEN date END)                                       AS seatNamedDays,
+      COUNT(DISTINCT CASE WHEN unit_type = '${UNIT_SEAT}' THEN date END)       AS seatDays
     FROM billing_usage_records
     ${buildWhereClause(usageClauses)}
   `
     )
     .get(...usageParams) as Record<string, number> | undefined;
+
+  // Is the named-user seat data a complete census, or only some orgs?
+  //
+  // GitHub reports seats either as one row per seat (carrying a username) or
+  // as org-level aggregate rows (no username). Both are billed. Comparing, on
+  // the days that carry any named row, the named seat quantity against that
+  // day's total tells us whether the named set covers everyone: July 2026
+  // scores 100%, March 2026 only 50% because half its orgs report aggregates.
+  //
+  // This decides whether the billed user count may headline as "licensed
+  // users" or must be treated as a lower bound -- leading with a 50%-covered
+  // count would just trade one contradiction for another.
+  const seatCensus = db
+    .prepare(
+      `
+    SELECT
+      COALESCE(SUM(CASE WHEN has_named = 1 THEN named_q  END), 0) AS namedOnNamedDays,
+      COALESCE(SUM(CASE WHEN has_named = 1 THEN total_q  END), 0) AS totalOnNamedDays
+    FROM (
+      SELECT
+        SUM(CASE WHEN ${HAS_USERNAME_SQL} THEN quantity ELSE 0 END) AS named_q,
+        SUM(quantity)                                               AS total_q,
+        MAX(CASE WHEN ${HAS_USERNAME_SQL} THEN 1 ELSE 0 END)         AS has_named
+      FROM billing_usage_records
+      ${buildWhereClause([...usageClauses, `unit_type = '${UNIT_SEAT}'`])}
+      GROUP BY date
+    )
+  `
+    )
+    .get(...usageParams) as Record<string, number> | undefined;
+
+  const namedOnNamedDays = Number(seatCensus?.namedOnNamedDays ?? 0);
+  const totalOnNamedDays = Number(seatCensus?.totalOnNamedDays ?? 0);
+  // 99% rather than 100%: the two row styles round independently.
+  const seatPopulationComplete =
+    totalOnNamedDays > 0 && namedOnNamedDays / totalOnNamedDays >= 0.99;
 
   const premClauses: string[] = ["date >= ?", "date <= ?"];
   const premParams: unknown[] = [start, end];
@@ -1933,7 +1980,7 @@ export function getCopilotCostBasis(
                         THEN (${AI_CREDIT_QUANTITY_SQL}) END), 0)          AS unattributed,
       COALESCE(SUM(CASE WHEN unit_type = '${UNIT_REQUESTS}' AND ${HAS_USERNAME_SQL}
                         THEN COALESCE(quantity, 0) END), 0)                AS requests,
-      COUNT(DISTINCT CASE WHEN ${HAS_USERNAME_SQL}
+      COUNT(DISTINCT CASE WHEN unit_type = '${UNIT_CREDITS}' AND ${HAS_USERNAME_SQL}
                           THEN LOWER(username) END)                        AS users
     FROM billing_premium_requests
     ${buildWhereClause(premClauses)}
@@ -1960,6 +2007,11 @@ export function getCopilotCostBasis(
     seatCostNet,
     seatCostGross: Number(usage?.seatGross ?? 0),
     seatQuantity: Number(usage?.seatQty ?? 0),
+    seatUsers: Number(usage?.seatUsers ?? 0),
+    seatAssignments: Number(usage?.seatAssignments ?? 0),
+    seatNamedDays: Number(usage?.seatNamedDays ?? 0),
+    seatDays: Number(usage?.seatDays ?? 0),
+    seatPopulationComplete,
     creditsBilled,
     requestsBilled,
     requestsAttributed: Number(prem?.requests ?? 0),
@@ -2054,7 +2106,18 @@ export function getAttributedCreditConsumptionByUser(
       unattributedCredits += credits;
       continue;
     }
-    byLogin.set(login, { credits, usd });
+    // Accumulate rather than assign. SQL groups on the untrimmed login, so
+    // "dev1" and " dev1 " arrive as two groups that collapse to one key here;
+    // assigning would drop one from `byLogin` while both still land in
+    // `totalCredits`, breaking the rows + residual identity the licensing page
+    // relies on.
+    const existing = byLogin.get(login);
+    if (existing) {
+      existing.credits += credits;
+      existing.usd += usd;
+    } else {
+      byLogin.set(login, { credits, usd });
+    }
     totalCredits += credits;
     totalUsd += usd;
   }

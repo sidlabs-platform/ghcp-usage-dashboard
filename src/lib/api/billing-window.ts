@@ -32,12 +32,23 @@ export function resolveBillingWindow(
   defaultDays = 28,
 ): BillingWindow | { error: string } {
   const periodParam = params.get("period");
-  if (periodParam) {
+  // `!== null` rather than truthiness: `?period=` yields "", which is a
+  // malformed period the caller should hear about, not a silent fallback to a
+  // rolling window that answers a different question than the one asked.
+  if (periodParam !== null) {
     if (!isValidPeriod(periodParam)) {
       return { error: `Invalid period "${periodParam}": expected format YYYY-MM` };
     }
-    const { startDate, endDate } = monthBounds(periodParam);
-    return { start: startDate, end: endDate, days: monthDayCount(periodParam), period: periodParam };
+    // One clock read for both bounds and day count, so an in-progress month
+    // cannot report bounds and a span from either side of midnight.
+    const now = new Date();
+    const { startDate, endDate } = monthBounds(periodParam, now);
+    return {
+      start: startDate,
+      end: endDate,
+      days: monthDayCount(periodParam, now),
+      period: periodParam,
+    };
   }
 
   const daysResult = parseAndClampDays(params.get("days"), defaultDays);

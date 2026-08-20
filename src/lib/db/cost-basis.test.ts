@@ -110,6 +110,48 @@ describe("getCopilotCostBasis", () => {
     expect(basis.attributionCoveragePct).toBeNull();
   });
 
+  it("reports the seat population billed in the window, not today's snapshot", () => {
+    // The headline "licensed users" figure must describe the selected period.
+    // `copilot_seats` only knows who holds a seat *now*, so for a past period
+    // it is the wrong population entirely — observed as 1,215 against 1,646
+    // actually billed for July 2026.
+    upsertUsageRecords("ent1", [
+      usage({ date: "2026-07-10", username: "alice", organization: "org1", quantity: 0.032 }),
+      usage({ date: "2026-07-11", username: "alice", organization: "org1", quantity: 0.032 }),
+      // Same user, second org: two seat assignments, one user.
+      usage({ date: "2026-07-10", username: "alice", organization: "org2", quantity: 0.032 }),
+      usage({ date: "2026-07-10", username: "bob", organization: "org1", quantity: 0.032 }),
+      // Org-level aggregate row: billed, but names nobody.
+      usage({ date: "2026-07-12", username: "", organization: "org1", quantity: 40 }),
+    ]);
+
+    const basis = getCopilotCostBasis("2026-07-01", "2026-07-31");
+
+    expect(basis.seatUsers).toBe(2);
+    expect(basis.seatAssignments).toBe(3);
+    // Coverage is visible, so a partially-named month reads as a lower bound
+    // rather than a precise count.
+    expect(basis.seatNamedDays).toBe(2);
+    expect(basis.seatDays).toBe(3);
+    // Every named day's seats are fully named here, so this is a real census.
+    expect(basis.seatPopulationComplete).toBe(true);
+  });
+
+  it("flags the seat population as incomplete when only some orgs name users", () => {
+    // Observed in 2026-03: half the billed seats arrive as org-level aggregate
+    // rows with no username. Headlining the named count would under-report the
+    // period by ~330 seats — swapping one contradiction for another.
+    upsertUsageRecords("ent1", [
+      usage({ date: "2026-07-10", username: "alice", organization: "org1", quantity: 0.5 }),
+      usage({ date: "2026-07-10", username: "", organization: "org2", quantity: 0.5 }),
+    ]);
+
+    const basis = getCopilotCostBasis("2026-07-01", "2026-07-31");
+
+    expect(basis.seatUsers).toBe(1);
+    expect(basis.seatPopulationComplete).toBe(false);
+  });
+
   it("excludes non-Copilot products so Actions spend never inflates seat cost", () => {
     upsertUsageRecords("ent1", [
       usage({ sku: "copilot_enterprise", quantity: 1, net_amount: 39 }),
@@ -178,6 +220,22 @@ describe("getCopilotCostBasis", () => {
     expect(basis.creditsUnattributed).toBe(300);
     expect(basis.attributedUsers).toBe(1);
     expect(basis.attributionCoveragePct).toBe(40);
+  });
+
+  it("counts only credit rows toward attributed users, so a requests-only window reports no attributed users", () => {
+    upsertUsageRecords("ent1", [
+      usage({ sku: "copilot_premium_request", unit_type: "requests", quantity: 900, net_amount: 9 }),
+    ]);
+    upsertPremiumRequests("ent1", [
+      premium({ sku: "copilot_premium_request", unit_type: "requests", quantity: 900, aic_quantity: 0 }),
+    ]);
+
+    const basis = getCopilotCostBasis("2026-07-01", "2026-07-31");
+
+    // 0 credits beside a non-zero user count would read as a contradiction.
+    expect(basis.creditsAttributed).toBe(0);
+    expect(basis.attributedUsers).toBe(0);
+    expect(basis.requestsAttributed).toBe(900);
   });
 
   it("falls back to quantity when aic_quantity is a literal zero on credit rows", () => {

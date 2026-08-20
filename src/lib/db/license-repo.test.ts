@@ -277,6 +277,23 @@ describe("getLicenseReconciliationRows", () => {
     expect(r.aic_consumed_credits).toBe(0);
   });
 
+  it("counts each seat individually when a user holds both an active and a cancelling seat", () => {
+    // `seat_status` is aggregated per user, so it reports
+    // "pending_cancellation" for this user. Deriving active seats from it would
+    // count zero active seats even though one seat is plainly active.
+    insertSeat({ user_login: "dev1", org_slug: "org1" });
+    insertSeat({ user_login: "dev1", org_slug: "org2", pending_cancellation_date: "2026-07-31" });
+
+    const rows = getLicenseReconciliationRows(WINDOW);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].seat_count).toBe(2);
+    expect(rows[0].active_seat_count).toBe(1);
+
+    const kpis = computeLicenseKPIs(rows);
+    expect(kpis.totalSeats).toBe(2);
+    expect(kpis.activeSeats).toBe(1);
+  });
+
   it("reports consumption that matches no seat as an unmatched residual instead of dropping it", () => {
     insertSeat({ user_login: "dev1" });
     insertConsumption("dev1", 100, 1);

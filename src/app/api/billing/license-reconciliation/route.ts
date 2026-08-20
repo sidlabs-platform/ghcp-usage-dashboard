@@ -190,15 +190,19 @@ export interface ReconciliationQueryError {
 function toReconciliationKPIs(h: LicenseHistoryKPIs): LicenseReconciliationKPIs {
   const n = (v: number | undefined | null) => (Number.isFinite(v as number) ? (v as number) : 0);
   const activeSeats = n(h?.activeSeats);
-  const totalUsers = n(h?.totalUsers);
+  // Genuine seats only. `no_seat` rows are consumption with no licence behind
+  // them; counting them here reported unmatched consumption as seats and as
+  // pending cancellations.
+  const inactiveSeats = n(h?.inactiveSeatRows);
   return {
-    totalUsers,
-    totalSeats: activeSeats + n(h?.inactiveSeats),
+    totalUsers: n(h?.totalUsers),
+    totalSeats: activeSeats + inactiveSeats,
     activeSeats,
-    // Historical rows carry seat-grain status only; a user is counted active
-    // when any of their seats is, which at this grain is the row count itself.
-    activeUsers: Math.min(activeSeats, totalUsers),
-    pendingCancellation: n(h?.inactiveSeats),
+    // A real distinct-user aggregate, not a seat-row count squeezed into a
+    // user slot — a user with several active seats would otherwise mask an
+    // inactive one.
+    activeUsers: n(h?.activeUsers),
+    pendingCancellation: inactiveSeats,
     inactive30d: 0,
     zeroConsumptionSeats: n(h?.zeroConsumptionRows),
     totalLicenseCost: n(h?.totalLicenseCost),
@@ -211,10 +215,10 @@ function toReconciliationKPIs(h: LicenseHistoryKPIs): LicenseReconciliationKPIs 
     totalCostOfOwnership: n(h?.totalCostOfOwnership),
     currency: h?.currency || "USD",
     // Materialization already emits `consumption_only` rows for consumption
-    // with no matching seat, so nothing is left unplaced here.
+    // with no matching seat, so nothing is left unplaced.
     unmatchedConsumedCredits: 0,
     unmatchedConsumedUsd: 0,
-    unmatchedUsers: 0,
+    unmatchedUsers: n(h?.noSeatRows),
     dataSource: "historical",
   };
 }

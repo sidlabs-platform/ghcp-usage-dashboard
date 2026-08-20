@@ -54,28 +54,45 @@ export function CopilotCostBasisPanel({ basis, currency = "USD", surface, classN
   const coverage = basis.attributionCoveragePct;
   const showGap = coverage !== null && !basis.attributionComplete;
 
-  // Quantities are only comparable within one unit type. A window billed in
-  // premium requests (pre-June-2026) has no credits at all, and reporting its
-  // request count under an "AI credits" label — or worse, adding the two — is
-  // how this strip previously produced figures no GitHub report could confirm.
+  // Quantities are only comparable within one unit type, so each billed unit
+  // gets its own figure. A period can carry more than one at once (March 2026
+  // billed AI credits, premium requests and token units), and showing only the
+  // credit count silently dropped the rest.
+  const consumptionFigures: { label: string; value: string; hint: string }[] = [];
+  if (basis.creditsBilled > 0 || basis.requestsBilled <= 0) {
+    consumptionFigures.push({
+      label: "AI credits consumed",
+      value: count(basis.creditsBilled),
+      hint: "From the detailed billing report",
+    });
+  }
+  if (basis.requestsBilled > 0) {
+    consumptionFigures.push({
+      label: "Premium requests",
+      value: count(basis.requestsBilled),
+      hint: "Billed as requests, not credits",
+    });
+  }
+  if (basis.tokenUnitsBilled > 0) {
+    consumptionFigures.push({
+      label: "Token units",
+      value: count(basis.tokenUnitsBilled),
+      hint: "Billed separately from credits",
+    });
+  }
+
+  /** True when the window predates AI credits entirely, so zero credits is expected rather than a gap. */
   const billedInRequests = basis.creditsBilled <= 0 && basis.requestsBilled > 0;
-  const consumption = billedInRequests
-    ? { label: "Premium requests consumed", value: count(basis.requestsBilled) }
-    : { label: "AI credits consumed", value: count(basis.creditsBilled) };
 
   const figures: { label: string; value: string; hint: string }[] = [
     {
       label: "Copilot seat licences",
       value: money(basis.seatCostNet, currency),
-      hint: `${count(basis.seatQuantity)} billed seat-months`,
+      hint: basis.seatPopulationComplete && basis.seatUsers > 0
+        ? `${count(basis.seatUsers)} users · ${count(basis.seatQuantity)} seat-months`
+        : `${count(basis.seatQuantity)} billed seat-months`,
     },
-    {
-      label: consumption.label,
-      value: consumption.value,
-      hint: basis.tokenUnitsBilled > 0
-        ? `Plus ${count(basis.tokenUnitsBilled)} token units, billed separately`
-        : "From the detailed billing report",
-    },
+    ...consumptionFigures,
     {
       label: "Consumption charges",
       value: money(basis.creditCostNet, currency),
@@ -109,7 +126,7 @@ export function CopilotCostBasisPanel({ basis, currency = "USD", surface, classN
         </p>
       </div>
 
-      <dl className="mt-4 grid gap-4 grid-cols-2 lg:grid-cols-4">
+      <dl className="mt-4 grid gap-4 grid-cols-2 lg:grid-cols-4 xl:grid-cols-6">
         {figures.map((f) => (
           <div key={f.label}>
             <dt className="text-xs font-medium text-[hsl(var(--muted-foreground))]">{f.label}</dt>

@@ -109,9 +109,36 @@ function PeriodBasisNotice({
   const notes: string[] = [];
 
   const periodName = basis?.period ? periodLabel(basis.period) : null;
-  if (liveSnapshot) {
+  const billedSeatUsers = safeNum(basis?.seatUsers ?? 0);
+  const snapshotUsers = safeNum(kpis.totalUsers);
+  const seatCensusComplete = !!basis?.seatPopulationComplete;
+
+  if (liveSnapshot && billedSeatUsers > 0 && seatCensusComplete) {
+    // Two different populations, both correct. Naming the delta is the only
+    // way a reader can tell this apart from an error.
+    const delta = billedSeatUsers - snapshotUsers;
+    const deltaText =
+      delta > 0
+        ? `${fmtNum(delta)} of them no longer hold a seat and so are absent from the per-user table below`
+        : delta < 0
+          ? `${fmtNum(-delta)} current seat-holders were not billed in that period`
+          : "the two populations match";
     notes.push(
-      `Seat figures (licensed users, seats, license cost) come from the current seat snapshot, not from ${periodName ?? "the selected window"} — seats added or removed since then are not reflected. Credit figures are period-scoped.`,
+      `${fmtNum(billedSeatUsers)} users were billed for a seat in ${periodName ?? "this period"}, against ${fmtNum(snapshotUsers)} holding one today — ${deltaText}. Per-user rows, allowances and utilization are built from today's seat snapshot, so they describe current seat-holders only.`,
+    );
+  } else if (liveSnapshot && billedSeatUsers > 0) {
+    notes.push(
+      `Licensed users shown are today's seat-holders, not ${periodName ?? "this period"}'s. GitHub named users for only part of this period's billed seats (${fmtNum(billedSeatUsers)} users across ${fmtNum(safeNum(basis?.seatNamedDays ?? 0))} of ${fmtNum(safeNum(basis?.seatDays ?? 0))} billed days, covering some organizations only), so a period-accurate headcount is not derivable here.`,
+    );
+  } else if (liveSnapshot) {
+    notes.push(
+      `Seat figures come from the current seat snapshot, not from ${periodName ?? "the selected window"} — seats added or removed since then are not reflected. Credit figures are period-scoped.`,
+    );
+  }
+
+  if (basis && safeNum(basis.seatQuantity) > 0) {
+    notes.push(
+      `${fmtNum(safeNum(basis.seatQuantity))} billed seat-months is a duration, not a headcount: over a full month it equals the average number of seats held per day, so a seat added mid-month counts as a fraction.`,
     );
   }
 
@@ -120,17 +147,6 @@ function PeriodBasisNotice({
     notes.push(
       `${fmtNum(unmatched)} credits (${fmtNum(kpis.unmatchedUsers)} users) were billed to logins with no seat in the current selection, so they are counted in the cost basis above but not in the per-user table.`,
     );
-  }
-
-  if (basis && safeNum(basis.seatQuantity) > 0 && safeNum(kpis.totalSeats) > 0) {
-    const billed = safeNum(basis.seatQuantity);
-    const held = safeNum(kpis.totalSeats);
-    const deltaPct = Math.abs(held - billed) / billed * 100;
-    if (deltaPct >= 5) {
-      notes.push(
-        `${fmtNum(held)} seats are held today vs ${fmtNum(billed)} billed seat-months in this period — a seat billed for part of a month counts as a fraction of a seat-month.`,
-      );
-    }
   }
 
   if (notes.length === 0) return null;
@@ -551,6 +567,38 @@ export default function LicenseReconciliationPage() {
       ? `License + credit spend · ${fmtMoney(safeNum(costBasis.totalCopilotNet))} billed`
       : "License + credit spend";
 
+  // Materialized history records a seat as `inactive` without saying why, so
+  // only the live snapshot — which reads `pending_cancellation_date` directly —
+  // may claim a pending cancellation.
+  const inactiveSeatsSubtitle =
+    dataSource === "live_snapshot_only"
+      ? `${fmtNum(kpis?.pendingCancellation ?? 0)} pending cancellation`
+      : `${fmtNum(kpis?.pendingCancellation ?? 0)} inactive seats`;
+
+  // The licensed-user headline must describe the *selected period*. In
+  // live-snapshot mode `kpis.totalUsers` counts who holds a seat **today**,
+  // which for a past period is simply the wrong population — for July 2026 it
+  // reported 1,215 against 1,646 users actually billed, because ~430 seats were
+  // removed in the interim. The billed seat rows know the real answer, so use
+  // them whenever they name users, and say which basis is in play.
+  const billedSeatUsers = costBasis ? safeNum(costBasis.seatUsers) : 0;
+  // Only headline the billed count when it is a complete census. March 2026
+  // names users for just half its billed seats, so leading with that figure
+  // would swap one contradiction for another.
+  const usePeriodSeats =
+    dataSource === "live_snapshot_only" && billedSeatUsers > 0 && !!costBasis?.seatPopulationComplete;
+  const licensedUsers = usePeriodSeats
+    ? {
+        title: "Licensed Users (billed)",
+        value: fmtNum(billedSeatUsers),
+        subtitle: `${fmtNum(safeNum(costBasis!.seatAssignments))} seat assignments · from billing`,
+      }
+    : {
+        title: "Licensed Users",
+        value: fmtNum(safeNum(kpis?.totalUsers ?? 0)),
+        subtitle: `${fmtNum(safeNum(kpis?.totalSeats ?? 0))} seats · ${fmtNum(safeNum(kpis?.activeSeats ?? 0))} active`,
+      };
+
   return (
     <div className="space-y-8">
       <PageHeader
@@ -669,7 +717,7 @@ export default function LicenseReconciliationPage() {
           <>
             <div className="space-y-4">
               <div className="grid gap-4 grid-cols-2 lg:grid-cols-4">
-                <MetricCard title="Licensed Users" value={kpis.totalUsers} accent="blue" icon={<Users className="h-5 w-5" />} subtitle={`${fmtNum(kpis.totalSeats)} seats · ${fmtNum(kpis.activeSeats)} active`} />
+                <MetricCard title={licensedUsers.title} value={licensedUsers.value} format="raw" accent="blue" icon={<Users className="h-5 w-5" />} subtitle={licensedUsers.subtitle} />
                 <MetricCard title="Monthly License Cost" value={fmtMoney(kpis.totalLicenseCost)} format="raw" accent="teal" icon={<CreditCard className="h-5 w-5" />} subtitle={licenseCostSubtitle} />
                 <MetricCard title="AI Credits (attributed)" value={fmtNum(kpis.totalConsumedCredits)} accent="violet" icon={<Zap className="h-5 w-5" />} subtitle={creditsSubtitle} />
                 <MetricCard title="Credit Utilization" value={`${safeNum(kpis.overallUtilizationPct).toFixed(1)}%`} format="raw" accent="amber" icon={<Gauge className="h-5 w-5" />} subtitle={`${fmtNum(kpis.totalConsumedCredits)} attributed of ${fmtNum(kpis.totalAllowanceCredits)} allocated`} />
@@ -678,7 +726,7 @@ export default function LicenseReconciliationPage() {
                 <MetricCard title="Total Cost of Ownership" value={fmtMoney(kpis.totalCostOfOwnership)} format="raw" accent="green" icon={<Wallet className="h-5 w-5" />} subtitle={tcoSubtitle} />
                 <MetricCard title="AIC Assigned Budget" value={fmtMoney(kpis.totalAssignedUsd)} format="raw" accent="blue" icon={<BadgeCheck className="h-5 w-5" />} subtitle="Allocated allowance value" />
                 <MetricCard title="Over-Budget Users" value={kpis.overBudgetUsers} accent="red" icon={<AlertTriangle className="h-5 w-5" />} subtitle="Consumption exceeds budget" />
-                <MetricCard title="Zero-Consumption Seats" value={kpis.zeroConsumptionSeats} accent="amber" icon={<AlertTriangle className="h-5 w-5" />} subtitle={`${fmtNum(kpis.pendingCancellation)} pending cancellation`} />
+                <MetricCard title="Zero-Consumption Seats" value={kpis.zeroConsumptionSeats} accent="amber" icon={<AlertTriangle className="h-5 w-5" />} subtitle={inactiveSeatsSubtitle} />
               </div>
 
               <ZeroConsumptionNotice kpis={kpis} />

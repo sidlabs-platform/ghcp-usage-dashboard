@@ -186,6 +186,8 @@ export function getLicenseReconciliationDataset(
     login: string;
     orgs: Set<string>;
     seatCount: number;
+    /** Seats with no pending cancellation. Counted per seat, not per user: a user can hold one active and one cancelling seat. */
+    activeSeatCount: number;
     plan: LicensePlanKey;
     assignedDate: string | null;
     lastActivity: string | null;
@@ -208,6 +210,7 @@ export function getLicenseReconciliationDataset(
         login: s.user_login,
         orgs: new Set<string>(),
         seatCount: 0,
+        activeSeatCount: 0,
         plan: "unknown",
         assignedDate: null,
         lastActivity: null,
@@ -248,6 +251,7 @@ export function getLicenseReconciliationDataset(
       if (rev && (!acc.revokedDate || rev > acc.revokedDate)) acc.revokedDate = rev;
     } else {
       acc.anyActive = true;
+      acc.activeSeatCount += 1;
     }
   }
 
@@ -295,6 +299,7 @@ export function getLicenseReconciliationDataset(
       orgs: [...acc.orgs].sort(),
       org_count: acc.orgs.size,
       seat_count: acc.seatCount,
+      active_seat_count: acc.activeSeatCount,
       plan_type: acc.plan,
       license_assigned_date: acc.assignedDate,
       last_activity_at: acc.lastActivity,
@@ -375,7 +380,7 @@ export function computeLicenseKPIs(
 
   for (const r of rows) {
     totalSeats += r.seat_count;
-    if (r.seat_status !== "pending_cancellation") activeSeats += r.seat_count;
+    activeSeats += r.active_seat_count;
     if (r.user_status === "active") activeUsers += 1;
     if (r.seat_status === "pending_cancellation") pendingCancellation += 1;
     if (r.activity_status !== "active_30d") inactive30d += 1;

@@ -275,7 +275,27 @@ export interface CopilotCostBasis {
   /** Copilot seat licences — net, gross, and billed seat-months. */
   seatCostNet: number;
   seatCostGross: number;
+  /**
+   * Billed seat-**months**, a duration, not a seat count: one seat held for a
+   * whole month is 1.0, and for 11 days is ~0.35. Never compare it directly to
+   * a headcount — use {@link seatUsers} / {@link seatAssignments} for that.
+   */
   seatQuantity: number;
+  /** Distinct users billed for a Copilot seat in this window. The period-accurate licensed-user count. */
+  seatUsers: number;
+  /** Distinct (user, org) seat assignments billed in this window — a multi-org user holds several. */
+  seatAssignments: number;
+  /** Days in the window whose seat rows carry a username (GitHub omits it on older/aggregate rows). */
+  seatNamedDays: number;
+  /** Days in the window with any seat row at all. Compare against {@link seatNamedDays} to judge coverage. */
+  seatDays: number;
+  /**
+   * True when, on the days GitHub named users, those named rows account for
+   * essentially all of that day's billed seats — i.e. {@link seatUsers} is a
+   * complete census rather than a subset of orgs. When false, treat
+   * {@link seatUsers} as a lower bound and do not headline it.
+   */
+  seatPopulationComplete: boolean;
 
   /**
    * AI credits billed in range, from the detailed usage report. This is the
@@ -309,7 +329,7 @@ export interface CopilotCostBasis {
   creditsAttributed: number;
   /** Credits present in the per-user report but carrying no username, so attributable to no one. */
   creditsUnattributed: number;
-  /** Distinct users carrying attributed credits. */
+  /** Distinct users carrying attributed credits (`ai-credits` rows only, matching {@link creditsAttributed}). */
   attributedUsers: number;
   /** creditsAttributed / creditsBilled, 0-100. Null when nothing was billed. */
   attributionCoveragePct: number | null;
