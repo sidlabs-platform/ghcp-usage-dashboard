@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import { Copy, Check, X } from "lucide-react";
 import { useDateRange } from "@/contexts/DateRangeContext";
 import { useScope } from "@/contexts/ScopeContext";
@@ -36,15 +36,42 @@ export function ScopeSummary() {
     clearAll,
   } = useScope();
 
-  const [copied, setCopied] = useState(false);
+  const [copyStatus, setCopyStatus] = useState<"idle" | "success" | "failed">("idle");
+  const resetCopyStatusTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const handleCopyLink = useCallback(() => {
-    if (typeof window === "undefined") return;
-    void navigator.clipboard.writeText(window.location.href).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    });
+  const setTemporaryCopyStatus = useCallback((status: "success" | "failed") => {
+    if (resetCopyStatusTimer.current !== null) {
+      clearTimeout(resetCopyStatusTimer.current);
+    }
+    setCopyStatus(status);
+    resetCopyStatusTimer.current = setTimeout(() => {
+      setCopyStatus("idle");
+      resetCopyStatusTimer.current = null;
+    }, 2000);
   }, []);
+
+  useEffect(() => {
+    return () => {
+      if (resetCopyStatusTimer.current !== null) {
+        clearTimeout(resetCopyStatusTimer.current);
+      }
+    };
+  }, []);
+
+  const handleCopyLink = useCallback(async () => {
+    if (typeof window === "undefined") return;
+    if (!navigator.clipboard?.writeText) {
+      setTemporaryCopyStatus("failed");
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(window.location.href);
+      setTemporaryCopyStatus("success");
+    } catch {
+      setTemporaryCopyStatus("failed");
+    }
+  }, [setTemporaryCopyStatus]);
 
   const dateLabel =
     mode === "month" && period
@@ -125,22 +152,51 @@ export function ScopeSummary() {
       <button
         type="button"
         onClick={handleCopyLink}
-        aria-label={copied ? "Link copied" : "Copy link to this view"}
-        title={copied ? "Copied!" : "Copy link to this view"}
+        aria-label={
+          copyStatus === "success"
+            ? "Link copied"
+            : copyStatus === "failed"
+            ? "Copy failed. Use the address bar to copy this link."
+            : "Copy link to this view"
+        }
+        title={
+          copyStatus === "success"
+            ? "Copied!"
+            : copyStatus === "failed"
+            ? "Copy failed"
+            : "Copy link to this view"
+        }
         className={cn(
           "ml-auto inline-flex items-center gap-1 rounded px-1.5 py-0.5 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[hsl(var(--ring))]",
-          copied
+          copyStatus === "success"
             ? "text-[hsl(var(--primary))]"
+            : copyStatus === "failed"
+            ? "text-red-600 dark:text-red-400"
             : "text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))]",
         )}
       >
-        {copied ? (
+        {copyStatus === "success" ? (
           <Check aria-hidden="true" className="h-3 w-3" />
+        ) : copyStatus === "failed" ? (
+          <X aria-hidden="true" className="h-3 w-3" />
         ) : (
           <Copy aria-hidden="true" className="h-3 w-3" />
         )}
-        <span className="sr-only">{copied ? "Copied" : "Copy link"}</span>
+        <span className={copyStatus === "idle" ? "sr-only" : undefined}>
+          {copyStatus === "success"
+            ? "Copied"
+            : copyStatus === "failed"
+            ? "Copy failed"
+            : "Copy link"}
+        </span>
       </button>
+      <div role="status" aria-live="polite" aria-atomic="true" className="sr-only">
+        {copyStatus === "success"
+          ? "Link copied."
+          : copyStatus === "failed"
+          ? "Copy failed. Use the address bar to copy this link."
+          : ""}
+      </div>
     </div>
   );
 }

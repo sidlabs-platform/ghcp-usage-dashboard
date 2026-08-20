@@ -21,7 +21,9 @@ export type MetricState = "good" | "watch" | "bad" | "neutral";
 /**
  * Threshold definition for threshold-driven accent computation.
  *
- * Supply either `good` + `bad` (with `watch` between them) or just `bad`.
+ * Supply `good` + `bad` (with `watch` between them), just `bad`, or just
+ * `good`. A one-sided threshold returns `bad`/`good` only when that threshold
+ * is crossed, and `neutral` otherwise.
  * The comparison direction is controlled by `higherIsBetter` (default `true`).
  *
  * @example
@@ -29,17 +31,33 @@ export type MetricState = "good" | "watch" | "bad" | "neutral";
  * thresholds={{ good: 80, bad: 60, higherIsBetter: true }}
  *
  * @example
- * // Error rate: < 5% is good, 5–15% is watch, > 15% is bad
+ * // Error rate: ≤ 5% is good, 5–15% is watch, > 15% is bad
  * thresholds={{ good: 5, bad: 15, higherIsBetter: false }}
+ *
+ * @example
+ * // Failure count: values above 0 are bad; 0 is neutral
+ * thresholds={{ bad: 0, higherIsBetter: false }}
  */
-export interface MetricThresholds {
-  /** Value at or above (higherIsBetter) / below (lowerIsBetter) which state is "good". */
-  good: number;
-  /** Value below (higherIsBetter) / at or above (lowerIsBetter) which state is "bad". */
-  bad: number;
+interface MetricThresholdBase {
   /** Default `true`. When false, lower values are better (e.g. error rates). */
   higherIsBetter?: boolean;
 }
+
+export interface MetricThresholdsWithGood extends MetricThresholdBase {
+  /** Value at or above (higherIsBetter) / at or below (lowerIsBetter) which state is "good". */
+  good: number;
+  /** Value below (higherIsBetter) / above (lowerIsBetter) which state is "bad". */
+  bad?: number;
+}
+
+export interface MetricThresholdsWithBad extends MetricThresholdBase {
+  /** Value at or above (higherIsBetter) / at or below (lowerIsBetter) which state is "good". */
+  good?: number;
+  /** Value below (higherIsBetter) / above (lowerIsBetter) which state is "bad". */
+  bad: number;
+}
+
+export type MetricThresholds = MetricThresholdsWithGood | MetricThresholdsWithBad;
 
 // ─── Legacy presentational accent (kept for backward compat) ──────────────────
 // Existing call sites may still pass a named colour string.  New call sites
@@ -137,19 +155,22 @@ const legacyAccentGlow: Record<LegacyAccent, string> = {
  *
  * @param value           - The numeric metric value.
  * @param thresholds      - Threshold configuration (see `MetricThresholds`).
- * @returns               - "good" | "watch" | "bad"
+ * @returns               - "good" | "watch" | "bad" | "neutral"
  */
 export function deriveMetricState(value: number, thresholds: MetricThresholds): MetricState {
   const { good, bad, higherIsBetter = true } = thresholds;
+  const hasGood = good !== undefined;
+  const hasBad = bad !== undefined;
+
   if (higherIsBetter) {
-    if (value >= good) return "good";
-    if (value < bad)   return "bad";
-    return "watch";
+    if (hasGood && value >= good) return "good";
+    if (hasBad && value < bad)    return "bad";
   } else {
-    if (value <= good) return "good";
-    if (value > bad)   return "bad";
-    return "watch";
+    if (hasGood && value <= good) return "good";
+    if (hasBad && value > bad)    return "bad";
   }
+
+  return hasGood && hasBad ? "watch" : "neutral";
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────

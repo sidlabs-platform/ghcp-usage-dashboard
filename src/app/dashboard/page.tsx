@@ -55,7 +55,7 @@ function formatCost(v: number | null): string {
 
 export default function DashboardOverview() {
   const { days } = useDateRange();
-  const { hasFilter, buildScopeParams } = useScope();
+  const { hasFilter, buildScopeParams, clearAll } = useScope();
   const [data, setData] = useState<OverviewData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -136,17 +136,47 @@ export default function DashboardOverview() {
         <div className="rounded-xl border bg-[hsl(var(--card))] p-12 text-center">
           <Activity className="h-12 w-12 mx-auto text-[hsl(var(--muted-foreground))] mb-4" />
           <h3 className="text-lg font-semibold mb-2">
-            {error ? "Error loading data" : "No data available"}
+            Error loading data
           </h3>
           <p className="text-sm text-[hsl(var(--muted-foreground))] max-w-md mx-auto">
-            {error || "Click the Sync button in the header to fetch metrics from GitHub."}
+            {error}
+          </p>
+          <p className="mt-2 text-sm text-[hsl(var(--muted-foreground))] max-w-md mx-auto">
+            If metrics have not been synced yet, click the Sync button in the header.
           </p>
         </div>
       </div>
     );
   }
 
-  if (!data) return null;
+  if (!data) {
+    return (
+      <div>
+        <PageHeader title="Overview" description="GitHub Copilot usage across your enterprise" />
+        <ScopeFilter />
+        <div className="rounded-xl border bg-[hsl(var(--card))] p-12 text-center">
+          <Activity className="h-12 w-12 mx-auto text-[hsl(var(--muted-foreground))] mb-4" />
+          <h3 className="text-lg font-semibold mb-2">
+            No data available
+          </h3>
+          <p className="text-sm text-[hsl(var(--muted-foreground))] max-w-md mx-auto">
+            {hasFilter
+              ? "No data matches the current filters."
+              : "Click the Sync button in the header to fetch metrics from GitHub."}
+          </p>
+          {hasFilter && (
+            <button
+              type="button"
+              onClick={clearAll}
+              className="mt-4 rounded-md border border-[hsl(var(--border))] px-3 py-1.5 text-sm font-medium text-[hsl(var(--foreground))] transition-colors hover:bg-[hsl(var(--accent))] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[hsl(var(--ring))]"
+            >
+              Clear filters
+            </button>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   const { kpis, activeUsersTrend, acceptanceRateTrend, chatModes, featureUsage, cliVsIde } = data;
   const dailyTrendValues = data.dailyTrendValues ?? [];
@@ -343,4 +373,3 @@ export default function DashboardOverview() {
     </div>
   );
 }
-
