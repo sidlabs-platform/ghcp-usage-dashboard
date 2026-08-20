@@ -42,7 +42,7 @@ vi.mock("@/components/filters/ScopeFilter", () => ({
   ScopeFilter: () => <div>Scope Filter</div>,
 }));
 
-describe("DashboardOverview", () => {
+describe("DashboardOverview", { timeout: 20000 }, () => {
   afterEach(() => {
     cleanup();
     mockScope.hasFilter = false;

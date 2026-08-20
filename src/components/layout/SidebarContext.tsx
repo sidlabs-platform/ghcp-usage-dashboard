@@ -1,7 +1,9 @@
 "use client";
 
-import React, { createContext, useCallback, useContext, useEffect, useState } from "react";
+import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import { usePathname } from "next/navigation";
+
+const MOBILE_SIDEBAR_QUERY = "(max-width: 767px)";
 
 interface SidebarContextValue {
   /** Whether the off-canvas drawer is open (relevant below md breakpoint). */
@@ -16,6 +18,8 @@ interface SidebarContextValue {
   isCollapsed: boolean;
   /** Update the collapsed preference (persisted to localStorage). */
   setCollapsed: (value: boolean) => void;
+  /** Whether the viewport is below the md breakpoint. */
+  isMobile: boolean;
 }
 
 const SidebarContext = createContext<SidebarContextValue | null>(null);
@@ -40,7 +44,7 @@ export function useSidebar(): SidebarContextValue {
  * ```ts
  * import { useSidebar } from "@/components/layout/SidebarContext";
  *
- * const { isOpen, close, isCollapsed, setCollapsed } = useSidebar();
+ * const { isOpen, close, isCollapsed, setCollapsed, isMobile } = useSidebar();
  * ```
  * - `isOpen` — render the aside as visible off-canvas drawer on mobile when true
  * - `close` — call on overlay click, Escape key, or internal close button
@@ -49,12 +53,14 @@ export function useSidebar(): SidebarContextValue {
  *
  * The `<aside>` should have:
  * - `id="sidebar-nav"` (referenced by the hamburger `aria-controls`)
- * - `aria-hidden={!isOpen}` on mobile (added/removed by responsive class)
- * - Focus trap while `isOpen && window.innerWidth < 768`
+ * - `inert` and `aria-hidden={!isOpen}` while closed on mobile
+ * - Focus trap while `isOpen && isMobile`
  */
 export function SidebarProvider({ children }: { children: React.ReactNode }) {
   const [isOpen, setIsOpen] = useState(false);
   const [isCollapsed, setIsCollapsedState] = useState(false);
+  const [isMobile, setIsMobile] = useState(false);
+  const triggerRef = useRef<HTMLElement | null>(null);
   const pathname = usePathname();
 
   // Restore collapsed preference from localStorage (desktop only).
@@ -72,9 +78,42 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
     setIsOpen(false);
   }, [pathname]);
 
-  const open = useCallback(() => setIsOpen(true), []);
+  useEffect(() => {
+    if (typeof window === "undefined" || typeof window.matchMedia !== "function") return;
+
+    const mediaQuery = window.matchMedia(MOBILE_SIDEBAR_QUERY);
+    const updateIsMobile = () => setIsMobile(mediaQuery.matches);
+
+    updateIsMobile();
+    mediaQuery.addEventListener("change", updateIsMobile);
+    return () => mediaQuery.removeEventListener("change", updateIsMobile);
+  }, []);
+
+  useEffect(() => {
+    if (isOpen || !isMobile) return;
+    const trigger = triggerRef.current;
+    // Consume the trigger so a later breakpoint change cannot re-steal focus.
+    triggerRef.current = null;
+    if (!trigger || !document.contains(trigger)) return;
+    trigger.focus();
+  }, [isOpen, isMobile]);
+
+  const rememberTrigger = useCallback(() => {
+    const activeElement = document.activeElement;
+    triggerRef.current = activeElement instanceof HTMLElement ? activeElement : null;
+  }, []);
+
+  const open = useCallback(() => {
+    rememberTrigger();
+    setIsOpen(true);
+  }, [rememberTrigger]);
   const close = useCallback(() => setIsOpen(false), []);
-  const toggle = useCallback(() => setIsOpen((prev) => !prev), []);
+  const toggle = useCallback(() => {
+    setIsOpen((prev) => {
+      if (!prev) rememberTrigger();
+      return !prev;
+    });
+  }, [rememberTrigger]);
 
   const setCollapsed = useCallback((value: boolean) => {
     setIsCollapsedState(value);
@@ -86,7 +125,9 @@ export function SidebarProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   return (
-    <SidebarContext.Provider value={{ isOpen, open, close, toggle, isCollapsed, setCollapsed }}>
+    <SidebarContext.Provider
+      value={{ isOpen, open, close, toggle, isCollapsed, setCollapsed, isMobile }}
+    >
       {children}
     </SidebarContext.Provider>
   );

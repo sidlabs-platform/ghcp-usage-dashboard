@@ -28,7 +28,7 @@ import {
   Cpu,
   BarChart2,
 } from "lucide-react";
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useSidebar } from "@/components/layout/SidebarContext";
 
 interface NavItem {
@@ -113,10 +113,28 @@ const destinations: NavDestination[] = [
 
 type PageVisibility = Record<string, boolean>;
 
+const FOCUSABLE_SELECTOR = [
+  "a[href]",
+  "button:not([disabled])",
+  "textarea:not([disabled])",
+  "input:not([disabled])",
+  "select:not([disabled])",
+  '[tabindex]:not([tabindex="-1"])',
+].join(",");
+
+function getFocusableElements(container: HTMLElement): HTMLElement[] {
+  return Array.from(container.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)).filter(
+    (element) =>
+      !element.hasAttribute("disabled") &&
+      !element.closest('[aria-hidden="true"], [inert]'),
+  );
+}
+
 /** Main application sidebar, supporting persistent desktop and off-canvas mobile modes. */
 export function Sidebar() {
   const pathname = usePathname();
-  const { isOpen, close, isCollapsed, setCollapsed } = useSidebar();
+  const { isOpen, close, isCollapsed, setCollapsed, isMobile } = useSidebar();
+  const sidebarRef = useRef<HTMLElement>(null);
   const [pageVisibility, setPageVisibility] = useState<PageVisibility>({});
   const [enterpriseLabel, setEnterpriseLabel] = useState<string>("Enterprise Dashboard");
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(
@@ -184,6 +202,56 @@ export function Sidebar() {
     }
   }, [pathname, isItemActive]);
 
+  useEffect(() => {
+    if (!isMobile || !isOpen) return;
+    const sidebar = sidebarRef.current;
+    if (!sidebar || sidebar.contains(document.activeElement)) return;
+
+    const [firstFocusable] = getFocusableElements(sidebar);
+    firstFocusable?.focus();
+  }, [isMobile, isOpen]);
+
+  useEffect(() => {
+    if (!isMobile || !isOpen) return;
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key !== "Tab") return;
+
+      const sidebar = sidebarRef.current;
+      if (!sidebar) return;
+
+      const focusableElements = getFocusableElements(sidebar);
+      if (focusableElements.length === 0) {
+        event.preventDefault();
+        return;
+      }
+
+      const firstFocusable = focusableElements[0];
+      const lastFocusable = focusableElements[focusableElements.length - 1];
+      const activeElement = document.activeElement;
+
+      if (!sidebar.contains(activeElement)) {
+        event.preventDefault();
+        firstFocusable.focus();
+        return;
+      }
+
+      if (event.shiftKey && activeElement === firstFocusable) {
+        event.preventDefault();
+        lastFocusable.focus();
+        return;
+      }
+
+      if (!event.shiftKey && activeElement === lastFocusable) {
+        event.preventDefault();
+        firstFocusable.focus();
+      }
+    }
+
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [isMobile, isOpen]);
+
   const toggleGroup = useCallback((id: string) => {
     setExpandedGroups((prev) => {
       const next = new Set(prev);
@@ -206,10 +274,15 @@ export function Sidebar() {
     })
     .filter((d): d is NavDestination => d !== null);
 
+  const isDrawerInert = isMobile && !isOpen;
+
   return (
     <aside
+      ref={sidebarRef}
       id="sidebar-nav"
       aria-label="Main navigation"
+      aria-hidden={isDrawerInert ? true : undefined}
+      inert={isDrawerInert ? true : undefined}
       className={cn(
         "flex flex-col border-r bg-[hsl(var(--card))] transition-all duration-300",
         // Desktop: persistent, respects isCollapsed
@@ -342,7 +415,7 @@ export function Sidebar() {
       </nav>
 
       {/* Desktop collapse toggle */}
-      <div className="hidden border-t p-2 md:block">
+      <div className="hidden border-t p-2 md:block" aria-hidden={isMobile ? true : undefined}>
         <button
           type="button"
           onClick={() => setCollapsed(!isCollapsed)}
@@ -357,4 +430,3 @@ export function Sidebar() {
     </aside>
   );
 }
-
