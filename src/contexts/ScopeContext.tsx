@@ -1,7 +1,22 @@
 "use client";
 
-import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from "react";
+import {
+  createContext,
+  useContext,
+  useState,
+  useEffect,
+  useCallback,
+  useRef,
+  Suspense,
+  type ReactNode,
+} from "react";
+import { useSearchParams, useRouter, usePathname } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
+import {
+  parseScopeFromURL,
+  serializeScopeToURL,
+  applyParamsToURL,
+} from "@/lib/url/params";
 
 export interface EnterpriseInfo {
   slug: string;
@@ -47,6 +62,83 @@ const ScopeContext = createContext<ScopeContextType>({
   isMultiEnterprise: false,
   buildScopeParams: () => new URLSearchParams(),
 });
+
+/**
+ * Inner component that bridges scope filter state to the URL.
+ *
+ * Wrapped in `<Suspense>` because it calls `useSearchParams()`.
+ *
+ * Loop avoidance: same `lastWrittenRef` pattern as `DateRangeURLSync` — the
+ * URL→state effect skips when `searchParams` matches what we last wrote.
+ */
+function ScopeURLSync({
+  selectedEnterprises,
+  selectedEntTeams,
+  selectedOrgTeams,
+  selectedOrgs,
+}: {
+  selectedEnterprises: string[];
+  selectedEntTeams: string[];
+  selectedOrgTeams: string[];
+  selectedOrgs: string[];
+}) {
+  const {
+    setSelectedEnterprises,
+    setSelectedEntTeams,
+    setSelectedOrgTeams,
+    setSelectedOrgs,
+  } = useScope();
+  const searchParams = useSearchParams();
+  const router = useRouter();
+  const pathname = usePathname();
+
+  const initialized = useRef(false);
+  const lastWritten = useRef<string>("");
+  const searchParamsRef = useRef(searchParams);
+  searchParamsRef.current = searchParams;
+
+  // Effect 1: URL → state (on mount and on external URL changes)
+  useEffect(() => {
+    const currentStr = searchParams.toString();
+    if (initialized.current && currentStr === lastWritten.current) return;
+
+    const parsed = parseScopeFromURL(searchParams);
+    setSelectedEnterprises(parsed.enterprises);
+    setSelectedEntTeams(parsed.entTeams);
+    setSelectedOrgTeams(parsed.orgTeams);
+    setSelectedOrgs(parsed.orgs);
+    initialized.current = true;
+  }, [searchParams, setSelectedEnterprises, setSelectedEntTeams, setSelectedOrgTeams, setSelectedOrgs]);
+
+  // Effect 2: state → URL
+  useEffect(() => {
+    if (!initialized.current) return;
+
+    const updates = serializeScopeToURL(
+      selectedEnterprises,
+      selectedEntTeams,
+      selectedOrgTeams,
+      selectedOrgs,
+    );
+    const next = applyParamsToURL(searchParamsRef.current, updates);
+    const nextStr = next.toString();
+
+    if (nextStr === searchParamsRef.current.toString()) return;
+
+    lastWritten.current = nextStr;
+    const newUrl = nextStr ? `${pathname}?${nextStr}` : pathname;
+    router.replace(newUrl, { scroll: false });
+  }, [
+    selectedEnterprises,
+    selectedEntTeams,
+    selectedOrgTeams,
+    selectedOrgs,
+    pathname,
+    router,
+  ]);
+
+  return null;
+}
 
 export function ScopeProvider({ children }: { children: ReactNode }) {
   const [filterOptions, setFilterOptions] = useState<ScopeFilterOptions>({
@@ -163,6 +255,15 @@ export function ScopeProvider({ children }: { children: ReactNode }) {
         buildScopeParams,
       }}
     >
+      {/* Suspense required by Next.js App Router for useSearchParams. */}
+      <Suspense fallback={null}>
+        <ScopeURLSync
+          selectedEnterprises={selectedEnterprises}
+          selectedEntTeams={selectedEntTeams}
+          selectedOrgTeams={selectedOrgTeams}
+          selectedOrgs={selectedOrgs}
+        />
+      </Suspense>
       {children}
     </ScopeContext.Provider>
   );

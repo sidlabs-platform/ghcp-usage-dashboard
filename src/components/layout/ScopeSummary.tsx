@@ -1,8 +1,11 @@
 "use client";
 
-import { X } from "lucide-react";
+import { useState, useCallback } from "react";
+import { Copy, Check, X } from "lucide-react";
 import { useDateRange } from "@/contexts/DateRangeContext";
 import { useScope } from "@/contexts/ScopeContext";
+import { periodLabel } from "@/lib/date/month-range";
+import { cn } from "@/lib/utils";
 
 /**
  * The provenance line for every number on the page: which slice of the
@@ -19,7 +22,7 @@ import { useScope } from "@/contexts/ScopeContext";
  * an active filter changes what every figure on the page means.
  */
 export function ScopeSummary() {
-  const { days, mode, startDate, endDate } = useDateRange();
+  const { days, mode, startDate, endDate, period } = useDateRange();
   const {
     hasFilter,
     selectedEnterprises,
@@ -33,8 +36,20 @@ export function ScopeSummary() {
     clearAll,
   } = useScope();
 
+  const [copied, setCopied] = useState(false);
+
+  const handleCopyLink = useCallback(() => {
+    if (typeof window === "undefined") return;
+    void navigator.clipboard.writeText(window.location.href).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  }, []);
+
   const dateLabel =
-    mode === "custom" && startDate && endDate
+    mode === "month" && period
+      ? periodLabel(period)
+      : mode === "custom" && startDate && endDate
       ? `${startDate} → ${endDate}`
       : `Last ${days} day${days === 1 ? "" : "s"}`;
 
@@ -105,6 +120,27 @@ export function ScopeSummary() {
           </button>
         </>
       )}
+
+      {/* Copy link — surfaces the URL so a filtered view is shareable. */}
+      <button
+        type="button"
+        onClick={handleCopyLink}
+        aria-label={copied ? "Link copied" : "Copy link to this view"}
+        title={copied ? "Copied!" : "Copy link to this view"}
+        className={cn(
+          "ml-auto inline-flex items-center gap-1 rounded px-1.5 py-0.5 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[hsl(var(--ring))]",
+          copied
+            ? "text-[hsl(var(--primary))]"
+            : "text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))]",
+        )}
+      >
+        {copied ? (
+          <Check aria-hidden="true" className="h-3 w-3" />
+        ) : (
+          <Copy aria-hidden="true" className="h-3 w-3" />
+        )}
+        <span className="sr-only">{copied ? "Copied" : "Copy link"}</span>
+      </button>
     </div>
   );
 }

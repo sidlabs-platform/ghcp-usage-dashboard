@@ -19,6 +19,21 @@ vi.mock("@tanstack/react-query", async () => {
 
 const mockedUseQuery = vi.mocked(useQuery);
 
+// DateRangeProvider/ScopeProvider sync state to the URL, so they call the
+// App Router navigation hooks. Those throw outside a real Next.js render.
+vi.mock("next/navigation", () => ({
+  useSearchParams: () => new URLSearchParams(),
+  usePathname: () => "/dashboard",
+  useRouter: () => ({
+    replace: vi.fn(),
+    push: vi.fn(),
+    refresh: vi.fn(),
+    back: vi.fn(),
+    forward: vi.fn(),
+    prefetch: vi.fn(),
+  }),
+}));
+
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
