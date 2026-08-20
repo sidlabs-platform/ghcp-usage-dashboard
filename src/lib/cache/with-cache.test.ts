@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { withCache } from "./with-cache";
+import { CACHE_SKIP_HEADER, withCache } from "./with-cache";
 import { cache } from "./memory-cache";
 import { NextRequest, NextResponse } from "next/server";
 
@@ -61,6 +61,43 @@ describe("withCache", () => {
     await wrapped(makeRequest());
 
     expect(handler).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not cache 200 responses that carry the cache-skip sentinel", async () => {
+    const handler = vi
+      .fn()
+      .mockResolvedValueOnce(
+        NextResponse.json({ count: 1 }, { headers: { [CACHE_SKIP_HEADER]: "1" } }),
+      )
+      .mockResolvedValueOnce(
+        NextResponse.json({ count: 2 }, { headers: { [CACHE_SKIP_HEADER]: "1" } }),
+      );
+    const wrapped = withCache(handler);
+
+    const first = await wrapped(makeRequest());
+    const second = await wrapped(makeRequest());
+
+    expect(await first.json()).toEqual({ count: 1 });
+    expect(await second.json()).toEqual({ count: 2 });
+    expect(first.headers.get(CACHE_SKIP_HEADER)).toBeNull();
+    expect(second.headers.get(CACHE_SKIP_HEADER)).toBeNull();
+    expect(first.headers.get("X-Cache")).toBeNull();
+    expect(second.headers.get("X-Cache")).toBeNull();
+    expect(handler).toHaveBeenCalledTimes(2);
+  });
+
+  it("still caches 200 responses with no-store Cache-Control when the sentinel is absent", async () => {
+    const handler = vi.fn().mockResolvedValue(
+      NextResponse.json({ count: 42 }, { headers: { "Cache-Control": "private, no-store" } }),
+    );
+    const wrapped = withCache(handler);
+
+    await wrapped(makeRequest());
+    const result = await wrapped(makeRequest());
+
+    expect(result.headers.get("X-Cache")).toBe("HIT");
+    expect(result.headers.get("Cache-Control")).toBe("private, no-store");
+    expect(handler).toHaveBeenCalledTimes(1);
   });
 
   it("uses sorted query params for cache key consistency", async () => {

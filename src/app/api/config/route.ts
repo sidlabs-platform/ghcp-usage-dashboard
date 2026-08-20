@@ -59,6 +59,11 @@ export async function GET() {
     seats: copilotEnabled && (multiEnt
       ? isCopilotSubEnabledForAnyEnterprise("seats")
       : isCopilotSubEnabled("seats")),
+    // Gated identically to `seats` — the lifecycle ledger is derived entirely
+    // from seat data, so it is visible exactly when seat data is.
+    seatLifecycle: copilotEnabled && (multiEnt
+      ? isCopilotSubEnabledForAnyEnterprise("seats")
+      : isCopilotSubEnabled("seats")),
     ideLanguages: userMetrics,
     // Copilot App analytics has an enterprise/org aggregate fallback (KPIs and
     // trends only) that works without user-level metrics — gate on the base

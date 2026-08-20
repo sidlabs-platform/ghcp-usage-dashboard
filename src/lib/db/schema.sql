@@ -136,6 +136,62 @@ CREATE TABLE IF NOT EXISTS copilot_seats (
 
 CREATE INDEX IF NOT EXISTS idx_seats_team ON copilot_seats(assigning_team_slug);
 
+-- ============================================================================
+-- Copilot seat lifecycle ledger (onboarding / offboarding)
+-- ============================================================================
+--
+-- `copilot_seats` above is a CURRENT snapshot: replaceEnterpriseSeats() deletes
+-- and re-inserts every row each sync, so a removed seat leaves no trace. This
+-- append-only ledger is what makes "who was offboarded in this window?"
+-- answerable. It is purely additive — it never requires dropping or re-syncing
+-- `copilot_seats`.
+--
+-- Three sources feed it (see seat-lifecycle-repo.ts):
+--   * 'seat_created_at' — onboarding derived from copilot_seats.created_at.
+--     Retroactive; works on already-synced data with no re-sync.
+--   * 'sync_diff'       — offboarding detected by diffing the live seat snapshot
+--     against the stored one during seat sync. Available to every install, but
+--     only from the first sync after this feature ships onward.
+--   * 'audit_log'       — both directions, projected from license_audit_events.
+--     Exact and retroactive, but only when the optional licensing-history sync
+--     is enabled.
+--
+-- `source` participates in the primary key so re-deriving one source is
+-- idempotent (INSERT OR REPLACE) and never destroys another source's row.
+CREATE TABLE IF NOT EXISTS copilot_seat_lifecycle_events (
+  enterprise_slug TEXT NOT NULL DEFAULT '',
+  org_slug TEXT NOT NULL,
+  user_login TEXT NOT NULL,
+  user_id INTEGER,
+  event_type TEXT NOT NULL,   -- 'onboarded' | 'offboarded'
+  event_date TEXT NOT NULL,   -- 'YYYY-MM-DD' — the query grain
+  occurred_at TEXT NOT NULL,  -- full ISO 8601 timestamp
+  plan_type TEXT,
+  assigning_team_slug TEXT,
+  assigning_team_name TEXT,
+  last_activity_at TEXT,
+  source TEXT NOT NULL,       -- 'seat_created_at' | 'sync_diff' | 'audit_log'
+  detected_at TEXT NOT NULL,
+  PRIMARY KEY (enterprise_slug, org_slug, user_login, event_type, event_date, source)
+);
+
+CREATE INDEX IF NOT EXISTS idx_seat_lifecycle_window
+  ON copilot_seat_lifecycle_events(enterprise_slug, event_date);
+CREATE INDEX IF NOT EXISTS idx_seat_lifecycle_type_window
+  ON copilot_seat_lifecycle_events(enterprise_slug, event_type, event_date);
+CREATE INDEX IF NOT EXISTS idx_seat_lifecycle_login
+  ON copilot_seat_lifecycle_events(enterprise_slug, user_login);
+CREATE INDEX IF NOT EXISTS idx_seat_lifecycle_source
+  ON copilot_seat_lifecycle_events(enterprise_slug, source);
+
+-- When snapshot-diff offboard tracking first ran for an enterprise. The UI uses
+-- this to say "offboards before <date> were not recorded" instead of silently
+-- implying there were none.
+CREATE TABLE IF NOT EXISTS copilot_seat_lifecycle_coverage (
+  enterprise_slug TEXT PRIMARY KEY,
+  tracking_started_at TEXT NOT NULL
+);
+
 -- Team membership cache
 CREATE TABLE IF NOT EXISTS team_memberships (
   enterprise_slug TEXT NOT NULL DEFAULT '',

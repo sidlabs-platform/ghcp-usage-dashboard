@@ -5,10 +5,32 @@ import { cache, CACHE_TTL } from "./memory-cache";
 
 type RouteHandler = (request: NextRequest) => Promise<NextResponse>;
 
+export const CACHE_SKIP_HEADER = "x-cache-skip";
+
+function copyPublicHeaders(response: NextResponse): Record<string, string> {
+  const headers: Record<string, string> = {};
+  response.headers.forEach((value, key) => {
+    const normalized = key.toLowerCase();
+    if (normalized !== "x-cache" && normalized !== CACHE_SKIP_HEADER) {
+      headers[key] = value;
+    }
+  });
+  return headers;
+}
+
+function stripInternalHeaders(response: NextResponse): NextResponse {
+  return new NextResponse(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: copyPublicHeaders(response),
+  });
+}
+
 /**
  * Wraps a GET API route handler with in-memory caching.
  * Cache key is derived from the route URL + query params.
  * Skips cache when the request has `Cache-Control: no-cache`.
+ * Skips storing responses that carry CACHE_SKIP_HEADER.
  */
 export function withCache(
   handler: RouteHandler,
@@ -40,19 +62,19 @@ export function withCache(
 
     // Execute handler
     const response = await handler(request);
+    const skipServerCache = response.headers.has(CACHE_SKIP_HEADER);
 
     // Only cache successful responses
     if (response.status === 200) {
+      if (skipServerCache) {
+        return stripInternalHeaders(response);
+      }
+
       // Clone before consuming body so fallback can return the original intact
       const cloned = response.clone();
       try {
         const body = await cloned.json();
-        const headers: Record<string, string> = {};
-        response.headers.forEach((value, key) => {
-          if (key.toLowerCase() !== "x-cache") {
-            headers[key] = value;
-          }
-        });
+        const headers = copyPublicHeaders(response);
 
         cache.set(cacheKey, { body, status: 200, headers }, ttlMs);
 
@@ -67,6 +89,10 @@ export function withCache(
         // If we can't parse JSON, return original response (body still intact)
         return response;
       }
+    }
+
+    if (skipServerCache) {
+      return stripInternalHeaders(response);
     }
 
     return response;

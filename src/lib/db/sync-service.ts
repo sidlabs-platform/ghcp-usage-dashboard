@@ -20,6 +20,15 @@ import {
   invalidateEnterpriseCountCache,
 } from "./metrics-repo";
 import { replaceEnterpriseSeats, upsertSeats } from "./seats-repo";
+import {
+  diffSeatSnapshot,
+  recordSeatLifecycleEvents,
+  backfillOnboardingFromSeats,
+  projectAuditEventsToLifecycle,
+  getSeatSnapshotForDiff,
+  markSeatLifecycleTrackingStarted,
+  type SeatSnapshotEntry,
+} from "./seat-lifecycle-repo";
 import { refreshAllSummaries } from "./summary-tables";
 import { cache } from "@/lib/cache/memory-cache";
 import { upsertAllTeams } from "./teams-repo";
@@ -598,6 +607,49 @@ export async function incrementalSync(
 
 // ── Sync seats (per-enterprise helper) ────────────────────────────────
 
+/**
+ * Derive and persist seat lifecycle (onboarding/offboarding) events.
+ *
+ * `copilot_seats` is a current snapshot with no history, so an offboarded seat
+ * is only observable as the difference between the stored snapshot and the
+ * freshly fetched one. This is captured here, at the one point in the codebase
+ * where both are in hand.
+ *
+ * Entirely best-effort: seat sync is the primary job and must never fail
+ * because the lifecycle ledger did.
+ *
+ * @param orgsInScope Orgs the incoming snapshot is authoritative for. MUST be
+ *   passed on the org-fallback path so orgs whose fetch failed are excluded —
+ *   otherwise their seats look absent and would be recorded as a mass
+ *   offboarding. Pass `undefined` only for the enterprise-wide snapshot.
+ */
+function recordSeatLifecycle(
+  slug: string,
+  previous: SeatSnapshotEntry[],
+  current: SeatSnapshotEntry[],
+  orgsInScope?: readonly string[],
+): void {
+  try {
+    const offboarded = diffSeatSnapshot(previous, current, new Date().toISOString(), orgsInScope);
+    if (offboarded.length > 0) {
+      recordSeatLifecycleEvents(slug, offboarded);
+      console.log("[Sync] [%s] Recorded %d seat offboarding event(s)", sanitizeForLog(slug), offboarded.length);
+    }
+    // Onboarding is derived from the just-written snapshot's `created_at`, so
+    // it is retroactive and needs no diff.
+    backfillOnboardingFromSeats(slug);
+    // Exact, retroactive lifecycle data when the optional licensing-history
+    // sync is enabled; a no-op otherwise.
+    projectAuditEventsToLifecycle(slug);
+    // Records how far back offboard coverage actually extends, so the UI can
+    // say so instead of implying there were no offboards before today.
+    markSeatLifecycleTrackingStarted(slug);
+    cache.invalidateByPrefix("/api/seats/lifecycle");
+  } catch (err) {
+    console.error("[Sync] [%s] Seat lifecycle ledger update failed (seat sync unaffected):", sanitizeForLog(slug), err);
+  }
+}
+
 async function syncSeatsForEnterprise(slug: string, preCaptured?: CaptureCurrentLicenseSeatSnapshotResult): Promise<number> {
   const orgs = getResolvedOrgsForEnterprise(slug);
   let total = 0;
@@ -622,8 +674,14 @@ async function syncSeatsForEnterprise(slug: string, preCaptured?: CaptureCurrent
         );
         throw new Error("Enterprise seats snapshot contained no organization metadata");
       }
+      // Must be read BEFORE replaceEnterpriseSeats() deletes the stored rows —
+      // this is the only moment the previous snapshot still exists.
+      const previousSeats = readSeatSnapshotSafely(slug);
       total = replaceEnterpriseSeats(slug, seatsByOrg);
       recordSync(slug, "seats", slug, null, total);
+      // The enterprise snapshot is authoritative for every org, so no scope
+      // restriction is needed.
+      recordSeatLifecycle(slug, previousSeats, toSnapshotEntries(seatsByOrg));
       if (skipped > 0) {
         console.warn(
           "[Sync] [%s] Skipped %d enterprise seat(s) without organization metadata during seat sync",
@@ -637,18 +695,74 @@ async function syncSeatsForEnterprise(slug: string, preCaptured?: CaptureCurrent
     }
   }
 
+  // Org-fallback path. `upsertSeats` does not delete, so the diff is computed
+  // per-org — and only across orgs that actually returned data. An org whose
+  // fetch threw is deliberately left out of `succeededOrgs` so its seats are
+  // never mistaken for offboardings.
+  const previousSeats = readSeatSnapshotSafely(slug);
+  const currentSeats: SeatSnapshotEntry[] = [];
+  const succeededOrgs: string[] = [];
+
   for (const org of orgs) {
     try {
       const { seats } = await seatsClient.getOrgSeats(org, slug);
       upsertSeats(slug, org, seats);
       total += seats.length;
       recordSync(slug, "seats", org, null, seats.length);
+      succeededOrgs.push(org);
+      for (const seat of seats) {
+        if (!seat.assignee?.login) continue;
+        currentSeats.push({
+          orgSlug: org,
+          userLogin: seat.assignee.login,
+          userId: seat.assignee.id,
+          planType: seat.plan_type,
+          assigningTeamSlug: seat.assigning_team?.slug ?? null,
+          assigningTeamName: seat.assigning_team?.name ?? null,
+          lastActivityAt: seat.last_activity_at ?? null,
+        });
+      }
     } catch (err) {
       console.error("[%s] Failed to sync seats for %s:", sanitizeForLog(slug), sanitizeForLog(org), err);
     }
   }
 
+  if (succeededOrgs.length > 0) {
+    recordSeatLifecycle(slug, previousSeats, currentSeats, succeededOrgs);
+  }
+
   return total;
+}
+
+/** Read the stored snapshot for diffing; never let a read failure break sync. */
+function readSeatSnapshotSafely(slug: string): SeatSnapshotEntry[] {
+  try {
+    return getSeatSnapshotForDiff(slug);
+  } catch (err) {
+    console.error("[Sync] [%s] Could not read previous seat snapshot for lifecycle diff:", sanitizeForLog(slug), err);
+    return [];
+  }
+}
+
+/** Flatten the per-org seat map into the diff's snapshot shape. */
+function toSnapshotEntries(seatsByOrg: Map<string, CopilotSeat[]>): SeatSnapshotEntry[] {
+  const entries: SeatSnapshotEntry[] = [];
+  for (const [orgSlug, seats] of seatsByOrg) {
+    if (!orgSlug) continue;
+    for (const seat of seats) {
+      if (!seat.assignee?.login) continue;
+      entries.push({
+        orgSlug,
+        userLogin: seat.assignee.login,
+        userId: seat.assignee.id,
+        planType: seat.plan_type,
+        assigningTeamSlug: seat.assigning_team?.slug ?? null,
+        assigningTeamName: seat.assigning_team?.name ?? null,
+        lastActivityAt: seat.last_activity_at ?? null,
+      });
+    }
+  }
+  return entries;
 }
 
 export async function syncSeats(): Promise<number> {

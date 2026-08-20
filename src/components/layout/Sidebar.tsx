@@ -10,6 +10,7 @@ import {
   GitPullRequest,
   Users,
   UserSearch,
+  UserPlus,
   KeyRound,
   Monitor,
   ChevronLeft,
@@ -85,6 +86,7 @@ const destinations: NavDestination[] = [
       { href: "/dashboard/teams",               label: "Teams",            icon: Users,          visKey: "teams" },
       // KeyRound replaces CreditCard — one icon per concept (issue #103 item 3)
       { href: "/dashboard/seats",               label: "Seat Management",  icon: KeyRound,       visKey: "seats" },
+      { href: "/dashboard/seat-lifecycle",      label: "Onboarding & Offboarding", icon: UserPlus, visKey: "seatLifecycle" },
     ],
   },
   {

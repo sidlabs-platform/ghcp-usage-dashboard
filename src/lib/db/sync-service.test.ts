@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 // Stub setTimeout to resolve immediately
 vi.stubGlobal("setTimeout", (fn: () => void) => { fn(); return 0; });
@@ -47,6 +47,19 @@ vi.mock("./metrics-repo", () => ({
 }));
 
 vi.mock("./seats-repo", () => ({ replaceEnterpriseSeats: vi.fn((_, seatsByOrg: Map<string, unknown[]>) => Array.from(seatsByOrg.values()).reduce((sum, seats) => sum + seats.length, 0)), upsertSeats: vi.fn() }));
+// Keep the real, pure `diffSeatSnapshot` so the lifecycle tests below exercise
+// the actual diff logic; only the DB-touching functions are stubbed.
+vi.mock("./seat-lifecycle-repo", async () => {
+  const actual = await vi.importActual<typeof import("./seat-lifecycle-repo")>("./seat-lifecycle-repo");
+  return {
+    ...actual,
+    getSeatSnapshotForDiff: vi.fn(() => []),
+    recordSeatLifecycleEvents: vi.fn(),
+    backfillOnboardingFromSeats: vi.fn(),
+    projectAuditEventsToLifecycle: vi.fn(),
+    markSeatLifecycleTrackingStarted: vi.fn(),
+  };
+});
 vi.mock("./summary-tables", () => ({ refreshAllSummaries: vi.fn() }));
 vi.mock("@/lib/cache/memory-cache", () => ({ cache: { invalidateByPrefix: vi.fn(), invalidateAll: vi.fn() } }));
 vi.mock("./teams-repo", () => ({ upsertAllTeams: vi.fn() }));
@@ -109,6 +122,13 @@ import { getConfiguredEnterprises, getResolvedOrgsForEnterprise, getEnterpriseCo
 import { orgsClient } from "@/lib/github/orgs-client";
 import { upsertEnterpriseOrgs } from "./orgs-repo";
 import { replaceEnterpriseSeats, upsertSeats } from "./seats-repo";
+import {
+  getSeatSnapshotForDiff,
+  recordSeatLifecycleEvents,
+  backfillOnboardingFromSeats,
+  projectAuditEventsToLifecycle,
+  markSeatLifecycleTrackingStarted,
+} from "./seat-lifecycle-repo";
 import { batchUpsertUserTeams } from "./user-teams-repo";
 import { datesBetween } from "@/lib/utils";
 import { syncLicenseHistoryForEnterprise, captureCurrentLicenseSeatSnapshot, createDefaultLicenseHistorySyncDeps } from "./license-history-sync-service";
@@ -240,6 +260,135 @@ describe("sync-service", () => {
     expect(result).toBe(1);
     expect(upsertSeats).toHaveBeenCalledWith("test-ent", "test-org", [makeSeat("u1", "test-org")]);
     errorSpy.mockRestore();
+  });
+
+  describe("seat lifecycle ledger", () => {
+    const defaultReplaceImpl = (_slug: unknown, seatsByOrg: Map<string, unknown[]>) =>
+      Array.from(seatsByOrg.values()).reduce((sum, seats) => sum + seats.length, 0);
+
+    // `vi.clearAllMocks()` clears calls but keeps implementations, so anything
+    // these tests override has to be put back explicitly.
+    const resetLifecycleMocks = () => {
+      (replaceEnterpriseSeats as ReturnType<typeof vi.fn>).mockImplementation(defaultReplaceImpl);
+      (getSeatSnapshotForDiff as ReturnType<typeof vi.fn>).mockReturnValue([]);
+      (recordSeatLifecycleEvents as ReturnType<typeof vi.fn>).mockImplementation(() => 0);
+      (backfillOnboardingFromSeats as ReturnType<typeof vi.fn>).mockImplementation(() => 0);
+      (projectAuditEventsToLifecycle as ReturnType<typeof vi.fn>).mockImplementation(() => 0);
+      (markSeatLifecycleTrackingStarted as ReturnType<typeof vi.fn>).mockImplementation(() => {});
+    };
+
+    beforeEach(resetLifecycleMocks);
+    afterEach(resetLifecycleMocks);
+
+    it("records an offboarding for a seat that disappeared from the enterprise snapshot", async () => {
+      // `departed` was in the stored snapshot but the live one only has `u1`.
+      (getSeatSnapshotForDiff as ReturnType<typeof vi.fn>).mockReturnValue([
+        { orgSlug: "test-org", userLogin: "u1", userId: 2 },
+        { orgSlug: "test-org", userLogin: "departed", userId: 9 },
+      ]);
+
+      await syncSeats();
+
+      expect(recordSeatLifecycleEvents).toHaveBeenCalledWith("test-ent", [
+        expect.objectContaining({ userLogin: "departed", eventType: "offboarded", source: "sync_diff" }),
+      ]);
+    });
+
+    it("reads the previous snapshot before the seat table is replaced", async () => {
+      const order: string[] = [];
+      (getSeatSnapshotForDiff as ReturnType<typeof vi.fn>).mockImplementation(() => {
+        order.push("read");
+        return [];
+      });
+      (replaceEnterpriseSeats as ReturnType<typeof vi.fn>).mockImplementation(() => {
+        order.push("replace");
+        return 1;
+      });
+
+      await syncSeats();
+
+      // Reading after the replace would always yield an empty diff.
+      expect(order).toEqual(["read", "replace"]);
+    });
+
+    it("records no offboarding when the snapshot is unchanged", async () => {
+      (getSeatSnapshotForDiff as ReturnType<typeof vi.fn>).mockReturnValue([
+        { orgSlug: "test-org", userLogin: "u1", userId: 2 },
+      ]);
+
+      await syncSeats();
+
+      expect(recordSeatLifecycleEvents).not.toHaveBeenCalled();
+    });
+
+    it("backfills onboarding, projects audit events and marks coverage on every sync", async () => {
+      await syncSeats();
+
+      expect(backfillOnboardingFromSeats).toHaveBeenCalledWith("test-ent");
+      expect(projectAuditEventsToLifecycle).toHaveBeenCalledWith("test-ent");
+      expect(markSeatLifecycleTrackingStarted).toHaveBeenCalledWith("test-ent");
+    });
+
+    it("never fails seat sync when the ledger update throws", async () => {
+      (backfillOnboardingFromSeats as ReturnType<typeof vi.fn>).mockImplementation(() => {
+        throw new Error("ledger exploded");
+      });
+      const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+      await expect(syncSeats()).resolves.toBe(1);
+
+      errorSpy.mockRestore();
+    });
+
+    it("diffs per-org on the org-fallback path", async () => {
+      (seatsClient.getEnterpriseSeats as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("no enterprise seats"));
+      (getSeatSnapshotForDiff as ReturnType<typeof vi.fn>).mockReturnValue([
+        { orgSlug: "test-org", userLogin: "u1", userId: 2 },
+        { orgSlug: "test-org", userLogin: "departed", userId: 9 },
+      ]);
+      const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+      await syncSeats();
+
+      expect(recordSeatLifecycleEvents).toHaveBeenCalledWith("test-ent", [
+        expect.objectContaining({ userLogin: "departed", eventType: "offboarded" }),
+      ]);
+      errorSpy.mockRestore();
+    });
+
+    it("never reports offboardings for an org whose seat fetch failed", async () => {
+      // This is the dangerous case: a transient org API failure must not be
+      // read as "every seat in that org was removed".
+      (seatsClient.getEnterpriseSeats as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("no enterprise seats"));
+      (getResolvedOrgsForEnterprise as ReturnType<typeof vi.fn>).mockReturnValue(["ok-org", "broken-org"]);
+      (seatsClient.getOrgSeats as ReturnType<typeof vi.fn>).mockImplementation(async (org: string) => {
+        if (org === "broken-org") throw new Error("org fetch failed");
+        return { seats: [makeSeat("u1", "ok-org")] };
+      });
+      (getSeatSnapshotForDiff as ReturnType<typeof vi.fn>).mockReturnValue([
+        { orgSlug: "ok-org", userLogin: "u1", userId: 2 },
+        { orgSlug: "broken-org", userLogin: "still-licensed-a", userId: 3 },
+        { orgSlug: "broken-org", userLogin: "still-licensed-b", userId: 4 },
+      ]);
+      const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+      await syncSeats();
+
+      expect(recordSeatLifecycleEvents).not.toHaveBeenCalled();
+      errorSpy.mockRestore();
+    });
+
+    it("skips the ledger entirely when every org fetch failed", async () => {
+      (seatsClient.getEnterpriseSeats as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("no enterprise seats"));
+      (seatsClient.getOrgSeats as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("org fetch failed"));
+      const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+      await syncSeats();
+
+      expect(recordSeatLifecycleEvents).not.toHaveBeenCalled();
+      expect(backfillOnboardingFromSeats).not.toHaveBeenCalled();
+      errorSpy.mockRestore();
+    });
   });
 
   it("syncDay org-only mode fetches user metrics per org", async () => {

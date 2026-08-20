@@ -97,6 +97,13 @@ const SEARCH_INDEX: SearchEntry[] = [
     section: "Management",
   },
   {
+    href: "/dashboard/seat-lifecycle",
+    label: "Onboarding & Offboarding",
+    description: "Licensed users added or removed in a given time window",
+    keywords: ["onboard", "offboard", "onboarding", "offboarding", "joined", "left", "churn", "provision", "deprovision", "revoked", "seat", "license"],
+    section: "Management",
+  },
+  {
     href: "/dashboard/security",
     label: "Security",
     description: "Security scanning alerts and vulnerability tracking",
