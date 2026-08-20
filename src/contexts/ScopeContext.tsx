@@ -8,7 +8,9 @@ import {
   useCallback,
   useRef,
   Suspense,
+  type Dispatch,
   type ReactNode,
+  type SetStateAction,
 } from "react";
 import { useSearchParams, useRouter, usePathname } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
@@ -36,10 +38,10 @@ interface ScopeContextType {
   selectedEntTeams: string[];
   selectedOrgTeams: string[];
   selectedOrgs: string[];
-  setSelectedEnterprises: (slugs: string[]) => void;
-  setSelectedEntTeams: (slugs: string[]) => void;
-  setSelectedOrgTeams: (slugs: string[]) => void;
-  setSelectedOrgs: (slugs: string[]) => void;
+  setSelectedEnterprises: Dispatch<SetStateAction<string[]>>;
+  setSelectedEntTeams: Dispatch<SetStateAction<string[]>>;
+  setSelectedOrgTeams: Dispatch<SetStateAction<string[]>>;
+  setSelectedOrgs: Dispatch<SetStateAction<string[]>>;
   clearAll: () => void;
   hasFilter: boolean;
   isMultiEnterprise: boolean;
@@ -62,6 +64,29 @@ const ScopeContext = createContext<ScopeContextType>({
   isMultiEnterprise: false,
   buildScopeParams: () => new URLSearchParams(),
 });
+
+/**
+ * True when two string arrays hold the same values in the same order.
+ */
+function sameMembers(a: string[], b: string[]): boolean {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  return a.every((value, index) => value === b[index]);
+}
+
+/**
+ * Applies a URL-parsed value to array state without churning its identity.
+ *
+ * `parseScopeFromURL` allocates a fresh array on every call, so calling the
+ * setter unconditionally makes state "change" on every `searchParams` tick even
+ * when the selection is identical. That re-renders every `ScopeContext`
+ * consumer and re-fires their queries; if `searchParams` also has a new
+ * identity per render, the URL→state effect re-runs forever. Returning `prev`
+ * lets React bail out of the re-render entirely.
+ */
+function applyIfChanged(setter: Dispatch<SetStateAction<string[]>>, next: string[]): void {
+  setter((prev) => (sameMembers(prev, next) ? prev : next));
+}
 
 /**
  * Inner component that bridges scope filter state to the URL.
@@ -103,10 +128,10 @@ function ScopeURLSync({
     if (initialized.current && currentStr === lastWritten.current) return;
 
     const parsed = parseScopeFromURL(searchParams);
-    setSelectedEnterprises(parsed.enterprises);
-    setSelectedEntTeams(parsed.entTeams);
-    setSelectedOrgTeams(parsed.orgTeams);
-    setSelectedOrgs(parsed.orgs);
+    applyIfChanged(setSelectedEnterprises, parsed.enterprises);
+    applyIfChanged(setSelectedEntTeams, parsed.entTeams);
+    applyIfChanged(setSelectedOrgTeams, parsed.orgTeams);
+    applyIfChanged(setSelectedOrgs, parsed.orgs);
     initialized.current = true;
   }, [searchParams, setSelectedEnterprises, setSelectedEntTeams, setSelectedOrgTeams, setSelectedOrgs]);
 
