@@ -588,6 +588,22 @@ describe("recordSeatAuditSyncState", () => {
     expect(state.coveredThrough).toBe("2026-06-25T00:00:00.000Z");
   });
 
+  it("does not let a failed run clear an earlier truncated retry marker", () => {
+    recordSeatAuditSyncState(auditState({ truncated: true }));
+    recordSeatAuditSyncState(auditState({
+      status: "error",
+      reason: "GitHub API error 502",
+      coveredFrom: null,
+      coveredThrough: null,
+      lastEventAt: null,
+      eventsWritten: 0,
+      truncated: false,
+    }));
+
+    const [state] = getSeatAuditSyncStates(["ent1"]);
+    expect(state.truncated).toBe(true);
+  });
+
   it("keeps state per enterprise", () => {
     recordSeatAuditSyncState(auditState());
     recordSeatAuditSyncState(auditState({ enterpriseSlug: "ent2", status: "unavailable" }));
@@ -695,6 +711,66 @@ describe("audit coverage-window precedence", () => {
 
     const logins = getSeatLifecycleRows({ ...WINDOW }, "offboarded", PAGE).rows.map((r) => r.user_login);
     expect(logins).toEqual(["audited"]);
+  });
+
+  it("keeps sync_diff rows when partial org fallback cleared the coverage window", () => {
+    recordSeatAuditSyncState(auditState({
+      reason: "Audit log unavailable for 1 organization(s).",
+      target: "org",
+      coveredFrom: null,
+      coveredThrough: null,
+      eventsWritten: 1,
+    }));
+    recordSeatLifecycleEvents("ent1", [
+      {
+        orgSlug: "org1",
+        userLogin: "diff-from-uncovered-org",
+        eventType: "offboarded",
+        occurredAt: "2026-06-18T00:00:00.000Z",
+        source: "sync_diff",
+      },
+      {
+        orgSlug: "org2",
+        userLogin: "audited-org-user",
+        eventType: "offboarded",
+        occurredAt: "2026-06-12T00:00:00.000Z",
+        source: "audit_log",
+      },
+    ]);
+
+    const logins = getSeatLifecycleRows({ ...WINDOW }, "offboarded", PAGE).rows
+      .map((r) => r.user_login).sort();
+    expect(logins).toEqual(["audited-org-user", "diff-from-uncovered-org"]);
+  });
+
+  it("suppresses sync_diff rows covered by licensing-history projection despite a null audit-sync window", () => {
+    recordSeatAuditSyncState(auditState({
+      status: "error",
+      reason: "GitHub API error 502",
+      target: null,
+      coveredFrom: null,
+      coveredThrough: null,
+      lastEventAt: null,
+      eventsWritten: 0,
+    }));
+    recordSeatLifecycleEvents("ent1", [{
+      orgSlug: "org1",
+      userLogin: "diff-duplicate",
+      eventType: "offboarded",
+      occurredAt: "2026-06-18T00:00:00.000Z",
+      source: "sync_diff",
+    }]);
+    insertAuditEvent({
+      event_id: "license-cancel",
+      action: "cancel",
+      observed_login: "audited-license-row",
+      occurred_at: "2026-06-18T12:00:00.000Z",
+    });
+    projectAuditEventsToLifecycle("ent1");
+
+    const logins = getSeatLifecycleRows({ ...WINDOW }, "offboarded", PAGE).rows
+      .map((r) => r.user_login).sort();
+    expect(logins).toEqual(["audited-license-row"]);
   });
 
   it("keeps same-day sync_diff rows before the exact audit coverage start", () => {

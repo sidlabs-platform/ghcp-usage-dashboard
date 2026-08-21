@@ -93,6 +93,10 @@ function formatDate(value: string | null): string {
   return value.slice(0, 10);
 }
 
+function isPaginationTruncationReason(reason: string): boolean {
+  return reason.startsWith("Copilot audit log pagination truncated");
+}
+
 /**
  * State the provenance of the offboarding numbers, and the window they actually
  * cover, rather than letting a reader assume completeness.
@@ -123,6 +127,13 @@ function SourceCoverageNotice({ coverage }: SourceCoverageNoticeProps) {
   const hasDiffRows = coverage.sourceBreakdown
     ? (sourceBreakdown.sync_diff ?? 0) > 0
     : coverage.source === "sync_diff";
+  const showsTruncationNotice = hasAuditRows && audit.truncated;
+  // `reason` is a one-slot warning channel. Pagination truncation already has a
+  // dedicated, clearer line below, so suppress only that known duplicate while
+  // still surfacing partial-scope and skipped-event warnings on successful runs.
+  const auditReason = audit.reason && !(showsTruncationNotice && isPaginationTruncationReason(audit.reason))
+    ? audit.reason
+    : null;
 
   if (coverage.source === "none" && audit.status !== "unavailable" && audit.status !== "error") {
     return (
@@ -157,9 +168,10 @@ function SourceCoverageNotice({ coverage }: SourceCoverageNoticeProps) {
           </>
         )}
         {audit.lastSyncedAt && <> (last synced {formatDate(audit.lastSyncedAt)})</>}.
+        {audit.status === "ok" && auditReason && <> {auditReason}</>}
       </span>,
     );
-    if (audit.truncated) {
+    if (showsTruncationNotice) {
       lines.push(
         <span key="truncated">
           The audit log returned more pages than a single sync reads, so the oldest part of this window may still be
@@ -173,7 +185,7 @@ function SourceCoverageNotice({ coverage }: SourceCoverageNoticeProps) {
     lines.push(
       <span key="unavailable">
         <strong className="text-[hsl(var(--foreground))]">The audit log is not available</strong> for this scope, so
-        exact removal timestamps cannot be read. {audit.reason}
+        exact removal timestamps cannot be read. {auditReason}
       </span>,
     );
   }
@@ -181,7 +193,7 @@ function SourceCoverageNotice({ coverage }: SourceCoverageNoticeProps) {
   if (audit.status === "error") {
     lines.push(
       <span key="error">
-        The last audit log sync did not complete, so recent removals may be missing. {audit.reason}
+        The last audit log sync did not complete, so recent removals may be missing. {auditReason}
       </span>,
     );
   }

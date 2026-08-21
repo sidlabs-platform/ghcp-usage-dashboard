@@ -232,19 +232,41 @@ describe("CopilotAuditClient", () => {
       expect(result.events.map((e) => e.eventId)).toEqual(["new"]);
     });
 
-    it("stops paginating once an older-than-cutoff event is observed (newest-first assumption)", async () => {
+    it("does not stop pagination when only one event in the page is older than cutoff", async () => {
       mockFetchWithMeta.mockResolvedValueOnce(
         page(
-          [{ action: "cfb_seat_added", user: "new", user_id: 1, "@timestamp": 2000, _document_id: "new" },
-           { action: "cfb_seat_added", user: "old", user_id: 2, "@timestamp": 500, _document_id: "old" }],
+          [
+            { action: "cfb_seat_added", user: "new", user_id: 1, "@timestamp": 2000, _document_id: "new" },
+            { action: "cfb_seat_added", user: "old", user_id: 2, "@timestamp": 500, _document_id: "old" },
+          ],
+          "https://api.github.com/orgs/acme/audit-log?per_page=100&after=cursor1",
+        ),
+      );
+      mockFetchWithMeta.mockResolvedValueOnce(
+        page([{ action: "cfb_seat_added", user: "later-page", user_id: 3, "@timestamp": 1500, _document_id: "later-page" }]),
+      );
+      const result = await client.getOrgAuditEvents("acme", { cutoffMs: 1000 });
+      expectOk(result);
+      expect(result.events.map((e) => e.eventId)).toEqual(["new", "later-page"]);
+      expect(mockFetchWithMeta).toHaveBeenCalledTimes(2);
+      expect(result.truncated).toBe(false); // stopping due to cutoff is not truncation
+    });
+
+    it("stops paginating once the whole page is older than cutoff", async () => {
+      mockFetchWithMeta.mockResolvedValueOnce(
+        page(
+          [
+           { action: "cfb_seat_added", user: "old", user_id: 1, "@timestamp": 900, _document_id: "old" },
+           { action: "cfb_seat_added", user: "older", user_id: 2, "@timestamp": 500, _document_id: "older" },
+          ],
           "https://api.github.com/orgs/acme/audit-log?per_page=100&after=cursor1",
         ),
       );
       const result = await client.getOrgAuditEvents("acme", { cutoffMs: 1000 });
       expectOk(result);
-      expect(result.events.map((e) => e.eventId)).toEqual(["new"]);
-      expect(mockFetchWithMeta).toHaveBeenCalledTimes(1); // did not follow the next-page link
-      expect(result.truncated).toBe(false); // stopping due to cutoff is not truncation
+      expect(result.events).toEqual([]);
+      expect(mockFetchWithMeta).toHaveBeenCalledTimes(1);
+      expect(result.truncated).toBe(false);
     });
 
     it("excludes events observed after untilMs", async () => {
@@ -318,6 +340,38 @@ describe("CopilotAuditClient", () => {
       expect(result.warnings.some((w) => /truncated/i.test(w) && /3-page/.test(w))).toBe(true);
     });
 
+    it("surfaces target deadline truncation instead of continuing through more pages", async () => {
+      const dateNowSpy = vi.spyOn(Date, "now")
+        .mockReturnValueOnce(1_000)
+        .mockReturnValueOnce(1_000)
+        .mockReturnValueOnce(1_002);
+      mockFetchWithMeta.mockResolvedValueOnce(
+        page(
+          [{ action: "cfb_seat_added", user: "x", user_id: 1, "@timestamp": 2000, _document_id: "deadline-event" }],
+          "https://api.github.com/orgs/acme/audit-log?after=next",
+        ),
+      );
+      try {
+        const result = await client.getOrgAuditEvents("acme", { targetDeadlineMs: 1, requestTimeoutMs: 100 });
+        expectOk(result);
+        expect(result.events.map((e) => e.eventId)).toEqual(["deadline-event"]);
+        expect(result.truncated).toBe(true);
+        expect(result.warnings.some((w) => /deadline/i.test(w))).toBe(true);
+        expect(mockFetchWithMeta).toHaveBeenCalledTimes(1);
+      } finally {
+        dateNowSpy.mockRestore();
+      }
+    });
+
+    it("surfaces target deadline truncation when the deadline expires during a page request", async () => {
+      mockFetchWithMeta.mockReturnValueOnce(new Promise(() => {}));
+      const result = await client.getOrgAuditEvents("acme", { targetDeadlineMs: 1, requestTimeoutMs: 100 });
+      expectOk(result);
+      expect(result.events).toEqual([]);
+      expect(result.truncated).toBe(true);
+      expect(result.warnings.some((w) => /deadline/i.test(w))).toBe(true);
+    });
+
     it("does not mark truncated when the last page fetched has no further next link", async () => {
       mockFetchWithMeta
         .mockResolvedValueOnce(page([{ action: "cfb_seat_added", user: "a", user_id: 1, "@timestamp": 1, _document_id: "a" }], "https://api.github.com/orgs/acme/audit-log?after=c1"))
@@ -356,19 +410,19 @@ describe("CopilotAuditClient", () => {
       expect(result.warnings.some((w) => /truncated/i.test(w) && /4-page/.test(w))).toBe(true);
     });
 
-    it("stops enterprise pagination once an older-than-cutoff event is observed", async () => {
+    it("stops enterprise pagination once the whole page is older than cutoff", async () => {
       mockFetchWithMeta.mockResolvedValueOnce(
         page(
           [
-            { action: "cfb_seat_added", user: "new", user_id: 1, org: "org-a", "@timestamp": 2000, _document_id: "new" },
-            { action: "cfb_seat_added", user: "old", user_id: 2, org: "org-a", "@timestamp": 500, _document_id: "old" },
+            { action: "cfb_seat_added", user: "old", user_id: 1, org: "org-a", "@timestamp": 900, _document_id: "old" },
+            { action: "cfb_seat_added", user: "older", user_id: 2, org: "org-a", "@timestamp": 500, _document_id: "older" },
           ],
           "https://api.github.com/enterprises/my-ent/audit-log?after=cursor1",
         ),
       );
       const result = await client.getEnterpriseAuditEvents("my-ent", { cutoffMs: 1000 });
       expectOk(result);
-      expect(result.events.map((e) => e.eventId)).toEqual(["new"]);
+      expect(result.events).toEqual([]);
       expect(mockFetchWithMeta).toHaveBeenCalledTimes(1);
     });
   });
@@ -458,6 +512,23 @@ describe("CopilotAuditClient", () => {
       mockFetchWithMeta.mockRejectedValueOnce(new GitHubApiError(500, "/orgs/acme/audit-log", "boom", true));
       const result = await client.getOrgAuditEvents("acme");
       expect(result.status).toBe("unknown");
+    });
+
+    it("returns a typed unknown result when an audit page request times out", async () => {
+      mockFetchWithMeta.mockReturnValueOnce(new Promise(() => {}));
+      const result = await client.getOrgAuditEvents("acme", { requestTimeoutMs: 1 });
+      expect(result.status).toBe("unknown");
+      if (result.status !== "unknown") throw new Error("expected unknown");
+      expect(result.target).toBe("acme");
+      expect(result.message).toMatch(/timed out/i);
+    });
+
+    it("returns a typed unknown result when the underlying fetch is aborted", async () => {
+      mockFetchWithMeta.mockRejectedValueOnce(new DOMException("The operation was aborted.", "AbortError"));
+      const result = await client.getOrgAuditEvents("acme");
+      expect(result.status).toBe("unknown");
+      if (result.status !== "unknown") throw new Error("expected unknown");
+      expect(result.message).toMatch(/aborted|timed out/i);
     });
 
     it("rethrows non-GitHubApiError failures instead of swallowing them (no broad catch)", async () => {

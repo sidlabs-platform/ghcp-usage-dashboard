@@ -82,6 +82,17 @@ export const SEAT_AUDIT_OVERLAP_HOURS = 48;
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 const MS_PER_HOUR = 60 * 60 * 1000;
 
+/**
+ * Safety margin applied above the oldest event a truncated fetch actually read,
+ * before that instant is claimed as audit coverage.
+ *
+ * GitHub paginates the audit log by its own document stream, so occurrence
+ * timestamps are only approximately ordered across pages. This margin is the
+ * amount of local disorder we are willing to assume, and it is deliberately far
+ * larger than the ingestion lag that causes it.
+ */
+const TRUNCATED_COVERAGE_SAFETY_MARGIN_MS = 24 * 60 * 60 * 1000;
+
 export interface SeatAuditSyncResult {
   enterpriseSlug: string;
   status: "ok" | "unavailable" | "error" | "skipped";
@@ -319,23 +330,45 @@ export async function syncSeatAuditEventsForEnterprise(
     (latest, event) => (latest === null || event.occurredAt > latest ? event.occurredAt : latest),
     null,
   );
+
   const firstEventAt = lifecycleEvents.reduce<string | null>(
     (earliest, event) => (earliest === null || event.occurredAt < earliest ? event.occurredAt : earliest),
     null,
   );
 
   // The audit log paginates newest-first, so a truncated fetch is missing the
-  // OLDEST part of the requested window, not the newest. Claiming coverage back
-  // to the cutoff would suppress snapshot-derived rows for a range the audit log
-  // never actually read — so fall back to the oldest event we did see.
+  // OLDEST part of the requested window, not the newest. The newest end really
+  // was read, but GitHub orders pages by its own document stream rather than
+  // strictly by the occurrence timestamp we store, so the oldest event we saw is
+  // only an approximate floor: an unread page can still hold an event near that
+  // boundary. Claiming coverage from a safety margin AFTER the oldest event we
+  // saw absorbs that local disorder.
   //
+  // Refusing to claim any window at all would be simpler, but a truncated run
+  // never advances the watermark, so a large or merely slow enterprise would
+  // truncate on every sync and stay permanently uncovered -- showing an
+  // audit-log row and a snapshot-diff row for every single offboard, forever.
+  const truncatedCoveredFrom = (): string | null => {
+    if (firstEventAt === null) return null;
+    const parsed = Date.parse(firstEventAt);
+    if (Number.isNaN(parsed)) return null;
+    const floorMs = parsed + TRUNCATED_COVERAGE_SAFETY_MARGIN_MS;
+    // A margin that runs past "now" leaves no window worth claiming.
+    return floorMs >= now.getTime() ? null : new Date(floorMs).toISOString();
+  };
+
   // Org fallback has another incompleteness mode: one org can answer while
   // another fails. Those rows are real and worth writing, but the state row is
   // enterprise-scoped; claiming an enterprise-wide window would hide
   // snapshot-derived offboards for the org that never answered.
   const partialOrgCoverage = target === "org" && orgFallbackHadFailure;
-  const effectiveCoveredFrom = partialOrgCoverage ? null : truncated ? firstEventAt ?? coveredFrom : coveredFrom;
-  const coveredThrough = partialOrgCoverage ? null : nowIso;
+  const effectiveCoveredFrom = partialOrgCoverage
+    ? null
+    : truncated
+      ? truncatedCoveredFrom()
+      : coveredFrom;
+  // Without a lower bound there is no interval, so the upper bound must go too.
+  const coveredThrough = partialOrgCoverage || effectiveCoveredFrom === null ? null : nowIso;
   const reason = orgFailureWarning ?? warnings[0] ?? null;
 
   recordSeatAuditSyncState({

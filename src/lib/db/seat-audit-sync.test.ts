@@ -242,7 +242,7 @@ describe("syncSeatAuditEventsForEnterprise", () => {
     }));
   });
 
-  it("does not claim coverage of the unread tail when the fetch was truncated", async () => {
+  it("claims only the well-read part of the window when the fetch was truncated", async () => {
     const deps = makeDeps({
       getEnterpriseAuditEvents: vi.fn(async () =>
         ok([
@@ -255,13 +255,24 @@ describe("syncSeatAuditEventsForEnterprise", () => {
     const result = await syncSeatAuditEventsForEnterprise("acme", deps);
 
     expect(result.truncated).toBe(true);
-    // The audit log paginates newest-first, so the pagination cap cut off the
-    // OLDEST part of the window — coverage must start at the oldest event
-    // actually seen, not at the requested cutoff, or snapshot-derived rows for
-    // an unread range would be wrongly suppressed.
-    expect(result.coveredFrom).toBe("2026-06-20T00:00:00.000Z");
-    // The newest end WAS read, so the watermark still advances.
-    expect(result.coveredThrough).toBe(NOW.toISOString());
+    // Truncation drops the OLDEST pages, so the newest end really was read.
+    // The floor sits a safety margin above the oldest event actually seen,
+    // because GitHub's page order only approximates occurrence order.
+    expect(result.coveredFrom).toBe("2026-06-21T00:00:00.000Z");
+    expect(result.coveredThrough).not.toBeNull();
+  });
+
+  it("claims no coverage when a truncated fetch read nothing older than the margin", async () => {
+    const deps = makeDeps({
+      // Only an event inside the trailing safety margin was read, so there is
+      // no interval left that we can honestly call covered.
+      getEnterpriseAuditEvents: vi.fn(async () => ok([auditEvent({ occurredAt: "2026-06-30T00:00:00.000Z" })], true)),
+    });
+
+    const result = await syncSeatAuditEventsForEnterprise("acme", deps);
+
+    expect(result.coveredFrom).toBeNull();
+    expect(result.coveredThrough).toBeNull();
   });
 
   it("claims the full requested window when the fetch was complete", async () => {

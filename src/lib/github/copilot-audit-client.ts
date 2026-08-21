@@ -21,6 +21,12 @@
 import { githubFetchWithMeta, GitHubApiError, toRootRelativeGitHubApiPath } from "./api-base";
 import { createHash } from "node:crypto";
 
+/** A single audit page is best-effort on the seat-sync path; bound hung transport before it can hold the global sync lock. */
+export const COPILOT_AUDIT_REQUEST_TIMEOUT_MS = 30_000;
+
+/** Caps one audit-log pagination target so 200 healthy-but-slow pages cannot monopolize the regular seat sync. */
+export const COPILOT_AUDIT_TARGET_DEADLINE_MS = 2 * 60 * 1000;
+
 // ── Raw audit log event (partial — the real payload varies significantly
 // by action/category; only fields this client reads are typed) ─────────
 
@@ -175,6 +181,10 @@ export interface CopilotAuditFetchOptions {
   perPage?: number;
   /** Enterprise slug to scope PAT/App auth selection to. */
   enterpriseSlug?: string;
+  /** Per-page request timeout in milliseconds. Default: COPILOT_AUDIT_REQUEST_TIMEOUT_MS. */
+  requestTimeoutMs?: number;
+  /** Overall wall-clock deadline for one paginated target. Default: COPILOT_AUDIT_TARGET_DEADLINE_MS. */
+  targetDeadlineMs?: number;
 }
 
 function extractNextLink(linkHeader: string | undefined): string | null {
@@ -215,16 +225,95 @@ export interface AuditFetchUnknown {
 
 export type AuditFetchResult = AuditFetchOk | AuditFetchUnavailable | AuditFetchUnknown;
 
+class AuditRequestTimeoutError extends Error {
+  constructor(
+    timeoutMs: number,
+    readonly kind: "request_timeout" | "target_deadline",
+  ) {
+    super(
+      kind === "target_deadline"
+        ? `Copilot audit log target deadline expired after ${timeoutMs}ms.`
+        : `Copilot audit log page request timed out after ${timeoutMs}ms.`,
+    );
+    this.name = "TimeoutError";
+  }
+}
+
+function requirePositiveIntegerOption(name: string, value: number): number {
+  if (!Number.isInteger(value) || value < 1) {
+    throw new Error(`copilotAuditClient: ${name} must be an integer >= 1 (received ${value}).`);
+  }
+  return value;
+}
+
+function errorField(err: unknown, field: "name" | "message"): string | null {
+  if (typeof err !== "object" || err === null || !(field in err)) return null;
+  const value = (err as Record<typeof field, unknown>)[field];
+  return typeof value === "string" ? value : null;
+}
+
+function isAbortOrTimeoutError(err: unknown): boolean {
+  if (err instanceof AuditRequestTimeoutError) return true;
+  const name = errorField(err, "name");
+  return name === "AbortError" || name === "TimeoutError";
+}
+
+function describeAbortOrTimeout(err: unknown): string {
+  const message = errorField(err, "message");
+  if (message && /timeout|timed out|abort/i.test(message)) return message;
+  const name = errorField(err, "name");
+  return name === "AbortError"
+    ? "Copilot audit log request was aborted."
+    : "Copilot audit log request timed out.";
+}
+
+function withAuditRequestTimeout<T>(
+  operation: Promise<T>,
+  timeoutMs: number,
+  kind: "request_timeout" | "target_deadline",
+): Promise<T> {
+  const signal = AbortSignal.timeout(timeoutMs);
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(new AuditRequestTimeoutError(timeoutMs, kind));
+    if (signal.aborted) {
+      onAbort();
+      return;
+    }
+
+    signal.addEventListener("abort", onAbort, { once: true });
+    operation.then(
+      (value) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(value);
+      },
+      (err: unknown) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(err);
+      },
+    );
+  });
+}
+
 async function fetchAuditEvents(
   basePath: string,
   orgLoginFallback: string,
   target: string,
   options: CopilotAuditFetchOptions,
 ): Promise<AuditFetchResult> {
-  const { cutoffMs = null, untilMs = null, maxPages = 200, perPage = 100, enterpriseSlug } = options;
+  const {
+    cutoffMs = null,
+    untilMs = null,
+    maxPages = 200,
+    perPage = 100,
+    enterpriseSlug,
+    requestTimeoutMs = COPILOT_AUDIT_REQUEST_TIMEOUT_MS,
+    targetDeadlineMs = COPILOT_AUDIT_TARGET_DEADLINE_MS,
+  } = options;
   if (!Number.isInteger(maxPages) || maxPages < 1) {
     throw new Error(`copilotAuditClient: maxPages must be an integer >= 1 (received ${maxPages}).`);
   }
+  const pageTimeoutMs = requirePositiveIntegerOption("requestTimeoutMs", requestTimeoutMs);
+  const runDeadlineMs = requirePositiveIntegerOption("targetDeadlineMs", targetDeadlineMs);
 
   const separator = basePath.includes("?") ? "&" : "?";
   // `phrase=action:copilot` is GitHub's audit-log search syntax for
@@ -235,25 +324,49 @@ async function fetchAuditEvents(
   const results: NormalizedCopilotAuditEvent[] = [];
   const warnings: string[] = [];
   let truncated = false;
+  const startedAt = Date.now();
+
+  const markDeadlineTruncated = () => {
+    if (truncated) return;
+    truncated = true;
+    warnings.push(
+      `Copilot audit log pagination truncated after reaching the ${runDeadlineMs}ms target deadline while more results may still be available.`,
+    );
+  };
 
   try {
     for (let page = 0; page < maxPages && url; page++) {
-      const result = await githubFetchWithMeta<RawCopilotAuditEvent[]>(url, { enterpriseSlug });
+      const remainingRunMs = runDeadlineMs - (Date.now() - startedAt);
+      if (remainingRunMs <= 0) {
+        markDeadlineTruncated();
+        url = null;
+        break;
+      }
+      const timeoutForPageMs = Math.min(pageTimeoutMs, remainingRunMs);
+
+      const result = await withAuditRequestTimeout(
+        githubFetchWithMeta<RawCopilotAuditEvent[]>(url, { enterpriseSlug }),
+        timeoutForPageMs,
+        timeoutForPageMs < pageTimeoutMs ? "target_deadline" : "request_timeout",
+      );
       const events = Array.isArray(result.data) ? result.data : [];
       if (events.length === 0) {
         url = null;
         break;
       }
 
-      // GitHub's audit log is returned newest-first by default, so once we
-      // encounter an event older than the cutoff, every later page is
-      // guaranteed to be older still — safe to stop paginating there.
-      let sawOlderThanCutoff = false;
+      // The audit log pagination order follows GitHub's document stream, not a
+      // strict ordering of the occurrence timestamp we store. A single old
+      // event can be locally out of order, so only stop on cutoff when the
+      // newest timestamp in the whole page is older than the requested window.
+      let newestTimestampInPage: number | null = null;
 
       for (const raw of events) {
         const ts = eventTimestampMs(raw);
+        if (ts !== null) {
+          newestTimestampInPage = newestTimestampInPage === null ? ts : Math.max(newestTimestampInPage, ts);
+        }
         if (cutoffMs !== null && ts !== null && ts < cutoffMs) {
-          sawOlderThanCutoff = true;
           continue;
         }
         if (untilMs !== null && ts !== null && ts > untilMs) continue;
@@ -277,7 +390,13 @@ async function fetchAuditEvents(
 
       const nextUrl = extractNextLink(result.headers.link);
 
-      if (cutoffMs !== null && sawOlderThanCutoff) {
+      if (cutoffMs !== null && newestTimestampInPage !== null && newestTimestampInPage < cutoffMs) {
+        url = null;
+        break;
+      }
+
+      if (nextUrl && Date.now() - startedAt >= runDeadlineMs) {
+        markDeadlineTruncated();
         url = null;
         break;
       }
@@ -297,6 +416,13 @@ async function fetchAuditEvents(
       url = nextUrl;
     }
   } catch (err) {
+    if (err instanceof AuditRequestTimeoutError && err.kind === "target_deadline") {
+      markDeadlineTruncated();
+      return { status: "ok", events: results, truncated, warnings };
+    }
+    if (isAbortOrTimeoutError(err)) {
+      return { status: "unknown", target, message: describeAbortOrTimeout(err) };
+    }
     if (err instanceof GitHubApiError) {
       // Check retryable first: GitHub's primary/secondary rate limits
       // commonly exhaust as 403 with retryable=true, and must be reported
@@ -309,8 +435,9 @@ async function fetchAuditEvents(
       if (err.status === 403) return { status: "unavailable", reason: "forbidden", target };
       return { status: "unknown", target, message: `GitHub API error ${err.status} fetching Copilot audit log events.` };
     }
-    // Never broad-catch a programmer/unexpected error — only a typed
-    // GitHubApiError is a legitimate "optional source unavailable" signal.
+    // Never broad-catch a programmer/unexpected error — only typed GitHub API
+    // failures and explicit abort/timeout outcomes are legitimate optional
+    // source signals.
     throw err;
   }
 

@@ -281,6 +281,53 @@ function tableExists(db: ReturnType<typeof getDb>, tableName: string): boolean {
   return row !== undefined;
 }
 
+/**
+ * Extra predicate that decides whether an audit-log row is authoritative enough
+ * to hide a snapshot-diff row for the same enterprise/query window.
+ *
+ * Databases that predate `copilot_seat_audit_sync_state` keep the original
+ * legacy behavior: any audit-log row in the selected window wins. Once the state
+ * table exists, suppression needs positive proof that this row was covered.
+ * NULL coverage bounds mean "this run proved nothing enterprise-wide", except
+ * for legacy licensing-history rows whose source table can prove day-level
+ * audit coverage independently.
+ */
+function buildAuditPrecedenceCoverageClause(outerTable: string): string {
+  const db = getDb();
+  if (!tableExists(db, "copilot_seat_audit_sync_state")) return "";
+
+  const licensingHistoryCoverage = tableExists(db, "license_audit_events")
+    ? `
+        OR EXISTS (
+          SELECT 1 FROM license_audit_events license_audit
+          WHERE license_audit.enterprise_slug = ${outerTable}.enterprise_slug
+            AND license_audit.action IN ('assign', 'cancel')
+            AND license_audit.occurred_at IS NOT NULL
+            AND length(license_audit.occurred_at) >= 10
+            AND substr(license_audit.occurred_at, 1, 10) = ${outerTable}.event_date
+        )`
+    : "";
+
+  return `
+      AND (
+        EXISTS (
+          SELECT 1 FROM copilot_seat_audit_sync_state state
+          WHERE state.enterprise_slug = ${outerTable}.enterprise_slug
+            AND state.covered_from IS NOT NULL
+            AND state.covered_through IS NOT NULL
+            AND julianday(${outerTable}.occurred_at) IS NOT NULL
+            AND julianday(state.covered_from) IS NOT NULL
+            AND julianday(state.covered_through) IS NOT NULL
+            AND julianday(${outerTable}.occurred_at) >= julianday(state.covered_from)
+            AND julianday(${outerTable}.occurred_at) <= julianday(state.covered_through)
+        )${licensingHistoryCoverage}
+        OR NOT EXISTS (
+          SELECT 1 FROM copilot_seat_audit_sync_state state
+          WHERE state.enterprise_slug = ${outerTable}.enterprise_slug
+        )
+      )`;
+}
+
 function targetKey(enterpriseSlug: string, userId: number): string {
   return `${enterpriseSlug}\u0000${userId}`;
 }
@@ -434,43 +481,17 @@ function buildLifecycleFilter(query: SeatLifecycleQuery): SqlFragment {
   sql += loginScope.sql;
   params.push(...loginScope.params);
 
-  // A `sync_diff` row is suppressed only when the audit log both has rows in
-  // this window AND actually covers this row's instant. `outsideAuditCoverage`
-  // is the escape hatch: it matches rows the audit log demonstrably never read,
-  // which must keep their snapshot-diff evidence. Coverage bounds are full ISO
-  // instants, so compare parsed instants instead of day strings; if SQLite
-  // cannot parse either side, fail safe by treating the row as outside coverage.
-  const outsideAuditCoverage = tableExists(getDb(), "copilot_seat_audit_sync_state")
-    ? `
-      AND NOT EXISTS (
-        SELECT 1 FROM copilot_seat_audit_sync_state state
-        WHERE state.enterprise_slug = copilot_seat_lifecycle_events.enterprise_slug
-          AND state.covered_from IS NOT NULL
-          AND (
-            julianday(copilot_seat_lifecycle_events.occurred_at) IS NULL
-            OR julianday(state.covered_from) IS NULL
-            OR julianday(copilot_seat_lifecycle_events.occurred_at) < julianday(state.covered_from)
-            OR (
-              state.covered_through IS NOT NULL
-              AND (
-                julianday(state.covered_through) IS NULL
-                OR julianday(copilot_seat_lifecycle_events.occurred_at) > julianday(state.covered_through)
-              )
-            )
-          )
-      )`
-    : "";
-
+  const auditPrecedenceCoverage = buildAuditPrecedenceCoverageClause("copilot_seat_lifecycle_events");
   sql += `
     AND NOT (
-      source = 'sync_diff'
+      copilot_seat_lifecycle_events.source = 'sync_diff'
       AND EXISTS (
         SELECT 1 FROM copilot_seat_lifecycle_events audit
         WHERE audit.enterprise_slug = copilot_seat_lifecycle_events.enterprise_slug
           AND audit.source = 'audit_log'
           AND audit.event_date >= ?
           AND audit.event_date <= ?
-      )${outsideAuditCoverage}
+      )${auditPrecedenceCoverage}
     )`;
   params.push(query.start, query.end);
 
@@ -709,7 +730,7 @@ export function enrichAuditLifecycleFromSeats(enterpriseSlug: string): number {
  * audit log has actually been read for — which is what the precedence rule in
  * `buildLifecycleFilter()` and the UI's coverage statement both depend on. A
  * failed or unavailable run records its status and reason but must not shrink
- * an earlier successful run's coverage.
+ * an earlier successful run's coverage or clear its truncation retry marker.
  */
 export function recordSeatAuditSyncState(state: SeatAuditSyncState): void {
   const db = getDb();
@@ -737,7 +758,10 @@ export function recordSeatAuditSyncState(state: SeatAuditSyncState): void {
       last_event_at = COALESCE(excluded.last_event_at, copilot_seat_audit_sync_state.last_event_at),
       last_synced_at = excluded.last_synced_at,
       events_written = excluded.events_written,
-      truncated = excluded.truncated
+      truncated = CASE
+        WHEN excluded.status = 'ok' THEN excluded.truncated
+        ELSE copilot_seat_audit_sync_state.truncated
+      END
   `).run(
     state.enterpriseSlug,
     state.status,

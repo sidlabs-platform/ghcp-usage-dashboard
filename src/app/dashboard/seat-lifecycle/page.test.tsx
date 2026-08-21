@@ -352,6 +352,32 @@ describe("Seat onboarding & offboarding page", () => {
     expect(screen.getByText("2025-06-08")).toBeInTheDocument();
   });
 
+  it("renders an audit warning carried on an otherwise successful audit sync", async () => {
+    await renderPage(
+      emptyPayload({
+        coverage: {
+          source: "audit_log",
+          trackingStartedAt: null,
+          onboardingOnly: false,
+          sourceBreakdown: { audit_log: 4, sync_diff: 0, seat_created_at: 2 },
+          audit: {
+            status: "ok",
+            reason: "Audit log unavailable for 1 organization(s).",
+            coveredFrom: "2025-03-01T00:00:00.000Z",
+            coveredThrough: "2025-06-08T00:00:00.000Z",
+            lastSyncedAt: "2025-06-08T06:00:00.000Z",
+            truncated: false,
+          },
+        },
+      }),
+    );
+
+    await waitFor(() =>
+      expect(screen.getByText(/sourced from the GitHub audit log/i)).toBeInTheDocument(),
+    );
+    expect(screen.getByText(/Audit log unavailable for 1 organization\(s\)\./)).toBeInTheDocument();
+  });
+
   it("distinguishes snapshot-derived offboarding outside the audit window", async () => {
     await renderPage(
       emptyPayload({
@@ -442,7 +468,8 @@ describe("Seat onboarding & offboarding page", () => {
           sourceBreakdown: { audit_log: 9, sync_diff: 0, seat_created_at: 0 },
           audit: {
             status: "ok",
-            reason: null,
+            reason:
+              "Copilot audit log pagination truncated after reaching the 100-page limit while more results were still available.",
             coveredFrom: "2025-05-01T00:00:00.000Z",
             coveredThrough: "2025-06-08T00:00:00.000Z",
             lastSyncedAt: "2025-06-08T06:00:00.000Z",
@@ -455,6 +482,7 @@ describe("Seat onboarding & offboarding page", () => {
     await waitFor(() =>
       expect(screen.getByText(/more pages than a single sync reads/i)).toBeInTheDocument(),
     );
+    expect(screen.queryByText(/pagination truncated after reaching/i)).not.toBeInTheDocument();
   });
 
   it("requests the preset window selected in the shared date range", async () => {
