@@ -434,7 +434,7 @@ export default function LicenseReconciliationPage() {
   // The Overview tab is now driven entirely by billed rows for the selected
   // window, so it has data whenever billing does — independently of whether a
   // per-user roster exists for the period.
-  const hasBilledData = !!billingBreakdown?.hasBilledData;
+  const hasBilledData = billingBreakdown?.hasBilledData ?? costBasis !== null;
   const hasRosterData = !!kpis && (kpis.totalUsers > 0 || pagination.totalItems > 0);
   const hasData = hasBilledData || hasRosterData;
 
@@ -456,11 +456,20 @@ export default function LicenseReconciliationPage() {
 
   const qualityCoverage: DataQualityCoverage | null = coverage;
 
-  const windowName = costBasis?.period
-    ? periodLabel(costBasis.period)
-    : periods.length > 0
-      ? periods.map(periodLabel).join(", ")
-      : `the last ${days} days`;
+  // Name the window the user actually selected. The server-resolved period is
+  // preferred because it is what the figures were computed over, but either
+  // server value can be absent if its query failed, so fall back through the
+  // client's own selection before the rolling-days default. Labelling a
+  // selected month as "the last 28 days" is exactly the mismatch this page
+  // exists to remove.
+  const windowName = (() => {
+    const serverPeriod = costBasis?.period ?? billingBreakdown?.period;
+    if (serverPeriod) return periodLabel(serverPeriod);
+    if (periods.length > 0) return periods.map(periodLabel).join(", ");
+    if (dateMode === "month" && selectedPeriod) return periodLabel(selectedPeriod);
+    if (dateMode === "custom" && startDate && endDate) return `${startDate} to ${endDate}`;
+    return `the last ${days} days`;
+  })();
 
   // In live-snapshot mode the per-user rows come from the *current*
   // `copilot_seats` table with period consumption joined on — a roster of who

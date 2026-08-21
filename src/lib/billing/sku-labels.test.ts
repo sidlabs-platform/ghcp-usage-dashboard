@@ -23,11 +23,20 @@ describe("skuLabel", () => {
   it("prefers the specific surface over the generic plan name", () => {
     // A surface SKU that also mentions a plan must not be filed as a seat.
     expect(skuLabel("copilot_enterprise_code_review")).toBe("Code review");
+    expect(skuLabel("copilot_business_coding_agent")).toBe("Cloud agent");
+    expect(skuLabel("copilot_enterprise_code_quality")).toBe("Code quality");
   });
 
   it("humanises an unrecognised SKU instead of bucketing it as Other", () => {
     expect(skuLabel("copilot_brand_new_surface")).toBe("Brand new surface");
     expect(skuLabel("something_else_entirely")).toBe("Something else entirely");
+  });
+
+  it("humanises prototype member names as plain strings", () => {
+    expect(skuLabel("constructor")).toBe("Constructor");
+    expect(skuLabel("toString")).toBe("Tostring");
+    expect(skuLabel("valueOf")).toBe("Valueof");
+    expect(skuLabel("hasOwnProperty")).toBe("Hasownproperty");
   });
 
   it("never returns an empty label", () => {
@@ -57,5 +66,16 @@ describe("skuKind", () => {
   it("defaults unknown SKUs to consumption", () => {
     expect(skuKind("mystery_sku")).toBe("consumption");
     expect(skuKind("")).toBe("consumption");
+  });
+
+  it("handles prototype member names without throwing", () => {
+    expect(() => skuKind("constructor")).not.toThrow();
+    expect(() => skuKind("toString")).not.toThrow();
+    expect(() => skuKind("valueOf")).not.toThrow();
+    expect(() => skuKind("hasOwnProperty")).not.toThrow();
+    expect(skuKind("constructor")).toBe("consumption");
+    expect(skuKind("toString")).toBe("consumption");
+    expect(skuKind("valueOf")).toBe("consumption");
+    expect(skuKind("hasOwnProperty")).toBe("consumption");
   });
 });

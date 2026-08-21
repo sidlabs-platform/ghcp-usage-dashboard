@@ -30,19 +30,19 @@ function normalizeSku(sku: string): string {
 }
 
 /** Exact-match labels, checked first. Keys are normalized SKU strings. */
-const EXACT_LABELS: Record<string, string> = {
-  copilot_business: "Copilot Business",
-  copilot_for_business: "Copilot Business",
-  copilot_business_seat: "Copilot Business",
-  copilot_enterprise: "Copilot Enterprise",
-  copilot_enterprise_seat: "Copilot Enterprise",
-  copilot_pro: "Copilot Pro",
-  copilot_pro_plus: "Copilot Pro+",
-  copilot_ai_credit: "AI credits",
-  copilot_ai_credits: "AI credits",
-  copilot_premium_request: "Premium requests",
-  copilot_premium_requests: "Premium requests",
-};
+const EXACT_LABELS = new Map<string, string>([
+  ["copilot_business", "Copilot Business"],
+  ["copilot_for_business", "Copilot Business"],
+  ["copilot_business_seat", "Copilot Business"],
+  ["copilot_enterprise", "Copilot Enterprise"],
+  ["copilot_enterprise_seat", "Copilot Enterprise"],
+  ["copilot_pro", "Copilot Pro"],
+  ["copilot_pro_plus", "Copilot Pro+"],
+  ["copilot_ai_credit", "AI credits"],
+  ["copilot_ai_credits", "AI credits"],
+  ["copilot_premium_request", "Premium requests"],
+  ["copilot_premium_requests", "Premium requests"],
+]);
 
 /**
  * Substring patterns, checked in order when no exact match applies. Order
@@ -90,7 +90,7 @@ export function skuLabel(sku: string | null | undefined): string {
   if (!sku || !sku.trim()) return "Unspecified";
   const key = normalizeSku(sku);
 
-  const exact = EXACT_LABELS[key];
+  const exact = EXACT_LABELS.get(key);
   if (exact) return exact;
 
   for (const { match, label } of PATTERN_LABELS) {
@@ -115,6 +115,6 @@ export function skuKind(sku: string | null | undefined): SkuKind {
     return "consumption";
   }
   if (key.includes("seat")) return "seat";
-  if (EXACT_LABELS[key]?.startsWith("Copilot ")) return "seat";
+  if (EXACT_LABELS.get(key)?.startsWith("Copilot ")) return "seat";
   return "consumption";
 }

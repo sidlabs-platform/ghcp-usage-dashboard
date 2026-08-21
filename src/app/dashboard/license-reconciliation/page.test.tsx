@@ -2,13 +2,14 @@
 
 import React from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 
 const dateRangeState = vi.hoisted(() => ({
-  mode: "preset" as "preset" | "custom",
+  mode: "preset" as "preset" | "custom" | "month",
   days: 28,
   startDate: "2026-05-01",
   endDate: "2026-05-28",
+  period: "2026-05",
 }));
 
 const scopeState = vi.hoisted(() => ({
@@ -203,6 +204,11 @@ const enabledResponse = {
 
 describe("License reconciliation page", () => {
   beforeEach(() => {
+    dateRangeState.mode = "preset";
+    dateRangeState.days = 28;
+    dateRangeState.startDate = "2026-05-01";
+    dateRangeState.endDate = "2026-05-28";
+    dateRangeState.period = "2026-05";
     scopeState.hasFilter = false;
     scopeState.selectedEntTeams = [];
     scopeState.selectedOrgTeams = [];
@@ -359,6 +365,79 @@ describe("License reconciliation page", () => {
     render(<Page />);
     await screen.findByText(/No Copilot billing rows for/i);
     expect(screen.queryByText("Entitlement pool credits")).not.toBeInTheDocument();
+    expect(screen.queryByText(/billing detail unavailable/i)).not.toBeInTheDocument();
+  });
+
+  it("renders basis figures instead of a no-rows claim when billing breakdown detail is unavailable", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() =>
+        jsonResponse({
+          ...enabledResponse,
+          billingBreakdown: null,
+        }),
+      ),
+    );
+    const Page = (await import("./page")).default;
+    render(<Page />);
+    await screen.findByText("Seat cost (billed)");
+    const seatCostTile = screen.getByText("Seat cost (billed)").closest("section");
+    const totalCostTile = screen
+      .getAllByText("Total Copilot cost")
+      .find((el) => el.tagName.toLowerCase() === "h2")
+      ?.closest("section");
+    expect(seatCostTile).not.toBeNull();
+    expect(totalCostTile).not.toBeNull();
+    expect(within(seatCostTile!).getByText("$390.00")).toBeInTheDocument();
+    expect(within(totalCostTile!).getByText("$440.00")).toBeInTheDocument();
+    expect(screen.queryByText(/No Copilot billing rows for/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/per-SKU billing detail could not be loaded/i)).toBeInTheDocument();
+  });
+
+  it("falls back to billing breakdown totals when cost basis detail is unavailable", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() =>
+        jsonResponse({
+          ...enabledResponse,
+          costBasis: null,
+        }),
+      ),
+    );
+    const Page = (await import("./page")).default;
+    render(<Page />);
+    await screen.findByText("Billed seat-months");
+    const seatCostTile = screen.getByText("Seat cost (billed)").closest("section");
+    const consumptionTile = screen.getByText("Consumption charges").closest("section");
+    const totalCostTile = screen
+      .getAllByText("Total Copilot cost")
+      .find((el) => el.tagName.toLowerCase() === "h2")
+      ?.closest("section");
+    expect(seatCostTile).not.toBeNull();
+    expect(consumptionTile).not.toBeNull();
+    expect(totalCostTile).not.toBeNull();
+    expect(within(seatCostTile!).getByText("$390.00")).toBeInTheDocument();
+    expect(within(consumptionTile!).getByText("$50.00")).toBeInTheDocument();
+    expect(within(totalCostTile!).getByText("$440.00")).toBeInTheDocument();
+  });
+
+  it("labels unavailable billing detail with the globally selected month before the rolling-days fallback", async () => {
+    dateRangeState.mode = "month";
+    dateRangeState.period = "2026-06";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() =>
+        jsonResponse({
+          ...enabledResponse,
+          costBasis: null,
+          billingBreakdown: null,
+        }),
+      ),
+    );
+    const Page = (await import("./page")).default;
+    render(<Page />);
+    await screen.findByText(/Billing detail unavailable for June 2026/i);
+    expect(screen.queryByText(/the last 28 days/i)).not.toBeInTheDocument();
   });
 
   it("passes current periods/scope/view params to CSV export via the existing hook", async () => {

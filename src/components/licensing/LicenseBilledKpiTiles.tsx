@@ -44,6 +44,10 @@ function count(value: number, maximumFractionDigits = 0): string {
   return value.toLocaleString(undefined, { maximumFractionDigits });
 }
 
+function sumValues<T>(items: T[], valueOf: (item: T) => number): number {
+  return items.reduce((sum, item) => sum + safeNum(valueOf(item)), 0);
+}
+
 export function LicenseBilledKpiTiles({
   basis,
   breakdown,
@@ -52,9 +56,8 @@ export function LicenseBilledKpiTiles({
 }: Readonly<LicenseBilledKpiTilesProps>) {
   const seatSkus = breakdown?.seatSkus ?? [];
   const consumptionSkus = breakdown?.consumptionSkus ?? [];
-  const hasBilledData = !!breakdown?.hasBilledData;
 
-  if (!hasBilledData) {
+  if (breakdown?.hasBilledData === false) {
     return (
       <div
         role="note"
@@ -73,11 +76,32 @@ export function LicenseBilledKpiTiles({
     );
   }
 
+  if (breakdown === null && basis === null) {
+    return (
+      <div
+        role="note"
+        className="flex items-start gap-3 rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--muted))]/30 px-4 py-4 text-sm"
+      >
+        <Info className="h-5 w-5 shrink-0 mt-0.5 text-[hsl(var(--muted-foreground))]" />
+        <div>
+          <p className="font-medium">Billing detail unavailable for {windowLabel}.</p>
+          <p className="mt-1 text-xs text-[hsl(var(--muted-foreground))]">
+            Copilot billing totals could not be loaded for this window. Try again or check the
+            billing sync status.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  const fallbackSeatMonths = sumValues(seatSkus, (s) => s.seatMonths);
+  const fallbackSeatCostNet = sumValues(seatSkus, (s) => s.netCost);
+  const fallbackConsumptionCostNet = sumValues(consumptionSkus, (s) => s.netCost);
   const seatUsers = safeNum(basis?.seatUsers ?? 0);
   const seatCensusComplete = !!basis?.seatPopulationComplete;
-  const seatMonths = safeNum(basis?.seatQuantity ?? 0);
-  const seatCostNet = safeNum(basis?.seatCostNet ?? 0);
-  const consumptionCostNet = safeNum(basis?.creditCostNet ?? 0);
+  const seatMonths = safeNum(basis?.seatQuantity ?? fallbackSeatMonths);
+  const seatCostNet = safeNum(basis?.seatCostNet ?? fallbackSeatCostNet);
+  const consumptionCostNet = safeNum(basis?.creditCostNet ?? fallbackConsumptionCostNet);
   const totalNet = safeNum(basis?.totalCopilotNet ?? seatCostNet + consumptionCostNet);
 
   const creditsBilled = safeNum(basis?.creditsBilled ?? 0);
@@ -119,7 +143,7 @@ export function LicenseBilledKpiTiles({
         : `${money(s.netCost, currency)} billed · seat-months`,
   }));
 
-  const showCredits = creditsBilled > 0 || splitBase > 0;
+  const showCreditSplit = breakdown !== null && (creditsBilled > 0 || splitBase > 0);
   const showRequests = requestsBilled > 0;
   const showTokenUnits = tokenUnitsBilled > 0;
 
@@ -127,6 +151,21 @@ export function LicenseBilledKpiTiles({
 
   return (
     <div className="space-y-4">
+      {breakdown === null && (
+        <div
+          role="note"
+          className="flex items-start gap-3 rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--muted))]/30 px-4 py-3 text-sm"
+        >
+          <Info className="h-5 w-5 shrink-0 mt-0.5 text-[hsl(var(--muted-foreground))]" />
+          <div>
+            <p className="font-medium">Per-SKU billing detail could not be loaded.</p>
+            <p className="mt-1 text-xs text-[hsl(var(--muted-foreground))]">
+              Showing the period totals available from the Copilot cost basis.
+            </p>
+          </div>
+        </div>
+      )}
+
       <div className="grid gap-4 grid-cols-2 lg:grid-cols-4">
         <MetricCard
           title={licensedTile.title}
@@ -158,7 +197,7 @@ export function LicenseBilledKpiTiles({
       </div>
 
       <div className="grid gap-4 grid-cols-2 lg:grid-cols-4">
-        {showCredits && (
+        {showCreditSplit && (
           <>
             <MetricCard
               title="Entitlement pool credits"
@@ -232,7 +271,7 @@ export function LicenseBilledKpiTiles({
             icon={<TrendingUp className="h-5 w-5" />}
             subtitle={`Across ${count(perUserDivisor)} billed users`}
           />
-          {showCredits && (
+          {creditsBilled > 0 && (
             <MetricCard
               title="Credits per licensed user"
               value={count(creditsBilled / perUserDivisor, 1)}
@@ -246,9 +285,9 @@ export function LicenseBilledKpiTiles({
       )}
 
       <p className="text-xs text-[hsl(var(--muted-foreground))]">
-        Every figure above is billed usage for {windowLabel}. The entitlement-pool split is
-        derived from each row&apos;s discount share, since GitHub&apos;s AI-credit report does not
-        report it directly.
+        Every figure above is billed usage for {windowLabel}.
+        {showCreditSplit &&
+          " The entitlement-pool split is derived from each row's discount share, since GitHub's AI-credit report does not report it directly."}
         {consumptionSkus.length > 0 &&
           " Per-surface detail is broken out below."}
       </p>

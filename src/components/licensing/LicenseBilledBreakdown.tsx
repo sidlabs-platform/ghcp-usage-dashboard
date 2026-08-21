@@ -1,7 +1,7 @@
 "use client";
 
 // Period-scoped breakdown sections for the License & AI Credits Overview tab:
-// AI credits by surface (SKU), billed cost by organization, and the daily net
+// consumption by surface (SKU), billed cost by organization, and the daily net
 // cost across the selected window.
 //
 // These replace three charts that were driven by `dashboard-config.json`
@@ -32,13 +32,46 @@ export interface LicenseBilledBreakdownProps {
 
 const UNIT_CREDITS = "ai-credits";
 
-/** Human name for a `unit_type`, so a quantity is never shown unlabelled. */
-function unitLabel(unit: string): string {
-  if (unit === UNIT_CREDITS) return "credits";
-  if (unit === "requests") return "requests";
-  if (unit === "token-units") return "token units";
-  if (unit === "user-months") return "seat-months";
-  return unit || "units";
+interface ConsumptionUnitDisplay {
+  title: string;
+  quantityLabel: string;
+  description: string;
+  showPoolSplit: boolean;
+}
+
+/** Human copy for a `unit_type`, so mixed consumption units stay distinct. */
+function consumptionUnitDisplay(unit: string, windowLabel: string): ConsumptionUnitDisplay {
+  if (unit === UNIT_CREDITS) {
+    return {
+      title: "AI credits",
+      quantityLabel: "AI credits",
+      description: `AI-credit consumption billed for ${windowLabel}. Derived, not reported: pool vs. above-pool usage is inferred from each row's discount share because GitHub's report does not state it directly.`,
+      showPoolSplit: true,
+    };
+  }
+  if (unit === "requests") {
+    return {
+      title: "Premium requests",
+      quantityLabel: "requests",
+      description: `Pre-cutover premium request consumption billed for ${windowLabel}.`,
+      showPoolSplit: false,
+    };
+  }
+  if (unit === "token-units") {
+    return {
+      title: "Token units",
+      quantityLabel: "token units",
+      description: `Token-unit consumption billed for ${windowLabel}.`,
+      showPoolSplit: false,
+    };
+  }
+  const fallback = unit || "units";
+  return {
+    title: fallback,
+    quantityLabel: fallback,
+    description: `Consumption billed in ${fallback} for ${windowLabel}.`,
+    showPoolSplit: false,
+  };
 }
 
 function money(value: number, currency: string): string {
@@ -85,12 +118,11 @@ function SurfaceSection({
   return (
     <Card className="p-6">
       <h3 className="text-sm font-semibold mb-1 flex items-center gap-2">
-        <Layers className="h-4 w-4" /> AI credits by surface
+        <Layers className="h-4 w-4" /> Consumption by surface
       </h3>
       <p className="text-xs text-[hsl(var(--muted-foreground))] mb-4">
-        Billed consumption per SKU for {windowLabel}, split into usage covered by the
-        entitlement pool and usage charged above it. The split is derived from each row&apos;s
-        discount share — GitHub&apos;s report does not state it directly.
+        Billed consumption per SKU for {windowLabel}, grouped by billing unit so
+        credits, requests, and token units are never mixed.
       </p>
 
       {groups.length === 0 ? (
@@ -100,11 +132,15 @@ function SurfaceSection({
       ) : (
         <div className="space-y-6">
           {groups.map((group) => {
+            const display = consumptionUnitDisplay(group.unit, windowLabel);
             const max = Math.max(1, ...group.rows.map((r) => r.quantity));
             return (
               <div key={group.unit}>
-                <p className="text-xs font-medium uppercase tracking-wider text-[hsl(var(--muted-foreground))] mb-3">
-                  Billed in {unitLabel(group.unit)}
+                <p className="text-xs font-medium uppercase tracking-wider text-[hsl(var(--muted-foreground))] mb-1">
+                  {display.title}
+                </p>
+                <p className="text-xs text-[hsl(var(--muted-foreground))] mb-3">
+                  {display.description}
                 </p>
                 <div className="space-y-4">
                   {group.rows.map((r) => (
@@ -112,8 +148,8 @@ function SurfaceSection({
                       <div className="flex items-center justify-between text-xs mb-1 gap-3">
                         <span className="font-medium">{r.label}</span>
                         <span className="text-[hsl(var(--muted-foreground))] tabular-nums">
-                          {count(r.quantity)} {unitLabel(group.unit)}
-                          {group.unit === UNIT_CREDITS && (
+                          {count(r.quantity)} {display.quantityLabel}
+                          {display.showPoolSplit && (
                             <> · {count(r.poolQuantity)} pool / {count(r.additionalQuantity)} above</>
                           )}
                           {" · "}
@@ -121,34 +157,45 @@ function SurfaceSection({
                         </span>
                       </div>
                       <div className="relative h-3 w-full rounded-full bg-[hsl(var(--accent))] overflow-hidden">
-                        <div
-                          className="absolute inset-y-0 left-0 rounded-full bg-emerald-500/70"
-                          style={{ width: `${(r.poolQuantity / max) * 100}%` }}
-                        />
-                        <div
-                          className="absolute inset-y-0 rounded-full bg-amber-500/80"
-                          style={{
-                            left: `${(r.poolQuantity / max) * 100}%`,
-                            width: `${(r.additionalQuantity / max) * 100}%`,
-                          }}
-                        />
+                        {display.showPoolSplit ? (
+                          <>
+                            <div
+                              className="absolute inset-y-0 left-0 rounded-full bg-emerald-500/70"
+                              style={{ width: `${(r.poolQuantity / max) * 100}%` }}
+                            />
+                            <div
+                              className="absolute inset-y-0 rounded-full bg-amber-500/80"
+                              style={{
+                                left: `${(r.poolQuantity / max) * 100}%`,
+                                width: `${(r.additionalQuantity / max) * 100}%`,
+                              }}
+                            />
+                          </>
+                        ) : (
+                          <div
+                            className="h-full rounded-full bg-[hsl(var(--primary))]/70"
+                            style={{ width: `${(r.quantity / max) * 100}%` }}
+                          />
+                        )}
                       </div>
                     </div>
                   ))}
                 </div>
+                {display.showPoolSplit && (
+                  <p className="mt-3 flex items-center gap-3 text-xs text-[hsl(var(--muted-foreground))]">
+                    <span className="flex items-center gap-1.5">
+                      <span className="inline-block h-2.5 w-2.5 rounded-full bg-emerald-500/70" aria-hidden="true" />
+                      Entitlement pool
+                    </span>
+                    <span className="flex items-center gap-1.5">
+                      <span className="inline-block h-2.5 w-2.5 rounded-full bg-amber-500/80" aria-hidden="true" />
+                      Above pool
+                    </span>
+                  </p>
+                )}
               </div>
             );
           })}
-          <p className="flex items-center gap-3 text-xs text-[hsl(var(--muted-foreground))]">
-            <span className="flex items-center gap-1.5">
-              <span className="inline-block h-2.5 w-2.5 rounded-full bg-emerald-500/70" aria-hidden="true" />
-              Entitlement pool
-            </span>
-            <span className="flex items-center gap-1.5">
-              <span className="inline-block h-2.5 w-2.5 rounded-full bg-amber-500/80" aria-hidden="true" />
-              Above pool
-            </span>
-          </p>
         </div>
       )}
     </Card>
