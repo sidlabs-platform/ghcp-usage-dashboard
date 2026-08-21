@@ -119,7 +119,8 @@ export default function SeatsPage() {
 
   const stats: SeatStats | undefined = statsData?.stats;
   const utilization: number | undefined = statsData?.utilization;
-  const cutoff = stats?.activitySince ?? fallbackCutoff();
+  const defaultCutoff = useMemo(() => fallbackCutoff(), []);
+  const cutoff = stats?.activitySince ?? defaultCutoff;
   // Absent on responses cached before this field existed, which correctly means
   // "no upper bound", so today's live activity still counts.
   const until = stats?.activityUntil ?? null;
@@ -152,7 +153,7 @@ export default function SeatsPage() {
 
       <p className="text-xs text-[hsl(var(--muted-foreground))] mb-4">
         Seat assignments are a live snapshot of today — GitHub does not report seat history, so Total
-        Seats cannot be scoped to a past window. The activity split below uses {dateLabel.toLowerCase()}
+        Seats cannot be scoped to a past window. Activity split window: {dateLabel}
         {until === null ? ", including today's live activity." : "."}
       </p>
 
@@ -167,7 +168,7 @@ export default function SeatsPage() {
           title="Active in window"
           value={stats?.active30d ?? 0}
           icon={<UserCheck className="h-4 w-4" />}
-          subtitle={`Used during ${dateLabel.toLowerCase()}`}
+          subtitle={`Used during ${dateLabel}`}
         />
         <MetricCard
           title="Inactive in window"

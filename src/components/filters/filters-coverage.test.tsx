@@ -20,8 +20,21 @@ vi.mock("@/contexts/ScopeContext", () => ({
 const mockedUseDateRange = vi.mocked(useDateRange);
 const mockedUseScope = vi.mocked(useScope);
 
+function mockCustomRangeFilter(setCustomRange = vi.fn()) {
+  mockedUseDateRange.mockReturnValue({
+    mode: "preset",
+    days: 7,
+    startDate: "",
+    endDate: "",
+    setDays: vi.fn(),
+    setCustomRange,
+  } as never);
+  return setCustomRange;
+}
+
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   vi.clearAllMocks();
 });
 
@@ -58,6 +71,67 @@ describe("filter components", () => {
     fireEvent.change(screen.getByLabelText("End Date"), { target: { value: "2025-01-10" } });
     fireEvent.click(screen.getByRole("button", { name: "Apply" }));
     expect(setCustomRange).toHaveBeenCalledWith("2025-01-01", "2025-01-10");
+  });
+
+  it("rejects a custom start date after yesterday", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 7, 21, 12));
+    const setCustomRange = mockCustomRangeFilter();
+
+    render(<CustomRangeFilter />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Custom Range" }));
+    fireEvent.change(screen.getByLabelText("Start Date"), { target: { value: "2026-08-21" } });
+    fireEvent.change(screen.getByLabelText("End Date"), { target: { value: "2026-08-21" } });
+    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+
+    expect(screen.getByText("Dates cannot be later than yesterday.")).toBeInTheDocument();
+    expect(setCustomRange).not.toHaveBeenCalled();
+  });
+
+  it("rejects a custom end date after yesterday", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 7, 21, 12));
+    const setCustomRange = mockCustomRangeFilter();
+
+    render(<CustomRangeFilter />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Custom Range" }));
+    fireEvent.change(screen.getByLabelText("Start Date"), { target: { value: "2026-08-20" } });
+    fireEvent.change(screen.getByLabelText("End Date"), { target: { value: "2026-08-21" } });
+    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+
+    expect(screen.getByText("Dates cannot be later than yesterday.")).toBeInTheDocument();
+    expect(setCustomRange).not.toHaveBeenCalled();
+  });
+
+  it("accepts a custom range ending yesterday", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 7, 21, 12));
+    const setCustomRange = mockCustomRangeFilter();
+
+    render(<CustomRangeFilter />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Custom Range" }));
+    fireEvent.change(screen.getByLabelText("Start Date"), { target: { value: "2026-08-14" } });
+    fireEvent.change(screen.getByLabelText("End Date"), { target: { value: "2026-08-20" } });
+    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+
+    expect(screen.queryByText("Dates cannot be later than yesterday.")).toBeNull();
+    expect(setCustomRange).toHaveBeenCalledWith("2026-08-14", "2026-08-20");
+  });
+
+  it("sets the date input max to yesterday in the local calendar", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 7, 21, 0, 30));
+    mockCustomRangeFilter();
+
+    render(<CustomRangeFilter />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Custom Range" }));
+
+    expect(screen.getByLabelText("Start Date")).toHaveAttribute("max", "2026-08-20");
+    expect(screen.getByLabelText("End Date")).toHaveAttribute("max", "2026-08-20");
   });
 
   it("renders and filters multi-enterprise scope selections", () => {

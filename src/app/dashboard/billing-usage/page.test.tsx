@@ -4,13 +4,30 @@ import React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 
-type DateState = {
+interface DateState {
   mode: "preset" | "custom" | "month";
   days: number;
   startDate: string;
   endDate: string;
   period: string | null;
-};
+}
+
+interface PageHeaderProps {
+  title: string;
+  description: string;
+  children?: React.ReactNode;
+}
+
+interface CapturedCsvConfig {
+  filename: string;
+  metadata: {
+    dateRange: string;
+  };
+}
+
+interface CapturedExportMenuProps {
+  csv: CapturedCsvConfig;
+}
 
 const dateState = vi.hoisted(() => ({
   value: {
@@ -31,7 +48,7 @@ const scopeState = vi.hoisted(() => ({
 }));
 
 const exportMenuState = vi.hoisted(() => ({
-  props: undefined as Record<string, unknown> | undefined,
+  props: undefined as CapturedExportMenuProps | undefined,
 }));
 
 vi.mock("next/dynamic", () => ({
@@ -49,7 +66,7 @@ vi.mock("@/contexts/ScopeContext", () => ({
 }));
 
 vi.mock("@/components/layout/PageHeader", () => ({
-  PageHeader: ({ title, description, children }: { title: string; description: string; children?: React.ReactNode }) => (
+  PageHeader: ({ title, description, children }: PageHeaderProps) => (
     <header>
       <h1>{title}</h1>
       <p>{description}</p>
@@ -63,7 +80,7 @@ vi.mock("@/components/states/ChartSkeleton", () => ({
 }));
 
 vi.mock("@/components/ui/ExportMenu", () => ({
-  ExportMenu: (props: Record<string, unknown>) => {
+  ExportMenu: (props: CapturedExportMenuProps) => {
     exportMenuState.props = props;
     return <button type="button">Export</button>;
   },
@@ -143,7 +160,7 @@ describe("Metered usage page", () => {
     }
     await screen.findByText(/Updated: 1 metered usage records, 2026-03-01 to 2026-03-31/);
 
-    const csvConfig = exportMenuState.props!.csv as { filename: string; metadata: { dateRange: string } };
+    const csvConfig = exportMenuState.props!.csv;
     expect(csvConfig.filename).toBe("metered-usage-2026-03-01_2026-03-31");
     expect(csvConfig.metadata.dateRange).toBe("2026-03-01 to 2026-03-31");
   });

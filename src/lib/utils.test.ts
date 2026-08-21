@@ -318,6 +318,20 @@ describe("parseDateRangeParams", () => {
     expect("error" in result).toBe(true);
   });
 
+  it("returns error for empty explicit date range values instead of falling back to days", () => {
+    const result = parseDateRangeParams(new URLSearchParams("startDate=&endDate=&days=7"));
+    expect(result).toEqual({
+      error: "Both startDate and endDate must be provided together.",
+    });
+  });
+
+  it("returns error for a single empty explicit date range boundary", () => {
+    const result = parseDateRangeParams(new URLSearchParams({ startDate: "", endDate: "2024-01-15" }));
+    expect(result).toEqual({
+      error: "Both startDate and endDate must be provided together.",
+    });
+  });
+
   it("returns error for invalid date format", () => {
     const params = new URLSearchParams({ startDate: "01-01-2024", endDate: "01-15-2024" });
     const result = parseDateRangeParams(params);
@@ -380,6 +394,17 @@ describe("parseDateRangeParams", () => {
     const result = parseDateRangeParams(params);
     expect("error" in result).toBe(true);
     if ("error" in result) expect(result.error).toContain("not a valid date");
+  });
+
+  it("returns error for regex-valid but impossible calendar dates", () => {
+    for (const date of ["2026-02-29", "2026-04-31"]) {
+      expect(parseDateRangeParams(new URLSearchParams({ startDate: date, endDate: "2026-05-01" }))).toEqual({
+        error: "startDate or endDate is not a valid date.",
+      });
+      expect(parseDateRangeParams(new URLSearchParams({ startDate: "2026-01-01", endDate: date }))).toEqual({
+        error: "startDate or endDate is not a valid date.",
+      });
+    }
   });
 });
 

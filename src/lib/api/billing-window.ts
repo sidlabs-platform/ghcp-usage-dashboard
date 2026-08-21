@@ -25,7 +25,7 @@ function parseExplicitBounds(params: URLSearchParams): BillingWindow | { error: 
   const rawStart = params.get("startDate");
   const rawEnd = params.get("endDate");
 
-  if (!rawStart && !rawEnd) return null;
+  if (rawStart === null && rawEnd === null) return null;
   if (!rawStart || !rawEnd) {
     return { error: "Both startDate and endDate must be provided together." };
   }
@@ -35,7 +35,12 @@ function parseExplicitBounds(params: URLSearchParams): BillingWindow | { error: 
 
   const s = new Date(`${rawStart}T00:00:00Z`);
   const e = new Date(`${rawEnd}T00:00:00Z`);
-  if (Number.isNaN(s.getTime()) || Number.isNaN(e.getTime())) {
+  if (
+    Number.isNaN(s.getTime()) ||
+    Number.isNaN(e.getTime()) ||
+    s.toISOString().slice(0, 10) !== rawStart ||
+    e.toISOString().slice(0, 10) !== rawEnd
+  ) {
     return { error: "startDate or endDate is not a valid date." };
   }
   if (s > e) {
@@ -45,6 +50,14 @@ function parseExplicitBounds(params: URLSearchParams): BillingWindow | { error: 
   const days = Math.round((e.getTime() - s.getTime()) / 86_400_000) + 1;
   if (days > MAX_DAYS) {
     return { error: `Date range spans ${days} days, which exceeds the maximum of ${MAX_DAYS}.` };
+  }
+
+  // Billing periods clamp an in-progress month to today, so explicit billing
+  // bounds allow today but reject dates beyond the period branch's upper bound.
+  const today = new Date();
+  today.setUTCHours(0, 0, 0, 0);
+  if (e > today) {
+    return { error: "endDate cannot be in the future." };
   }
 
   return { start: rawStart, end: rawEnd, days, period: null };

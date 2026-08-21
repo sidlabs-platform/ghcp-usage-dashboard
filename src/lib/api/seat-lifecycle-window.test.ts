@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MAX_DAYS } from "@/lib/utils";
 import { parseSeatLifecycleWindow, SEAT_LIFECYCLE_DEFAULT_DAYS } from "./seat-lifecycle-window";
 
@@ -17,6 +17,11 @@ function shiftDays(offset: number): string {
 }
 
 describe("parseSeatLifecycleWindow", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-21T12:00:00Z"));
+  });
+
   afterEach(() => {
     vi.useRealTimers();
   });
@@ -64,11 +69,32 @@ describe("parseSeatLifecycleWindow", () => {
     expect(result).toMatchObject({ end: today(), explicit: true });
   });
 
-  it("leaves a deliberately earlier end date untouched", () => {
+  it("extends an end of today to today", () => {
+    const result = parseSeatLifecycleWindow(
+      new URLSearchParams({ startDate: shiftDays(-6), endDate: today() }),
+    );
+    expect(result).toEqual({ start: shiftDays(-6), end: today(), explicit: true });
+  });
+
+  it("leaves a fully historical range untouched", () => {
     const result = parseSeatLifecycleWindow(
       new URLSearchParams({ startDate: shiftDays(-10), endDate: shiftDays(-2) }),
     );
-    expect(result).toMatchObject({ end: shiftDays(-2) });
+    expect(result).toEqual({ start: shiftDays(-10), end: shiftDays(-2), explicit: true });
+  });
+
+  it("rejects a range that would become inverted after clamping", () => {
+    const result = parseSeatLifecycleWindow(
+      new URLSearchParams({ startDate: shiftDays(1), endDate: shiftDays(2) }),
+    );
+    expect(result).toEqual({ error: "start cannot be in the future." });
+  });
+
+  it("rejects a fully future range", () => {
+    const result = parseSeatLifecycleWindow(
+      new URLSearchParams({ startDate: shiftDays(1), endDate: shiftDays(7) }),
+    );
+    expect(result).toEqual({ error: "start cannot be in the future." });
   });
 
   it("rejects a MAX_DAYS raw range ending yesterday because today extension exceeds the limit", () => {

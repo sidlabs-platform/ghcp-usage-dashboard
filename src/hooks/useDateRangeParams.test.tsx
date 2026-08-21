@@ -3,13 +3,13 @@
 import { describe, expect, it, vi } from "vitest";
 import { renderHook } from "@testing-library/react";
 
-type DateState = {
+interface DateState {
   mode: "preset" | "custom" | "month";
   days: number;
   startDate: string;
   endDate: string;
   period: string | null;
-};
+}
 
 const dateState = vi.hoisted(() => ({
   value: {

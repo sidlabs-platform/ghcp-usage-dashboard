@@ -36,12 +36,13 @@ function yesterdayISO(): string {
  * lifecycle event is recorded with today's date, so clamping to yesterday would
  * silently hide the most recent activity.
  *
- * That is why an explicit end of yesterday-or-later is extended to today. The
+ * That is why an explicit end of yesterday or today is extended to today. The
  * shared date selector resolves both a rolling preset and an in-progress month
  * to an end of *yesterday*, so without this the page would lose today's events
  * the moment it started honouring the global selector — the exact regression
  * the include-today rule exists to prevent. A fully elapsed past month, or a
- * custom range the reader deliberately ended earlier, is left untouched. The
+ * custom range the reader deliberately ended earlier, is left untouched. Future
+ * dates are rejected because no seat lifecycle events can exist for them. The
  * maximum-span limit applies to this effective post-extension window.
  *
  * @returns `{ start, end, explicit }` or `{ error }` for a 400 response.
@@ -68,7 +69,19 @@ export function parseSeatLifecycleWindow(
     if (s > e) {
       return { error: "start must be on or before end." };
     }
-    const end = rawEnd >= yesterdayISO() ? todayISO() : rawEnd;
+    const today = todayISO();
+    const todayDate = new Date(`${today}T00:00:00Z`);
+    if (s > todayDate) {
+      return { error: "start cannot be in the future." };
+    }
+    if (e > todayDate) {
+      return { error: "end cannot be in the future." };
+    }
+    // Extending the end can only move it forward, and both bounds are now known
+    // to be no later than today, so the effective range can never come out
+    // inverted: either `end` becomes today (>= start) or it stays `rawEnd`,
+    // which the ordering check above already proved is >= start.
+    const end = rawEnd >= yesterdayISO() ? today : rawEnd;
     const effectiveEnd = new Date(`${end}T00:00:00Z`);
     const spanDays = Math.round((effectiveEnd.getTime() - s.getTime()) / 86_400_000) + 1;
     if (spanDays > MAX_DAYS) {

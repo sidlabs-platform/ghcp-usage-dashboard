@@ -5,7 +5,9 @@ import { useDateRange } from "@/contexts/DateRangeContext";
 import { periodLabel } from "@/lib/date/month-range";
 
 /** Query params that describe the active window, ready to merge into a request. */
-export type DateRangeQuery = Readonly<Record<string, string>>;
+export interface DateRangeQuery {
+  readonly [key: string]: string;
+}
 
 export interface UseDateRangeParamsResult {
   /**
@@ -46,9 +48,11 @@ export function useDateRangeParams(): UseDateRangeParamsResult {
 
   const dateParams = useMemo<DateRangeQuery>(() => {
     if (mode !== "preset" && startDate && endDate) {
-      return { startDate, endDate } as DateRangeQuery;
+      const params: DateRangeQuery = { startDate, endDate };
+      return params;
     }
-    return { days: String(days) } as DateRangeQuery;
+    const params: DateRangeQuery = { days: String(days) };
+    return params;
   }, [mode, days, startDate, endDate]);
 
   const buildParams = useCallback(

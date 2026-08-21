@@ -108,16 +108,21 @@ export function parseDateRangeParams(
   const rawStart = params.get("startDate");
   const rawEnd = params.get("endDate");
 
-  if (rawStart || rawEnd) {
+  if (rawStart !== null || rawEnd !== null) {
     if (!rawStart || !rawEnd) {
       return { error: "Both startDate and endDate must be provided together." };
     }
     if (!DATE_RE.test(rawStart) || !DATE_RE.test(rawEnd)) {
       return { error: "startDate and endDate must be in YYYY-MM-DD format." };
     }
-    const s = new Date(rawStart);
-    const e = new Date(rawEnd);
-    if (isNaN(s.getTime()) || isNaN(e.getTime())) {
+    const s = new Date(`${rawStart}T00:00:00Z`);
+    const e = new Date(`${rawEnd}T00:00:00Z`);
+    if (
+      Number.isNaN(s.getTime()) ||
+      Number.isNaN(e.getTime()) ||
+      s.toISOString().slice(0, 10) !== rawStart ||
+      e.toISOString().slice(0, 10) !== rawEnd
+    ) {
       return { error: "startDate or endDate is not a valid date." };
     }
     if (s > e) {

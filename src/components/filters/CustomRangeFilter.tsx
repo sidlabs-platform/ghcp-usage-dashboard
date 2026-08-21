@@ -5,6 +5,10 @@ import { CalendarDays } from "lucide-react";
 import { useDateRange } from "@/contexts/DateRangeContext";
 import { MAX_DAYS, cn } from "@/lib/utils";
 
+interface CustomRangeFilterProps {
+  className?: string;
+}
+
 /**
  * Custom start/end date picker bound to `DateRangeContext`.
  *
@@ -14,7 +18,7 @@ import { MAX_DAYS, cn } from "@/lib/utils";
  * selectors while the rest showed one, and neither control offered the full
  * set of modes.
  */
-export function CustomRangeFilter({ className }: Readonly<{ className?: string }>) {
+export function CustomRangeFilter({ className }: Readonly<CustomRangeFilterProps>) {
   const { mode, startDate, endDate, setCustomRange } = useDateRange();
   const [open, setOpen] = useState(false);
   const [localStart, setLocalStart] = useState(startDate);
@@ -25,7 +29,10 @@ export function CustomRangeFilter({ className }: Readonly<{ className?: string }
   const maxDate = useMemo(() => {
     const yesterday = new Date();
     yesterday.setDate(yesterday.getDate() - 1);
-    return yesterday.toISOString().split("T")[0];
+    const year = yesterday.getFullYear();
+    const month = String(yesterday.getMonth() + 1).padStart(2, "0");
+    const day = String(yesterday.getDate()).padStart(2, "0");
+    return `${year}-${month}-${day}`;
   }, []);
 
   const close = useCallback(() => {
@@ -67,6 +74,10 @@ export function CustomRangeFilter({ className }: Readonly<{ className?: string }
     }
     if (localStart > localEnd) {
       setError("Start date must be before end date.");
+      return;
+    }
+    if (localStart > maxDate || localEnd > maxDate) {
+      setError("Dates cannot be later than yesterday.");
       return;
     }
     const span =
