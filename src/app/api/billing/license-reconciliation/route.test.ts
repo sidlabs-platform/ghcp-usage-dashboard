@@ -9,6 +9,7 @@ const repoState = vi.hoisted(() => ({
   computeUtilizationBuckets: vi.fn(),
   sortLicenseRows: vi.fn(),
   getCopilotCostBasis: vi.fn(),
+  getCopilotBillingBreakdown: vi.fn(),
 }));
 
 const historyRepoState = vi.hoisted(() => ({
@@ -70,6 +71,7 @@ vi.mock("@/lib/api/scope-filter", () => ({
 // schema migrations, which blows the 5s test timeout.
 vi.mock("@/lib/db/billing-repo", () => ({
   getCopilotCostBasis: (...a: unknown[]) => repoState.getCopilotCostBasis(...a),
+  getCopilotBillingBreakdown: (...a: unknown[]) => repoState.getCopilotBillingBreakdown(...a),
 }));
 
 vi.mock("@/lib/db/license-repo", () => ({
@@ -182,6 +184,7 @@ beforeEach(() => {
   historyRepoState.getMaterializedPeriods.mockReturnValue([]);
   historyRepoState.getEarliestMaterializedPeriod.mockReturnValue(null);
   historyRepoState.getMaterializedUtilizationBuckets.mockReturnValue([]);
+  repoState.getCopilotBillingBreakdown.mockReturnValue(null);
   historyRepoState.getLatestLicenseQualitySummary.mockReturnValue({ pass: 0, warning: 0, fail: 0 });
   configState.getLicensingConfig.mockReturnValue({
     currency: "USD",
@@ -359,6 +362,33 @@ describe("license reconciliation route", () => {
       expect(res.status).not.toBe(500);
     });
 
+    it("returns the period-scoped billing breakdown in live-snapshot mode", async () => {
+      const breakdown = { startDate: "2026-05-01", endDate: "2026-05-31", period: "2026-05", hasBilledData: true };
+      repoState.getCopilotBillingBreakdown.mockReturnValue(breakdown);
+      const res = await GET(req());
+      const body = await res.json();
+      expect(body.dataSource).toBe("live_snapshot_only");
+      expect(body.billingBreakdown).toEqual(breakdown);
+    });
+
+    it("computes the breakdown over exactly the window the cost basis uses", async () => {
+      await GET(req("http://localhost/api/billing/license-reconciliation?periods=2026-05"));
+      const basisArgs = repoState.getCopilotCostBasis.mock.calls[0];
+      const breakdownArgs = repoState.getCopilotBillingBreakdown.mock.calls[0];
+      // Same bounds, same scope, same period hint — the two cannot disagree.
+      expect(breakdownArgs).toEqual(basisArgs);
+    });
+
+    it("returns billingBreakdown: null instead of failing when the billing query throws", async () => {
+      repoState.getCopilotBillingBreakdown.mockImplementation(() => {
+        throw new Error("no such table: billing_usage_records");
+      });
+      const res = await GET(req());
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.billingBreakdown).toBeNull();
+    });
+
     it("reports missing historical coverage without replacing it with successful zeroes", async () => {
       vi.useFakeTimers();
       vi.setSystemTime(new Date("2026-08-10T00:00:00Z"));
@@ -437,6 +467,15 @@ describe("license reconciliation route", () => {
       expect(historyRepoState.getMaterializedPlanBreakdown).toHaveBeenCalledTimes(1);
       expect(historyRepoState.getMaterializedOrgBreakdown).toHaveBeenCalledTimes(1);
       expect(repoState.getLicenseReconciliationDataset).not.toHaveBeenCalled();
+    });
+
+    it("returns the period-scoped billing breakdown in historical mode too", async () => {
+      const breakdown = { startDate: "2026-05-01", endDate: "2026-05-31", period: "2026-05", hasBilledData: true };
+      repoState.getCopilotBillingBreakdown.mockReturnValue(breakdown);
+      const res = await GET(req());
+      const body = await res.json();
+      expect(body.dataSource).toBe("historical");
+      expect(body.billingBreakdown).toEqual(breakdown);
     });
 
     it("returns a valid empty historical payload (rows [], zero KPIs) when history exists but a narrow filter matches nothing, without falling back", async () => {

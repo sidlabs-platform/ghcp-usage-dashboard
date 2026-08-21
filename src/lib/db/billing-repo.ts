@@ -28,7 +28,19 @@ import type {
   TokenAttributionRow,
   TokenModelDailyPoint,
   CopilotCostBasis,
+  CopilotBillingBreakdown,
+  SeatSkuBreakdown,
+  ConsumptionSkuBreakdown,
+  BilledOrgBreakdown,
+  BilledDailyCost,
 } from "@/lib/types/billing";
+import {
+  UNIT_SEAT,
+  UNIT_CREDITS,
+  UNIT_REQUESTS,
+  UNIT_TOKEN_UNITS,
+} from "@/lib/types/billing";
+import { skuLabel } from "@/lib/billing/sku-labels";
 
 const AI_CREDITS_START_DATE = "2026-06-01";
 
@@ -1347,14 +1359,36 @@ export function getPremiumFilterOptions(
 // Legacy `premium_request` rows still carry an explicit `exceeds_quota` flag;
 // when present it takes precedence over the amount ratio.
 
-/** Fraction of a row's credits covered by the included allowance. */
-const POOL_FRACTION_SQL = `
-  CASE
+/**
+ * Fraction of a row's credits covered by the included allowance.
+ *
+ * `billing_premium_requests` carries `exceeds_quota` (legacy premium-request
+ * rows set it explicitly); `billing_usage_records` has no such column, so the
+ * same rule has to be expressible without it. Rather than let two copies of
+ * this expression drift, both tables build it from here and only the
+ * `exceeds_quota` short-circuit is conditional — the amount-ratio branch,
+ * which is what actually decides the split for every AI-credit row, is
+ * literally the same string in both cases.
+ */
+function poolFractionSql(opts?: { hasExceedsQuota?: boolean }): string {
+  const quotaBranches =
+    opts?.hasExceedsQuota === false
+      ? ""
+      : `
     WHEN exceeds_quota = 'TRUE'  THEN 0.0
-    WHEN exceeds_quota = 'FALSE' THEN 1.0
+    WHEN exceeds_quota = 'FALSE' THEN 1.0`;
+  return `
+  CASE${quotaBranches}
     WHEN gross_amount > 0        THEN MIN(1.0, MAX(0.0, discount_amount / gross_amount))
     ELSE 1.0
   END`;
+}
+
+/** Pool fraction for `billing_premium_requests`, which carries `exceeds_quota`. */
+const POOL_FRACTION_SQL = poolFractionSql();
+
+/** Pool fraction for `billing_usage_records`, which does not carry `exceeds_quota`. */
+const USAGE_POOL_FRACTION_SQL = poolFractionSql({ hasExceedsQuota: false });
 
 /**
  * Strict AI-credit quantity, in credits only.
@@ -1889,19 +1923,15 @@ export function getAiCreditsReconciliation(
 // Quantities are only ever summed within one unit type. Amounts (gross,
 // discount, net) are USD and therefore safe to sum across all of them.
 
-/** Copilot seat licences. Quantity is seat-months (a seat held all month = 1). */
-const UNIT_SEAT = "user-months";
-/** AI credits, the billed consumption unit from June 2026 onward. */
-const UNIT_CREDITS = "ai-credits";
-/** Premium requests, the billed consumption unit before June 2026. */
-const UNIT_REQUESTS = "requests";
-/** Token units, billed alongside credits for some models. */
-const UNIT_TOKEN_UNITS = "token-units";
+// These constants are defined once in `@/lib/types/billing` (imported at the
+// top of this file) so the queries below and the client components that render
+// their output cannot drift apart.
 
 /** A per-user billing row that actually names a user. */
 const HAS_USERNAME_SQL = `TRIM(COALESCE(username, '')) <> ''`;
 
 export type { CopilotCostBasis };
+export type { CopilotBillingBreakdown };
 
 /**
  * Canonical Copilot cost + AI-credit figures for a date range.
@@ -2163,4 +2193,236 @@ export function getAttributedCreditConsumptionByUser(
   }
 
   return { byLogin, totalCredits, totalUsd, unattributedCredits };
+}
+
+// ── Period-scoped Copilot billing breakdown ───────────────────────────
+//
+// The License & AI Credits Overview tab used to build its tiles and charts
+// from `copilot_seats` (a snapshot table with no date column — it can only
+// describe *today*) and from `dashboard-config.json` list prices and notional
+// allowances (operator-entered, identical in every period). Both are
+// period-blind, so selecting a month changed the cost-basis strip while every
+// tile underneath it stayed put.
+//
+// This function is the replacement source. It reads the same table, over the
+// same window and scope, as `getCopilotCostBasis`, so the two agree by
+// construction:
+//
+//   SUM(seatSkus[].netCost)        === CopilotCostBasis.seatCostNet
+//   SUM(consumptionSkus[].netCost) === CopilotCostBasis.creditCostNet
+//
+// Grouping is by `sku`, which is what distinguishes Business from Enterprise
+// seats and one AI-credit surface (cloud agent, code review, code quality)
+// from another. Nothing is hardcoded to a SKU string: unrecognised SKUs are
+// returned with their raw name and correct figures.
+
+/** Shape returned by the per-SKU rollup, before it is split by unit type. */
+interface SkuRollupRow {
+  sku: string;
+  unit_type: string;
+  quantity: number;
+  pool_quantity: number;
+  users: number;
+  gross_amount: number;
+  discount_amount: number;
+  net_amount: number;
+}
+
+/**
+ * Period-scoped Copilot billing breakdown: seats and consumption by SKU, by
+ * organization, and by day, over the given window and scope.
+ *
+ * Returns an empty-but-valid breakdown (never throws, never a partial shape)
+ * when billing has not been synced or the window billed nothing, so callers
+ * can render an explicit empty state instead of failing.
+ */
+export function getCopilotBillingBreakdown(
+  start: string,
+  end: string,
+  filters?: BillingFilters,
+  enterpriseSlugs?: string[],
+  /** See {@link getCopilotCostBasis} — `null` means "not a calendar month". */
+  periodHint?: string | null
+): CopilotBillingBreakdown {
+  const db = getDb();
+  const { clause: entClause, params: entParams } = buildEnterpriseFilter(enterpriseSlugs);
+  const entWhere = entClause.replace(/^\s*AND\s+/, "");
+
+  const clauses: string[] = ["date >= ?", "date <= ?", "product = 'copilot'"];
+  const params: unknown[] = [start, end];
+  if (entWhere) { clauses.push(entWhere); params.push(...entParams); }
+  appendBillingFilters(clauses, params, filters);
+  const where = buildWhereClause(clauses);
+
+  const empty: CopilotBillingBreakdown = {
+    startDate: start,
+    endDate: end,
+    period: periodHint === undefined ? derivePeriod(start, end) : periodHint,
+    seatSkus: [],
+    consumptionSkus: [],
+    orgs: [],
+    daily: [],
+    poolCredits: 0,
+    additionalCredits: 0,
+    additionalCreditCostNet: 0,
+    hasBilledData: false,
+  };
+
+  const usageTableExists = db
+    .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='billing_usage_records'")
+    .get();
+  if (!usageTableExists) return empty;
+
+  // One row per (sku, unit_type). Keeping unit_type in the grouping key is
+  // what stops a SKU that billed both credits and token units from having two
+  // incompatible counts added together.
+  const skuRows = db
+    .prepare(
+      `
+    SELECT
+      COALESCE(NULLIF(TRIM(sku), ''), '')                                  AS sku,
+      COALESCE(NULLIF(TRIM(unit_type), ''), '')                            AS unit_type,
+      COALESCE(SUM(quantity), 0)                                           AS quantity,
+      COALESCE(SUM(quantity * (${USAGE_POOL_FRACTION_SQL})), 0)            AS pool_quantity,
+      COUNT(DISTINCT CASE WHEN ${HAS_USERNAME_SQL} THEN LOWER(username) END) AS users,
+      COALESCE(SUM(gross_amount), 0)                                       AS gross_amount,
+      COALESCE(SUM(discount_amount), 0)                                    AS discount_amount,
+      COALESCE(SUM(net_amount), 0)                                         AS net_amount
+    FROM billing_usage_records
+    ${where}
+    GROUP BY 1, 2
+  `
+    )
+    .all(...params) as SkuRollupRow[];
+
+  if (skuRows.length === 0) return empty;
+
+  const seatSkus: SeatSkuBreakdown[] = [];
+  const consumptionSkus: ConsumptionSkuBreakdown[] = [];
+  let poolCredits = 0;
+  let additionalCredits = 0;
+  let additionalCreditCostNet = 0;
+
+  for (const r of skuRows) {
+    const quantity = Number(r.quantity) || 0;
+    const grossCost = Number(r.gross_amount) || 0;
+    const netCost = Number(r.net_amount) || 0;
+    const discountAmount = Number(r.discount_amount) || 0;
+
+    // A SKU that billed nothing and cost nothing is noise, not a finding.
+    if (quantity === 0 && grossCost === 0 && netCost === 0) continue;
+
+    if (r.unit_type === UNIT_SEAT) {
+      seatSkus.push({
+        sku: r.sku,
+        label: skuLabel(r.sku),
+        seatMonths: quantity,
+        users: Number(r.users) || 0,
+        grossCost,
+        netCost,
+      });
+      continue;
+    }
+
+    const poolQuantity = Math.min(quantity, Math.max(0, Number(r.pool_quantity) || 0));
+    const additionalQuantity = Math.max(0, quantity - poolQuantity);
+    consumptionSkus.push({
+      sku: r.sku,
+      label: skuLabel(r.sku),
+      unit: r.unit_type,
+      quantity,
+      poolQuantity,
+      additionalQuantity,
+      grossCost,
+      discountAmount,
+      netCost,
+    });
+
+    // Pool/additional totals are credit figures only. Requests and token units
+    // are different units and are reported on their own rows above; adding
+    // them here would produce a "credits" number reproducible from no report.
+    if (r.unit_type === UNIT_CREDITS) {
+      poolCredits += poolQuantity;
+      additionalCredits += additionalQuantity;
+      additionalCreditCostNet += netCost;
+    }
+  }
+
+  seatSkus.sort((a, b) => b.netCost - a.netCost || b.seatMonths - a.seatMonths);
+  consumptionSkus.sort((a, b) => b.quantity - a.quantity || b.netCost - a.netCost);
+
+  const orgRows = db
+    .prepare(
+      `
+    SELECT
+      COALESCE(NULLIF(TRIM(organization), ''), '')                            AS organization,
+      COALESCE(SUM(CASE WHEN unit_type = '${UNIT_SEAT}' THEN quantity END), 0) AS seat_months,
+      COUNT(DISTINCT CASE WHEN unit_type = '${UNIT_SEAT}' AND ${HAS_USERNAME_SQL}
+                          THEN LOWER(username) END)                           AS seat_users,
+      COALESCE(SUM(CASE WHEN unit_type = '${UNIT_SEAT}' THEN net_amount END), 0) AS seat_net,
+      COALESCE(SUM(CASE WHEN unit_type = '${UNIT_CREDITS}' THEN quantity END), 0) AS credits,
+      COALESCE(SUM(CASE WHEN unit_type <> '${UNIT_SEAT}' THEN net_amount END), 0) AS consumption_net
+    FROM billing_usage_records
+    ${where}
+    GROUP BY 1
+  `
+    )
+    .all(...params) as Record<string, string | number>[];
+
+  const orgs: BilledOrgBreakdown[] = orgRows
+    .map((r) => {
+      const seatCostNet = Number(r.seat_net) || 0;
+      const consumptionCostNet = Number(r.consumption_net) || 0;
+      return {
+        organization: String(r.organization ?? ""),
+        seatMonths: Number(r.seat_months) || 0,
+        seatUsers: Number(r.seat_users) || 0,
+        seatCostNet,
+        credits: Number(r.credits) || 0,
+        consumptionCostNet,
+        totalNet: seatCostNet + consumptionCostNet,
+      };
+    })
+    .filter((o) => o.totalNet !== 0 || o.seatMonths !== 0 || o.credits !== 0)
+    .sort((a, b) => b.totalNet - a.totalNet);
+
+  const dailyRows = db
+    .prepare(
+      `
+    SELECT
+      date                                                                       AS day,
+      COALESCE(SUM(CASE WHEN unit_type = '${UNIT_SEAT}' THEN net_amount END), 0)  AS seat_net,
+      COALESCE(SUM(CASE WHEN unit_type <> '${UNIT_SEAT}' THEN net_amount END), 0) AS consumption_net
+    FROM billing_usage_records
+    ${where}
+    GROUP BY date
+    ORDER BY date ASC
+  `
+    )
+    .all(...params) as Record<string, string | number>[];
+
+  const daily: BilledDailyCost[] = dailyRows.map((r) => {
+    const seatCostNet = Number(r.seat_net) || 0;
+    const consumptionCostNet = Number(r.consumption_net) || 0;
+    return {
+      day: String(r.day),
+      seatCostNet,
+      consumptionCostNet,
+      totalNet: seatCostNet + consumptionCostNet,
+    };
+  });
+
+  return {
+    startDate: start,
+    endDate: end,
+    period: periodHint === undefined ? derivePeriod(start, end) : periodHint,
+    seatSkus,
+    consumptionSkus,
+    orgs,
+    daily,
+    poolCredits,
+    additionalCredits,
+    additionalCreditCostNet,
+    hasBilledData: seatSkus.length > 0 || consumptionSkus.length > 0,
+  };
 }
