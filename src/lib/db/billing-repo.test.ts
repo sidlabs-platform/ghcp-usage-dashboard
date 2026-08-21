@@ -44,6 +44,7 @@ import {
   TokenExportTooLargeError,
   getAiCreditsReconciliation,
   getCopilotCostBasis,
+  getCopilotBillingBreakdown,
 } from "./billing-repo";
 import type { BillingPremiumRequestRecord } from "@/lib/types/billing";
 
@@ -294,6 +295,137 @@ describe("getAiCreditsReconciliation", () => {
     expect(result.attributionComplete).toBe(true);
     // USD amounts are unit-agnostic and therefore still additive.
     expect(result.creditCostNet).toBe(2.5);
+  });
+});
+
+describe("getCopilotBillingBreakdown", () => {
+  /** Usage-record factory: the breakdown reads only `billing_usage_records`. */
+  function usage(over: Record<string, unknown> = {}) {
+    return {
+      date: "2026-06-10", product: "copilot", sku: "copilot_enterprise", quantity: 1,
+      unit_type: "user-months", applied_cost_per_quantity: 39, gross_amount: 39,
+      discount_amount: 0, net_amount: 39, organization: "org1", repository: "",
+      username: "alice", workflow_path: "", cost_center_name: "", charge_scope: "user" as const,
+      ...over,
+    };
+  }
+
+  it("returns an empty-but-valid breakdown when nothing was billed", () => {
+    const b = getCopilotBillingBreakdown("2026-06-01", "2026-06-30");
+    expect(b.hasBilledData).toBe(false);
+    expect(b.seatSkus).toEqual([]);
+    expect(b.consumptionSkus).toEqual([]);
+    expect(b.orgs).toEqual([]);
+    expect(b.daily).toEqual([]);
+    expect(b.poolCredits).toBe(0);
+    expect(b.period).toBe("2026-06");
+  });
+
+  it("splits seat SKUs from consumption SKUs and labels them", () => {
+    upsertUsageRecords("ent1", [
+      usage({ sku: "copilot_enterprise", quantity: 3, gross_amount: 117, net_amount: 117 }),
+      usage({ sku: "copilot_business", username: "bob", quantity: 2, gross_amount: 38, net_amount: 38 }),
+      usage({
+        sku: "copilot_coding_agent", unit_type: "ai-credits", quantity: 100,
+        gross_amount: 10, discount_amount: 4, net_amount: 6,
+      }),
+    ]);
+
+    const b = getCopilotBillingBreakdown("2026-06-01", "2026-06-30");
+    expect(b.hasBilledData).toBe(true);
+    expect(b.seatSkus.map((s) => s.label)).toEqual(["Copilot Enterprise", "Copilot Business"]);
+    expect(b.seatSkus[0].seatMonths).toBe(3);
+    expect(b.seatSkus[0].users).toBe(1);
+    expect(b.consumptionSkus).toHaveLength(1);
+    expect(b.consumptionSkus[0].label).toBe("Cloud agent");
+    expect(b.consumptionSkus[0].unit).toBe("ai-credits");
+  });
+
+  it("never sums quantities across unit types", () => {
+    // Credits, requests and token units are three different units. A single
+    // "consumption" quantity built from all three reproduces no GitHub report.
+    upsertUsageRecords("ent1", [
+      usage({ sku: "s_credits", unit_type: "ai-credits", quantity: 100, gross_amount: 10, net_amount: 10 }),
+      usage({ sku: "s_requests", unit_type: "requests", quantity: 50, gross_amount: 5, net_amount: 5 }),
+      usage({ sku: "s_tokens", unit_type: "token-units", quantity: 25, gross_amount: 2, net_amount: 2 }),
+    ]);
+
+    const b = getCopilotBillingBreakdown("2026-06-01", "2026-06-30");
+    const byUnit = Object.fromEntries(b.consumptionSkus.map((c) => [c.unit, c.quantity]));
+    expect(byUnit).toEqual({ "ai-credits": 100, requests: 50, "token-units": 25 });
+    // Only credit rows feed the pool split.
+    expect(b.poolCredits + b.additionalCredits).toBe(100);
+  });
+
+  it("derives the pool split from the discount share of each row", () => {
+    upsertUsageRecords("ent1", [
+      // Fully discounted -> entirely inside the entitlement pool.
+      usage({ sku: "s_pool", unit_type: "ai-credits", quantity: 80, gross_amount: 8, discount_amount: 8, net_amount: 0 }),
+      // Not discounted at all -> entirely above the pool.
+      usage({ sku: "s_over", unit_type: "ai-credits", quantity: 20, gross_amount: 2, discount_amount: 0, net_amount: 2 }),
+    ]);
+
+    const b = getCopilotBillingBreakdown("2026-06-01", "2026-06-30");
+    expect(b.poolCredits).toBe(80);
+    expect(b.additionalCredits).toBe(20);
+    expect(b.additionalCreditCostNet).toBe(2);
+  });
+
+  it("agrees with getCopilotCostBasis on seat and consumption cost", () => {
+    upsertUsageRecords("ent1", [
+      usage({ quantity: 4, gross_amount: 156, net_amount: 156 }),
+      usage({ sku: "copilot_code_review", unit_type: "ai-credits", quantity: 300, gross_amount: 30, discount_amount: 12, net_amount: 18 }),
+      usage({ date: "2026-06-11", sku: "copilot_premium_request", unit_type: "requests", quantity: 40, gross_amount: 4, net_amount: 4 }),
+    ]);
+
+    const basis = getCopilotCostBasis("2026-06-01", "2026-06-30");
+    const b = getCopilotBillingBreakdown("2026-06-01", "2026-06-30");
+
+    const seatSum = b.seatSkus.reduce((s, r) => s + r.netCost, 0);
+    const consumptionSum = b.consumptionSkus.reduce((s, r) => s + r.netCost, 0);
+    expect(seatSum).toBeCloseTo(basis.seatCostNet, 6);
+    expect(consumptionSum).toBeCloseTo(basis.creditCostNet, 6);
+    expect(seatSum + consumptionSum).toBeCloseTo(basis.totalCopilotNet, 6);
+
+    const dailySum = b.daily.reduce((s, d) => s + d.totalNet, 0);
+    expect(dailySum).toBeCloseTo(basis.totalCopilotNet, 6);
+    const orgSum = b.orgs.reduce((s, o) => s + o.totalNet, 0);
+    expect(orgSum).toBeCloseTo(basis.totalCopilotNet, 6);
+  });
+
+  it("confines every figure to the requested window", () => {
+    upsertUsageRecords("ent1", [
+      usage({ date: "2026-05-31", quantity: 9, gross_amount: 351, net_amount: 351 }),
+      usage({ date: "2026-06-10", quantity: 1, gross_amount: 39, net_amount: 39 }),
+      usage({ date: "2026-07-01", quantity: 7, gross_amount: 273, net_amount: 273 }),
+    ]);
+
+    const b = getCopilotBillingBreakdown("2026-06-01", "2026-06-30");
+    expect(b.seatSkus.reduce((s, r) => s + r.seatMonths, 0)).toBe(1);
+    expect(b.daily.map((d) => d.day)).toEqual(["2026-06-10"]);
+  });
+
+  it("excludes non-Copilot products", () => {
+    upsertUsageRecords("ent1", [
+      usage({ product: "actions", sku: "actions_linux", unit_type: "minutes", quantity: 500, gross_amount: 4, net_amount: 4 }),
+    ]);
+    expect(getCopilotBillingBreakdown("2026-06-01", "2026-06-30").hasBilledData).toBe(false);
+  });
+
+  it("keeps an unrecognised SKU's raw name with correct figures", () => {
+    upsertUsageRecords("ent1", [
+      usage({ sku: "copilot_future_surface_x", unit_type: "ai-credits", quantity: 42, gross_amount: 4, net_amount: 4 }),
+    ]);
+    const b = getCopilotBillingBreakdown("2026-06-01", "2026-06-30");
+    expect(b.consumptionSkus[0].sku).toBe("copilot_future_surface_x");
+    expect(b.consumptionSkus[0].quantity).toBe(42);
+  });
+
+  it("honours the period hint instead of re-deriving it", () => {
+    const b = getCopilotBillingBreakdown("2026-06-05", "2026-06-20", undefined, undefined, null);
+    expect(b.period).toBeNull();
+    expect(b.startDate).toBe("2026-06-05");
+    expect(b.endDate).toBe("2026-06-20");
   });
 });
 
