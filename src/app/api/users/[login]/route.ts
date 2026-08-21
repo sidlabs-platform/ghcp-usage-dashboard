@@ -10,7 +10,7 @@ import { CACHE_TTL } from "@/lib/cache/memory-cache";
 // sites. Never re-declare a local copy or fall back to a bare
 // `!= 'agent_edit'` exclusion, since that would silently misclassify
 // `copilot_app`, `chat_inline`, or any future unknown feature as completion.
-import { IS_COMPLETION_SQL, NOT_AGENT_OR_APP_SQL, getCompletionDailyTrend } from "@/lib/db/aggregation-queries";
+import { IS_COMPLETION_SQL, IS_CLI_SQL, IS_ACCEPTANCE_ELIGIBLE_SQL, NOT_AGENT_OR_APP_SQL, getCompletionDailyTrend } from "@/lib/db/aggregation-queries";
 // Copilot App KPI aggregation is delegated entirely to this shared query
 // helper (Task 2/3's SQL layer) rather than re-implemented here: it already
 // dedupes same-login/same-day rows across enterprises via MAX-before-SUM and
@@ -63,9 +63,17 @@ interface UserSummary {
   totalAiCreditsUsed: number;
   totalCodeGen: number;
   totalCodeAccept: number;
+  /** Acceptance rate over completion + CLI. Excludes agent_edit (always 0 acceptances). */
   acceptanceRate: number;
   agentLocAdded: number;
   agentLocDeleted: number;
+  /**
+   * Copilot CLI LoC, written to files directly. Never folded into
+   * completionLocAccepted — the CLI shows no suggestion, so its LoC was never
+   * "accepted" by anyone.
+   */
+  cliLocAdded: number;
+  cliLocDeleted: number;
   // Completion-only fields (excludes agent_edit)
   totalLocSuggested: number;
   completionLocAccepted: number;
@@ -290,17 +298,21 @@ async function handler(request: NextRequest) {
     // into completion LoC or the completion acceptance rate.
     const completionLocRow = db.prepare(`
       SELECT
-        COALESCE(SUM(json_extract(j.value, '$.loc_suggested_to_add_sum')), 0) AS compLocSuggested,
-        COALESCE(SUM(json_extract(j.value, '$.loc_added_sum')), 0) AS compLocAccepted,
-        COALESCE(SUM(json_extract(j.value, '$.loc_deleted_sum')), 0) AS compLocDeleted,
-        COALESCE(SUM(json_extract(j.value, '$.loc_suggested_to_delete_sum')), 0) AS compLocSuggestedDelete,
-        COALESCE(SUM(json_extract(j.value, '$.code_generation_activity_count')), 0) AS compCodeGen,
-        COALESCE(SUM(json_extract(j.value, '$.code_acceptance_activity_count')), 0) AS compCodeAccept
+        COALESCE(SUM(CASE WHEN ${IS_COMPLETION_SQL} THEN json_extract(j.value, '$.loc_suggested_to_add_sum') ELSE 0 END), 0) AS compLocSuggested,
+        COALESCE(SUM(CASE WHEN ${IS_COMPLETION_SQL} THEN json_extract(j.value, '$.loc_added_sum') ELSE 0 END), 0) AS compLocAccepted,
+        COALESCE(SUM(CASE WHEN ${IS_COMPLETION_SQL} THEN json_extract(j.value, '$.loc_deleted_sum') ELSE 0 END), 0) AS compLocDeleted,
+        COALESCE(SUM(CASE WHEN ${IS_COMPLETION_SQL} THEN json_extract(j.value, '$.loc_suggested_to_delete_sum') ELSE 0 END), 0) AS compLocSuggestedDelete,
+        COALESCE(SUM(CASE WHEN ${IS_COMPLETION_SQL} THEN json_extract(j.value, '$.code_generation_activity_count') ELSE 0 END), 0) AS compCodeGen,
+        COALESCE(SUM(CASE WHEN ${IS_COMPLETION_SQL} THEN json_extract(j.value, '$.code_acceptance_activity_count') ELSE 0 END), 0) AS compCodeAccept,
+        COALESCE(SUM(CASE WHEN ${IS_CLI_SQL} THEN json_extract(j.value, '$.loc_added_sum') ELSE 0 END), 0) AS cliLocAdded,
+        COALESCE(SUM(CASE WHEN ${IS_CLI_SQL} THEN json_extract(j.value, '$.loc_deleted_sum') ELSE 0 END), 0) AS cliLocDeleted,
+        COALESCE(SUM(CASE WHEN ${IS_CLI_SQL} THEN json_extract(j.value, '$.code_generation_activity_count') ELSE 0 END), 0) AS cliCodeGen,
+        COALESCE(SUM(CASE WHEN ${IS_CLI_SQL} THEN json_extract(j.value, '$.code_acceptance_activity_count') ELSE 0 END), 0) AS cliCodeAccept
       FROM user_daily_metrics u, json_each(u.totals_by_feature) j
       WHERE u.user_login = ? AND u.day BETWEEN ? AND ?
         AND u.totals_by_feature IS NOT NULL AND u.totals_by_feature != '[]'
         AND json_valid(u.totals_by_feature)
-        AND ${IS_COMPLETION_SQL}${efClause}
+        AND ${IS_ACCEPTANCE_ELIGIBLE_SQL}${efClause}
     `).get(decodedLogin, start, end, ...efParams) as {
       compLocSuggested: number;
       compLocAccepted: number;
@@ -308,6 +320,10 @@ async function handler(request: NextRequest) {
       compLocSuggestedDelete: number;
       compCodeGen: number;
       compCodeAccept: number;
+      cliLocAdded: number;
+      cliLocDeleted: number;
+      cliCodeGen: number;
+      cliCodeAccept: number;
     } | undefined;
 
     // Copilot App — a single call to the shared Task 2/3 query helper
@@ -353,11 +369,20 @@ async function handler(request: NextRequest) {
       const compSuggestedDelete = completionLocRow?.compLocSuggestedDelete ?? summaryRow.totalLocSuggestedDelete;
       const compCodeGen = completionLocRow?.compCodeGen ?? summaryRow.totalCodeGen;
       const compCodeAccept = completionLocRow?.compCodeAccept ?? summaryRow.totalCodeAccept;
+      const cliAdded = completionLocRow?.cliLocAdded ?? 0;
+      const cliDeleted = completionLocRow?.cliLocDeleted ?? 0;
 
-      const compRate = compCodeGen > 0 ? (compCodeAccept / compCodeGen) * 100 : 0;
-      const topLevelRate = summaryRow.totalCodeGen > 0
-        ? (summaryRow.totalCodeAccept / summaryRow.totalCodeGen) * 100
-        : 0;
+      // Acceptance rate over completion + CLI — the same basis as the overview
+      // and team APIs (see acceptanceRateFrom). agent_edit stays out: it reports
+      // 0 acceptances against non-zero generations and can only deflate the rate.
+      const acceptEligibleGen = compCodeGen + (completionLocRow?.cliCodeGen ?? 0);
+      const acceptEligibleAccept = compCodeAccept + (completionLocRow?.cliCodeAccept ?? 0);
+      const compRate = acceptEligibleGen > 0 ? (acceptEligibleAccept / acceptEligibleGen) * 100 : 0;
+      // Deliberately the same figure. The old "top level" rate divided by
+      // `code_generation_activity_count`, which includes agent_edit generations
+      // that can never be accepted — it read as a fleet-wide acceptance rate but
+      // was structurally incapable of reaching a true one.
+      const topLevelRate = compRate;
 
       summary = {
         totalActiveDays: summaryRow.totalActiveDays,
@@ -375,6 +400,8 @@ async function handler(request: NextRequest) {
         acceptanceRate: Math.round(topLevelRate * 10) / 10,
         agentLocAdded: agentAdded,
         agentLocDeleted: agentDeleted,
+        cliLocAdded: cliAdded,
+        cliLocDeleted: cliDeleted,
         // Completion-only fields (excludes agent_edit)
         totalLocSuggested: compSuggested,
         completionLocAccepted: compAccepted,

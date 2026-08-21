@@ -217,7 +217,7 @@ describe("migrateSummaryCacheClassification — idempotency and ledger", () => {
   it("records the migration marker only after a successful run", () => {
     migrateSummaryCacheClassification(db);
     const row = db.prepare(
-      `SELECT name FROM summary_cache_migrations WHERE name = 'summary-cache-completion-classification-v1'`
+      `SELECT name FROM summary_cache_migrations WHERE name = 'summary-cache-completion-classification-v2'`
     ).get();
     expect(row).toBeTruthy();
   });
@@ -251,7 +251,7 @@ describe("migrateSummaryCacheClassification — idempotency and ledger", () => {
     expect(afterSecondRun.acceptance_rate).toBe(33.3);
 
     const markerCount = db.prepare(
-      `SELECT COUNT(*) as cnt FROM summary_cache_migrations WHERE name = 'summary-cache-completion-classification-v1'`
+      `SELECT COUNT(*) as cnt FROM summary_cache_migrations WHERE name = 'summary-cache-completion-classification-v2'`
     ).get() as { cnt: number };
     expect(markerCount.cnt).toBe(1);
   });
@@ -267,7 +267,7 @@ describe("migrateSummaryCacheClassification — idempotency and ledger", () => {
     bareDb.exec(`CREATE TABLE summary_cache_migrations (name TEXT PRIMARY KEY, applied_at TEXT NOT NULL)`);
     expect(() => migrateSummaryCacheClassification(bareDb)).not.toThrow();
     const row = bareDb.prepare(
-      `SELECT name FROM summary_cache_migrations WHERE name = 'summary-cache-completion-classification-v1'`
+      `SELECT name FROM summary_cache_migrations WHERE name = 'summary-cache-completion-classification-v2'`
     ).get();
     expect(row).toBeTruthy();
     bareDb.close();
@@ -277,7 +277,7 @@ describe("migrateSummaryCacheClassification — idempotency and ledger", () => {
     // Schema exists but no rows at all — must safely mark complete.
     expect(() => migrateSummaryCacheClassification(db)).not.toThrow();
     const row = db.prepare(
-      `SELECT name FROM summary_cache_migrations WHERE name = 'summary-cache-completion-classification-v1'`
+      `SELECT name FROM summary_cache_migrations WHERE name = 'summary-cache-completion-classification-v2'`
     ).get();
     expect(row).toBeTruthy();
   });
@@ -322,7 +322,7 @@ describe("migrateSummaryCacheClassification — malformed totals_by_feature JSON
     expect(goodRow.acceptance_rate).toBe(75);
 
     const marker = db.prepare(
-      `SELECT name FROM summary_cache_migrations WHERE name = 'summary-cache-completion-classification-v1'`
+      `SELECT name FROM summary_cache_migrations WHERE name = 'summary-cache-completion-classification-v2'`
     ).get();
     expect(marker).toBeTruthy();
   });
@@ -348,7 +348,7 @@ describe("migrateSummaryCacheClassification — malformed totals_by_feature JSON
     expect(row.completion_loc_accepted).toBe(80);
 
     const marker = db.prepare(
-      `SELECT name FROM summary_cache_migrations WHERE name = 'summary-cache-completion-classification-v1'`
+      `SELECT name FROM summary_cache_migrations WHERE name = 'summary-cache-completion-classification-v2'`
     ).get();
     expect(marker).toBeTruthy();
   });
@@ -379,7 +379,7 @@ describe("migrateSummaryCacheClassification — malformed totals_by_feature JSON
     expect(row.overall_acceptance_rate).toBe(75);
 
     const marker = db.prepare(
-      `SELECT name FROM summary_cache_migrations WHERE name = 'summary-cache-completion-classification-v1'`
+      `SELECT name FROM summary_cache_migrations WHERE name = 'summary-cache-completion-classification-v2'`
     ).get();
     expect(marker).toBeTruthy();
   });

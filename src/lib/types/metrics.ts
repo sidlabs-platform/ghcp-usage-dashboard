@@ -199,8 +199,16 @@ export interface RoiGroup {
   phases: number[];
   /** Distinct users assigned to these phases anywhere in the window. */
   developers: number;
-  /** Total Copilot cost attributed to these users across the window. */
+  /**
+   * Total Copilot cost attributed to these users across the window — seat
+   * subscription plus consumption. Seat cost dominates in practice; reporting
+   * consumption alone understated cost per developer by ~70x.
+   */
   totalCostUsd: number;
+  /** Consumption-only portion of `totalCostUsd` (AI credits / premium requests). */
+  usageCostUsd: number;
+  /** Seat-subscription portion of `totalCostUsd`. Zero when no seat charges are synced. */
+  seatCostUsd: number;
   /** `totalCostUsd` per developer, normalized to a month. */
   costPerDevPerMonth: number;
   /** Absolute pull requests merged by this group (28-day rolling snapshot). */
@@ -219,6 +227,12 @@ export interface RoiResponse {
   currency: string;
   /** USD value of one AI credit used for the `credits` cost path. */
   creditToUsd: number;
+  /**
+   * Average billed USD per Copilot seat per month over the window, applied
+   * uniformly per developer. 0 when no `user-months` charges are synced, in
+   * which case the cost figures cover consumption only and should say so.
+   */
+  seatCostPerUserMonth: number;
   groups: RoiGroup[];
   windowDays: number;
   dataAsOf: string;
@@ -404,6 +418,35 @@ export interface OverviewKpis {
   aiCreditsConsumed: number | null;
   /** False when billing tables are empty; drives graceful "—" display in the UI. */
   billingAvailable: boolean;
+  /**
+   * How the active/inactive seat split was derived.
+   *
+   * - `"last_activity"` — from the live `copilot_seats` snapshot's
+   *   `last_activity_at`. Only meaningful for a window that ends today.
+   * - `"usage"` — from recorded usage inside the selected window. Used for
+   *   historical windows, because the snapshot stores only each seat's
+   *   latest-ever activity and therefore cannot answer "was this seat active
+   *   in June?".
+   *
+   * `null` when a scope filter is active, since seat data is enterprise-wide
+   * and is not reported for a filtered view.
+   */
+  seatActivityBasis: "last_activity" | "usage" | null;
+  /** True when the seat snapshot describes the selected window (i.e. it ends today). */
+  seatSnapshotIsLive: boolean;
+  /** LoC accepted from IDE completion features only (excludes agent and CLI). */
+  completionLocAccepted: number;
+  /** LoC suggested by IDE completion features only. */
+  completionLocSuggested: number;
+  /** LoC written directly to files by agent features; never "accepted". */
+  agentLocAdded: number;
+  /** LoC added via the Copilot CLI, reported separately from IDE completions. */
+  cliLocAdded: number;
+  /**
+   * Users with usage in the window who hold no seat in the current snapshot.
+   * Explains why the active-user count can exceed the seat count.
+   */
+  activeUsersWithoutSeat: number;
 }
 
 export interface OverviewData {
@@ -426,6 +469,18 @@ export interface OverviewData {
   cliVsIde: { day: string; ideUsers: number; cliUsers: number }[];
   dataAsOf: string;
   daysLoaded: number;
+  /**
+   * Whether the selected window is actually backed by synced usage data.
+   * Absent on responses produced before this field existed.
+   */
+  coverage?: {
+    earliest: string | null;
+    latest: string | null;
+    daysCovered: number;
+    daysRequested: number;
+    isEmpty: boolean;
+    isPartial: boolean;
+  };
   filtered?: boolean;
 }
 

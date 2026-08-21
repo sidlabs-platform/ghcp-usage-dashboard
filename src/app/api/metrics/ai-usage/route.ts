@@ -9,6 +9,7 @@ import { CACHE_TTL } from "@/lib/cache/memory-cache";
 import {
   getCompletionDailyTrend,
   getCompletionTotals,
+  acceptanceRateFrom,
   getActiveUsersRollingTrend,
   getIdeBreakdown,
   getFeatureBreakdown,
@@ -75,10 +76,16 @@ export interface AiUsageKpis {
   avgDailyActiveUsers: number;
   /** DAU/MAU stickiness as a percentage. */
   stickiness: number;
-  /** Completion-only acceptance rate, excluding agent activity. */
+  /**
+   * Acceptance rate over the surfaces that report a real accept/reject signal:
+   * IDE completion plus the Copilot CLI. Excludes agent activity, which
+   * reports acceptances as a hard 0.
+   */
   completionAcceptanceRate: number;
   completionLocAccepted: number;
   agentLocAdded: number;
+  /** CLI LoC written to files. Kept apart from completion LoC — not "accepted". */
+  cliLocAdded: number;
   totalInteractions: number;
 }
 
@@ -145,16 +152,16 @@ async function handler(request: NextRequest) {
       };
     });
 
-    // ── Acceptance rate trend — completion only ───────────────────────
+    // ── Acceptance rate trend — completion + CLI ──────────────────────
+    // Shared definition with the overview KPI (acceptanceRateFrom), so the two
+    // pages cannot report different acceptance rates for the same window.
     const acceptanceTrend = allDays.map((day) => {
       const r = trendByDay.get(day);
-      const gen = r?.compGenCount ?? 0;
-      const acc = r?.compAcceptCount ?? 0;
       return {
         day,
         suggested: r?.completionSuggested ?? 0,
         accepted: r?.completionAccepted ?? 0,
-        rate: gen > 0 ? (acc / gen) * 100 : 0,
+        rate: r ? acceptanceRateFrom(r) : 0,
       };
     });
 
@@ -198,9 +205,10 @@ async function handler(request: NextRequest) {
         monthlyActiveUsers,
         avgDailyActiveUsers,
         stickiness: monthlyActiveUsers > 0 ? (avgDailyActiveUsers / monthlyActiveUsers) * 100 : 0,
-        completionAcceptanceRate: totals.compGenCount > 0 ? (totals.compAcceptCount / totals.compGenCount) * 100 : 0,
+        completionAcceptanceRate: acceptanceRateFrom(totals),
         completionLocAccepted: totals.completionAccepted,
         agentLocAdded: totals.agentAdded,
+        cliLocAdded: totals.cliAdded,
         totalInteractions,
       },
     } satisfies AiUsageResponse, {

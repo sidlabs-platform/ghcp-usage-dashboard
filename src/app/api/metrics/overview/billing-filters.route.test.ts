@@ -42,6 +42,7 @@ vi.mock("@/lib/db/metrics-repo", () => ({
 
 vi.mock("@/lib/db/seats-repo", () => ({
   getSeatStats: () => ({ total: 0, active30d: 0, inactive30d: 0 }),
+  getSeatStatsForWindow: () => ({ total: 0, active30d: 0, inactive30d: 0 }),
 }));
 
 vi.mock("@/lib/db/aggregation-queries", async () => {
@@ -51,6 +52,7 @@ vi.mock("@/lib/db/aggregation-queries", async () => {
   return {
     buildLoginFilter: actual.buildLoginFilter,
     buildEnterpriseFilter: actual.buildEnterpriseFilter,
+    acceptanceRateFrom: actual.acceptanceRateFrom,
     estimateRowCount: () => ({ count: 0, exceeds: false }),
     getFeatureUsageDaily: () => [],
     getActiveUsersDailyTrend: () => [],
@@ -82,6 +84,11 @@ vi.mock("@/lib/db/aggregation-queries", async () => {
       appDeleted: 0,
       appGenCount: 0,
       appAcceptCount: 0,
+      cliSuggested: 0,
+      cliAdded: 0,
+      cliDeleted: 0,
+      cliGenCount: 0,
+      cliAcceptCount: 0,
     }),
   };
 });

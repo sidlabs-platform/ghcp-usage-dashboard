@@ -32,6 +32,7 @@ const hasBillingCostDataMock = vi.fn(() => false);
 const billingCostMock = vi.fn(() => [] as { phase: number; developers: number; total_cost_usd: number }[]);
 const creditsCostMock = vi.fn(() => [] as { phase: number; developers: number; total_cost_usd: number }[]);
 const countEnterprisesMock = vi.fn(() => 1);
+const seatCostMock = vi.fn(() => 0);
 
 vi.mock("@/lib/db/metrics-repo", () => ({
   countEffectiveEnterprises: (...a: unknown[]) =>
@@ -42,6 +43,8 @@ vi.mock("@/lib/db/metrics-repo", () => ({
     (billingCostMock as unknown as (...x: unknown[]) => unknown)(...a),
   getPhaseCostFromCredits: (...a: unknown[]) =>
     (creditsCostMock as unknown as (...x: unknown[]) => unknown)(...a),
+  getSeatCostPerUserMonth: (...a: unknown[]) =>
+    (seatCostMock as unknown as (...x: unknown[]) => unknown)(...a),
 }));
 
 const getMock = vi.fn(() => undefined as unknown);
@@ -104,6 +107,7 @@ beforeEach(() => {
   hasBillingCostDataMock.mockReturnValue(false);
   billingCostMock.mockReturnValue([]);
   creditsCostMock.mockReturnValue([]);
+  seatCostMock.mockReturnValue(0);
   getMock.mockReturnValue(undefined);
 });
 

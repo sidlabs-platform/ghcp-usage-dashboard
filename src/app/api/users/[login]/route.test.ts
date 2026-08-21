@@ -286,9 +286,15 @@ describe("user detail route", { timeout: 10000 }, () => {
         totalAiCreditsUsed: 1.5,
         totalCodeGen: 20,
         totalCodeAccept: 8,
-        acceptanceRate: 40,
+        // Now identical to `completionAcceptanceRate` by design: both are the
+        // accept/generate ratio over acceptance-eligible features. The old
+        // top-level figure divided the same acceptances by an agent-inclusive
+        // generation count, which could only ever understate the rate.
+        acceptanceRate: 50,
         agentLocAdded: 40,
         agentLocDeleted: 5,
+        cliLocAdded: 0,
+        cliLocDeleted: 0,
         totalLocSuggested: 120,
         completionLocAccepted: 110,
         completionLocDeleted: 5,

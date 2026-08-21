@@ -44,6 +44,12 @@ interface AdoptionCohortsData {
   daysLoaded: number;
   latestDay?: string;
   countBasis?: "window" | "snapshot";
+  /** Distinct users active in the window who were assigned an adoption phase. */
+  classified?: number;
+  /** Distinct active users the API assigned no adoption phase to. */
+  unclassified?: number;
+  /** Distinct users active anywhere in the window, phase-assigned or not. */
+  totalActive?: number;
 }
 
 const PHASE_ICONS: Record<number, typeof Users> = {
@@ -181,6 +187,23 @@ export default function AdoptionCohortsPage() {
       </PageHeader>
 
       <ScopeFilter />
+
+      {/*
+        Cohort counts only cover users the API assigned a phase to, so they are
+        always a subset of the active-user count on the Overview page. Naming the
+        remainder here stops the two pages reading as a contradiction.
+      */}
+      {(data.unclassified ?? 0) > 0 && (
+        <div
+          role="status"
+          className="mb-4 rounded-lg border border-slate-600/50 bg-slate-800/40 px-4 py-3 text-sm text-slate-300"
+        >
+          {data.unclassified?.toLocaleString()} of {data.totalActive?.toLocaleString()} active
+          users have no adoption phase assigned and are excluded from the cohorts below.
+          GitHub assigns a phase only to users who meet its engagement criteria, so
+          cohort totals are expected to be lower than the Overview&apos;s active-user count.
+        </div>
+      )}
 
       {/* Polite live region for screen readers */}
       <div aria-live="polite" aria-atomic="true" className="sr-only">

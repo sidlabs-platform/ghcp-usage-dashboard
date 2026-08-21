@@ -18,11 +18,20 @@
 // ./aggregation-queries) so this module can be required by database.ts
 // without creating a circular import: database.ts -> summary-cache-migration.ts
 // -> aggregation-queries.ts -> database.ts would otherwise be a cycle.
-import { IS_COMPLETION_SQL } from "./feature-classification";
+import { IS_COMPLETION_SQL, IS_ACCEPTANCE_ELIGIBLE_SQL } from "./feature-classification";
 import type { SqliteDatabase } from "./sqlite-database";
 
-/** Ledger name recorded once this migration has successfully applied. */
-const MIGRATION_NAME = "summary-cache-completion-classification-v1";
+/**
+ * Ledger name recorded once this migration has successfully applied.
+ *
+ * Bumped to v2 when `copilot_cli` was given its own classification. A database
+ * that already ran v1 still holds acceptance rates computed without the CLI —
+ * on a CLI-heavy fleet that under-reported the rate by roughly 6x — so the
+ * ledger name must change or those rows would never be recomputed. The
+ * migration only ever recomputes derived columns from `user_daily_metrics`, so
+ * re-running it is safe and needs no re-sync.
+ */
+const MIGRATION_NAME = "summary-cache-completion-classification-v2";
 
 function tableExists(db: SqliteDatabase, table: string): boolean {
   const row = db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`).get(table);
@@ -61,12 +70,12 @@ function migrateUserPeriodSummary(db: SqliteDatabase): void {
     UPDATE user_period_summary SET acceptance_rate = COALESCE(f.rate, 0)
     FROM (
       SELECT u.enterprise_slug, u.user_login, s.period_start, s.period_end,
-        CASE WHEN SUM(CASE WHEN ${IS_COMPLETION_SQL}
+        CASE WHEN SUM(CASE WHEN ${IS_ACCEPTANCE_ELIGIBLE_SQL}
             THEN json_extract(j.value, '$.code_generation_activity_count') ELSE 0 END) > 0
           THEN ROUND(
-            CAST(SUM(CASE WHEN ${IS_COMPLETION_SQL}
+            CAST(SUM(CASE WHEN ${IS_ACCEPTANCE_ELIGIBLE_SQL}
               THEN json_extract(j.value, '$.code_acceptance_activity_count') ELSE 0 END) AS REAL) /
-            SUM(CASE WHEN ${IS_COMPLETION_SQL}
+            SUM(CASE WHEN ${IS_ACCEPTANCE_ELIGIBLE_SQL}
               THEN json_extract(j.value, '$.code_generation_activity_count') ELSE 0 END) * 100, 1)
           ELSE 0 END as rate
       FROM user_period_summary s
@@ -136,12 +145,12 @@ function migrateTeamSummaryCache(db: SqliteDatabase): void {
     UPDATE team_summary_cache SET overall_acceptance_rate = COALESCE(f.rate, 0)
     FROM (
       SELECT tm.enterprise_slug, tm.team_slug, tm.source, s.period_start, s.period_end,
-        CASE WHEN SUM(CASE WHEN ${IS_COMPLETION_SQL}
+        CASE WHEN SUM(CASE WHEN ${IS_ACCEPTANCE_ELIGIBLE_SQL}
             THEN json_extract(j.value, '$.code_generation_activity_count') ELSE 0 END) > 0
           THEN ROUND(
-            CAST(SUM(CASE WHEN ${IS_COMPLETION_SQL}
+            CAST(SUM(CASE WHEN ${IS_ACCEPTANCE_ELIGIBLE_SQL}
               THEN json_extract(j.value, '$.code_acceptance_activity_count') ELSE 0 END) AS REAL) /
-            SUM(CASE WHEN ${IS_COMPLETION_SQL}
+            SUM(CASE WHEN ${IS_ACCEPTANCE_ELIGIBLE_SQL}
               THEN json_extract(j.value, '$.code_generation_activity_count') ELSE 0 END) * 100, 1)
           ELSE 0 END as rate
       FROM team_summary_cache s

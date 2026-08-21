@@ -2,6 +2,7 @@
 
 import { getDb } from "./database";
 import type { CopilotSeat } from "@/lib/types/seats";
+import { SEAT_ACTIVE_WINDOW_DAYS } from "@/lib/constants";
 
 function buildEnterpriseFilter(slugs?: string[], prefix = "WHERE"): { clause: string; params: string[] } {
   if (!slugs || slugs.length === 0) return { clause: "", params: [] };
@@ -184,6 +185,16 @@ export function getSeatsPaginated(
 }
 
 export interface SeatStats {
+  /**
+   * Distinct people holding a Copilot seat right now.
+   *
+   * Counted as `COUNT(DISTINCT LOWER(user_login))`, not `COUNT(*)`: the
+   * `copilot_seats` primary key includes `org_slug`, so a user who belongs to
+   * several orgs in the same enterprise produces several rows. Counting rows
+   * over-stated this fleet by 31% (1,595 rows for 1,219 people) and inflated
+   * every derived figure — seat totals, the utilization denominator and the
+   * inactive count.
+   */
   total: number;
   /** Seats with activity at or after the cutoff. Named for the default 30-day window. */
   active30d: number;
@@ -193,6 +204,15 @@ export interface SeatStats {
   activitySince: string;
   /** Optional inclusive upper bound applied to activity, or null for current windows. */
   activityUntil: string | null;
+  /**
+   * How the active/inactive split was derived.
+   *
+   * `"last_activity"` — from each seat's live `last_activity_at` stamp. Only
+   * meaningful for a window that runs up to now.
+   * `"usage"` — from recorded per-day usage inside the window. The only
+   * correct basis for a historical window; see {@link getSeatStatsForWindow}.
+   */
+  activityBasis: "last_activity" | "usage";
 }
 
 /**
@@ -200,9 +220,14 @@ export interface SeatStats {
  *
  * `copilot_seats` is a *live snapshot* — it holds today's seat assignments and
  * no history — so `total` and `pendingCancellation` always describe now, no
- * matter what window is selected. Only the active/inactive split can honour a
- * window, because `last_activity_at` is a real timestamp on each seat row.
- * Callers must present the two differently; see the Seat Management page.
+ * matter what window is selected. Callers must present the two differently;
+ * see the Seat Management page.
+ *
+ * The active/inactive split here is derived from `last_activity_at`, which is
+ * each seat's *latest ever* activity, refreshed on every sync. That makes it
+ * valid only for a window running up to now. For a historical window use
+ * {@link getSeatStatsForWindow}, which derives the split from recorded usage
+ * instead.
  *
  * @param enterpriseSlugs Restrict to these enterprises.
  * @param activitySince ISO timestamp; seats active at or after it count as
@@ -219,9 +244,9 @@ export function getSeatStats(
   const db = getDb();
   let cutoff = activitySince;
   if (!cutoff) {
-    const thirtyDaysAgo = new Date();
-    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-    cutoff = thirtyDaysAgo.toISOString();
+    const windowStart = new Date();
+    windowStart.setDate(windowStart.getDate() - SEAT_ACTIVE_WINDOW_DAYS);
+    cutoff = windowStart.toISOString();
   }
   const upperBound = activityUntil || null;
 
@@ -232,9 +257,9 @@ export function getSeatStats(
     ? [cutoff, upperBound, ...efA.params]
     : [cutoff, ...efA.params];
 
-  const total = (db.prepare(`SELECT COUNT(*) as c FROM copilot_seats${efW.clause}`).get(...efW.params) as { c: number }).c;
-  const active30d = (db.prepare(`SELECT COUNT(*) as c FROM copilot_seats WHERE last_activity_at >= ?${activityUpperClause}${efA.clause}`).get(...activeParams) as { c: number }).c;
-  const pendingCancellation = (db.prepare(`SELECT COUNT(*) as c FROM copilot_seats WHERE pending_cancellation_date IS NOT NULL${efA.clause}`).get(...efA.params) as { c: number }).c;
+  const total = (db.prepare(`SELECT COUNT(DISTINCT LOWER(user_login)) as c FROM copilot_seats${efW.clause}`).get(...efW.params) as { c: number }).c;
+  const active30d = (db.prepare(`SELECT COUNT(DISTINCT LOWER(user_login)) as c FROM copilot_seats WHERE last_activity_at >= ?${activityUpperClause}${efA.clause}`).get(...activeParams) as { c: number }).c;
+  const pendingCancellation = (db.prepare(`SELECT COUNT(DISTINCT LOWER(user_login)) as c FROM copilot_seats WHERE pending_cancellation_date IS NOT NULL${efA.clause}`).get(...efA.params) as { c: number }).c;
 
   return {
     total,
@@ -243,5 +268,110 @@ export function getSeatStats(
     pendingCancellation,
     activitySince: cutoff,
     activityUntil: upperBound,
+    activityBasis: "last_activity",
   };
+}
+
+/**
+ * Seat counts whose active/inactive split describes the *selected window*.
+ *
+ * This exists because `copilot_seats.last_activity_at` is a single
+ * latest-ever timestamp on a live snapshot, not a history. Asking whether that
+ * one stamp falls inside a past month answers the wrong question: everyone
+ * still using Copilot today carries a *today* stamp, so they fall outside the
+ * month and get counted as inactive. Selecting June 2026 in August reported 48
+ * active and 1,547 inactive seats — and a 3% license utilization — for a fleet
+ * where 1,077 seat holders actually used Copilot that June.
+ *
+ * So for a historical window the split is derived from `user_daily_metrics`,
+ * which *is* per-day history: a seat is active if that person has a recorded
+ * usage row inside the window. `total` and `pendingCancellation` still describe
+ * now, because the snapshot has no history to offer — callers must label them
+ * as such.
+ *
+ * A window that runs up to the present keeps the cheaper `last_activity_at`
+ * basis, which also picks up activity newer than the last metrics sync.
+ *
+ * @param isCurrentWindow When true, use the live `last_activity_at` basis.
+ */
+export function getSeatStatsForWindow(
+  startDay: string,
+  endDay: string,
+  isCurrentWindow: boolean,
+  enterpriseSlugs?: string[],
+  activitySince?: string,
+  activityUntil?: string | null,
+): SeatStats {
+  if (isCurrentWindow) {
+    return getSeatStats(enterpriseSlugs, activitySince, activityUntil);
+  }
+
+  const db = getDb();
+  const efW = buildEnterpriseFilter(enterpriseSlugs);
+  const efA = buildEnterpriseFilter(enterpriseSlugs, "AND");
+
+  const total = (db.prepare(
+    `SELECT COUNT(DISTINCT LOWER(user_login)) as c FROM copilot_seats${efW.clause}`,
+  ).get(...efW.params) as { c: number }).c;
+
+  const pendingCancellation = (db.prepare(
+    `SELECT COUNT(DISTINCT LOWER(user_login)) as c FROM copilot_seats WHERE pending_cancellation_date IS NOT NULL${efA.clause}`,
+  ).get(...efA.params) as { c: number }).c;
+
+  // Enterprise scoping is applied to the seat side only. A seat holder counts
+  // as active on the strength of any recorded usage in the window, regardless
+  // of which enterprise reported it, so a user whose seat sits in one
+  // enterprise is not marked inactive because their usage was reported under
+  // another.
+  const active30d = (db.prepare(
+    `SELECT COUNT(*) as c FROM (
+       SELECT DISTINCT LOWER(user_login) AS login FROM copilot_seats${efW.clause}
+     ) s
+     WHERE s.login IN (
+       SELECT DISTINCT LOWER(user_login) FROM user_daily_metrics WHERE day >= ? AND day <= ?
+     )`,
+  ).get(...efW.params, startDay, endDay) as { c: number }).c;
+
+  return {
+    total,
+    active30d,
+    inactive30d: total - active30d,
+    pendingCancellation,
+    activitySince: `${startDay}T00:00:00.000Z`,
+    activityUntil: `${endDay}T23:59:59.999Z`,
+    activityBasis: "usage",
+  };
+}
+
+/**
+ * Distinct users with recorded usage in the window who hold no seat in the
+ * current `copilot_seats` snapshot.
+ *
+ * Active-user counts come from usage metrics while seat counts come from a live
+ * snapshot, so the two populations do not have to match — a user whose seat was
+ * removed, or whose organization's seat sync is failing, appears in one and not
+ * the other. Left unreported this shows up as "1,464 active users" beside "1,219
+ * seats", which reads as a bug rather than as two different measurements.
+ */
+export function countActiveUsersWithoutSeat(
+  startDay: string,
+  endDay: string,
+  enterpriseSlugs?: string[],
+): number {
+  const db = getDb();
+  const efW = buildEnterpriseFilter(enterpriseSlugs);
+  const efU = buildEnterpriseFilter(enterpriseSlugs, "AND");
+
+  const row = db.prepare(
+    `SELECT COUNT(*) as c FROM (
+       SELECT DISTINCT LOWER(user_login) AS login
+       FROM user_daily_metrics
+       WHERE day >= ? AND day <= ?${efU.clause}
+     ) u
+     WHERE u.login NOT IN (
+       SELECT DISTINCT LOWER(user_login) FROM copilot_seats${efW.clause}
+     )`,
+  ).get(startDay, endDay, ...efU.params, ...efW.params) as { c: number } | undefined;
+
+  return row?.c ?? 0;
 }

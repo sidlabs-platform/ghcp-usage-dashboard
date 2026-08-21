@@ -4,6 +4,7 @@ import { parseScopeFilter } from "@/lib/api/scope-filter";
 import {
   getCompletionDailyTrend,
   getCompletionTotals,
+  acceptanceRateFrom,
   getLanguageBreakdown,
   getFeatureBreakdown,
   getModelBreakdown,
@@ -38,6 +39,11 @@ export interface CodeGenerationResponse {
     appLocAdded: number;
     appLocDeleted: number;
     appCodeGenerations: number;
+    /** Copilot CLI LoC written directly to files — not "accepted" suggestions. */
+    cliLocAdded: number;
+    cliLocDeleted: number;
+    cliCodeGenerations: number;
+    cliLocShare: number;
   };
 }
 
@@ -85,12 +91,10 @@ export async function GET(request: NextRequest) {
       };
     });
 
-    // Acceptance rate — completion only
+    // Acceptance rate — completion + CLI (shared definition; see acceptanceRateFrom)
     const acceptanceRate = allDays.map((day) => {
       const r = trendByDay.get(day);
-      const gen = r?.compGenCount ?? 0;
-      const acc = r?.compAcceptCount ?? 0;
-      return { day, rate: gen > 0 ? (acc / gen) * 100 : 0 };
+      return { day, rate: r ? acceptanceRateFrom(r) : 0 };
     });
 
     // Language, feature, model breakdowns — all SQL
@@ -101,10 +105,16 @@ export async function GET(request: NextRequest) {
     // KPIs — period totals via SQL
     const totals = getCompletionTotals(startDay, endDay, allowedLogins, enterpriseSlugs);
     // Total LoC changed spans every surface: completion (accepted), agent (added + deleted),
-    // and Copilot App (added + deleted) — App activity is additive here but never folds into
-    // completion-specific KPIs (see completionAcceptanceRate below).
+    // Copilot App (added + deleted) and the CLI (added + deleted). The CLI was previously
+    // absent here, which under-reported total LoC by an order of magnitude on CLI-heavy
+    // fleets. It is additive here but never folds into completion-specific KPIs
+    // (see completionAcceptanceRate below).
     const totalLocChanged =
-      totals.completionAccepted + totals.agentAdded + totals.agentDeleted + totals.appAdded + totals.appDeleted;
+      totals.completionAccepted + totals.agentAdded + totals.agentDeleted
+      + totals.appAdded + totals.appDeleted + totals.cliAdded + totals.cliDeleted;
+    // Denominator shared by every "share of added LoC" KPI, so the surface
+    // shares are mutually consistent and sum to 100%.
+    const totalLocAdded = totals.completionAccepted + totals.agentAdded + totals.appAdded + totals.cliAdded;
 
     return NextResponse.json({
       dailyTrend,
@@ -114,21 +124,24 @@ export async function GET(request: NextRequest) {
       modelBreakdown,
       kpis: {
         totalLocChanged,
-        // Completion-only ratio — App generations/acceptances must never leak in here.
-        completionAcceptanceRate: totals.compGenCount > 0 ? (totals.compAcceptCount / totals.compGenCount) * 100 : 0,
+        // Completion + CLI ratio — App and agent generations must never leak in here.
+        completionAcceptanceRate: acceptanceRateFrom(totals),
         completionLocSuggested: totals.completionSuggested,
         completionLocAccepted: totals.completionAccepted,
         agentLocAdded: totals.agentAdded,
         agentLocDeleted: totals.agentDeleted,
-        // Share of "added" LoC across all writing surfaces (completion, agent, Copilot App).
-        // Copilot App added LoC must be counted in the denominator alongside completion and
-        // agent so App activity doesn't silently inflate the agent's apparent share.
-        agentLocShare: (totals.completionAccepted + totals.agentAdded + totals.appAdded) > 0
-          ? (totals.agentAdded / (totals.completionAccepted + totals.agentAdded + totals.appAdded)) * 100 : 0,
-        totalCodeGenerations: totals.compGenCount,
+        // Share of "added" LoC across all writing surfaces (completion, agent,
+        // Copilot App, CLI). Every writing surface must be in the denominator
+        // or the remaining ones inflate each other's apparent share.
+        agentLocShare: totalLocAdded > 0 ? (totals.agentAdded / totalLocAdded) * 100 : 0,
+        totalCodeGenerations: totals.compGenCount + totals.cliGenCount,
         appLocAdded: totals.appAdded,
         appLocDeleted: totals.appDeleted,
         appCodeGenerations: totals.appGenCount,
+        cliLocAdded: totals.cliAdded,
+        cliLocDeleted: totals.cliDeleted,
+        cliCodeGenerations: totals.cliGenCount,
+        cliLocShare: totalLocAdded > 0 ? (totals.cliAdded / totalLocAdded) * 100 : 0,
       },
     } as CodeGenerationResponse, {
       headers: { "Cache-Control": "private, max-age=300, stale-while-revalidate=60" },

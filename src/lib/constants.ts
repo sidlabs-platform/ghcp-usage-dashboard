@@ -131,6 +131,18 @@ export const DATE_PRESETS = [
 export const DEFAULT_DATE_RANGE_DAYS = 7;
 
 /**
+ * Days of inactivity after which a seat in the live `copilot_seats` snapshot is
+ * treated as inactive.
+ *
+ * Shared by the SQL that computes the split (`getSeatStats`), the licensing
+ * activity status (`deriveActivityStatus`) and the dashboard copy that explains
+ * it, so the number a reader is shown can never drift from the number actually
+ * used. Lives here because the dashboard is a client component and must not
+ * import the SQLite-backed repositories.
+ */
+export const SEAT_ACTIVE_WINDOW_DAYS = 30;
+
+/**
  * Data-quality caveat surfaced on the AI Credits page. The 2026-07-02 metrics
  * accuracy update began attributing AI-credit usage that was previously dropped
  * (org-less usage and users seen only via server-side telemetry). Already-reported

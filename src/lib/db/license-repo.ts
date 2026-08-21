@@ -18,8 +18,7 @@ import type {
   UtilizationBucket,
   ActivityStatus,
 } from "@/lib/types/licensing";
-
-const ACTIVE_WINDOW_DAYS = 30;
+import { SEAT_ACTIVE_WINDOW_DAYS as ACTIVE_WINDOW_DAYS } from "@/lib/constants";
 
 export interface LicenseReconciliationFilters {
   /** Restrict to these logins (resolved from team/org scope). */
@@ -77,6 +76,13 @@ function toDateOnly(value: string | null): string | null {
   return value.length >= 10 ? value.slice(0, 10) : value;
 }
 
+/**
+ * Classify a seat's activity relative to a reference instant.
+ *
+ * `now` must be the end of the window being reported, not wall-clock now —
+ * otherwise a historical view labels seats using a window that has nothing to
+ * do with the period on screen.
+ */
 function deriveActivityStatus(lastActivity: string | null, now: Date): ActivityStatus {
   if (!lastActivity) return "never";
   const ts = Date.parse(lastActivity);
@@ -179,7 +185,13 @@ export function getLicenseReconciliationDataset(
     .all(...ent.params) as SeatRow[];
 
   const consumption = getConsumptionByUser(start, end, filters);
-  const now = new Date();
+  // Anchored to the end of the *selected* window, not wall-clock now. Using
+  // `new Date()` asked "was this seat active in the 30 days before today?"
+  // while every other figure on the page described the selected period, so a
+  // historical window mixed two different definitions of "active" in one table.
+  // Falls back to now when the window end is unparseable or in the future.
+  const windowEnd = Date.parse(`${end}T23:59:59.999Z`);
+  const now = Number.isNaN(windowEnd) ? new Date() : new Date(Math.min(windowEnd, Date.now()));
 
   // Group seats by user_login.
   interface Acc {
