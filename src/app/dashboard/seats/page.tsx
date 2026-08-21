@@ -36,6 +36,8 @@ interface SeatStats {
   pendingCancellation: number;
   /** ISO timestamp the API used as the activity cutoff for this window. */
   activitySince?: string;
+  /** Inclusive upper bound for historical windows; null/absent means current live activity is included. */
+  activityUntil?: string | null;
 }
 
 function daysAgo(dateStr: string | null): string {
@@ -52,9 +54,11 @@ function fallbackCutoff(): string {
   return d.toISOString();
 }
 
-function seatStatus(row: SeatRow, cutoff: string): "Pending Cancel" | "Active" | "Inactive" {
+function seatStatus(row: SeatRow, cutoff: string, until: string | null): "Pending Cancel" | "Active" | "Inactive" {
   if (row.pending_cancellation_date) return "Pending Cancel";
-  return row.last_activity_at && row.last_activity_at >= cutoff ? "Active" : "Inactive";
+  return row.last_activity_at && row.last_activity_at >= cutoff && (until === null || row.last_activity_at <= until)
+    ? "Active"
+    : "Inactive";
 }
 
 /**
@@ -62,7 +66,7 @@ function seatStatus(row: SeatRow, cutoff: string): "Pending Cancel" | "Active" |
  * module constant because the status badge must agree with the KPI tiles above
  * it, and those follow the selected window.
  */
-function buildSeatColumns(cutoff: string): ColumnDef<SeatRow>[] {
+function buildSeatColumns(cutoff: string, until: string | null): ColumnDef<SeatRow>[] {
   return [
     { key: "user_login", label: "User", render: (row) => <span className="font-medium">{row.user_login}</span> },
     { key: "org_slug", label: "Org", render: (row) => row.org_slug },
@@ -74,7 +78,7 @@ function buildSeatColumns(cutoff: string): ColumnDef<SeatRow>[] {
       label: "Status",
       sortable: false,
       render: (row) => {
-        const status = seatStatus(row, cutoff);
+        const status = seatStatus(row, cutoff, until);
         if (status === "Pending Cancel") return <Badge variant="warning">Pending Cancel</Badge>;
         if (status === "Active") return <Badge variant="success">Active</Badge>;
         return <Badge variant="secondary">Inactive</Badge>;
@@ -83,14 +87,14 @@ function buildSeatColumns(cutoff: string): ColumnDef<SeatRow>[] {
   ];
 }
 
-function buildSeatExportColumns(cutoff: string): CSVColumn[] {
+function buildSeatExportColumns(cutoff: string, until: string | null): CSVColumn[] {
   return [
     { key: "user_login", label: "User" },
     { key: "org_slug", label: "Organization" },
     { key: "plan_type", label: "Plan" },
     { key: "last_activity_at", label: "Last Activity", format: (row) => row.last_activity_at ?? "Never" },
     { key: "last_activity_editor", label: "Editor", format: (row) => row.last_activity_editor ?? "" },
-    { key: "status", label: "Status", format: (row) => seatStatus(row as unknown as SeatRow, cutoff) },
+    { key: "status", label: "Status", format: (row) => seatStatus(row as unknown as SeatRow, cutoff, until) },
   ];
 }
 
@@ -116,9 +120,12 @@ export default function SeatsPage() {
   const stats: SeatStats | undefined = statsData?.stats;
   const utilization: number | undefined = statsData?.utilization;
   const cutoff = stats?.activitySince ?? fallbackCutoff();
+  // Absent on responses cached before this field existed, which correctly means
+  // "no upper bound", so today's live activity still counts.
+  const until = stats?.activityUntil ?? null;
 
-  const seatColumns = useMemo(() => buildSeatColumns(cutoff), [cutoff]);
-  const seatExportColumns = useMemo(() => buildSeatExportColumns(cutoff), [cutoff]);
+  const seatColumns = useMemo(() => buildSeatColumns(cutoff, until), [cutoff, until]);
+  const seatExportColumns = useMemo(() => buildSeatExportColumns(cutoff, until), [cutoff, until]);
 
   const extraParams = new URLSearchParams(windowKey);
   if (showInactiveOnly) extraParams.set("inactiveOnly", "true");
@@ -145,7 +152,8 @@ export default function SeatsPage() {
 
       <p className="text-xs text-[hsl(var(--muted-foreground))] mb-4">
         Seat assignments are a live snapshot of today — GitHub does not report seat history, so Total
-        Seats cannot be scoped to a past window. The activity split below uses {dateLabel.toLowerCase()}.
+        Seats cannot be scoped to a past window. The activity split below uses {dateLabel.toLowerCase()}
+        {until === null ? ", including today's live activity." : "."}
       </p>
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4 mb-8">

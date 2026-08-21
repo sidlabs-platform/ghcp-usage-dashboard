@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSeatsPaginated, getSeatStats } from "@/lib/db/seats-repo";
 import { parseScopeFilter } from "@/lib/api/scope-filter";
+import { resolveSeatActivityWindow } from "@/lib/api/seat-activity-window";
 import { parseDateRangeParams } from "@/lib/utils";
 import { withCache } from "@/lib/cache/with-cache";
 import { withTimeout } from "@/lib/api/timeout";
@@ -19,7 +20,7 @@ async function handler(request: NextRequest) {
     if ("error" in range) {
       return NextResponse.json({ error: range.error }, { status: 400 });
     }
-    const activitySince = `${range.start}T00:00:00.000Z`;
+    const { activitySince, activityUntil } = resolveSeatActivityWindow(range.start, range.end);
 
     const rawPage = parseInt(params.get("page") || "1", 10);
     const page = Math.max(1, Number.isNaN(rawPage) ? 1 : rawPage);
@@ -28,7 +29,7 @@ async function handler(request: NextRequest) {
     const sort = params.get("sort") || "_lastActivity";
     const sortDir = (params.get("sortDir") === "asc" ? "asc" : "desc") as "asc" | "desc";
 
-    const stats = getSeatStats(enterpriseSlugs, activitySince);
+    const stats = getSeatStats(enterpriseSlugs, activitySince, activityUntil);
 
     const result = getSeatsPaginated(page, pageSize, sort, sortDir, filter.allowedLogins, enterpriseSlugs);
 

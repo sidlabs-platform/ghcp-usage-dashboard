@@ -5,10 +5,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render, screen, fireEvent, waitFor } from "@testing-library/react";
 
 const dateRangeState = vi.hoisted(() => ({
-  mode: "preset" as "preset" | "custom",
+  mode: "preset" as "preset" | "custom" | "month",
   days: 28,
   startDate: "2026-05-01",
   endDate: "2026-05-28",
+  period: null as string | null,
 }));
 
 const scopeState = vi.hoisted(() => ({
@@ -149,6 +150,11 @@ const enabledResponse = {
 
 describe("License reconciliation page", () => {
   beforeEach(() => {
+    dateRangeState.mode = "preset";
+    dateRangeState.days = 28;
+    dateRangeState.startDate = "2026-05-01";
+    dateRangeState.endDate = "2026-05-28";
+    dateRangeState.period = null;
     scopeState.hasFilter = false;
     scopeState.selectedEntTeams = [];
     scopeState.selectedOrgTeams = [];
@@ -275,6 +281,39 @@ describe("License reconciliation page", () => {
     const csvConfig = exportMenuState.props!.csv as { fetchUrl: string; extraParams: URLSearchParams };
     expect(csvConfig.fetchUrl).toBe("/api/billing/license-reconciliation");
     expect(csvConfig.extraParams.get("days")).toBe("28");
+  });
+
+  it("sends custom startDate/endDate to reconciliation and export params, not days", async () => {
+    dateRangeState.mode = "custom";
+    dateRangeState.days = 31;
+    dateRangeState.startDate = "2026-03-01";
+    dateRangeState.endDate = "2026-03-31";
+
+    const Page = (await import("./page")).default;
+    render(<Page />);
+
+    await waitFor(() => {
+      const calls = (fetch as unknown as ReturnType<typeof vi.fn>).mock.calls;
+      expect(calls.some((call: unknown[]) => String(call[0]).includes("/api/billing/license-reconciliation"))).toBe(true);
+    });
+    const call = (fetch as unknown as ReturnType<typeof vi.fn>).mock.calls.find((args: unknown[]) =>
+      String(args[0]).includes("/api/billing/license-reconciliation?"),
+    );
+    const params = new URL(String(call?.[0]), "http://localhost").searchParams;
+    expect(params.get("startDate")).toBe("2026-03-01");
+    expect(params.get("endDate")).toBe("2026-03-31");
+    expect(params.has("days")).toBe(false);
+
+    const csvConfig = exportMenuState.props!.csv as {
+      filename: string;
+      extraParams: URLSearchParams;
+      metadata: { dateRange: string };
+    };
+    expect(csvConfig.extraParams.get("startDate")).toBe("2026-03-01");
+    expect(csvConfig.extraParams.get("endDate")).toBe("2026-03-31");
+    expect(csvConfig.extraParams.has("days")).toBe(false);
+    expect(csvConfig.filename).toBe("license-ai-credits-2026-03-01_2026-03-31");
+    expect(csvConfig.metadata.dateRange).toBe("2026-03-01 to 2026-03-31");
   });
 
   it("shows an error state with a retry button", async () => {

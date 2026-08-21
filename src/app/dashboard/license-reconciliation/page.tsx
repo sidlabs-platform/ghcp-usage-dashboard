@@ -528,9 +528,27 @@ export default function LicenseReconciliationPage() {
     unknown: "#94a3b8",
   };
 
+  const selectedWindowLabel =
+    periods.length > 0
+      ? `Periods: ${periods.join(", ")}`
+      : dateMode === "month" && selectedPeriod
+        ? periodLabel(selectedPeriod)
+        : dateMode === "custom"
+          ? `${startDate} to ${endDate}`
+          : `Last ${days} days`;
+
+  const exportSlug =
+    periods.length > 0
+      ? periods.join("_")
+      : dateMode === "month" && selectedPeriod
+        ? selectedPeriod
+        : dateMode === "custom"
+          ? `${startDate}_${endDate}`
+          : `${days}d`;
+
   const exportMeta = {
     reportName: "License & AI Credits Reconciliation",
-    dateRange: periods.length > 0 ? `Periods: ${periods.join(", ")}` : `Last ${days} days`,
+    dateRange: selectedWindowLabel,
     view,
     ...(hasFilter && { teams: [...selectedEntTeams, ...selectedOrgTeams].join(", "), orgs: selectedOrgs.join(", ") }),
   };
@@ -616,13 +634,13 @@ export default function LicenseReconciliationPage() {
                 orgs: Array.isArray(r.orgs) ? r.orgs.join(" | ") : r.orgs,
                 over_budget: r.over_budget ? "TRUE" : "FALSE",
               })),
-            filename: `license-ai-credits-${days}d`,
+            filename: `license-ai-credits-${exportSlug}`,
             metadata: exportMeta,
           }}
           pdf={{
             sectionRefs: [overviewRef, qualityRef],
             title: "License & AI Credits Reconciliation",
-            filename: `license-ai-credits-${days}d`,
+            filename: `license-ai-credits-${exportSlug}`,
             metadata: exportMeta,
           }}
           isReady={hasData}

@@ -41,7 +41,8 @@ function yesterdayISO(): string {
  * to an end of *yesterday*, so without this the page would lose today's events
  * the moment it started honouring the global selector — the exact regression
  * the include-today rule exists to prevent. A fully elapsed past month, or a
- * custom range the reader deliberately ended earlier, is left untouched.
+ * custom range the reader deliberately ended earlier, is left untouched. The
+ * maximum-span limit applies to this effective post-extension window.
  *
  * @returns `{ start, end, explicit }` or `{ error }` for a 400 response.
  */
@@ -67,11 +68,12 @@ export function parseSeatLifecycleWindow(
     if (s > e) {
       return { error: "start must be on or before end." };
     }
-    const spanDays = Math.round((e.getTime() - s.getTime()) / 86_400_000) + 1;
+    const end = rawEnd >= yesterdayISO() ? todayISO() : rawEnd;
+    const effectiveEnd = new Date(`${end}T00:00:00Z`);
+    const spanDays = Math.round((effectiveEnd.getTime() - s.getTime()) / 86_400_000) + 1;
     if (spanDays > MAX_DAYS) {
       return { error: `Date range spans ${spanDays} days, which exceeds the maximum of ${MAX_DAYS}.` };
     }
-    const end = rawEnd >= yesterdayISO() ? todayISO() : rawEnd;
     return { start: rawStart, end, explicit: true };
   }
 

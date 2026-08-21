@@ -88,7 +88,7 @@ type ModelSortKey = keyof TokenModelSummary;
  * correlated against AI credit consumption (allowance vs. additional) and USD.
  */
 export default function TokenUsagePage() {
-  const { buildParams, dateLabel, filenameSuffix } = useDateRangeParams();
+  const { buildParams } = useDateRangeParams();
   const { buildScopeParams } = useScope();
 
   const [data, setData] = useState<TokenResponse | null>(null);

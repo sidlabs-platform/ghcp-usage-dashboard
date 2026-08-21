@@ -191,6 +191,8 @@ export interface SeatStats {
   pendingCancellation: number;
   /** The activity cutoff actually applied, as an ISO timestamp. */
   activitySince: string;
+  /** Optional inclusive upper bound applied to activity, or null for current windows. */
+  activityUntil: string | null;
 }
 
 /**
@@ -205,8 +207,15 @@ export interface SeatStats {
  * @param enterpriseSlugs Restrict to these enterprises.
  * @param activitySince ISO timestamp; seats active at or after it count as
  *   active. Defaults to 30 days ago so existing callers are unaffected.
+ * @param activityUntil Optional inclusive ISO timestamp; when provided, seats
+ *   active after it do not count as active. Omitted by default so current
+ *   live-snapshot behavior remains unchanged.
  */
-export function getSeatStats(enterpriseSlugs?: string[], activitySince?: string): SeatStats {
+export function getSeatStats(
+  enterpriseSlugs?: string[],
+  activitySince?: string,
+  activityUntil?: string | null,
+): SeatStats {
   const db = getDb();
   let cutoff = activitySince;
   if (!cutoff) {
@@ -214,12 +223,17 @@ export function getSeatStats(enterpriseSlugs?: string[], activitySince?: string)
     thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
     cutoff = thirtyDaysAgo.toISOString();
   }
+  const upperBound = activityUntil || null;
 
   const efW = buildEnterpriseFilter(enterpriseSlugs);
   const efA = buildEnterpriseFilter(enterpriseSlugs, "AND");
+  const activityUpperClause = upperBound ? " AND last_activity_at <= ?" : "";
+  const activeParams = upperBound
+    ? [cutoff, upperBound, ...efA.params]
+    : [cutoff, ...efA.params];
 
   const total = (db.prepare(`SELECT COUNT(*) as c FROM copilot_seats${efW.clause}`).get(...efW.params) as { c: number }).c;
-  const active30d = (db.prepare(`SELECT COUNT(*) as c FROM copilot_seats WHERE last_activity_at >= ?${efA.clause}`).get(cutoff, ...efA.params) as { c: number }).c;
+  const active30d = (db.prepare(`SELECT COUNT(*) as c FROM copilot_seats WHERE last_activity_at >= ?${activityUpperClause}${efA.clause}`).get(...activeParams) as { c: number }).c;
   const pendingCancellation = (db.prepare(`SELECT COUNT(*) as c FROM copilot_seats WHERE pending_cancellation_date IS NOT NULL${efA.clause}`).get(...efA.params) as { c: number }).c;
 
   return {
@@ -228,5 +242,6 @@ export function getSeatStats(enterpriseSlugs?: string[], activitySince?: string)
     inactive30d: total - active30d,
     pendingCancellation,
     activitySince: cutoff,
+    activityUntil: upperBound,
   };
 }

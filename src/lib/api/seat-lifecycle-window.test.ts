@@ -71,6 +71,24 @@ describe("parseSeatLifecycleWindow", () => {
     expect(result).toMatchObject({ end: shiftDays(-2) });
   });
 
+  it("rejects a MAX_DAYS raw range ending yesterday because today extension exceeds the limit", () => {
+    const result = parseSeatLifecycleWindow(
+      new URLSearchParams({ startDate: shiftDays(-MAX_DAYS), endDate: shiftDays(-1) }),
+    );
+
+    expect(result).toEqual({
+      error: `Date range spans ${MAX_DAYS + 1} days, which exceeds the maximum of ${MAX_DAYS}.`,
+    });
+  });
+
+  it("accepts a MAX_DAYS effective range after extending an end of yesterday to today", () => {
+    const result = parseSeatLifecycleWindow(
+      new URLSearchParams({ startDate: shiftDays(-(MAX_DAYS - 1)), endDate: shiftDays(-1) }),
+    );
+
+    expect(result).toEqual({ start: shiftDays(-(MAX_DAYS - 1)), end: today(), explicit: true });
+  });
+
   it("rejects a half-filled range", () => {
     expect(parseSeatLifecycleWindow(new URLSearchParams({ startDate: "2025-01-01" }))).toEqual({
       error: "Both start and end must be provided together.",
