@@ -152,9 +152,10 @@ CREATE INDEX IF NOT EXISTS idx_seats_team ON copilot_seats(assigning_team_slug);
 --   * 'sync_diff'       — offboarding detected by diffing the live seat snapshot
 --     against the stored one during seat sync. Available to every install, but
 --     only from the first sync after this feature ships onward.
---   * 'audit_log'       — both directions, projected from license_audit_events.
---     Exact and retroactive, but only when the optional licensing-history sync
---     is enabled.
+--   * 'audit_log'       — both directions, with exact GitHub-reported dates.
+--     Fetched from the audit log API on every seat sync (seat-audit-sync.ts),
+--     and additionally projected from license_audit_events when the optional
+--     licensing-history sync is enabled.
 --
 -- `source` participates in the primary key so re-deriving one source is
 -- idempotent (INSERT OR REPLACE) and never destroys another source's row.
@@ -190,6 +191,32 @@ CREATE INDEX IF NOT EXISTS idx_seat_lifecycle_source
 CREATE TABLE IF NOT EXISTS copilot_seat_lifecycle_coverage (
   enterprise_slug TEXT PRIMARY KEY,
   tracking_started_at TEXT NOT NULL
+);
+
+-- Audit-log seat lifecycle sync state, one row per enterprise.
+--
+-- The audit log is the authoritative offboarding source (GitHub reports the
+-- exact removal instant, rather than "sometime between the last two syncs"),
+-- but it is an optional capability: an enterprise may not have audit log API
+-- access, or the credential may lack `read:audit_log`. This row records BOTH
+-- what was fetched and why it could not be, so the dashboard can name the
+-- active source and its real coverage instead of implying completeness.
+--
+-- `covered_from`/`covered_through` bound the window the audit log has actually
+-- been read for. seat-lifecycle-repo.ts uses them so `sync_diff` rows are only
+-- suppressed inside that window — outside it, the snapshot diff is still the
+-- only evidence there is.
+CREATE TABLE IF NOT EXISTS copilot_seat_audit_sync_state (
+  enterprise_slug TEXT PRIMARY KEY,
+  status TEXT NOT NULL,           -- 'ok' | 'unavailable' | 'error'
+  reason TEXT,                    -- human-readable explanation for the UI
+  target TEXT,                    -- 'enterprise' | 'org' — which API answered
+  covered_from TEXT,              -- earliest instant ever successfully fetched
+  covered_through TEXT,           -- newest instant successfully fetched (watermark)
+  last_event_at TEXT,             -- newest audit event observed
+  last_synced_at TEXT NOT NULL,
+  events_written INTEGER NOT NULL DEFAULT 0,
+  truncated INTEGER NOT NULL DEFAULT 0
 );
 
 -- Team membership cache

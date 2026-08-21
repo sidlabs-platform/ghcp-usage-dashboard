@@ -39,6 +39,23 @@ interface Pagination {
   totalPages: number;
 }
 
+interface LifecycleCoverage {
+  source: "audit_log" | "sync_diff" | "none";
+  trackingStartedAt: string | null;
+  onboardingOnly: boolean;
+  /** Absent on responses cached before the audit-log source shipped. */
+  sourceBreakdown?: Partial<Record<LifecycleRow["source"], number>>;
+  /** Absent on responses cached before the audit-log source shipped. */
+  audit?: {
+    status: "ok" | "unavailable" | "error" | "never_run";
+    reason: string | null;
+    coveredFrom: string | null;
+    coveredThrough: string | null;
+    lastSyncedAt: string | null;
+    truncated: boolean;
+  };
+}
+
 interface LifecycleResponse {
   window: { start: string; end: string; explicit: boolean };
   stats: {
@@ -52,11 +69,7 @@ interface LifecycleResponse {
   trend: { day: string; onboarded: number; offboarded: number; net: number }[];
   onboarded: { rows: LifecycleRow[]; pagination: Pagination };
   offboarded: { rows: LifecycleRow[]; pagination: Pagination };
-  coverage: {
-    source: "audit_log" | "sync_diff" | "none";
-    trackingStartedAt: string | null;
-    onboardingOnly: boolean;
-  };
+  coverage: LifecycleCoverage;
   filtered: boolean;
   available: boolean;
 }
@@ -72,6 +85,124 @@ const SOURCE_LABELS: Record<LifecycleRow["source"], string> = {
 function formatDate(value: string | null): string {
   if (!value) return "—";
   return value.slice(0, 10);
+}
+
+/**
+ * State the provenance of the offboarding numbers, and the window they actually
+ * cover, rather than letting a reader assume completeness.
+ *
+ * Offboarding has two possible sources with materially different accuracy, so
+ * "which one is this?" is not a footnote: the audit log carries GitHub's exact
+ * removal instant, while the seat-sync diff can only place a removal somewhere
+ * between two syncs and knows nothing from before tracking began.
+ */
+function SourceCoverageNotice({ coverage }: { coverage: LifecycleCoverage }) {
+  // A response cached before this feature shipped carries neither field. Fall
+  // back to "the audit sync has not run", which is exactly what it means.
+  const audit = coverage.audit ?? {
+    status: "never_run" as const,
+    reason: null,
+    coveredFrom: null,
+    coveredThrough: null,
+    lastSyncedAt: null,
+    truncated: false,
+  };
+  const sourceBreakdown = coverage.sourceBreakdown ?? {};
+  const trackingStartedAt = coverage.trackingStartedAt;
+  // Without a breakdown, fall back to the top-level source verdict rather than
+  // silently claiming a source contributed no rows.
+  const hasAuditRows = coverage.sourceBreakdown
+    ? (sourceBreakdown.audit_log ?? 0) > 0
+    : coverage.source === "audit_log";
+  const hasDiffRows = coverage.sourceBreakdown
+    ? (sourceBreakdown.sync_diff ?? 0) > 0
+    : coverage.source === "sync_diff";
+
+  if (coverage.source === "none" && audit.status !== "unavailable" && audit.status !== "error") {
+    return (
+      <Card className="mb-6 p-6">
+        <div className="flex items-start gap-4">
+          <Info className="h-6 w-6 shrink-0 text-[hsl(var(--muted-foreground))]" />
+          <div>
+            <h2 className="font-semibold">Offboarding tracking has not started yet</h2>
+            <p className="mt-1 text-sm text-[hsl(var(--muted-foreground))]">
+              Seat removals are read from the GitHub audit log on every sync, and — where the audit log is not
+              available — detected by comparing each seat sync against the previous one. Run a sync to populate this
+              view. Onboarding dates are read from existing seat records and are available immediately.
+            </p>
+          </div>
+        </div>
+      </Card>
+    );
+  }
+
+  const lines: React.ReactNode[] = [];
+
+  if (hasAuditRows) {
+    lines.push(
+      <span key="audit">
+        Events are <strong className="text-[hsl(var(--foreground))]">sourced from the enterprise audit log</strong>,
+        with exact assignment and removal timestamps
+        {audit.coveredFrom && audit.coveredThrough && (
+          <>
+            , covering{" "}
+            <strong className="text-[hsl(var(--foreground))]">{formatDate(audit.coveredFrom)}</strong> →{" "}
+            <strong className="text-[hsl(var(--foreground))]">{formatDate(audit.coveredThrough)}</strong>
+          </>
+        )}
+        {audit.lastSyncedAt && <> (last synced {formatDate(audit.lastSyncedAt)})</>}.
+      </span>,
+    );
+    if (audit.truncated) {
+      lines.push(
+        <span key="truncated">
+          The audit log returned more pages than a single sync reads, so the oldest part of this window may still be
+          incomplete. Subsequent syncs continue filling it in.
+        </span>,
+      );
+    }
+  }
+
+  if (audit.status === "unavailable") {
+    lines.push(
+      <span key="unavailable">
+        <strong className="text-[hsl(var(--foreground))]">The audit log is not available</strong> for this scope, so
+        exact removal timestamps cannot be read. {audit.reason}
+      </span>,
+    );
+  }
+
+  if (audit.status === "error") {
+    lines.push(
+      <span key="error">
+        The last audit log sync did not complete, so recent removals may be missing. {audit.reason}
+      </span>,
+    );
+  }
+
+  if (trackingStartedAt && (hasDiffRows || audit.status !== "ok")) {
+    lines.push(
+      <span key="diff">
+        {hasAuditRows ? "Outside that window, offboarding" : "Offboarding"} is derived from seat-sync snapshots and
+        has been tracked since{" "}
+        <strong className="text-[hsl(var(--foreground))]">{formatDate(trackingStartedAt)}</strong>. Seats removed
+        before that date are not recorded.
+      </span>,
+    );
+  }
+
+  if (lines.length === 0) return null;
+
+  return (
+    <div className="mb-6 flex items-start gap-3 rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--muted))]/40 px-4 py-3 text-sm text-[hsl(var(--muted-foreground))]">
+      <Info className="mt-0.5 h-4 w-4 shrink-0" />
+      <div className="space-y-1">
+        {lines.map((line, index) => (
+          <p key={index}>{line}</p>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 function LifecycleTable({
@@ -268,41 +399,8 @@ export default function SeatLifecyclePage() {
         </div>
       )}
 
-      {/* Honest statement of what offboard data actually exists */}
-      {coverage?.source === "none" && (
-        <Card className="mb-6 p-6">
-          <div className="flex items-start gap-4">
-            <Info className="h-6 w-6 shrink-0 text-[hsl(var(--muted-foreground))]" />
-            <div>
-              <h2 className="font-semibold">Offboarding tracking has not started yet</h2>
-              <p className="mt-1 text-sm text-[hsl(var(--muted-foreground))]">
-                Seat removals are detected by comparing each seat sync against the previous one, so offboarding data
-                begins accumulating from the next sync. Onboarding dates are read from existing seat records and are
-                available immediately. If your enterprise has the licensing history sync enabled, exact historical
-                onboarding and offboarding events are imported from the audit log instead.
-              </p>
-            </div>
-          </div>
-        </Card>
-      )}
-
-      {coverage?.source === "sync_diff" && coverage.trackingStartedAt && (
-        <div className="mb-6 flex items-start gap-3 rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--muted))]/40 px-4 py-3 text-sm text-[hsl(var(--muted-foreground))]">
-          <Info className="mt-0.5 h-4 w-4 shrink-0" />
-          <span>
-            Offboarding is derived from seat-sync snapshots and has been tracked since{" "}
-            <strong className="text-[hsl(var(--foreground))]">{formatDate(coverage.trackingStartedAt)}</strong>. Seats
-            removed before that date are not recorded.
-          </span>
-        </div>
-      )}
-
-      {coverage?.source === "audit_log" && (
-        <div className="mb-6 flex items-start gap-3 rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--muted))]/40 px-4 py-3 text-sm text-[hsl(var(--muted-foreground))]">
-          <Info className="mt-0.5 h-4 w-4 shrink-0" />
-          <span>Events sourced from the enterprise audit log, with exact assignment and removal dates.</span>
-        </div>
-      )}
+      {/* Honest statement of what offboard data actually exists, and from where */}
+      {coverage && <SourceCoverageNotice coverage={coverage} />}
 
       <div className="mb-8 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <MetricCard

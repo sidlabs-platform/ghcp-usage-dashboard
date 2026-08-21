@@ -64,6 +64,7 @@ graph TB
         BIS["billing-sync-service.ts<br/>syncBilling"]
         SCHED["auto-sync-scheduler.ts<br/>(cron-based background sync)"]
         LHS["license-history-sync-service.ts<br/>syncLicenseHistory / syncLicenseHistoryForEnterprise<br/>runs after seats+billing, per enterprise, isolated failures"]
+        SAS["seat-audit-sync.ts<br/>syncSeatAuditEventsSafely<br/>always-on audit-log read for seat<br/>onboarding/offboarding, per enterprise"]
     end
 
     MC --> SS
@@ -74,6 +75,8 @@ graph TB
     SEC --> GS
     BC --> BIS
     AUDC & IDC & OBC & AICC & PRE --> LHS
+    AUDC --> SAS
+    SS -->|after each seat snapshot replace| SAS
     SS -->|after seats+billing| LHS
     SCHED -->|triggers| SS & GS
 
@@ -92,6 +95,7 @@ graph TB
             T7["ghas_dependabot_alerts"]
             T8["ghas_secret_scanning_alerts"]
             T9["billing_metered_usage<br/>billing_premium_requests<br/>(+ per-model token columns)"]
+            T10["copilot_seat_lifecycle_events<br/>copilot_seat_lifecycle_coverage<br/>copilot_seat_audit_sync_state"]
         end
 
         subgraph SummaryTables["Pre-Aggregated Summary Tables"]
@@ -243,8 +247,8 @@ graph TB
 
     class GH_ENT,GH_ORG,GH_SEATS,GH_TEAMS,GH_GHAS,GH_BILLING,GH_AUDIT,GH_IDENTITY,GH_ORGBILL,GH_AIC github
     class PAT,APP,AUTH_RESOLVE auth
-    class SS,GS,BIS,SCHED sync
-    class SQLITE,REPO,SUMM,GETDB,T1,T2,T3,T4,T5,T6,T7,T8,T9,ST1,ST2,ST3 db
+    class SS,GS,BIS,SCHED,SAS sync
+    class SQLITE,REPO,SUMM,GETDB,T1,T2,T3,T4,T5,T6,T7,T8,T9,T10,ST1,ST2,ST3 db
     class CACHE cache
     class R_METRICS,R_USERS,R_TEAMS,R_SEATS,R_SECURITY,R_BILLING,R_SYNC,R_FILTERS,R_CONFIG,SF,AGG api
     class P1,P2,P3,P4,P5,P6,CHARTS,CARDS,FILTER_UI,TABLES,RQ,CTX,PDF,CSV frontend
@@ -259,7 +263,7 @@ graph TB
 | **GitHub APIs** | External | Source of Copilot, GHAS, Billing, Teams, Seats, audit-log, identity, and AI-Credit data |
 | **Authentication** | `src/lib/github/` | PAT (enterprise endpoints) + GitHub App JWT (org endpoints) |
 | **GitHub Clients** | `src/lib/github/` | Typed wrappers for every GitHub API endpoint, including licensing-history sources (audit log, enterprise/org identity, SCIM membership, org billing, per-user AI-Credit usage) and capability preflight |
-| **Sync Services** | `src/lib/db/sync-*.ts` | Orchestrate day-by-day backfill and incremental syncs; `license-history-sync-service.ts` runs the historical licensing sync per enterprise, after seats/billing, with isolated per-enterprise failure |
+| **Sync Services** | `src/lib/db/sync-*.ts` | Orchestrate day-by-day backfill and incremental syncs; `seat-audit-sync.ts` reads the audit log for seat assign/cancel after each seat snapshot replace; `license-history-sync-service.ts` runs the historical licensing sync per enterprise, after seats/billing, with isolated per-enterprise failure |
 | **Database** | `src/lib/db/`, `data/*.db` | SQLite with WAL; raw tables + pre-aggregated summary tables + additive licensing-history tables (`licensing-schema.sql`) |
 | **In-Memory Cache** | `src/lib/cache/` | LRU + TTL cache wrapping all API route responses |
 | **API Routes** | `src/app/api/` | Next.js route handlers; serve JSON with scope filtering & pagination, including the licensing reconciliation/runs/preflight JSON APIs and the server-side historical CSV export |

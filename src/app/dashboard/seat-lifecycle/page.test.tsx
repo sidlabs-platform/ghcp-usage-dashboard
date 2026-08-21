@@ -325,6 +325,138 @@ describe("Seat onboarding & offboarding page", () => {
     );
   });
 
+  it("states the window the audit log actually covers", async () => {
+    await renderPage(
+      emptyPayload({
+        coverage: {
+          source: "audit_log",
+          trackingStartedAt: null,
+          onboardingOnly: false,
+          sourceBreakdown: { audit_log: 4, sync_diff: 0, seat_created_at: 2 },
+          audit: {
+            status: "ok",
+            reason: null,
+            coveredFrom: "2025-03-01T00:00:00.000Z",
+            coveredThrough: "2025-06-08T00:00:00.000Z",
+            lastSyncedAt: "2025-06-08T06:00:00.000Z",
+            truncated: false,
+          },
+        },
+      }),
+    );
+
+    await waitFor(() =>
+      expect(screen.getByText(/sourced from the enterprise audit log/i)).toBeInTheDocument(),
+    );
+    expect(screen.getByText("2025-03-01")).toBeInTheDocument();
+    expect(screen.getByText("2025-06-08")).toBeInTheDocument();
+  });
+
+  it("distinguishes snapshot-derived offboarding outside the audit window", async () => {
+    await renderPage(
+      emptyPayload({
+        coverage: {
+          source: "audit_log",
+          trackingStartedAt: "2025-01-15T00:00:00Z",
+          onboardingOnly: false,
+          sourceBreakdown: { audit_log: 4, sync_diff: 3, seat_created_at: 2 },
+          audit: {
+            status: "ok",
+            reason: null,
+            coveredFrom: "2025-03-01T00:00:00.000Z",
+            coveredThrough: "2025-06-08T00:00:00.000Z",
+            lastSyncedAt: "2025-06-08T06:00:00.000Z",
+            truncated: false,
+          },
+        },
+      }),
+    );
+
+    await waitFor(() =>
+      expect(screen.getByText(/Outside that window, offboarding/i)).toBeInTheDocument(),
+    );
+    expect(screen.getByText(/derived from seat-sync snapshots/i)).toBeInTheDocument();
+    expect(screen.getByText("2025-01-15")).toBeInTheDocument();
+  });
+
+  it("says so, with the reason, when the audit log is unavailable", async () => {
+    await renderPage(
+      emptyPayload({
+        coverage: {
+          source: "sync_diff",
+          trackingStartedAt: "2025-05-01T00:00:00Z",
+          onboardingOnly: false,
+          sourceBreakdown: { audit_log: 0, sync_diff: 3, seat_created_at: 2 },
+          audit: {
+            status: "unavailable",
+            reason: "The configured token is missing the read:audit_log scope.",
+            coveredFrom: null,
+            coveredThrough: null,
+            lastSyncedAt: "2025-06-08T06:00:00.000Z",
+            truncated: false,
+          },
+        },
+      }),
+    );
+
+    await waitFor(() =>
+      expect(screen.getByText(/The audit log is not available/i)).toBeInTheDocument(),
+    );
+    expect(screen.getByText(/read:audit_log scope/i)).toBeInTheDocument();
+    // The snapshot fallback must still be named as the source in use.
+    expect(screen.getByText(/derived from seat-sync snapshots/i)).toBeInTheDocument();
+  });
+
+  it("warns when the last audit sync failed", async () => {
+    await renderPage(
+      emptyPayload({
+        coverage: {
+          source: "sync_diff",
+          trackingStartedAt: "2025-05-01T00:00:00Z",
+          onboardingOnly: false,
+          sourceBreakdown: { audit_log: 0, sync_diff: 3, seat_created_at: 0 },
+          audit: {
+            status: "error",
+            reason: "GitHub API error 502 fetching Copilot audit log events.",
+            coveredFrom: null,
+            coveredThrough: null,
+            lastSyncedAt: "2025-06-08T06:00:00.000Z",
+            truncated: false,
+          },
+        },
+      }),
+    );
+
+    await waitFor(() =>
+      expect(screen.getByText(/last audit log sync did not complete/i)).toBeInTheDocument(),
+    );
+  });
+
+  it("flags a truncated audit fetch as still filling in", async () => {
+    await renderPage(
+      emptyPayload({
+        coverage: {
+          source: "audit_log",
+          trackingStartedAt: null,
+          onboardingOnly: false,
+          sourceBreakdown: { audit_log: 9, sync_diff: 0, seat_created_at: 0 },
+          audit: {
+            status: "ok",
+            reason: null,
+            coveredFrom: "2025-05-01T00:00:00.000Z",
+            coveredThrough: "2025-06-08T00:00:00.000Z",
+            lastSyncedAt: "2025-06-08T06:00:00.000Z",
+            truncated: true,
+          },
+        },
+      }),
+    );
+
+    await waitFor(() =>
+      expect(screen.getByText(/more pages than a single sync reads/i)).toBeInTheDocument(),
+    );
+  });
+
   it("requests the preset window selected in the shared date range", async () => {
     const { rerender, Page, queryClient } = await renderPage(emptyPayload());
 

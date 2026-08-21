@@ -41,6 +41,7 @@ A comprehensive dashboard for visualizing GitHub Copilot usage metrics, GHAS sec
 | **👥 Team Analytics** | Computed team-level metrics, leaderboard, adoption heatmap |
 | **👤 User Explorer** | Individual user drill-down, feature adoption per user |
 | **💳 Seat Management** | License utilization, idle seat detection, team assignment distribution |
+| **🔄 Seat Onboarding & Offboarding** | Who gained/lost a seat over time, sourced from the enterprise audit log with seat-sync snapshots as fallback — see [Seat Onboarding & Offboarding](#-seat-onboarding--offboarding) |
 | **🖥️ IDE & Languages** | IDE distribution, language heatmap, version tracking |
 | **💰 Billing** | Cost overview, product/org/user breakdowns, cost trends |
 | **📈 Metered Usage** | Detailed metered usage reports by product, org, and user |
@@ -70,6 +71,7 @@ A comprehensive dashboard for visualizing GitHub Copilot usage metrics, GHAS sec
 | Enterprise teams | `read:enterprise` | — |
 | GHAS (Security) | `security_events` | `code_scanning_alerts:read`, `dependabot_alerts:read`, `secret_scanning_alerts:read` |
 | Billing | — | Enterprise: `Enterprise administration` (write) |
+| Seat offboarding via audit log (recommended) | `read:audit_log` or `admin:enterprise` | Enterprise/organization: `Administration` (read) |
 | Historical license reconciliation — **required** | `manage_billing:copilot`/`read:enterprise` (seats) | same as Copilot enterprise metrics |
 | Historical license reconciliation — optional (audit) | `read:audit_log` or `admin:enterprise` | Fine-grained tokens are probed per-endpoint (see below) |
 | Historical license reconciliation — optional (membership/identity) | `read:enterprise`/`admin:enterprise` | Fine-grained tokens are probed per-endpoint |
@@ -126,6 +128,7 @@ Set these in `.env.local` at the project root.
 | `GITHUB_ENTERPRISE` | **Yes**\* | — | Your enterprise slug (as shown in `github.com/enterprises/<slug>`). \*Not required if you disable enterprise mode in `dashboard-config.json`. |
 | `GITHUB_ORGS` | No | — | Comma-separated list of organization slugs to track. If empty, the dashboard discovers orgs from the enterprise. |
 | `BACKFILL_DAYS` | No | `90` | Number of days to backfill on first sync (max: 365) |
+| `SEAT_AUDIT_LOOKBACK_DAYS` | No | `90` | How far back the *first* audit-log read reaches when reconstructing seat onboarding/offboarding. Later syncs are incremental from a stored watermark, so this only bounds the initial catch-up. |
 | `GITHUB_API_BASE` | No | `https://api.github.com` | Base URL for the GitHub API. Set this for GHES installations (e.g., `https://github.example.com/api/v3`). |
 | `GITHUB_APP_ID` | No | — | GitHub App ID (numeric). Required for GitHub App authentication. |
 | `GITHUB_APP_PRIVATE_KEY` | No | — | GitHub App private key in PEM format. Use literal `\n` for newlines in env vars. |
@@ -375,6 +378,22 @@ Individual user drill-down with feature adoption details and activity over time.
 
 License utilization overview, idle seat detection, and team assignment distribution. Server-side paginated and searchable. Requires `copilot.seats: true`. Supports CSV export.
 
+### 🔄 Seat Onboarding & Offboarding
+
+Who gained and lost a Copilot seat over the selected window, with a trend chart, KPIs, and paginated onboarded/offboarded tables. Requires `copilot.seats: true`. Supports CSV export.
+
+Every row is labelled with the source it came from, and the page states the coverage that source actually has:
+
+| Source badge | Where it comes from | Accuracy |
+|--------------|--------------------|----------|
+| **Audit log** | GitHub's enterprise (or per-org) audit log, read on every seat sync | Exact removal instant, and covers seats removed *before* this dashboard was installed |
+| **Seat sync** | Comparing each seat snapshot against the previous one | Only places a removal somewhere between two syncs, and knows nothing before tracking began |
+| **Seat record** | The `created_at` on a live seat | Onboarding only |
+
+Audit-log events are fetched and stored during the normal sync, so the page loads from the local database with no live API call. Inside the window the audit log has actually covered, audit rows take precedence over snapshot-diff rows for the same period; outside it — before the audit log's retention/lookback, or after the last successful audit read — the snapshot-derived rows are still shown, and the page says so. If the token lacks `read:audit_log`, the page names that as the reason and falls back to snapshot diffing.
+
+Set `SEAT_AUDIT_LOOKBACK_DAYS` (default `90`) to change how far back a first audit sync reaches. Subsequent syncs are incremental from a stored watermark.
+
 ### 🖥️ IDE & Languages
 
 IDE distribution (VS Code, JetBrains, Xcode, Neovim, Visual Studio, etc.), language usage heatmap, and editor version tracking. Requires `copilot.userMetrics: true`.
@@ -455,7 +474,8 @@ Which config toggles control the visibility of each sidebar page:
 
 1. **First sync** — Backfills data by fetching the `enterprise-1-day` and `users-1-day` endpoints for each day in the `BACKFILL_DAYS` range (default 90 days). Also syncs seats, teams, GHAS alerts, and billing data as configured. If `billing.licensing.history.enabled` is `true`, also runs the [historical license reconciliation sync](#historical-license-reconciliation) for each configured enterprise.
 2. **Subsequent syncs** — Only fetches days that haven't been synced yet (incremental). Typically takes just a few seconds. Historical licensing periods with no source/config changes since the last run are skipped (see [below](#historical-license-reconciliation)); the current month is always refreshed.
-3. **Data storage** — All data is stored in a local SQLite database at `data/copilot-metrics.db`. Pre-aggregated summary tables are refreshed after each sync for fast queries.
+3. **Seat lifecycle** — Every seat sync replaces the seat snapshot, diffs it against the previous one, and then reads the enterprise (or per-org) audit log for Copilot seat assign/cancel events. Both sources are written to the same ledger table with their `source` recorded, so [Seat Onboarding & Offboarding](#-seat-onboarding--offboarding) renders instantly from local data.
+4. **Data storage** — All data is stored in a local SQLite database at `data/copilot-metrics.db`. Pre-aggregated summary tables are refreshed after each sync for fast queries.
 
 ### Triggering a Sync
 

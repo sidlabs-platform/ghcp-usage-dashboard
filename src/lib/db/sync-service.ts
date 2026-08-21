@@ -29,6 +29,7 @@ import {
   markSeatLifecycleTrackingStarted,
   type SeatSnapshotEntry,
 } from "./seat-lifecycle-repo";
+import { syncSeatAuditEventsSafely } from "./seat-audit-sync";
 import { refreshAllSummaries } from "./summary-tables";
 import { cache } from "@/lib/cache/memory-cache";
 import { upsertAllTeams } from "./teams-repo";
@@ -651,6 +652,43 @@ function recordSeatLifecycle(
 }
 
 async function syncSeatsForEnterprise(slug: string, preCaptured?: CaptureCurrentLicenseSeatSnapshotResult): Promise<number> {
+  const total = await replaceSeatSnapshotForEnterprise(slug, preCaptured);
+  // Runs AFTER the snapshot is stored so audit rows can be enriched from it.
+  // The audit log is the exact offboarding source; the snapshot diff above only
+  // knows an offboard happened somewhere between two syncs.
+  await syncSeatLifecycleAuditLog(slug);
+  return total;
+}
+
+/**
+ * Fetch and persist audit-log seat lifecycle events for one enterprise.
+ *
+ * Always best-effort: an enterprise without audit log access, or a credential
+ * without `read:audit_log`, degrades to the snapshot-diff source rather than
+ * failing seat sync. The outcome is persisted either way so the dashboard can
+ * state which source it is showing.
+ */
+async function syncSeatLifecycleAuditLog(slug: string): Promise<void> {
+  const result = await syncSeatAuditEventsSafely(slug);
+  if (result.status === "ok") {
+    console.log(
+      "[Sync] [%s] Audit log: %d seat lifecycle event(s) recorded from the %s audit log",
+      sanitizeForLog(slug),
+      result.eventsWritten,
+      result.target ?? "unknown",
+    );
+  } else {
+    console.warn(
+      "[Sync] [%s] Audit-log seat lifecycle source unavailable (%s): %s",
+      sanitizeForLog(slug),
+      result.status,
+      sanitizeForLog(result.reason ?? "no reason reported"),
+    );
+  }
+  cache.invalidateByPrefix("/api/seats/lifecycle");
+}
+
+async function replaceSeatSnapshotForEnterprise(slug: string, preCaptured?: CaptureCurrentLicenseSeatSnapshotResult): Promise<number> {
   const orgs = getResolvedOrgsForEnterprise(slug);
   let total = 0;
 
