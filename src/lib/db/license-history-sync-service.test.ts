@@ -204,7 +204,7 @@ function makeDeps(overrides: Partial<LicenseHistorySyncDeps> = {}): LicenseHisto
     importAicConsumptionCsv: vi.fn(() => emptyImport<AicCsvConsumptionRecord>()),
 
     getEnterpriseSeatsNormalized: vi.fn(async () => ({ totalSeats: 1, seats: [makeSeat()] })),
-    getEnterpriseAuditEvents: vi.fn(async (): Promise<AuditFetchResult> => ({ status: "ok", events: [], truncated: false, warnings: [] })),
+    getEnterpriseAuditEvents: vi.fn(async (): Promise<AuditFetchResult> => ({ status: "ok", events: [], truncated: false, warnings: [], droppedEventCount: 0 })),
     getEnterpriseIdentities: vi.fn(async (): Promise<IdentityFetchResult> => ({ identities: [], warnings: [] })),
     getOrgIdentities: vi.fn(async (): Promise<IdentityFetchResult> => ({ identities: [], warnings: [] })),
     getEnterpriseScimUsers: vi.fn(async (): Promise<ScimFetchResult> => ({ status: "ok", records: [] })),
@@ -433,7 +433,7 @@ describe("license-history-sync-service", () => {
         }),
         getEnterpriseAuditEvents: vi.fn(async (): Promise<AuditFetchResult> => {
           importOrder.push("audit_api");
-          return { status: "ok", events: [apiEvent], truncated: false, warnings: [] };
+          return { status: "ok", events: [apiEvent], truncated: false, warnings: [], droppedEventCount: 0 };
         }),
         buildSeatLedger: vi.fn((options: BuildSeatLedgerOptions) => {
           // Assert the merged, deduped audit events reach the ledger builder with both events present.
@@ -511,7 +511,7 @@ describe("license-history-sync-service", () => {
       let capturedEvents: { eventId: string; source: string; githubUserId: number | null }[] = [];
       const deps = makeDeps({
         importAuditArchive: vi.fn(() => ({ records: [archiveEvent], warnings: [], skippedRows: 0, sourceFingerprint: "fp" })),
-        getEnterpriseAuditEvents: vi.fn(async (): Promise<AuditFetchResult> => ({ status: "ok", events: [apiEvent], truncated: false, warnings: [] })),
+        getEnterpriseAuditEvents: vi.fn(async (): Promise<AuditFetchResult> => ({ status: "ok", events: [apiEvent], truncated: false, warnings: [], droppedEventCount: 0 })),
         upsertAuditEvents: vi.fn((_enterpriseSlug: string, events) => {
           capturedEvents = events.map((e: { eventId: string; source: string; githubUserId: number | null }) => ({ eventId: e.eventId, source: e.source, githubUserId: e.githubUserId }));
           return events.length;
@@ -554,7 +554,7 @@ describe("license-history-sync-service", () => {
       let ledgerAuditEvents: { eventId: string; holderKey: string; action: string }[] = [];
       const deps = makeDeps({
         importAuditArchive: vi.fn(() => ({ records: [archiveAssign], warnings: [], skippedRows: 0, sourceFingerprint: "fp" })),
-        getEnterpriseAuditEvents: vi.fn(async (): Promise<AuditFetchResult> => ({ status: "ok", events: [apiCancel], truncated: false, warnings: [] })),
+        getEnterpriseAuditEvents: vi.fn(async (): Promise<AuditFetchResult> => ({ status: "ok", events: [apiCancel], truncated: false, warnings: [], droppedEventCount: 0 })),
         buildSeatLedger: vi.fn((options: BuildSeatLedgerOptions) => {
           ledgerAuditEvents = (options.auditEvents ?? []).map((e) => ({ eventId: e.eventId, holderKey: e.holderKey, action: e.action }));
           return { rows: options.periods.map((p) => makeLedgerRow(p)), coverage: [], warnings: [] };
@@ -602,7 +602,7 @@ describe("license-history-sync-service", () => {
       const deps = makeDeps({
         getEnterpriseSeatsNormalized: vi.fn(async () => ({ totalSeats: 1, seats: [seatWithId10] })),
         importAuditArchive: vi.fn(() => ({ records: [archiveEvent], warnings: [], skippedRows: 0, sourceFingerprint: "fp" })),
-        getEnterpriseAuditEvents: vi.fn(async (): Promise<AuditFetchResult> => ({ status: "ok", events: [apiEventWithId11], truncated: false, warnings: [] })),
+        getEnterpriseAuditEvents: vi.fn(async (): Promise<AuditFetchResult> => ({ status: "ok", events: [apiEventWithId11], truncated: false, warnings: [], droppedEventCount: 0 })),
         buildSeatLedger: vi.fn((options: BuildSeatLedgerOptions) => {
           capturedEvents = (options.auditEvents ?? []).map((e) => ({ eventId: e.eventId, holderKey: e.holderKey }));
           return { rows: options.periods.map((p) => makeLedgerRow(p)), coverage: [], warnings: [] };
@@ -634,7 +634,7 @@ describe("license-history-sync-service", () => {
         }),
         getEnterpriseAuditEvents: vi.fn(async (): Promise<AuditFetchResult> => {
           order.push("audit_api");
-          return { status: "ok", events: [], truncated: false, warnings: [] };
+          return { status: "ok", events: [], truncated: false, warnings: [], droppedEventCount: 0 };
         }),
       });
 
@@ -1505,7 +1505,7 @@ describe("license-history-sync-service", () => {
       const deps = makeDeps({
         listLicenseRuns: vi.fn(() => [{ status: "success", sourceStats: { periodFingerprints: priorFingerprints } }]),
         hasMaterializedRows: vi.fn(() => true),
-        getEnterpriseAuditEvents: vi.fn(async (): Promise<AuditFetchResult> => ({ status: "ok", events: [newAuditEvent], truncated: false, warnings: [] })),
+        getEnterpriseAuditEvents: vi.fn(async (): Promise<AuditFetchResult> => ({ status: "ok", events: [newAuditEvent], truncated: false, warnings: [], droppedEventCount: 0 })),
       });
 
       const result = await syncLicenseHistoryForEnterprise("acme", deps);

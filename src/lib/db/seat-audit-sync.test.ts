@@ -41,6 +41,7 @@ import {
   syncSeatAuditEventsSafely,
   resolveAuditCutoff,
   toLifecycleEvents,
+  SEAT_AUDIT_ENTERPRISE_BUDGET_MS,
   SEAT_AUDIT_LOOKBACK_DAYS,
   SEAT_AUDIT_OVERLAP_HOURS,
   type SeatAuditSyncDeps,
@@ -64,8 +65,13 @@ function auditEvent(overrides: Partial<NormalizedCopilotAuditEvent> = {}): Norma
   };
 }
 
-function ok(events: NormalizedCopilotAuditEvent[], truncated = false, warnings: string[] = []): AuditFetchResult {
-  return { status: "ok", events, truncated, warnings };
+function ok(
+  events: NormalizedCopilotAuditEvent[],
+  truncated = false,
+  warnings: string[] = [],
+  droppedEventCount = 0,
+): AuditFetchResult {
+  return { status: "ok", events, truncated, warnings, droppedEventCount };
 }
 
 function makeDeps(overrides: Partial<SeatAuditSyncDeps> = {}): SeatAuditSyncDeps {
@@ -75,6 +81,7 @@ function makeDeps(overrides: Partial<SeatAuditSyncDeps> = {}): SeatAuditSyncDeps
     getOrgs: () => [],
     isEnterpriseScopeEnabled: () => true,
     now: () => NOW,
+    nowMs: () => NOW.getTime(),
     ...overrides,
   };
 }
@@ -116,25 +123,30 @@ describe("resolveAuditCutoff", () => {
 
 describe("toLifecycleEvents", () => {
   it("maps cancel to offboarded and assign to onboarded", () => {
-    const mapped = toLifecycleEvents([
+    const { lifecycleEvents } = toLifecycleEvents([
       auditEvent({ action: "cancel", observedLogin: "leaver" }),
       auditEvent({ action: "assign", observedLogin: "joiner" }),
     ]);
-    expect(mapped.map((e) => [e.userLogin, e.eventType])).toEqual([
+    expect(lifecycleEvents.map((e) => [e.userLogin, e.eventType])).toEqual([
       ["leaver", "offboarded"],
       ["joiner", "onboarded"],
     ]);
-    expect(mapped.every((e) => e.source === "audit_log")).toBe(true);
+    expect(lifecycleEvents.every((e) => e.source === "audit_log")).toBe(true);
   });
 
   it("falls back to a user-id placeholder when the login is obfuscated away", () => {
-    const [mapped] = toLifecycleEvents([auditEvent({ observedLogin: null, githubUserId: 77 })]);
+    const { lifecycleEvents: [mapped], droppedEventCount } = toLifecycleEvents([
+      auditEvent({ observedLogin: null, githubUserId: 77 }),
+    ]);
     expect(mapped.userLogin).toBe("user-77");
     expect(mapped.userId).toBe(77);
+    expect(droppedEventCount).toBe(0);
   });
 
   it("drops events with no usable identity rather than colliding on the ledger key", () => {
-    expect(toLifecycleEvents([auditEvent({ observedLogin: "  ", githubUserId: null })])).toEqual([]);
+    const result = toLifecycleEvents([auditEvent({ observedLogin: "  ", githubUserId: null })]);
+    expect(result.lifecycleEvents).toEqual([]);
+    expect(result.droppedEventCount).toBe(1);
   });
 });
 
@@ -288,6 +300,44 @@ describe("syncSeatAuditEventsForEnterprise", () => {
     expect(result.coveredThrough).toBe(NOW.toISOString());
   });
 
+  it("claims no coverage when fetched events were dropped by the client", async () => {
+    const deps = makeDeps({
+      getEnterpriseAuditEvents: vi.fn(async () =>
+        ok([auditEvent({ occurredAt: "2026-06-20T00:00:00.000Z" })], false, [], 1),
+      ),
+    });
+
+    const result = await syncSeatAuditEventsForEnterprise("acme", deps);
+
+    expect(result.coveredFrom).toBeNull();
+    expect(result.coveredThrough).toBeNull();
+    expect(result.reason).toBe("Audit log returned 1 seat event(s) that could not be represented.");
+    expect(recordSeatAuditSyncState).toHaveBeenCalledWith(expect.objectContaining({ clearCoverage: true }));
+    // Atomicity: the window must be cleared inside the state write's own
+    // transaction, never as a second statement a crash could land between.
+    expect(clearSeatAuditCoverageWindow).not.toHaveBeenCalled();
+  });
+
+  it("claims no coverage when lifecycle mapping drops identity-less events", async () => {
+    const deps = makeDeps({
+      getEnterpriseAuditEvents: vi.fn(async () =>
+        ok([
+          auditEvent({ occurredAt: "2026-06-20T00:00:00.000Z" }),
+          auditEvent({ occurredAt: "2026-06-21T00:00:00.000Z", observedLogin: " ", githubUserId: null }),
+        ]),
+      ),
+    });
+
+    const result = await syncSeatAuditEventsForEnterprise("acme", deps);
+
+    expect(result.eventsFetched).toBe(2);
+    expect(result.eventsWritten).toBe(1);
+    expect(result.coveredFrom).toBeNull();
+    expect(result.coveredThrough).toBeNull();
+    expect(result.reason).toBe("Audit log returned 1 seat event(s) that could not be represented.");
+    expect(recordSeatAuditSyncState).toHaveBeenCalledWith(expect.objectContaining({ clearCoverage: true }));
+  });
+
   it("resumes from the stored watermark instead of refetching the whole lookback", async () => {
     getSeatAuditSyncStates.mockReturnValue([{
       enterpriseSlug: "acme",
@@ -353,9 +403,35 @@ describe("syncSeatAuditEventsForEnterprise", () => {
       coveredFrom: null,
       coveredThrough: null,
     }));
-    expect(clearSeatAuditCoverageWindow).toHaveBeenCalledWith("acme");
+    expect(recordSeatAuditSyncState).toHaveBeenCalledWith(expect.objectContaining({ clearCoverage: true }));
     expect(result.reason).toBe("Audit log unavailable for 1 organization(s).");
     expect(result.warnings.join(" ")).toMatch(/1 organization/);
+  });
+
+  it("stops org fallback at the enterprise budget and clears coverage for skipped orgs", async () => {
+    const nowMs = vi.fn()
+      .mockReturnValueOnce(0)
+      .mockReturnValueOnce(0)
+      .mockReturnValueOnce(SEAT_AUDIT_ENTERPRISE_BUDGET_MS + 1);
+    const getOrgAuditEvents = vi.fn(async (org: string) => ok([auditEvent({ orgLogin: org })]));
+    const deps = makeDeps({
+      isEnterpriseScopeEnabled: () => false,
+      getOrgs: () => ["first", "second", "third"],
+      getOrgAuditEvents,
+      nowMs,
+    });
+
+    const result = await syncSeatAuditEventsForEnterprise("acme", deps);
+
+    expect(getOrgAuditEvents).toHaveBeenCalledTimes(1);
+    expect(getOrgAuditEvents).toHaveBeenCalledWith("first", "acme", expect.any(Number));
+    expect(result.status).toBe("ok");
+    expect(result.eventsWritten).toBe(1);
+    expect(result.coveredFrom).toBeNull();
+    expect(result.coveredThrough).toBeNull();
+    expect(result.reason).toBe("Audit log org fallback budget exhausted before 2 organization(s) were attempted.");
+    expect(result.warnings).toContain("Audit log org fallback budget exhausted before 2 organization(s) were attempted.");
+    expect(recordSeatAuditSyncState).toHaveBeenCalledWith(expect.objectContaining({ clearCoverage: true }));
   });
 });
 

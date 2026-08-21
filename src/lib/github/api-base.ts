@@ -278,8 +278,32 @@ async function ensureAuthReady(mode: AuthMode): Promise<void> {
   }
 }
 
-async function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function abortErrorFromSignal(signal: AbortSignal): Error {
+  const reason: unknown = signal.reason;
+  if (reason instanceof Error) return reason;
+  return new DOMException(
+    typeof reason === "string" && reason.length > 0 ? reason : "The operation was aborted.",
+    "AbortError",
+  );
+}
+
+function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) throw abortErrorFromSignal(signal);
+}
+
+async function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  throwIfAborted(signal);
+  return new Promise((resolve, reject) => {
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(abortErrorFromSignal(signal!));
+    };
+    const timer = setTimeout(() => {
+      if (signal) signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    if (signal) signal.addEventListener("abort", onAbort, { once: true });
+  });
 }
 
 // ── Adaptive rate-limit tracking (per auth context) ───────────────────
@@ -335,12 +359,13 @@ const ADAPTIVE_DELAY_CAP_MS = 120_000;
  * - 100–1000 remaining: 200ms delay
  * - < 100 remaining: wait until reset, capped at `ADAPTIVE_DELAY_CAP_MS`
  */
-async function adaptiveRateDelay(mode: AuthMode, enterpriseSlug?: string): Promise<void> {
+async function adaptiveRateDelay(mode: AuthMode, enterpriseSlug?: string, signal?: AbortSignal): Promise<void> {
+  throwIfAborted(signal);
   if (mode === "none") return; // No rate limits for pre-signed URLs
   const state = getRateLimitState(mode, enterpriseSlug);
   if (state.remaining > 1000) return;
   if (state.remaining > 100) {
-    await sleep(200);
+    await sleep(200, signal);
     return;
   }
   // Low quota: wait until reset, but never more than the cap — a stale or
@@ -350,7 +375,7 @@ async function adaptiveRateDelay(mode: AuthMode, enterpriseSlug?: string): Promi
   if (waitMs > 0) {
     const label = enterpriseSlug ? `${enterpriseSlug.replace(/\n|\r/g, "")}:${mode}` : mode;
     console.warn("[Rate Limit] (%s) Only %d requests remaining, waiting %ds until reset", label, state.remaining, Math.round(waitMs / 1000));
-    await sleep(waitMs);
+    await sleep(waitMs, signal);
   }
 }
 
@@ -515,6 +540,8 @@ export interface GithubFetchMetaOptions {
   authMode?: AuthMode;
   enterpriseSlug?: string;
   extraHeaders?: Record<string, string>;
+  /** Optional cancellation signal for callers that need to bound one request including retry/backoff waits. */
+  signal?: AbortSignal;
 }
 
 export interface GithubFetchMetaResult<T> {
@@ -578,25 +605,30 @@ export async function githubFetchWithMeta<T>(
   path: string,
   options: GithubFetchMetaOptions = {},
 ): Promise<GithubFetchMetaResult<T>> {
-  const { method = "GET", body, retries = 3, authMode, enterpriseSlug, extraHeaders } = options;
+  const { method = "GET", body, retries = 3, authMode, enterpriseSlug, extraHeaders, signal } = options;
   const url = buildValidatedUrl(path);
   const ctx = resolveOrOverrideContext(path, authMode, enterpriseSlug);
   await ensureAuthReady(ctx.mode);
+  throwIfAborted(signal);
 
   let lastStatus = TRANSPORT_FAILURE_STATUS;
   let lastBody = "";
 
   for (let attempt = 0; attempt < retries; attempt++) {
-    await adaptiveRateDelay(ctx.mode, ctx.enterpriseSlug);
+    await adaptiveRateDelay(ctx.mode, ctx.enterpriseSlug, signal);
+    throwIfAborted(signal);
     const authHeaders = await headersForAuth(ctx.mode, ctx.enterpriseSlug);
+    throwIfAborted(signal);
     const headers = buildRequestHeaders(authHeaders, extraHeaders, body !== undefined);
     const init: RequestInit = { method, headers, cache: "no-store" };
+    if (signal) init.signal = signal;
     if (body !== undefined) init.body = JSON.stringify(body);
 
     let resp: Response;
     try {
       resp = await fetch(url, init);
     } catch (err) {
+      if (signal?.aborted) throw abortErrorFromSignal(signal);
       // Transport-level failure — no HTTP response was ever received (DNS,
       // connection refused, timeout, etc.). Treat it like any other
       // retryable failure so a transient network blip doesn't need special
@@ -609,7 +641,7 @@ export async function githubFetchWithMeta<T>(
           "GitHub API transport error on %s, retrying in %dms (attempt %d/%d): %s",
           path.replace(/\n|\r/g, ""), Math.round(waitMs), attempt + 1, retries, lastBody.replace(/\n|\r/g, ""),
         );
-        await sleep(waitMs);
+        await sleep(waitMs, signal);
         continue;
       }
       break;
@@ -643,7 +675,7 @@ export async function githubFetchWithMeta<T>(
           "GitHub API %d on %s, retrying in %dms (attempt %d/%d)",
           resp.status, path.replace(/\n|\r/g, ""), Math.round(waitMs), attempt + 1, retries,
         );
-        await sleep(waitMs);
+        await sleep(waitMs, signal);
         continue;
       }
       break;

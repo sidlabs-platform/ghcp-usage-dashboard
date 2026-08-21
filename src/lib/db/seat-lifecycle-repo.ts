@@ -166,6 +166,12 @@ export interface SeatAuditSyncState {
   truncated: boolean;
 }
 
+/** Input for recording one audit-log seat lifecycle sync run. */
+export interface SeatAuditSyncStateInput extends SeatAuditSyncState {
+  /** Force the stored coverage window empty in the same transaction as the run. */
+  clearCoverage?: boolean;
+}
+
 export interface SeatLifecycleQuery {
   /** Inclusive window start, 'YYYY-MM-DD'. */
   start: string;
@@ -722,18 +728,10 @@ export function enrichAuditLifecycleFromSeats(enterpriseSlug: string): number {
   return result.changes;
 }
 
-/**
- * Persist the outcome of one audit-log seat lifecycle sync run.
- *
- * `covered_from` only ever moves BACKWARD and `covered_through` only ever moves
- * FORWARD, so the stored pair always describes the union of every window the
- * audit log has actually been read for — which is what the precedence rule in
- * `buildLifecycleFilter()` and the UI's coverage statement both depend on. A
- * failed or unavailable run records its status and reason but must not shrink
- * an earlier successful run's coverage or clear its truncation retry marker.
- */
-export function recordSeatAuditSyncState(state: SeatAuditSyncState): void {
-  const db = getDb();
+function upsertSeatAuditSyncState(
+  db: ReturnType<typeof getDb>,
+  state: SeatAuditSyncStateInput,
+): void {
   db.prepare(`
     INSERT INTO copilot_seat_audit_sync_state (
       enterprise_slug, status, reason, target, covered_from, covered_through,
@@ -776,6 +774,39 @@ export function recordSeatAuditSyncState(state: SeatAuditSyncState): void {
   );
 }
 
+function clearSeatAuditCoverageWindowInDb(db: ReturnType<typeof getDb>, enterpriseSlug: string): void {
+  db.prepare(`
+    UPDATE copilot_seat_audit_sync_state
+    SET covered_from = NULL,
+        covered_through = NULL
+    WHERE enterprise_slug = ?
+  `).run(enterpriseSlug);
+}
+
+/**
+ * Persist the outcome of one audit-log seat lifecycle sync run.
+ *
+ * `covered_from` only ever moves BACKWARD and `covered_through` only ever moves
+ * FORWARD, so the stored pair always describes the union of every window the
+ * audit log has actually been read for — which is what the precedence rule in
+ * `buildLifecycleFilter()` and the UI's coverage statement both depend on. A
+ * failed or unavailable run records its status and reason but must not shrink
+ * an earlier successful run's coverage or clear its truncation retry marker.
+ */
+export function recordSeatAuditSyncState(state: SeatAuditSyncStateInput): void {
+  const db = getDb();
+  if (state.clearCoverage === true) {
+    const tx = db.transaction(() => {
+      upsertSeatAuditSyncState(db, state);
+      clearSeatAuditCoverageWindowInDb(db, state.enterpriseSlug);
+    });
+    tx();
+    return;
+  }
+
+  upsertSeatAuditSyncState(db, state);
+}
+
 /**
  * Drop the recorded coverage window for one enterprise, keeping the rest of its
  * state row.
@@ -788,12 +819,7 @@ export function recordSeatAuditSyncState(state: SeatAuditSyncState): void {
  * derived offboards. Clearing the window costs nothing but a re-read.
  */
 export function clearSeatAuditCoverageWindow(enterpriseSlug: string): void {
-  getDb().prepare(`
-    UPDATE copilot_seat_audit_sync_state
-    SET covered_from = NULL,
-        covered_through = NULL
-    WHERE enterprise_slug = ?
-  `).run(enterpriseSlug);
+  clearSeatAuditCoverageWindowInDb(getDb(), enterpriseSlug);
 }
 
 /**

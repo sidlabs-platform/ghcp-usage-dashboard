@@ -100,6 +100,7 @@ describe("CopilotAuditClient", () => {
       const result = await client.getOrgAuditEvents("acme");
       expectOk(result);
       expect(result.events).toHaveLength(0);
+      expect(result.droppedEventCount).toBe(1);
       expect(result.warnings).toHaveLength(1);
       expect(result.warnings[0]).toMatch(/timestamp/i);
       expect(result.warnings[0]).toContain("doc-1");
@@ -122,6 +123,7 @@ describe("CopilotAuditClient", () => {
       const result = await client.getOrgAuditEvents("acme");
       expectOk(result);
       expect(result.events.map((e) => e.eventId)).toEqual(["doc-valid"]);
+      expect(result.droppedEventCount).toBe(1);
       expect(result.warnings).toHaveLength(1);
       expect(result.warnings[0]).toContain("doc-missing-ts");
       // Must not leak sensitive raw content (login/email/external identity) into the warning.
@@ -269,6 +271,29 @@ describe("CopilotAuditClient", () => {
       expect(result.truncated).toBe(false);
     });
 
+    it("continues pagination when an older-than-cutoff page also contains a Copilot event with no parseable timestamp", async () => {
+      mockFetchWithMeta.mockResolvedValueOnce(
+        page(
+          [
+            { action: "cfb_seat_cancelled", user: "old", user_id: 1, "@timestamp": 900, _document_id: "old" },
+            { action: "cfb_seat_cancelled", user: "unknown-time", user_id: 2, _document_id: "unknown-time" },
+          ],
+          "https://api.github.com/orgs/acme/audit-log?per_page=100&after=cursor1",
+        ),
+      );
+      mockFetchWithMeta.mockResolvedValueOnce(
+        page([{ action: "cfb_seat_cancelled", user: "later-page", user_id: 3, "@timestamp": 1500, _document_id: "later-page" }]),
+      );
+
+      const result = await client.getOrgAuditEvents("acme", { cutoffMs: 1000 });
+
+      expectOk(result);
+      expect(result.events.map((e) => e.eventId)).toEqual(["later-page"]);
+      expect(result.droppedEventCount).toBe(1);
+      expect(mockFetchWithMeta).toHaveBeenCalledTimes(2);
+      expect(result.truncated).toBe(false);
+    });
+
     it("excludes events observed after untilMs", async () => {
       mockFetchWithMeta.mockResolvedValueOnce(
         page([
@@ -370,6 +395,20 @@ describe("CopilotAuditClient", () => {
       expect(result.events).toEqual([]);
       expect(result.truncated).toBe(true);
       expect(result.warnings.some((w) => /deadline/i.test(w))).toBe(true);
+    });
+
+    it("passes the per-page timeout signal to the request helper so timed-out fetches are aborted", async () => {
+      let requestSignal: AbortSignal | undefined;
+      mockFetchWithMeta.mockImplementationOnce((_url, options) => {
+        requestSignal = options.signal;
+        return new Promise(() => {});
+      });
+
+      const result = await client.getOrgAuditEvents("acme", { requestTimeoutMs: 1 });
+
+      expect(result.status).toBe("unknown");
+      expect(requestSignal).toBeDefined();
+      expect(requestSignal!.aborted).toBe(true);
     });
 
     it("does not mark truncated when the last page fetched has no further next link", async () => {

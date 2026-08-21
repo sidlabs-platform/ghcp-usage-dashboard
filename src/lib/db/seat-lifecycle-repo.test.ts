@@ -604,6 +604,103 @@ describe("recordSeatAuditSyncState", () => {
     expect(state.truncated).toBe(true);
   });
 
+  it("clears coverage atomically when requested by a partial org run", () => {
+    recordSeatAuditSyncState(auditState({
+      coveredFrom: "2026-05-01T00:00:00.000Z",
+      coveredThrough: "2026-06-30T00:00:00.000Z",
+    }));
+
+    recordSeatAuditSyncState(auditState({
+      reason: "Audit log unavailable for 1 organization(s).",
+      target: "org",
+      coveredFrom: null,
+      coveredThrough: null,
+      eventsWritten: 1,
+      clearCoverage: true,
+    }));
+
+    const [state] = getSeatAuditSyncStates(["ent1"]);
+    expect(state.status).toBe("ok");
+    expect(state.reason).toBe("Audit log unavailable for 1 organization(s).");
+    expect(state.target).toBe("org");
+    expect(state.coveredFrom).toBeNull();
+    expect(state.coveredThrough).toBeNull();
+    expect(state.eventsWritten).toBe(1);
+  });
+
+  it("keeps default monotonic widening and retry-marker preservation when clearCoverage is false", () => {
+    recordSeatAuditSyncState(auditState({
+      coveredFrom: "2026-06-10T00:00:00.000Z",
+      coveredThrough: "2026-06-25T00:00:00.000Z",
+      truncated: true,
+    }));
+
+    recordSeatAuditSyncState(auditState({
+      status: "error",
+      reason: "GitHub API error 502",
+      target: "org",
+      coveredFrom: null,
+      coveredThrough: null,
+      lastEventAt: null,
+      eventsWritten: 0,
+      truncated: false,
+      clearCoverage: false,
+    }));
+
+    const [state] = getSeatAuditSyncStates(["ent1"]);
+    expect(state.status).toBe("error");
+    expect(state.reason).toBe("GitHub API error 502");
+    expect(state.target).toBe("org");
+    expect(state.coveredFrom).toBe("2026-06-10T00:00:00.000Z");
+    expect(state.coveredThrough).toBe("2026-06-25T00:00:00.000Z");
+    expect(state.truncated).toBe(true);
+  });
+
+  it("rolls back the state update when clearing coverage fails", () => {
+    recordSeatAuditSyncState(auditState({
+      status: "ok",
+      reason: null,
+      target: "enterprise",
+      coveredFrom: "2026-05-01T00:00:00.000Z",
+      coveredThrough: "2026-06-30T00:00:00.000Z",
+      eventsWritten: 5,
+      truncated: true,
+    }));
+    db.exec(`
+      CREATE TRIGGER fail_clear_audit_coverage
+      BEFORE UPDATE OF covered_from, covered_through ON copilot_seat_audit_sync_state
+      WHEN NEW.covered_from IS NULL AND NEW.covered_through IS NULL
+      BEGIN
+        SELECT RAISE(ABORT, 'forced coverage clear failure');
+      END
+    `);
+
+    try {
+      expect(() => recordSeatAuditSyncState(auditState({
+        reason: "Audit log unavailable for 1 organization(s).",
+        target: "org",
+        coveredFrom: null,
+        coveredThrough: null,
+        eventsWritten: 1,
+        truncated: false,
+        clearCoverage: true,
+      }))).toThrow("forced coverage clear failure");
+
+      expect(getSeatAuditSyncStates(["ent1"])).toEqual([auditState({
+        status: "ok",
+        reason: null,
+        target: "enterprise",
+        coveredFrom: "2026-05-01T00:00:00.000Z",
+        coveredThrough: "2026-06-30T00:00:00.000Z",
+        eventsWritten: 5,
+        truncated: true,
+      })]);
+      expect(() => recordSeatAuditSyncState(auditState({ enterpriseSlug: "ent2" }))).not.toThrow();
+    } finally {
+      db.exec("DROP TRIGGER IF EXISTS fail_clear_audit_coverage");
+    }
+  });
+
   it("keeps state per enterprise", () => {
     recordSeatAuditSyncState(auditState());
     recordSeatAuditSyncState(auditState({ enterpriseSlug: "ent2", status: "unavailable" }));

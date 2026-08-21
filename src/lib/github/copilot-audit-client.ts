@@ -205,6 +205,8 @@ function extractNextLink(linkHeader: string | undefined): string | null {
 export interface AuditFetchOk {
   status: "ok";
   events: NormalizedCopilotAuditEvent[];
+  /** Count of relevant Copilot seat events skipped because GitHub omitted a parseable timestamp. */
+  droppedEventCount: number;
   /** True when the `maxPages` cap was hit while more pages were still available — `events` is a partial result. */
   truncated: boolean;
   warnings: string[];
@@ -268,11 +270,12 @@ function describeAbortOrTimeout(err: unknown): string {
 }
 
 function withAuditRequestTimeout<T>(
-  operation: Promise<T>,
   timeoutMs: number,
   kind: "request_timeout" | "target_deadline",
+  operation: (signal: AbortSignal) => Promise<T>,
 ): Promise<T> {
   const signal = AbortSignal.timeout(timeoutMs);
+  const operationPromise = Promise.resolve().then(() => operation(signal));
   return new Promise<T>((resolve, reject) => {
     const onAbort = () => reject(new AuditRequestTimeoutError(timeoutMs, kind));
     if (signal.aborted) {
@@ -281,7 +284,7 @@ function withAuditRequestTimeout<T>(
     }
 
     signal.addEventListener("abort", onAbort, { once: true });
-    operation.then(
+    operationPromise.then(
       (value) => {
         signal.removeEventListener("abort", onAbort);
         resolve(value);
@@ -324,6 +327,7 @@ async function fetchAuditEvents(
   const results: NormalizedCopilotAuditEvent[] = [];
   const warnings: string[] = [];
   let truncated = false;
+  let droppedEventCount = 0;
   const startedAt = Date.now();
 
   const markDeadlineTruncated = () => {
@@ -343,11 +347,12 @@ async function fetchAuditEvents(
         break;
       }
       const timeoutForPageMs = Math.min(pageTimeoutMs, remainingRunMs);
+      const requestPath = url;
 
       const result = await withAuditRequestTimeout(
-        githubFetchWithMeta<RawCopilotAuditEvent[]>(url, { enterpriseSlug }),
         timeoutForPageMs,
         timeoutForPageMs < pageTimeoutMs ? "target_deadline" : "request_timeout",
+        (signal) => githubFetchWithMeta<RawCopilotAuditEvent[]>(requestPath, { enterpriseSlug, signal }),
       );
       const events = Array.isArray(result.data) ? result.data : [];
       if (events.length === 0) {
@@ -360,11 +365,14 @@ async function fetchAuditEvents(
       // event can be locally out of order, so only stop on cutoff when the
       // newest timestamp in the whole page is older than the requested window.
       let newestTimestampInPage: number | null = null;
+      let everyEventHasTimestamp = true;
 
       for (const raw of events) {
         const ts = eventTimestampMs(raw);
         if (ts !== null) {
           newestTimestampInPage = newestTimestampInPage === null ? ts : Math.max(newestTimestampInPage, ts);
+        } else {
+          everyEventHasTimestamp = false;
         }
         if (cutoffMs !== null && ts !== null && ts < cutoffMs) {
           continue;
@@ -380,6 +388,7 @@ async function fetchAuditEvents(
           warnings.push(
             `Skipped a Copilot audit "${outcome.action}" event (id ${outcome.eventId}) with no parseable timestamp.`,
           );
+          droppedEventCount++;
           continue;
         }
         const normalized = outcome.event;
@@ -390,7 +399,7 @@ async function fetchAuditEvents(
 
       const nextUrl = extractNextLink(result.headers.link);
 
-      if (cutoffMs !== null && newestTimestampInPage !== null && newestTimestampInPage < cutoffMs) {
+      if (cutoffMs !== null && everyEventHasTimestamp && newestTimestampInPage !== null && newestTimestampInPage < cutoffMs) {
         url = null;
         break;
       }
@@ -418,7 +427,7 @@ async function fetchAuditEvents(
   } catch (err) {
     if (err instanceof AuditRequestTimeoutError && err.kind === "target_deadline") {
       markDeadlineTruncated();
-      return { status: "ok", events: results, truncated, warnings };
+      return { status: "ok", events: results, droppedEventCount, truncated, warnings };
     }
     if (isAbortOrTimeoutError(err)) {
       return { status: "unknown", target, message: describeAbortOrTimeout(err) };
@@ -441,7 +450,7 @@ async function fetchAuditEvents(
     throw err;
   }
 
-  return { status: "ok", events: results, truncated, warnings };
+  return { status: "ok", events: results, droppedEventCount, truncated, warnings };
 }
 
 // ── Exported client ───────────────────────────────────────────────────

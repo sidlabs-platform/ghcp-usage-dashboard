@@ -53,7 +53,6 @@ import {
   recordSeatLifecycleEvents,
   recordSeatAuditSyncState,
   getSeatAuditSyncStates,
-  clearSeatAuditCoverageWindow,
   enrichAuditLifecycleFromSeats,
   type SeatAuditSyncState,
   type SeatLifecycleEventInput,
@@ -78,6 +77,13 @@ export const SEAT_AUDIT_LOOKBACK_DAYS =
  * so resuming exactly at the watermark can miss a late-indexed event.
  */
 export const SEAT_AUDIT_OVERLAP_HOURS = 48;
+
+/**
+ * Wall-clock budget for one enterprise's audit read, including enterprise and
+ * org fallback attempts. Keep this comfortably below the 15-minute global sync
+ * lock TTL so seat sync can heartbeat again before another process may start.
+ */
+export const SEAT_AUDIT_ENTERPRISE_BUDGET_MS = 5 * 60 * 1000;
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 const MS_PER_HOUR = 60 * 60 * 1000;
@@ -123,6 +129,7 @@ export interface SeatAuditSyncDeps {
   getOrgs: (enterpriseSlug: string) => string[];
   isEnterpriseScopeEnabled: (enterpriseSlug: string) => boolean;
   now: () => Date;
+  nowMs?: () => number;
 }
 
 export function createDefaultSeatAuditSyncDeps(): SeatAuditSyncDeps {
@@ -135,7 +142,17 @@ export function createDefaultSeatAuditSyncDeps(): SeatAuditSyncDeps {
     isEnterpriseScopeEnabled: (enterpriseSlug) =>
       isCopilotSubEnabledForEnterprise(enterpriseSlug, "enterprise"),
     now: () => new Date(),
+    nowMs: () => Date.now(),
   };
+}
+
+function auditFetchDroppedEventCount(result: AuditFetchResult): number {
+  return result.status === "ok" ? Math.max(0, result.droppedEventCount) : 0;
+}
+
+export interface ToLifecycleEventsResult {
+  lifecycleEvents: SeatLifecycleEventInput[];
+  droppedEventCount: number;
 }
 
 /**
@@ -185,17 +202,21 @@ function reasonForUnavailable(result: AuditFetchResult): string {
  */
 export function toLifecycleEvents(
   events: readonly NormalizedCopilotAuditEvent[],
-): SeatLifecycleEventInput[] {
-  const mapped: SeatLifecycleEventInput[] = [];
+): ToLifecycleEventsResult {
+  const lifecycleEvents: SeatLifecycleEventInput[] = [];
+  let droppedEventCount = 0;
   for (const event of events) {
     // The ledger's primary key is (enterprise, org, login, type, date, source),
     // so a row with no usable login identity has no stable key and would
     // collide with every other identity-less row for the same day.
     const login = event.observedLogin?.trim()
       || (event.githubUserId != null ? `user-${event.githubUserId}` : "");
-    if (!login) continue;
+    if (!login) {
+      droppedEventCount += 1;
+      continue;
+    }
 
-    mapped.push({
+    lifecycleEvents.push({
       orgSlug: event.orgLogin ?? "",
       userLogin: login,
       userId: event.githubUserId,
@@ -205,7 +226,7 @@ export function toLifecycleEvents(
       source: "audit_log",
     });
   }
-  return mapped;
+  return { lifecycleEvents, droppedEventCount };
 }
 
 /**
@@ -222,6 +243,8 @@ export async function syncSeatAuditEventsForEnterprise(
 ): Promise<SeatAuditSyncResult> {
   const now = deps.now();
   const nowIso = now.toISOString();
+  const currentTimeMs = () => deps.nowMs?.() ?? Date.now();
+  const auditReadDeadlineMs = currentTimeMs() + SEAT_AUDIT_ENTERPRISE_BUDGET_MS;
   const [existing] = getSeatAuditSyncStates([enterpriseSlug]);
   const cutoffMs = resolveAuditCutoff(
     existing?.coveredThrough ?? null,
@@ -240,6 +263,8 @@ export async function syncSeatAuditEventsForEnterprise(
   let sawTransientFailure = false;
   let orgFallbackHadFailure = false;
   let orgFailureWarning: string | null = null;
+  let orgBudgetWarning: string | null = null;
+  let fetchDroppedEventCount = 0;
 
   if (deps.isEnterpriseScopeEnabled(enterpriseSlug)) {
     result = await deps.getEnterpriseAuditEvents(enterpriseSlug, cutoffMs);
@@ -248,6 +273,7 @@ export async function syncSeatAuditEventsForEnterprise(
       events.push(...result.events);
       truncated = result.truncated;
       warnings.push(...result.warnings);
+      fetchDroppedEventCount += auditFetchDroppedEventCount(result);
     } else {
       sawTransientFailure = result.status === "unknown";
       unavailableReason = reasonForUnavailable(result);
@@ -262,13 +288,22 @@ export async function syncSeatAuditEventsForEnterprise(
     let anyOrgSucceeded = false;
     const orgFailures: string[] = [];
 
-    for (const org of orgs) {
+    for (const [index, org] of orgs.entries()) {
+      if (currentTimeMs() >= auditReadDeadlineMs) {
+        const skippedCount = orgs.length - index;
+        orgFallbackHadFailure = true;
+        sawTransientFailure = true;
+        orgBudgetWarning = `Audit log org fallback budget exhausted before ${skippedCount} organization(s) were attempted.`;
+        warnings.push(orgBudgetWarning);
+        break;
+      }
       const orgResult = await deps.getOrgAuditEvents(org, enterpriseSlug, cutoffMs);
       if (orgResult.status === "ok") {
         anyOrgSucceeded = true;
         events.push(...orgResult.events);
         truncated = truncated || orgResult.truncated;
         warnings.push(...orgResult.warnings);
+        fetchDroppedEventCount += auditFetchDroppedEventCount(orgResult);
       } else {
         orgFallbackHadFailure = true;
         sawTransientFailure = sawTransientFailure || orgResult.status === "unknown";
@@ -283,7 +318,7 @@ export async function syncSeatAuditEventsForEnterprise(
         warnings.push(orgFailureWarning);
       }
     } else if (orgs.length > 0) {
-      unavailableReason = orgFailures[0] ?? unavailableReason;
+      unavailableReason = orgBudgetWarning ?? orgFailures[0] ?? unavailableReason;
     }
   }
 
@@ -322,7 +357,12 @@ export async function syncSeatAuditEventsForEnterprise(
     };
   }
 
-  const lifecycleEvents = toLifecycleEvents(events);
+  const { lifecycleEvents, droppedEventCount: lifecycleDroppedEventCount } = toLifecycleEvents(events);
+  const droppedEventCount = fetchDroppedEventCount + lifecycleDroppedEventCount;
+  const droppedEventWarning = droppedEventCount > 0
+    ? `Audit log returned ${droppedEventCount} seat event(s) that could not be represented.`
+    : null;
+  if (droppedEventWarning !== null) warnings.push(droppedEventWarning);
   const eventsWritten = recordSeatLifecycleEvents(enterpriseSlug, lifecycleEvents);
   if (eventsWritten > 0) enrichAuditLifecycleFromSeats(enterpriseSlug);
 
@@ -362,14 +402,15 @@ export async function syncSeatAuditEventsForEnterprise(
   // enterprise-scoped; claiming an enterprise-wide window would hide
   // snapshot-derived offboards for the org that never answered.
   const partialOrgCoverage = target === "org" && orgFallbackHadFailure;
-  const effectiveCoveredFrom = partialOrgCoverage
+  const incompleteCoverage = partialOrgCoverage || droppedEventCount > 0;
+  const effectiveCoveredFrom = incompleteCoverage
     ? null
     : truncated
       ? truncatedCoveredFrom()
       : coveredFrom;
   // Without a lower bound there is no interval, so the upper bound must go too.
-  const coveredThrough = partialOrgCoverage || effectiveCoveredFrom === null ? null : nowIso;
-  const reason = orgFailureWarning ?? warnings[0] ?? null;
+  const coveredThrough = incompleteCoverage || effectiveCoveredFrom === null ? null : nowIso;
+  const reason = droppedEventWarning ?? orgBudgetWarning ?? orgFailureWarning ?? warnings[0] ?? null;
 
   recordSeatAuditSyncState({
     enterpriseSlug,
@@ -382,14 +423,14 @@ export async function syncSeatAuditEventsForEnterprise(
     lastSyncedAt: nowIso,
     eventsWritten,
     truncated,
-  });
-  if (partialOrgCoverage) {
     // The shared state writer intentionally preserves earlier successful
-    // coverage on ordinary failures. Partial org success is different: keeping
-    // an enterprise-wide window would give audit-log precedence to orgs that
-    // did not answer, so clear the precedence window after recording the run.
-    clearSeatAuditCoverageWindow(enterpriseSlug);
-  }
+    // coverage on ordinary failures. Incomplete successful reads are different:
+    // keeping a coverage window would give audit-log precedence where we know
+    // the audit source has gaps, so the window is cleared in the same
+    // transaction as the run — a crash between the two would otherwise leave a
+    // stale window suppressing real snapshot-derived offboards.
+    clearCoverage: incompleteCoverage,
+  });
 
   return {
     enterpriseSlug,
