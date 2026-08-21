@@ -27,7 +27,12 @@ import {
   type PaginatedLicenseRows,
 } from "@/lib/db/license-history-repo";
 import type { LicensePeriodFilterQuery, LicenseHistoryKPIs, LicenseReconciliationKPIs } from "@/lib/types/licensing";
-import { getCopilotCostBasis, type CopilotCostBasis } from "@/lib/db/billing-repo";
+import {
+  getCopilotCostBasis,
+  getCopilotBillingBreakdown,
+  type CopilotCostBasis,
+  type CopilotBillingBreakdown,
+} from "@/lib/db/billing-repo";
 import { monthBounds } from "@/lib/date/month-range";
 import type { AccountState } from "@/lib/licensing/identity-resolver";
 import type { SeatLedgerConfidence } from "@/lib/licensing/seat-ledger";
@@ -437,6 +442,28 @@ async function handler(request: NextRequest) {
       console.error("Failed to compute Copilot cost basis:", err);
     }
 
+    // Per-SKU / per-org / per-day detail behind the same basis, so the Overview
+    // tiles can be built from billed rows for the selected window instead of
+    // from the undated `copilot_seats` snapshot and config list prices. Same
+    // window, same scope, same table as the basis above — the two agree by
+    // construction rather than by two implementations rounding alike.
+    let billingBreakdown: CopilotBillingBreakdown | null = null;
+    try {
+      billingBreakdown = getCopilotBillingBreakdown(
+        windowStart,
+        windowEnd,
+        {
+          allowedLogins: baseFilterQuery.allowedLogins ? [...baseFilterQuery.allowedLogins] : undefined,
+          scopeOrgs: scope.selectedOrgs?.length ? [...scope.selectedOrgs] : undefined,
+        },
+        scope.enterpriseSlugs ? [...scope.enterpriseSlugs] : undefined,
+        periodHint,
+      );
+    } catch (err) {
+      // Billing may never have been synced. That is an empty state, not a 500.
+      console.error("Failed to compute Copilot billing breakdown:", err);
+    }
+
     const earliestMaterialized = getEarliestMaterializedPeriod({
       enterpriseSlugs: baseFilterQuery.enterpriseSlugs,
       allowedLogins: baseFilterQuery.allowedLogins,
@@ -543,6 +570,7 @@ async function handler(request: NextRequest) {
           qualitySummary,
           kpis,
           costBasis,
+          billingBreakdown,
           rows,
           planBreakdown,
           orgBreakdown,
@@ -594,6 +622,7 @@ async function handler(request: NextRequest) {
         qualitySummary,
         kpis,
         costBasis,
+        billingBreakdown,
         rows: paginated.rows,
         planBreakdown,
         orgBreakdown,

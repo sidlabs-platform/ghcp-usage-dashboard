@@ -142,6 +142,60 @@ const enabledResponse = {
   planBreakdown: [],
   orgBreakdown: [],
   utilizationBuckets: [],
+  costBasis: {
+    startDate: "2026-05-01",
+    endDate: "2026-05-31",
+    period: "2026-05",
+    seatCostNet: 390,
+    seatCostGross: 390,
+    seatQuantity: 10,
+    seatUsers: 10,
+    seatAssignments: 10,
+    seatNamedDays: 31,
+    seatDays: 31,
+    seatPopulationComplete: true,
+    creditsBilled: 1000,
+    requestsBilled: 0,
+    requestsAttributed: 0,
+    tokenUnitsBilled: 0,
+    creditCostNet: 50,
+    creditCostGross: 100,
+    creditsAttributed: 900,
+    creditsUnattributed: 100,
+    attributedUsers: 9,
+    attributionCoveragePct: 90,
+    attributionComplete: false,
+    totalCopilotNet: 440,
+  },
+  billingBreakdown: {
+    startDate: "2026-05-01",
+    endDate: "2026-05-31",
+    period: "2026-05",
+    seatSkus: [
+      { sku: "copilot_enterprise_seat", label: "Copilot Enterprise", seatMonths: 10, users: 10, grossCost: 390, netCost: 390 },
+    ],
+    consumptionSkus: [
+      {
+        sku: "copilot_coding_agent",
+        label: "Cloud agent",
+        unit: "ai-credits",
+        quantity: 1000,
+        poolQuantity: 800,
+        additionalQuantity: 200,
+        grossCost: 100,
+        discountAmount: 50,
+        netCost: 50,
+      },
+    ],
+    orgs: [
+      { organization: "octo-org", seatMonths: 10, seatUsers: 10, seatCostNet: 390, credits: 1000, consumptionCostNet: 50, totalNet: 440 },
+    ],
+    daily: [{ day: "2026-05-01", seatCostNet: 390, consumptionCostNet: 50, totalNet: 440 }],
+    poolCredits: 800,
+    additionalCredits: 200,
+    additionalCreditCostNet: 50,
+    hasBilledData: true,
+  },
   config: { currency: "USD", creditToUsd: 0.1 },
   pagination: { page: 1, pageSize: 50, totalItems: 1, totalPages: 1 },
   warnings: [],
@@ -220,7 +274,7 @@ describe("License reconciliation page", () => {
   it("shows the historical coverage banner with selected periods and view", async () => {
     const Page = (await import("./page")).default;
     render(<Page />);
-    await screen.findByText(/2026-05/);
+    await screen.findAllByText(/2026-05/);
     expect(screen.getByText(/Historical coverage:/i)).toBeInTheDocument();
   });
 
@@ -249,6 +303,8 @@ describe("License reconciliation page", () => {
           ...enabledResponse,
           kpis: { ...enabledResponse.kpis, totalUsers: 0 },
           rows: [],
+          costBasis: null,
+          billingBreakdown: { ...enabledResponse.billingBreakdown, seatSkus: [], consumptionSkus: [], orgs: [], daily: [], hasBilledData: false },
           pagination: { page: 1, pageSize: 50, totalItems: 0, totalPages: 0 },
         }),
       ),
@@ -258,14 +314,51 @@ describe("License reconciliation page", () => {
     await screen.findByText(/run sync|change periods|clear filters/i);
   });
 
-  it("preserves existing KPI/chart rendering on the Overview tab", async () => {
+  it("renders only period-scoped billed figures on the Overview tab", async () => {
     const Page = (await import("./page")).default;
     render(<Page />);
-    await screen.findByText("Licensed Users");
-    expect(screen.getByText("Monthly License Cost")).toBeInTheDocument();
-    expect(screen.getByText("AI Credits (attributed)")).toBeInTheDocument();
-    expect(screen.getByText("Credit Utilization")).toBeInTheDocument();
-    expect(screen.getByText(/utilization distribution is unavailable/i)).toBeInTheDocument();
+    await screen.findByText("Licensed users (billed)");
+    expect(screen.getByText("Seat cost (billed)")).toBeInTheDocument();
+    expect(screen.getByText("Entitlement pool credits")).toBeInTheDocument();
+    expect(screen.getByText("Usage above entitlement pool")).toBeInTheDocument();
+    expect(screen.getAllByText("Total Copilot cost").length).toBeGreaterThan(0);
+    expect(screen.getByText("Copilot Enterprise")).toBeInTheDocument();
+    expect(screen.getByText("Cloud agent")).toBeInTheDocument();
+  });
+
+  it("drops every snapshot- and config-derived tile from the Overview tab", async () => {
+    const Page = (await import("./page")).default;
+    render(<Page />);
+    await screen.findByText("Licensed users (billed)");
+    for (const gone of [
+      "Monthly License Cost",
+      "AI Credits (attributed)",
+      "Credit Utilization",
+      "AIC Assigned Budget",
+      "Over-Budget Users",
+      "Zero-Consumption Seats",
+      "Allocation vs. Consumption by Plan",
+      "Credit Utilization Distribution",
+    ]) {
+      expect(screen.queryByText(gone)).not.toBeInTheDocument();
+    }
+  });
+
+  it("shows an explicit empty state when the window billed no Copilot rows", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() =>
+        jsonResponse({
+          ...enabledResponse,
+          costBasis: null,
+          billingBreakdown: { ...enabledResponse.billingBreakdown, seatSkus: [], consumptionSkus: [], orgs: [], daily: [], hasBilledData: false },
+        }),
+      ),
+    );
+    const Page = (await import("./page")).default;
+    render(<Page />);
+    await screen.findByText(/No Copilot billing rows for/i);
+    expect(screen.queryByText("Entitlement pool credits")).not.toBeInTheDocument();
   });
 
   it("passes current periods/scope/view params to CSV export via the existing hook", async () => {
@@ -311,7 +404,7 @@ describe("License reconciliation page", () => {
     vi.stubGlobal("fetch", fetchMock);
     const Page = (await import("./page")).default;
     render(<Page />);
-    await screen.findByText("Licensed Users");
+    await screen.findByText("Licensed users (billed)");
 
     fireEvent.click(screen.getByRole("tab", { name: "Data Quality" }));
 
@@ -335,7 +428,7 @@ describe("License reconciliation page", () => {
       if (url.includes("search=new")) {
         return jsonResponse({
           ...enabledResponse,
-          kpis: { ...enabledResponse.kpis, totalUsers: 20 },
+          costBasis: { ...enabledResponse.costBasis, seatUsers: 20 },
         });
       }
       return jsonResponse(enabledResponse);
@@ -343,7 +436,7 @@ describe("License reconciliation page", () => {
     vi.stubGlobal("fetch", fetchMock);
     const Page = (await import("./page")).default;
     render(<Page />);
-    await screen.findByText("Licensed Users");
+    await screen.findByText("Licensed users (billed)");
 
     act(() => {
       (filtersState.props?.onSearchChange as (value: string) => void)("old");
@@ -358,7 +451,7 @@ describe("License reconciliation page", () => {
       ok: true,
       json: async () => ({
         ...enabledResponse,
-        kpis: { ...enabledResponse.kpis, totalUsers: 99 },
+        costBasis: { ...enabledResponse.costBasis, seatUsers: 99 },
       }),
     } as Response);
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -376,7 +469,7 @@ describe("License reconciliation page", () => {
     vi.stubGlobal("fetch", fetchMock);
     const Page = (await import("./page")).default;
     render(<Page />);
-    await screen.findByText("Licensed Users");
+    await screen.findByText("Licensed users (billed)");
 
     act(() => {
       (filtersState.props?.onSearchChange as (value: string) => void)("fail");
@@ -390,7 +483,7 @@ describe("License reconciliation page", () => {
   it("resets sort to the cross-mode total-cost default when the view changes", async () => {
     const Page = (await import("./page")).default;
     render(<Page />);
-    await screen.findByText("Licensed Users");
+    await screen.findByText("Licensed users (billed)");
 
     act(() => {
       (tableState.props?.onSort as (field: string) => void)("billing_period");

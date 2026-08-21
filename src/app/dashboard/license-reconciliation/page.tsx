@@ -11,8 +11,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent } from "react";
 import { PageHeader } from "@/components/layout/PageHeader";
-import { MetricCard } from "@/components/cards/MetricCard";
-import { Card } from "@/components/ui/card";
 import { ChartSkeleton } from "@/components/states/ChartSkeleton";
 import { ExportMenu } from "@/components/ui/ExportMenu";
 import { useDateRange } from "@/contexts/DateRangeContext";
@@ -25,23 +23,18 @@ import { LicensePeriodFilters } from "@/components/licensing/LicensePeriodFilter
 import { LicenseReconciliationTable, type TablePagination } from "@/components/licensing/LicenseReconciliationTable";
 import { LicenseDataQualityPanel, type DataQualityCoverage } from "@/components/licensing/LicenseDataQualityPanel";
 import { LicenseRunHistory } from "@/components/licensing/LicenseRunHistory";
+import { LicenseBilledKpiTiles } from "@/components/licensing/LicenseBilledKpiTiles";
+import { LicenseBilledBreakdown } from "@/components/licensing/LicenseBilledBreakdown";
 import {
   CreditCard,
-  Users,
-  Wallet,
-  Zap,
-  Gauge,
   AlertTriangle,
-  Building2,
-  BadgeCheck,
   Info,
 } from "lucide-react";
 import type {
   LicenseReconciliationRow,
   LicenseReconciliationKPIs,
-  LicenseGroupBreakdown,
-  UtilizationBucket,
 } from "@/lib/types/licensing";
+import type { CopilotBillingBreakdown } from "@/lib/types/billing";
 import type { LicensePeriodRowRecord, LicenseRollupRowRecord } from "@/lib/db/license-history-repo";
 import type { LicenseRunReportObject } from "@/lib/db/license-run-repo";
 import type { EnterprisePreflightResult } from "@/lib/github/auth-preflight";
@@ -68,99 +61,37 @@ type ReconciliationTableRows =
   | { view: "rollup"; rows: LicenseRollupRowRecord[] }
   | { view: "legacy"; rows: LicenseReconciliationRow[] };
 
-/** Clarifies that zero AI-credit consumption is a data/period condition, not a reconciliation failure. Renders nothing when consumption exists. */
-function ZeroConsumptionNotice({ kpis }: Readonly<{ kpis: LicenseReconciliationKPIs }>) {
-  if (!(kpis.totalUsers > 0 && kpis.totalConsumedCredits <= 0)) return null;
-  const users = safeNum(kpis.totalUsers).toLocaleString(undefined, { maximumFractionDigits: 0 });
-  return (
-    <div role="note" className="flex items-start gap-3 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
-      <Info className="h-5 w-5 shrink-0 mt-0.5" />
-      <div>
-        <p className="font-medium">No AI-credit consumption recorded for this period.</p>
-        <p className="text-xs mt-1 opacity-90">
-          All {users} licensed users show zero AI-credit usage. This measures premium AI-credit spend, not Copilot activity &mdash; seats can be active with included features (completions, chat) while consuming zero credits. If you expect consumption, confirm the billing sync has AI-credit data for the selected window (AI Credits began 2026-06-01).
-        </p>
-      </div>
-    </div>
-  );
-}
-
 /**
- * States, in one place, every way the per-user tiles above can legitimately
- * differ from the billed figures in the cost-basis strip.
+ * Names the one gap that can still exist between the per-user table below and
+ * the billed figures above: AI credits billed to a login that holds no seat in
+ * the current selection.
  *
- * Both sets of numbers now describe the same window, so any remaining gap is
- * structural (a seat snapshot that is not period-scoped, or credits billed to
- * a login that holds no seat today) rather than an inconsistency. Naming those
- * gaps is what stops a reader from treating two correct numbers as a
- * contradiction.
+ * Every other former note here excused tiles that were built from the undated
+ * `copilot_seats` snapshot and from configured list prices. Those tiles are
+ * gone — the Overview now reads billed rows for the selected window only — so
+ * there is nothing left to excuse. A residual that is genuinely real still
+ * gets named rather than silently dropped.
  */
 function PeriodBasisNotice({
   kpis,
-  basis,
-  liveSnapshot,
   fmtNum,
 }: Readonly<{
   kpis: LicenseReconciliationKPIs;
-  basis: CopilotCostBasis | null;
-  liveSnapshot: boolean;
   fmtNum: (v: number) => string;
 }>) {
-  const notes: string[] = [];
-
-  const periodName = basis?.period ? periodLabel(basis.period) : null;
-  const billedSeatUsers = safeNum(basis?.seatUsers ?? 0);
-  const snapshotUsers = safeNum(kpis.totalUsers);
-  const seatCensusComplete = !!basis?.seatPopulationComplete;
-
-  if (liveSnapshot && billedSeatUsers > 0 && seatCensusComplete) {
-    // Two different populations, both correct. Naming the delta is the only
-    // way a reader can tell this apart from an error.
-    const delta = billedSeatUsers - snapshotUsers;
-    const deltaText =
-      delta > 0
-        ? `${fmtNum(delta)} of them no longer hold a seat and so are absent from the per-user table below`
-        : delta < 0
-          ? `${fmtNum(-delta)} current seat-holders were not billed in that period`
-          : "the two populations match";
-    notes.push(
-      `${fmtNum(billedSeatUsers)} users were billed for a seat in ${periodName ?? "this period"}, against ${fmtNum(snapshotUsers)} holding one today — ${deltaText}. Per-user rows, allowances and utilization are built from today's seat snapshot, so they describe current seat-holders only.`,
-    );
-  } else if (liveSnapshot && billedSeatUsers > 0) {
-    notes.push(
-      `Licensed users shown are today's seat-holders, not ${periodName ?? "this period"}'s. GitHub named users for only part of this period's billed seats (${fmtNum(billedSeatUsers)} users across ${fmtNum(safeNum(basis?.seatNamedDays ?? 0))} of ${fmtNum(safeNum(basis?.seatDays ?? 0))} billed days, covering some organizations only), so a period-accurate headcount is not derivable here.`,
-    );
-  } else if (liveSnapshot) {
-    notes.push(
-      `Seat figures come from the current seat snapshot, not from ${periodName ?? "the selected window"} — seats added or removed since then are not reflected. Credit figures are period-scoped.`,
-    );
-  }
-
-  if (basis && safeNum(basis.seatQuantity) > 0) {
-    notes.push(
-      `${fmtNum(safeNum(basis.seatQuantity))} billed seat-months is a duration, not a headcount: over a full month it equals the average number of seats held per day, so a seat added mid-month counts as a fraction.`,
-    );
-  }
-
   const unmatched = safeNum(kpis.unmatchedConsumedCredits);
-  if (unmatched > 0) {
-    notes.push(
-      `${fmtNum(unmatched)} credits (${fmtNum(kpis.unmatchedUsers)} users) were billed to logins with no seat in the current selection, so they are counted in the cost basis above but not in the per-user table.`,
-    );
-  }
-
-  if (notes.length === 0) return null;
+  if (unmatched <= 0) return null;
 
   return (
     <div role="note" className="flex items-start gap-3 rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--muted))]/30 px-4 py-3 text-sm">
       <Info className="h-5 w-5 shrink-0 mt-0.5 text-[hsl(var(--muted-foreground))]" />
       <div>
-        <p className="font-medium">How these tiles relate to the cost basis above</p>
-        <ul className="mt-1 space-y-1 text-xs text-[hsl(var(--muted-foreground))] list-disc pl-4">
-          {notes.map((note) => (
-            <li key={note}>{note}</li>
-          ))}
-        </ul>
+        <p className="font-medium">Consumption billed outside the current seat list</p>
+        <p className="mt-1 text-xs text-[hsl(var(--muted-foreground))]">
+          {fmtNum(unmatched)} credits ({fmtNum(kpis.unmatchedUsers)} users) were billed to logins
+          with no seat in the current selection. They are counted in the billed figures above but
+          cannot appear in the per-user table.
+        </p>
       </div>
     </div>
   );
@@ -191,9 +122,7 @@ export default function LicenseReconciliationPage() {
   // ── Fetched response state ──────────────────────────────────────────
   const [kpis, setKpis] = useState<LicenseReconciliationKPIs | null>(null);
   const [rows, setRows] = useState<(LicensePeriodRowRecord | LicenseRollupRowRecord | LicenseReconciliationRow)[]>([]);
-  const [planBreakdown, setPlanBreakdown] = useState<LicenseGroupBreakdown[]>([]);
-  const [orgBreakdown, setOrgBreakdown] = useState<LicenseGroupBreakdown[]>([]);
-  const [utilizationBuckets, setUtilizationBuckets] = useState<UtilizationBucket[]>([]);
+  const [billingBreakdown, setBillingBreakdown] = useState<CopilotBillingBreakdown | null>(null);
   const [pagination, setPagination] = useState<TablePagination>({ page: 1, pageSize: PAGE_SIZE, totalItems: 0, totalPages: 0 });
   const [currency, setCurrency] = useState("USD");
   const [coverage, setCoverage] = useState<Coverage | null>(null);
@@ -220,20 +149,6 @@ export default function LicenseReconciliationPage() {
   const preflightRequestSeq = useRef(0);
 
   const activeEnterprise = selectedEnterprises[0] ?? filterOptions.enterprises[0]?.slug ?? null;
-
-  const fmtMoney = useCallback(
-    (v: number) => {
-      const n = safeNum(v);
-      const sign = n < 0 ? "-" : "";
-      const abs = Math.abs(n);
-      const body =
-        abs >= 1_000_000 ? `${(abs / 1_000_000).toFixed(1)}M`
-          : abs >= 1_000 ? `${(abs / 1_000).toFixed(1)}K`
-          : abs.toFixed(2);
-      return `${sign}${currency === "USD" ? "$" : ""}${body}`;
-    },
-    [currency],
-  );
 
   const fmtNum = (v: number) => safeNum(v).toLocaleString(undefined, { maximumFractionDigits: 0 });
 
@@ -304,14 +219,12 @@ export default function LicenseReconciliationPage() {
       setEnabled(true);
       setKpis(data.kpis || null);
       setRows(data.rows || []);
-      setPlanBreakdown(data.planBreakdown || []);
-      setOrgBreakdown(data.orgBreakdown || []);
-      setUtilizationBuckets(data.utilizationBuckets || []);
       setPagination(data.pagination || { page: 1, pageSize: PAGE_SIZE, totalItems: 0, totalPages: 0 });
       setCoverage(data.coverage || null);
       setDataSource(data.dataSource || "historical");
       setWarnings(data.warnings || []);
       setCostBasis(data.costBasis ?? null);
+      setBillingBreakdown(data.billingBreakdown ?? null);
       if (data.config?.currency) setCurrency(data.config.currency);
     } catch {
       if (fetchRequestSeq.current !== requestSeq) return;
@@ -518,15 +431,12 @@ export default function LicenseReconciliationPage() {
     );
   }
 
-  const hasData = !!kpis && (kpis.totalUsers > 0 || pagination.totalItems > 0);
-  const maxPlanCredits = Math.max(1, ...planBreakdown.map((p) => Math.max(p.allowanceCredits, p.consumedCredits)));
-  const maxBucket = Math.max(1, ...utilizationBuckets.map((b) => b.count));
-
-  const planColor: Record<string, string> = {
-    enterprise: "#8b5cf6",
-    business: "#3b82f6",
-    unknown: "#94a3b8",
-  };
+  // The Overview tab is now driven entirely by billed rows for the selected
+  // window, so it has data whenever billing does — independently of whether a
+  // per-user roster exists for the period.
+  const hasBilledData = !!billingBreakdown?.hasBilledData;
+  const hasRosterData = !!kpis && (kpis.totalUsers > 0 || pagination.totalItems > 0);
+  const hasData = hasBilledData || hasRosterData;
 
   const exportMeta = {
     reportName: "License & AI Credits Reconciliation",
@@ -546,58 +456,21 @@ export default function LicenseReconciliationPage() {
 
   const qualityCoverage: DataQualityCoverage | null = coverage;
 
-  // Tie each seat/credit tile back to the billed figure it should be read
-  // against, so the two blocks are visibly one story rather than two.
-  const billedSeatCost = costBasis ? safeNum(costBasis.seatCostNet) : 0;
-  const licenseCostSubtitle =
-    costBasis && billedSeatCost > 0
-      ? `Negotiated rates · ${fmtMoney(billedSeatCost)} actually billed`
-      : "Negotiated seat pricing";
+  const windowName = costBasis?.period
+    ? periodLabel(costBasis.period)
+    : periods.length > 0
+      ? periods.map(periodLabel).join(", ")
+      : `the last ${days} days`;
 
-  const billedCredits = costBasis ? safeNum(costBasis.creditsBilled) : 0;
-  const creditsSubtitle =
-    kpis && billedCredits > 0
-      ? `${fmtMoney(kpis.totalConsumedUsd)} spend · ${((safeNum(kpis.totalConsumedCredits) / billedCredits) * 100).toFixed(0)}% of ${fmtNum(billedCredits)} billed`
-      : kpis
-        ? `${fmtMoney(kpis.totalConsumedUsd)} spend · per-user report`
-        : "";
-
-  const tcoSubtitle =
-    costBasis && safeNum(costBasis.totalCopilotNet) > 0
-      ? `License + credit spend · ${fmtMoney(safeNum(costBasis.totalCopilotNet))} billed`
-      : "License + credit spend";
-
-  // Materialized history records a seat as `inactive` without saying why, so
-  // only the live snapshot — which reads `pending_cancellation_date` directly —
-  // may claim a pending cancellation.
-  const inactiveSeatsSubtitle =
+  // In live-snapshot mode the per-user rows come from the *current*
+  // `copilot_seats` table with period consumption joined on — a roster of who
+  // holds a seat today, not a census of who held one during the window. Saying
+  // so plainly is the only honest framing; the billed figures above are where
+  // period-accurate answers live.
+  const rosterCaption =
     dataSource === "live_snapshot_only"
-      ? `${fmtNum(kpis?.pendingCancellation ?? 0)} pending cancellation`
-      : `${fmtNum(kpis?.pendingCancellation ?? 0)} inactive seats`;
-
-  // The licensed-user headline must describe the *selected period*. In
-  // live-snapshot mode `kpis.totalUsers` counts who holds a seat **today**,
-  // which for a past period is simply the wrong population — for July 2026 it
-  // reported 1,215 against 1,646 users actually billed, because ~430 seats were
-  // removed in the interim. The billed seat rows know the real answer, so use
-  // them whenever they name users, and say which basis is in play.
-  const billedSeatUsers = costBasis ? safeNum(costBasis.seatUsers) : 0;
-  // Only headline the billed count when it is a complete census. March 2026
-  // names users for just half its billed seats, so leading with that figure
-  // would swap one contradiction for another.
-  const usePeriodSeats =
-    dataSource === "live_snapshot_only" && billedSeatUsers > 0 && !!costBasis?.seatPopulationComplete;
-  const licensedUsers = usePeriodSeats
-    ? {
-        title: "Licensed Users (billed)",
-        value: fmtNum(billedSeatUsers),
-        subtitle: `${fmtNum(safeNum(costBasis!.seatAssignments))} seat assignments · from billing`,
-      }
-    : {
-        title: "Licensed Users",
-        value: fmtNum(safeNum(kpis?.totalUsers ?? 0)),
-        subtitle: `${fmtNum(safeNum(kpis?.totalSeats ?? 0))} seats · ${fmtNum(safeNum(kpis?.activeSeats ?? 0))} active`,
-      };
+      ? `Current seat-holders, with AI-credit consumption from ${windowName} joined on. This is today's roster, not a ${windowName} census — for period-accurate licence and cost figures, use the billed totals above.`
+      : `Per-user licence and AI-credit detail materialized for ${windowName}.`;
 
   return (
     <div className="space-y-8">
@@ -713,120 +586,15 @@ export default function LicenseReconciliationPage() {
         ref={overviewRef}
         className="space-y-8"
       >
-        {hasData && kpis && (
+        {hasBilledData || hasRosterData ? (
           <>
-            <div className="space-y-4">
-              <div className="grid gap-4 grid-cols-2 lg:grid-cols-4">
-                <MetricCard title={licensedUsers.title} value={licensedUsers.value} format="raw" accent="blue" icon={<Users className="h-5 w-5" />} subtitle={licensedUsers.subtitle} />
-                <MetricCard title="Monthly License Cost" value={fmtMoney(kpis.totalLicenseCost)} format="raw" accent="teal" icon={<CreditCard className="h-5 w-5" />} subtitle={licenseCostSubtitle} />
-                <MetricCard title="AI Credits (attributed)" value={fmtNum(kpis.totalConsumedCredits)} accent="violet" icon={<Zap className="h-5 w-5" />} subtitle={creditsSubtitle} />
-                <MetricCard title="Credit Utilization" value={`${safeNum(kpis.overallUtilizationPct).toFixed(1)}%`} format="raw" accent="amber" icon={<Gauge className="h-5 w-5" />} subtitle={`${fmtNum(kpis.totalConsumedCredits)} attributed of ${fmtNum(kpis.totalAllowanceCredits)} allocated`} />
-              </div>
-              <div className="grid gap-4 grid-cols-2 lg:grid-cols-4">
-                <MetricCard title="Total Cost of Ownership" value={fmtMoney(kpis.totalCostOfOwnership)} format="raw" accent="green" icon={<Wallet className="h-5 w-5" />} subtitle={tcoSubtitle} />
-                <MetricCard title="AIC Assigned Budget" value={fmtMoney(kpis.totalAssignedUsd)} format="raw" accent="blue" icon={<BadgeCheck className="h-5 w-5" />} subtitle="Allocated allowance value" />
-                <MetricCard title="Over-Budget Users" value={kpis.overBudgetUsers} accent="red" icon={<AlertTriangle className="h-5 w-5" />} subtitle="Consumption exceeds budget" />
-                <MetricCard title="Zero-Consumption Seats" value={kpis.zeroConsumptionSeats} accent="amber" icon={<AlertTriangle className="h-5 w-5" />} subtitle={inactiveSeatsSubtitle} />
-              </div>
+            <LicenseBilledKpiTiles basis={costBasis} breakdown={billingBreakdown} currency={currency} windowLabel={windowName} />
 
-              <ZeroConsumptionNotice kpis={kpis} />
-              <PeriodBasisNotice
-                kpis={kpis}
-                basis={costBasis}
-                liveSnapshot={dataSource === "live_snapshot_only"}
-                fmtNum={fmtNum}
-              />
-            </div>
+            {kpis && <PeriodBasisNotice kpis={kpis} fmtNum={fmtNum} />}
 
-            <div className="grid gap-6 lg:grid-cols-2">
-              <Card className="p-6">
-                <h3 className="text-sm font-semibold mb-1">Allocation vs. Consumption by Plan</h3>
-                <p className="text-xs text-[hsl(var(--muted-foreground))] mb-4">AI-credit allowance and actual consumption per license plan.</p>
-                <div className="space-y-4">
-                  {planBreakdown.length === 0 && <p className="text-sm text-[hsl(var(--muted-foreground))]">No data.</p>}
-                  {planBreakdown.map((p) => (
-                    <div key={p.key}>
-                      <div className="flex items-center justify-between text-xs mb-1">
-                        <span className="font-medium capitalize">{p.key}</span>
-                        <span className="text-[hsl(var(--muted-foreground))]">
-                          {fmtNum(p.consumedCredits)} / {fmtNum(p.allowanceCredits)} cr · {p.utilizationPct.toFixed(0)}% · {p.seats} seats
-                        </span>
-                      </div>
-                      <div className="relative h-3 w-full rounded-full bg-[hsl(var(--accent))] overflow-hidden">
-                        <div className="absolute inset-y-0 left-0 rounded-full opacity-30" style={{ width: `${(p.allowanceCredits / maxPlanCredits) * 100}%`, background: planColor[p.key] || "#3b82f6" }} />
-                        <div className="absolute inset-y-0 left-0 rounded-full" style={{ width: `${(p.consumedCredits / maxPlanCredits) * 100}%`, background: planColor[p.key] || "#3b82f6" }} />
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </Card>
-
-              <Card className="p-6">
-                <h3 className="text-sm font-semibold mb-1">Credit Utilization Distribution</h3>
-                <p className="text-xs text-[hsl(var(--muted-foreground))] mb-4">How many users fall into each allowance-utilization band.</p>
-                <div className="space-y-3">
-                 {utilizationBuckets.length === 0 ? (
-                   <p className="text-sm text-[hsl(var(--muted-foreground))]">
-                     Utilization distribution is unavailable for the selected historical periods.
-                   </p>
-                 ) : (
-                   utilizationBuckets.map((b) => (
-                     <div key={b.label} className="flex items-center gap-3">
-                       <span className="w-16 text-xs text-[hsl(var(--muted-foreground))] text-right">{b.label}</span>
-                       <div className="flex-1 h-5 rounded bg-[hsl(var(--accent))] overflow-hidden">
-                         <div
-                           className="h-full rounded bg-amber-500/80 flex items-center justify-end pr-2"
-                           style={{ width: `${Math.max((b.count / maxBucket) * 100, b.count > 0 ? 6 : 0)}%` }}
-                         >
-                           {b.count > 0 && <span className="text-[10px] font-semibold text-white">{b.count}</span>}
-                         </div>
-                       </div>
-                     </div>
-                   ))
-                 )}
-                </div>
-              </Card>
-            </div>
-
-            {orgBreakdown.length > 0 && (
-              <Card className="p-6">
-                <h3 className="text-sm font-semibold mb-4 flex items-center gap-2">
-                  <Building2 className="h-4 w-4" /> Cost & Consumption by Organization
-                </h3>
-                <div className="overflow-x-auto">
-                  <table className="w-full text-sm">
-                    <caption className="sr-only">
-                      Copilot license cost and AI-credit consumption per organization, for the
-                      selected period and scope.
-                    </caption>
-                    <thead>
-                      <tr className="border-b">
-                        <th scope="col" className="px-3 py-2 text-left text-xs font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wider">Organization</th>
-                        <th scope="col" className="px-3 py-2 text-right text-xs font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wider">Seats</th>
-                        <th scope="col" className="px-3 py-2 text-right text-xs font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wider">License Cost</th>
-                        <th scope="col" className="px-3 py-2 text-right text-xs font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wider">Consumed (cr)</th>
-                        <th scope="col" className="px-3 py-2 text-right text-xs font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wider">Consumed</th>
-                        <th scope="col" className="px-3 py-2 text-right text-xs font-medium text-[hsl(var(--muted-foreground))] uppercase tracking-wider">Utilization</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {orgBreakdown.slice(0, 15).map((o) => (
-                        <tr key={o.key} className="border-b border-[hsl(var(--border))]/50 hover:bg-[hsl(var(--accent))]/40">
-                          <td className="px-3 py-2 font-medium">{o.key || "(none)"}</td>
-                          <td className="px-3 py-2 text-right tabular-nums">{fmtNum(o.seats)}</td>
-                          <td className="px-3 py-2 text-right tabular-nums">{fmtMoney(o.licenseCost)}</td>
-                          <td className="px-3 py-2 text-right tabular-nums">{fmtNum(o.consumedCredits)}</td>
-                          <td className="px-3 py-2 text-right tabular-nums">{fmtMoney(o.consumedUsd)}</td>
-                          <td className="px-3 py-2 text-right tabular-nums">{o.utilizationPct.toFixed(0)}%</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </Card>
-            )}
+            <LicenseBilledBreakdown breakdown={billingBreakdown} currency={currency} windowLabel={windowName} />
           </>
-        )}
+        ) : null}
       </div>
 
       {/* ── Period Detail panel ──────────────────────────────────────── */}
@@ -854,6 +622,17 @@ export default function LicenseReconciliationPage() {
           onHistoryConfidenceChange={setHistoryConfidence}
           onClearFilters={handleClearFilters}
         />
+        <div role="note" className="flex items-start gap-3 rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--muted))]/30 px-4 py-3 text-sm">
+          <Info className="h-5 w-5 shrink-0 mt-0.5 text-[hsl(var(--muted-foreground))]" />
+          <div>
+            <p className="font-medium">
+              {dataSource === "live_snapshot_only"
+                ? "Current seat roster, joined to period consumption"
+                : `Per-user detail for ${windowName}`}
+            </p>
+            <p className="mt-1 text-xs text-[hsl(var(--muted-foreground))]">{rosterCaption}</p>
+          </div>
+        </div>
         <LicenseReconciliationTable
           {...tableRowsProps}
           currency={currency}

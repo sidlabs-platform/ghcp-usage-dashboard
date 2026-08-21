@@ -344,6 +344,120 @@ export interface CopilotCostBasis {
   totalCopilotNet: number;
 }
 
+// ── Period-scoped Copilot billing breakdown ───────────────────────────
+//
+// Everything below describes the *selected window only*, read from the billed
+// rows in `billing_usage_records`. Nothing here reads `copilot_seats` (a
+// snapshot table with no date column, so it can only ever describe today) or
+// `dashboard-config.json` list prices (operator-entered, and identical in
+// every period). That distinction is the entire point: figures on a page
+// filtered to a month must be reproducible from that month's GitHub billing
+// report and no other source.
+//
+// Quantities are only ever summed within one `unit_type`. Amounts
+// (gross/discount/net) are USD and are safe to sum across unit types.
+
+/** A seat licence SKU billed in the window (`unit_type = 'user-months'`). */
+export interface SeatSkuBreakdown {
+  /** Raw SKU string from the billing report — never normalized away. */
+  sku: string;
+  /** Display label from `skuLabel()`. Cosmetic; no figure depends on it. */
+  label: string;
+  /**
+   * Billed seat-**months**, a duration rather than a headcount: a seat held
+   * for a whole month is 1.0, and for 11 days ~0.35.
+   */
+  seatMonths: number;
+  /**
+   * Distinct users billed for this SKU in the window. Zero when GitHub
+   * reported the SKU only as org-level aggregate rows carrying no username.
+   */
+  users: number;
+  grossCost: number;
+  netCost: number;
+}
+
+/**
+ * A consumption SKU billed in the window, in one unit type.
+ *
+ * `unit` names the unit `quantity` is counted in, so a caller can never add a
+ * credit count to a request count. `poolQuantity`/`additionalQuantity` are
+ * only meaningful for `ai-credits`.
+ */
+export interface ConsumptionSkuBreakdown {
+  sku: string;
+  label: string;
+  /** The `unit_type` these quantities are counted in. */
+  unit: string;
+  quantity: number;
+  /** Portion of `quantity` covered by the included entitlement pool (derived). */
+  poolQuantity: number;
+  /** Portion of `quantity` charged beyond the entitlement pool (derived). */
+  additionalQuantity: number;
+  grossCost: number;
+  discountAmount: number;
+  netCost: number;
+}
+
+/** Billed Copilot cost and consumption for one organization in the window. */
+export interface BilledOrgBreakdown {
+  organization: string;
+  seatMonths: number;
+  seatUsers: number;
+  seatCostNet: number;
+  credits: number;
+  consumptionCostNet: number;
+  totalNet: number;
+}
+
+/** Net Copilot cost for a single day in the window. */
+export interface BilledDailyCost {
+  day: string;
+  seatCostNet: number;
+  consumptionCostNet: number;
+  totalNet: number;
+}
+
+/**
+ * Period-scoped Copilot billing breakdown for the License & AI Credits page.
+ *
+ * Computed over the same window and scope as {@link CopilotCostBasis}, from
+ * the same table, so the two agree by construction: summing `seatSkus[].netCost`
+ * yields `CopilotCostBasis.seatCostNet`, and summing
+ * `consumptionSkus[].netCost` yields `CopilotCostBasis.creditCostNet`.
+ */
+export interface CopilotBillingBreakdown {
+  /** Inclusive bounds these figures were computed over. */
+  startDate: string;
+  endDate: string;
+  /** Calendar period when the bounds are exactly one month, else null. */
+  period: string | null;
+
+  seatSkus: SeatSkuBreakdown[];
+  consumptionSkus: ConsumptionSkuBreakdown[];
+  orgs: BilledOrgBreakdown[];
+  daily: BilledDailyCost[];
+
+  /**
+   * AI credits covered by the included entitlement pool, across all SKUs.
+   *
+   * Derived from `discount_amount / gross_amount`, not reported by GitHub —
+   * the AI-credit report carries no `exceeds_quota` column. Label it as
+   * derived wherever it is displayed.
+   */
+  poolCredits: number;
+  /** AI credits charged beyond the entitlement pool (derived, same caveat). */
+  additionalCredits: number;
+  /** Net USD charged for credits beyond the pool. */
+  additionalCreditCostNet: number;
+
+  /**
+   * True when the window billed no Copilot rows at all, so the page can show
+   * an explicit empty state rather than a wall of confident zeroes.
+   */
+  hasBilledData: boolean;
+}
+
 // ── Token Usage Analytics ─────────────────────────────────────────────
 // Backed by the per-model token breakdown added to the AI usage report on
 // 2026-08-11. All figures come from `billing_premium_requests`.
