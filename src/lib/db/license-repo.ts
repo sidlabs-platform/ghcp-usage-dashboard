@@ -18,8 +18,7 @@ import type {
   UtilizationBucket,
   ActivityStatus,
 } from "@/lib/types/licensing";
-
-const ACTIVE_WINDOW_DAYS = 30;
+import { SEAT_ACTIVE_WINDOW_DAYS as ACTIVE_WINDOW_DAYS } from "@/lib/constants";
 
 export interface LicenseReconciliationFilters {
   /** Restrict to these logins (resolved from team/org scope). */

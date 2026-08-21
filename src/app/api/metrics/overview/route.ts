@@ -243,14 +243,18 @@ async function handler(request: NextRequest) {
         const agent = extractAgentMetrics(d.totals_by_feature || []);
         const cli = extractCliMetrics(d.totals_by_feature || []);
         // Same accept/reject basis as the SQL branch above: completion + CLI.
-        const generations = comp.codeGenCount + cli.codeGenCount;
         return {
           day: d.day,
           suggested: comp.locSuggested,
           accepted: comp.locAccepted,
           agentAdded: agent.locAdded,
           cliAdded: cli.locAdded,
-          rate: generations > 0 ? ((comp.codeAcceptCount + cli.codeAcceptCount) / generations) * 100 : 0,
+          rate: acceptanceRateFrom({
+            compGenCount: comp.codeGenCount,
+            compAcceptCount: comp.codeAcceptCount,
+            cliGenCount: cli.codeGenCount,
+            cliAcceptCount: cli.codeAcceptCount,
+          }),
         };
       });
 

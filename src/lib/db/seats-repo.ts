@@ -2,6 +2,7 @@
 
 import { getDb } from "./database";
 import type { CopilotSeat } from "@/lib/types/seats";
+import { SEAT_ACTIVE_WINDOW_DAYS } from "@/lib/constants";
 
 function buildEnterpriseFilter(slugs?: string[], prefix = "WHERE"): { clause: string; params: string[] } {
   if (!slugs || slugs.length === 0) return { clause: "", params: [] };
@@ -243,9 +244,9 @@ export function getSeatStats(
   const db = getDb();
   let cutoff = activitySince;
   if (!cutoff) {
-    const thirtyDaysAgo = new Date();
-    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-    cutoff = thirtyDaysAgo.toISOString();
+    const windowStart = new Date();
+    windowStart.setDate(windowStart.getDate() - SEAT_ACTIVE_WINDOW_DAYS);
+    cutoff = windowStart.toISOString();
   }
   const upperBound = activityUntil || null;
 

@@ -16,6 +16,45 @@
 
 import type { UserDayRecord, TotalsByFeature } from "@/lib/types/metrics";
 
+/**
+ * The accept/reject counts an acceptance rate is computed from.
+ *
+ * Structural rather than tied to one row type, so both the SQL-side
+ * `CompletionDailyRow` and the JS-side aggregation below satisfy it without
+ * either module having to depend on the other.
+ */
+export interface AcceptanceCounts {
+  compGenCount: number;
+  compAcceptCount: number;
+  cliGenCount?: number;
+  cliAcceptCount?: number;
+}
+
+/**
+ * Acceptance rate over every surface that reports a meaningful accept/reject
+ * signal: IDE completion plus the Copilot CLI.
+ *
+ * THE single definition, shared by every caller, so the overview KPI, the daily
+ * trend, the per-user page and the per-team page can never drift apart. It
+ * lives in this dependency-free module (types only) so that both the SQLite
+ * query layer and the JS aggregation here can reach it without a cycle;
+ * `aggregation-queries` re-exports it for callers that already import from
+ * there.
+ *
+ * `agent_edit` is deliberately absent — it reports acceptances as a hard 0
+ * against non-zero generations, so including it can only deflate the rate.
+ * The CLI is deliberately present: it reports real generations *and*
+ * acceptances, and excluding it (as the code previously did, by accident, by
+ * classifying `copilot_cli` as nothing at all) discarded roughly three quarters
+ * of the fleet's genuine acceptance signal.
+ */
+export function acceptanceRateFrom(row: AcceptanceCounts): number {
+  const generations = (row.compGenCount || 0) + (row.cliGenCount || 0);
+  if (generations <= 0) return 0;
+  const acceptances = (row.compAcceptCount || 0) + (row.cliAcceptCount || 0);
+  return (acceptances / generations) * 100;
+}
+
 export interface CompletionMetrics {
   locSuggested: number;
   locAccepted: number;
@@ -196,16 +235,18 @@ export function separateMetrics(features: TotalsByFeature[]): SeparatedMetrics {
   const copilotApp = extractCopilotAppMetrics(features);
   const cli = extractCliMetrics(features);
 
-  const acceptEligibleGen = completion.codeGenCount + cli.codeGenCount;
-  const acceptEligibleAccept = completion.codeAcceptCount + cli.codeAcceptCount;
-
   return {
     completion,
     agent,
     copilotApp,
     cli,
     totalLocAdded: completion.locAccepted + agent.locAdded + copilotApp.locAdded + cli.locAdded,
-    acceptanceRate: acceptEligibleGen > 0 ? (acceptEligibleAccept / acceptEligibleGen) * 100 : 0,
+    acceptanceRate: acceptanceRateFrom({
+      compGenCount: completion.codeGenCount,
+      compAcceptCount: completion.codeAcceptCount,
+      cliGenCount: cli.codeGenCount,
+      cliAcceptCount: cli.codeAcceptCount,
+    }),
   };
 }
 
@@ -245,8 +286,12 @@ export function aggregateSeparatedMetrics(records: UserDayRecord[]): SeparatedMe
     }
   }
 
-  const acceptEligibleGen = compGenCount + cliGenCount;
-  const acceptEligibleAccept = compAcceptCount + cliAcceptCount;
+  const acceptEligible: AcceptanceCounts = {
+    compGenCount,
+    compAcceptCount,
+    cliGenCount,
+    cliAcceptCount,
+  };
 
   return {
     completion: {
@@ -271,6 +316,6 @@ export function aggregateSeparatedMetrics(records: UserDayRecord[]): SeparatedMe
       codeAcceptCount: cliAcceptCount,
     },
     totalLocAdded: compLocAccepted + agentLocAdded + appLocAdded + cliLocAdded,
-    acceptanceRate: acceptEligibleGen > 0 ? (acceptEligibleAccept / acceptEligibleGen) * 100 : 0,
+    acceptanceRate: acceptanceRateFrom(acceptEligible),
   };
 }

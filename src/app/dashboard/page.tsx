@@ -9,7 +9,7 @@ import { ChartSkeleton, KPISkeleton } from "@/components/states/ChartSkeleton";
 import { Section } from "@/components/ui/Section";
 import { useDateRangeParams } from "@/hooks/useDateRangeParams";
 import { useScope } from "@/contexts/ScopeContext";
-import { CHART_COLORS } from "@/lib/constants";
+import { CHART_COLORS, SEAT_ACTIVE_WINDOW_DAYS } from "@/lib/constants";
 import { ExportMenu } from "@/components/ui/ExportMenu";
 import type { OverviewData } from "@/lib/types/metrics";
 
@@ -216,9 +216,11 @@ export default function DashboardOverview() {
   // split is instead derived from usage recorded inside that window; say which,
   // so a reader never compares a live figure against a period figure unknowingly.
   const seatsFromUsage = kpis.seatActivityBasis === "usage";
+  // Both branches must be positive active-seat descriptions so that "not ${seatBasisNote}"
+  // reads grammatically: e.g. "not active in june 2026" / "not active in the last 30 days".
   const seatBasisNote = seatsFromUsage
     ? `active in ${dateRangeLabel.toLowerCase()}`
-    : "no activity 30 d";
+    : `active in the last ${SEAT_ACTIVE_WINDOW_DAYS} days`;
 
   const coverage = data.coverage;
   const coverageWarning =

@@ -1128,25 +1128,12 @@ export function getCompletionTotals(
  * Acceptance rate over every surface that reports a meaningful accept/reject
  * signal: IDE completion plus the Copilot CLI.
  *
- * Single definition, shared by every caller, so the overview KPI, the daily
- * trend, the per-user page and the per-team page can never drift apart.
- *
- * `agent_edit` is deliberately absent — it reports acceptances as a hard 0
- * against non-zero generations, so including it can only deflate the rate.
- * The CLI is deliberately present: it reports real generations *and*
- * acceptances, and excluding it (as the code previously did, by accident, by
- * classifying `copilot_cli` as nothing at all) discarded roughly three quarters
- * of the fleet's genuine acceptance signal.
+ * Re-exported from `separate-metrics` (a dependency-free leaf) so that the
+ * JS-side aggregation there can share this exact definition without importing
+ * the SQLite-backed query layer. Import it from either module; there is only
+ * ever one implementation.
  */
-export function acceptanceRateFrom(
-  row: Pick<CompletionDailyRow, "compGenCount" | "compAcceptCount"> &
-    Partial<Pick<CompletionDailyRow, "cliGenCount" | "cliAcceptCount">>,
-): number {
-  const generations = (row.compGenCount || 0) + (row.cliGenCount || 0);
-  if (generations <= 0) return 0;
-  const acceptances = (row.compAcceptCount || 0) + (row.cliAcceptCount || 0);
-  return (acceptances / generations) * 100;
-}
+export { acceptanceRateFrom } from "@/lib/aggregation/separate-metrics";
 
 // ── IDE breakdown (SQL via json_each) ─────────────────────────────────
 
