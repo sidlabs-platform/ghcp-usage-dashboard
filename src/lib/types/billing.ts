@@ -2,6 +2,27 @@
 // Based on: https://docs.github.com/en/enterprise-cloud@latest/rest/billing/usage-reports
 // and https://docs.github.com/en/enterprise-cloud@latest/billing/reference/billing-reports
 
+// ── Billing unit types ────────────────────────────────────────────────
+//
+// GitHub's usage report carries a `unit_type` per row, and it is the only
+// safe way to classify a quantity. SKU names drift and vary by plan; the
+// unit does not. Quantities are only ever summed *within* one unit type.
+// Amounts (gross, discount, net) are USD and are therefore safe to sum
+// across all of them.
+//
+// These live here rather than in the repo layer so the server queries and
+// the client components that render their output share one definition and
+// cannot drift apart.
+
+/** Copilot seat licences. Quantity is seat-months (a seat held all month = 1). */
+export const UNIT_SEAT = "user-months";
+/** AI credits, the billed consumption unit from June 2026 onward. */
+export const UNIT_CREDITS = "ai-credits";
+/** Premium requests, the billed consumption unit before June 2026. */
+export const UNIT_REQUESTS = "requests";
+/** Token units, billed alongside credits for some models. */
+export const UNIT_TOKEN_UNITS = "token-units";
+
 // ── Charge Scope ──────────────────────────────────────────────────────
 
 export type ChargeScope = "user" | "org";

@@ -34,6 +34,12 @@ import type {
   BilledOrgBreakdown,
   BilledDailyCost,
 } from "@/lib/types/billing";
+import {
+  UNIT_SEAT,
+  UNIT_CREDITS,
+  UNIT_REQUESTS,
+  UNIT_TOKEN_UNITS,
+} from "@/lib/types/billing";
 import { skuLabel } from "@/lib/billing/sku-labels";
 
 const AI_CREDITS_START_DATE = "2026-06-01";
@@ -1917,14 +1923,9 @@ export function getAiCreditsReconciliation(
 // Quantities are only ever summed within one unit type. Amounts (gross,
 // discount, net) are USD and therefore safe to sum across all of them.
 
-/** Copilot seat licences. Quantity is seat-months (a seat held all month = 1). */
-const UNIT_SEAT = "user-months";
-/** AI credits, the billed consumption unit from June 2026 onward. */
-const UNIT_CREDITS = "ai-credits";
-/** Premium requests, the billed consumption unit before June 2026. */
-const UNIT_REQUESTS = "requests";
-/** Token units, billed alongside credits for some models. */
-const UNIT_TOKEN_UNITS = "token-units";
+// These constants are defined once in `@/lib/types/billing` (imported at the
+// top of this file) so the queries below and the client components that render
+// their output cannot drift apart.
 
 /** A per-user billing row that actually names a user. */
 const HAS_USERNAME_SQL = `TRIM(COALESCE(username, '')) <> ''`;

@@ -22,6 +22,7 @@ import type {
   CopilotBillingBreakdown,
   ConsumptionSkuBreakdown,
 } from "@/lib/types/billing";
+import { UNIT_CREDITS, UNIT_REQUESTS, UNIT_TOKEN_UNITS } from "@/lib/types/billing";
 
 export interface LicenseBilledBreakdownProps {
   breakdown: CopilotBillingBreakdown | null;
@@ -29,8 +30,6 @@ export interface LicenseBilledBreakdownProps {
   /** Human name for the selected window, so every section states its own scope. */
   windowLabel?: string;
 }
-
-const UNIT_CREDITS = "ai-credits";
 
 interface ConsumptionUnitDisplay {
   title: string;
@@ -49,7 +48,7 @@ function consumptionUnitDisplay(unit: string, windowLabel: string): ConsumptionU
       showPoolSplit: true,
     };
   }
-  if (unit === "requests") {
+  if (unit === UNIT_REQUESTS) {
     return {
       title: "Premium requests",
       quantityLabel: "requests",
@@ -57,7 +56,7 @@ function consumptionUnitDisplay(unit: string, windowLabel: string): ConsumptionU
       showPoolSplit: false,
     };
   }
-  if (unit === "token-units") {
+  if (unit === UNIT_TOKEN_UNITS) {
     return {
       title: "Token units",
       quantityLabel: "token units",

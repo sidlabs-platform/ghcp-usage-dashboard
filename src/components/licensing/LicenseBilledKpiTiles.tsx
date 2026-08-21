@@ -22,7 +22,8 @@
 import { MetricCard } from "@/components/cards/MetricCard";
 import { Users, CreditCard, Wallet, Zap, PiggyBank, TrendingUp, Info } from "lucide-react";
 import { safeNum } from "@/lib/utils";
-import type { CopilotBillingBreakdown, CopilotCostBasis } from "@/lib/types/billing";
+import type { ConsumptionSkuBreakdown, CopilotBillingBreakdown, CopilotCostBasis } from "@/lib/types/billing";
+import { UNIT_CREDITS, UNIT_REQUESTS, UNIT_TOKEN_UNITS } from "@/lib/types/billing";
 
 export interface LicenseBilledKpiTilesProps {
   basis: CopilotCostBasis | null;
@@ -46,6 +47,12 @@ function count(value: number, maximumFractionDigits = 0): string {
 
 function sumValues<T>(items: T[], valueOf: (item: T) => number): number {
   return items.reduce((sum, item) => sum + safeNum(valueOf(item)), 0);
+}
+
+function sumConsumptionQuantityByUnit(items: ConsumptionSkuBreakdown[], unit: string): number {
+  return items.reduce((sum, item) => (
+    item.unit === unit ? sum + safeNum(item.quantity) : sum
+  ), 0);
 }
 
 export function LicenseBilledKpiTiles({
@@ -97,6 +104,9 @@ export function LicenseBilledKpiTiles({
   const fallbackSeatMonths = sumValues(seatSkus, (s) => s.seatMonths);
   const fallbackSeatCostNet = sumValues(seatSkus, (s) => s.netCost);
   const fallbackConsumptionCostNet = sumValues(consumptionSkus, (s) => s.netCost);
+  const fallbackCreditsBilled = sumConsumptionQuantityByUnit(consumptionSkus, UNIT_CREDITS);
+  const fallbackRequestsBilled = sumConsumptionQuantityByUnit(consumptionSkus, UNIT_REQUESTS);
+  const fallbackTokenUnitsBilled = sumConsumptionQuantityByUnit(consumptionSkus, UNIT_TOKEN_UNITS);
   const seatUsers = safeNum(basis?.seatUsers ?? 0);
   const seatCensusComplete = !!basis?.seatPopulationComplete;
   const seatMonths = safeNum(basis?.seatQuantity ?? fallbackSeatMonths);
@@ -104,9 +114,9 @@ export function LicenseBilledKpiTiles({
   const consumptionCostNet = safeNum(basis?.creditCostNet ?? fallbackConsumptionCostNet);
   const totalNet = safeNum(basis?.totalCopilotNet ?? seatCostNet + consumptionCostNet);
 
-  const creditsBilled = safeNum(basis?.creditsBilled ?? 0);
-  const requestsBilled = safeNum(basis?.requestsBilled ?? 0);
-  const tokenUnitsBilled = safeNum(basis?.tokenUnitsBilled ?? 0);
+  const creditsBilled = safeNum(basis?.creditsBilled ?? fallbackCreditsBilled);
+  const requestsBilled = safeNum(basis?.requestsBilled ?? fallbackRequestsBilled);
+  const tokenUnitsBilled = safeNum(basis?.tokenUnitsBilled ?? fallbackTokenUnitsBilled);
 
   const poolCredits = safeNum(breakdown?.poolCredits ?? 0);
   const additionalCredits = safeNum(breakdown?.additionalCredits ?? 0);

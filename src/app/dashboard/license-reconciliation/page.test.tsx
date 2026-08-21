@@ -421,6 +421,67 @@ describe("License reconciliation page", () => {
     expect(within(totalCostTile!).getByText("$440.00")).toBeInTheDocument();
   });
 
+  it("falls back to billing breakdown unit quantities when cost basis detail is unavailable", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() =>
+        jsonResponse({
+          ...enabledResponse,
+          costBasis: null,
+          billingBreakdown: {
+            ...enabledResponse.billingBreakdown,
+            consumptionSkus: [
+              {
+                ...enabledResponse.billingBreakdown.consumptionSkus[0],
+                quantity: 1000,
+                poolQuantity: 800,
+                additionalQuantity: 200,
+              },
+              {
+                sku: "copilot_premium_request",
+                label: "Premium request usage",
+                unit: "requests",
+                quantity: 14_368,
+                poolQuantity: 0,
+                additionalQuantity: 14_368,
+                grossCost: 120,
+                discountAmount: 0,
+                netCost: 120,
+              },
+              {
+                sku: "copilot_token_unit",
+                label: "Token unit usage",
+                unit: "token-units",
+                quantity: 83_136,
+                poolQuantity: 0,
+                additionalQuantity: 83_136,
+                grossCost: 80,
+                discountAmount: 0,
+                netCost: 80,
+              },
+            ],
+          },
+        }),
+      ),
+    );
+    const Page = (await import("./page")).default;
+    render(<Page />);
+    await screen.findByText("Billed seat-months");
+
+    const requestsTile = screen
+      .getAllByText("Premium requests")
+      .find((el) => el.tagName.toLowerCase() === "h2")
+      ?.closest("section");
+    const tokenUnitsTile = screen
+      .getAllByText("Token units")
+      .find((el) => el.tagName.toLowerCase() === "h2")
+      ?.closest("section");
+    expect(requestsTile).not.toBeNull();
+    expect(tokenUnitsTile).not.toBeNull();
+    expect(within(requestsTile!).getByText("14,368")).toBeInTheDocument();
+    expect(within(tokenUnitsTile!).getByText("83,136")).toBeInTheDocument();
+  });
+
   it("labels unavailable billing detail with the globally selected month before the rolling-days fallback", async () => {
     dateRangeState.mode = "month";
     dateRangeState.period = "2026-06";
