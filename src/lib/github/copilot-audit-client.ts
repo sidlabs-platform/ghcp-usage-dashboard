@@ -354,7 +354,7 @@ async function fetchAuditEvents(
 
       const result = await withAuditRequestTimeout(
         timeoutForPageMs,
-        remainingRunMs !== null && timeoutForPageMs < pageTimeoutMs ? "target_deadline" : "request_timeout",
+        remainingRunMs !== null && remainingRunMs <= pageTimeoutMs ? "target_deadline" : "request_timeout",
         (signal) => githubFetchWithMeta<RawCopilotAuditEvent[]>(requestPath, { enterpriseSlug, signal }),
       );
       const events = Array.isArray(result.data) ? result.data : [];

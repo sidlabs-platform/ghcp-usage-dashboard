@@ -127,15 +127,24 @@ function SourceCoverageNotice({ coverage }: SourceCoverageNoticeProps) {
   const hasDiffRows = coverage.sourceBreakdown
     ? (sourceBreakdown.sync_diff ?? 0) > 0
     : coverage.source === "sync_diff";
-  const showsTruncationNotice = hasAuditRows && audit.truncated;
+  const showsTruncationNotice = audit.status === "ok" && audit.truncated;
   // `reason` is a one-slot warning channel. Pagination truncation already has a
   // dedicated, clearer line below, so suppress only that known duplicate while
   // still surfacing partial-scope and skipped-event warnings on successful runs.
   const auditReason = audit.reason && !(showsTruncationNotice && isPaginationTruncationReason(audit.reason))
     ? audit.reason
     : null;
+  // A successful-but-incomplete run is still a run: it must explain itself even when it
+  // persisted no rows, otherwise the "tracking has not started" card below would claim
+  // nothing happened while the sync actually ran and hit a limit.
+  const auditIncomplete = audit.status === "ok" && (auditReason !== null || showsTruncationNotice);
 
-  if (coverage.source === "none" && audit.status !== "unavailable" && audit.status !== "error") {
+  if (
+    coverage.source === "none" &&
+    audit.status !== "unavailable" &&
+    audit.status !== "error" &&
+    !auditIncomplete
+  ) {
     return (
       <Card className="mb-6 p-6">
         <div className="flex items-start gap-4">
@@ -169,6 +178,26 @@ function SourceCoverageNotice({ coverage }: SourceCoverageNoticeProps) {
         )}
         {audit.lastSyncedAt && <> (last synced {formatDate(audit.lastSyncedAt)})</>}.
         {audit.status === "ok" && auditReason && <> {auditReason}</>}
+      </span>,
+    );
+    if (showsTruncationNotice) {
+      lines.push(
+        <span key="truncated">
+          The audit log returned more pages than a single sync reads, so the oldest part of this window may still be
+          incomplete. Subsequent syncs continue filling it in.
+        </span>,
+      );
+    }
+  }
+
+  if (!hasAuditRows && auditIncomplete) {
+    lines.push(
+      <span key="audit-incomplete">
+        The audit log sync ran for this window but did not produce usable audit-log events, so{" "}
+        {hasDiffRows
+          ? "the offboarding shown here is derived from seat-sync snapshots"
+          : "no offboarding events are shown for this window"}
+        .{auditReason && <> {auditReason}</>}
       </span>,
     );
     if (showsTruncationNotice) {

@@ -423,6 +423,30 @@ describe("CopilotAuditClient", () => {
       expect(result.warnings.some((w) => /deadline/i.test(w))).toBe(true);
     });
 
+    it("preserves fetched pages as truncated when the target deadline equals the page timeout", async () => {
+      const dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(1_000);
+      mockFetchWithMeta
+        .mockResolvedValueOnce(
+          page(
+            [{ action: "cfb_seat_added", user: "a", user_id: 1, "@timestamp": 1, _document_id: "a" }],
+            "https://api.github.com/orgs/acme/audit-log?after=c1",
+          ),
+        )
+        .mockReturnValueOnce(new Promise(() => {}));
+
+      try {
+        const result = await client.getOrgAuditEvents("acme", { targetDeadlineMs: 1, requestTimeoutMs: 1 });
+
+        expect(result.status).not.toBe("unknown");
+        expectOk(result);
+        expect(result.events.map((e) => e.eventId)).toEqual(["a"]);
+        expect(result.truncated).toBe(true);
+        expect(result.warnings.some((w) => w.startsWith("Copilot audit log pagination truncated") && /deadline/i.test(w))).toBe(true);
+      } finally {
+        dateNowSpy.mockRestore();
+      }
+    });
+
     it("passes the per-page timeout signal to the request helper so timed-out fetches are aborted", async () => {
       let requestSignal: AbortSignal | undefined;
       mockFetchWithMeta.mockImplementationOnce((_url, options) => {
