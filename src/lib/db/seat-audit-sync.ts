@@ -53,6 +53,7 @@ import {
   recordSeatLifecycleEvents,
   recordSeatAuditSyncState,
   getSeatAuditSyncStates,
+  clearSeatAuditCoverageWindow,
   enrichAuditLifecycleFromSeats,
   type SeatAuditSyncState,
   type SeatLifecycleEventInput,
@@ -136,8 +137,13 @@ export function resolveAuditCutoff(
   watermark: string | null,
   now: Date,
   lookbackDays = SEAT_AUDIT_LOOKBACK_DAYS,
+  previousRunTruncated = false,
 ): number {
   const floor = now.getTime() - lookbackDays * MS_PER_DAY;
+  // A truncated newest-first read did not reach the oldest end of the requested
+  // window. Retrying only from the watermark would permanently strand those
+  // older pages, so the next run must keep reaching back to the lookback floor.
+  if (previousRunTruncated) return floor;
   if (!watermark) return floor;
 
   const parsed = Date.parse(watermark);
@@ -206,7 +212,12 @@ export async function syncSeatAuditEventsForEnterprise(
   const now = deps.now();
   const nowIso = now.toISOString();
   const [existing] = getSeatAuditSyncStates([enterpriseSlug]);
-  const cutoffMs = resolveAuditCutoff(existing?.coveredThrough ?? null, now);
+  const cutoffMs = resolveAuditCutoff(
+    existing?.coveredThrough ?? null,
+    now,
+    SEAT_AUDIT_LOOKBACK_DAYS,
+    existing?.truncated ?? false,
+  );
   const coveredFrom = new Date(cutoffMs).toISOString();
 
   const warnings: string[] = [];
@@ -215,6 +226,9 @@ export async function syncSeatAuditEventsForEnterprise(
   const events: NormalizedCopilotAuditEvent[] = [];
   let truncated = false;
   let unavailableReason: string | null = null;
+  let sawTransientFailure = false;
+  let orgFallbackHadFailure = false;
+  let orgFailureWarning: string | null = null;
 
   if (deps.isEnterpriseScopeEnabled(enterpriseSlug)) {
     result = await deps.getEnterpriseAuditEvents(enterpriseSlug, cutoffMs);
@@ -224,6 +238,7 @@ export async function syncSeatAuditEventsForEnterprise(
       truncated = result.truncated;
       warnings.push(...result.warnings);
     } else {
+      sawTransientFailure = result.status === "unknown";
       unavailableReason = reasonForUnavailable(result);
     }
   }
@@ -244,6 +259,8 @@ export async function syncSeatAuditEventsForEnterprise(
         truncated = truncated || orgResult.truncated;
         warnings.push(...orgResult.warnings);
       } else {
+        orgFallbackHadFailure = true;
+        sawTransientFailure = sawTransientFailure || orgResult.status === "unknown";
         orgFailures.push(reasonForUnavailable(orgResult));
       }
     }
@@ -251,7 +268,8 @@ export async function syncSeatAuditEventsForEnterprise(
     if (anyOrgSucceeded) {
       target = "org";
       if (orgFailures.length > 0) {
-        warnings.push(`Audit log unavailable for ${orgFailures.length} organization(s).`);
+        orgFailureWarning = `Audit log unavailable for ${orgFailures.length} organization(s).`;
+        warnings.push(orgFailureWarning);
       }
     } else if (orgs.length > 0) {
       unavailableReason = orgFailures[0] ?? unavailableReason;
@@ -264,7 +282,7 @@ export async function syncSeatAuditEventsForEnterprise(
     // A transient failure must not be reported as a missing capability — the UI
     // tells the operator to grant a scope for one and to wait for the other.
     const status: SeatAuditSyncState["status"] =
-      result?.status === "unknown" ? "error" : "unavailable";
+      sawTransientFailure ? "error" : "unavailable";
 
     recordSeatAuditSyncState({
       enterpriseSlug,
@@ -310,13 +328,20 @@ export async function syncSeatAuditEventsForEnterprise(
   // OLDEST part of the requested window, not the newest. Claiming coverage back
   // to the cutoff would suppress snapshot-derived rows for a range the audit log
   // never actually read — so fall back to the oldest event we did see.
-  const effectiveCoveredFrom = truncated ? firstEventAt ?? coveredFrom : coveredFrom;
-  const coveredThrough = nowIso;
+  //
+  // Org fallback has another incompleteness mode: one org can answer while
+  // another fails. Those rows are real and worth writing, but the state row is
+  // enterprise-scoped; claiming an enterprise-wide window would hide
+  // snapshot-derived offboards for the org that never answered.
+  const partialOrgCoverage = target === "org" && orgFallbackHadFailure;
+  const effectiveCoveredFrom = partialOrgCoverage ? null : truncated ? firstEventAt ?? coveredFrom : coveredFrom;
+  const coveredThrough = partialOrgCoverage ? null : nowIso;
+  const reason = orgFailureWarning ?? warnings[0] ?? null;
 
   recordSeatAuditSyncState({
     enterpriseSlug,
     status: "ok",
-    reason: warnings[0] ?? null,
+    reason,
     target,
     coveredFrom: effectiveCoveredFrom,
     coveredThrough,
@@ -325,6 +350,13 @@ export async function syncSeatAuditEventsForEnterprise(
     eventsWritten,
     truncated,
   });
+  if (partialOrgCoverage) {
+    // The shared state writer intentionally preserves earlier successful
+    // coverage on ordinary failures. Partial org success is different: keeping
+    // an enterprise-wide window would give audit-log precedence to orgs that
+    // did not answer, so clear the precedence window after recording the run.
+    clearSeatAuditCoverageWindow(enterpriseSlug);
+  }
 
   return {
     enterpriseSlug,
@@ -335,7 +367,7 @@ export async function syncSeatAuditEventsForEnterprise(
     coveredFrom: effectiveCoveredFrom,
     coveredThrough,
     truncated,
-    reason: warnings[0] ?? null,
+    reason,
     warnings,
   };
 }

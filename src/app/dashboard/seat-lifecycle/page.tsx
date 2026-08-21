@@ -39,6 +39,15 @@ interface Pagination {
   totalPages: number;
 }
 
+interface LifecycleAuditCoverage {
+  status: "ok" | "unavailable" | "error" | "never_run";
+  reason: string | null;
+  coveredFrom: string | null;
+  coveredThrough: string | null;
+  lastSyncedAt: string | null;
+  truncated: boolean;
+}
+
 interface LifecycleCoverage {
   source: "audit_log" | "sync_diff" | "none";
   trackingStartedAt: string | null;
@@ -46,14 +55,7 @@ interface LifecycleCoverage {
   /** Absent on responses cached before the audit-log source shipped. */
   sourceBreakdown?: Partial<Record<LifecycleRow["source"], number>>;
   /** Absent on responses cached before the audit-log source shipped. */
-  audit?: {
-    status: "ok" | "unavailable" | "error" | "never_run";
-    reason: string | null;
-    coveredFrom: string | null;
-    coveredThrough: string | null;
-    lastSyncedAt: string | null;
-    truncated: boolean;
-  };
+  audit?: LifecycleAuditCoverage;
 }
 
 interface LifecycleResponse {
@@ -72,6 +74,10 @@ interface LifecycleResponse {
   coverage: LifecycleCoverage;
   filtered: boolean;
   available: boolean;
+}
+
+interface SourceCoverageNoticeProps {
+  coverage: LifecycleCoverage;
 }
 
 const PAGE_SIZE = 25;
@@ -96,7 +102,7 @@ function formatDate(value: string | null): string {
  * removal instant, while the seat-sync diff can only place a removal somewhere
  * between two syncs and knows nothing from before tracking began.
  */
-function SourceCoverageNotice({ coverage }: { coverage: LifecycleCoverage }) {
+function SourceCoverageNotice({ coverage }: SourceCoverageNoticeProps) {
   // A response cached before this feature shipped carries neither field. Fall
   // back to "the audit sync has not run", which is exactly what it means.
   const audit = coverage.audit ?? {
@@ -141,7 +147,7 @@ function SourceCoverageNotice({ coverage }: { coverage: LifecycleCoverage }) {
   if (hasAuditRows) {
     lines.push(
       <span key="audit">
-        Events are <strong className="text-[hsl(var(--foreground))]">sourced from the enterprise audit log</strong>,
+        Events are <strong className="text-[hsl(var(--foreground))]">sourced from the GitHub audit log</strong>,
         with exact assignment and removal timestamps
         {audit.coveredFrom && audit.coveredThrough && (
           <>

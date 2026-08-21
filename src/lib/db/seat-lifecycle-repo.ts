@@ -182,6 +182,8 @@ export interface SeatLifecycleCoverageQuery {
   /** Inclusive window end, 'YYYY-MM-DD'. */
   end: string;
   enterpriseSlugs?: string[];
+  orgs?: string[];
+  allowedLogins?: Set<string>;
 }
 
 export interface SeatLifecyclePagination {
@@ -433,9 +435,11 @@ function buildLifecycleFilter(query: SeatLifecycleQuery): SqlFragment {
   params.push(...loginScope.params);
 
   // A `sync_diff` row is suppressed only when the audit log both has rows in
-  // this window AND actually covers this row's date. `outsideAuditCoverage`
+  // this window AND actually covers this row's instant. `outsideAuditCoverage`
   // is the escape hatch: it matches rows the audit log demonstrably never read,
-  // which must keep their snapshot-diff evidence.
+  // which must keep their snapshot-diff evidence. Coverage bounds are full ISO
+  // instants, so compare parsed instants instead of day strings; if SQLite
+  // cannot parse either side, fail safe by treating the row as outside coverage.
   const outsideAuditCoverage = tableExists(getDb(), "copilot_seat_audit_sync_state")
     ? `
       AND NOT EXISTS (
@@ -443,10 +447,15 @@ function buildLifecycleFilter(query: SeatLifecycleQuery): SqlFragment {
         WHERE state.enterprise_slug = copilot_seat_lifecycle_events.enterprise_slug
           AND state.covered_from IS NOT NULL
           AND (
-            copilot_seat_lifecycle_events.event_date < substr(state.covered_from, 1, 10)
+            julianday(copilot_seat_lifecycle_events.occurred_at) IS NULL
+            OR julianday(state.covered_from) IS NULL
+            OR julianday(copilot_seat_lifecycle_events.occurred_at) < julianday(state.covered_from)
             OR (
               state.covered_through IS NOT NULL
-              AND copilot_seat_lifecycle_events.event_date > substr(state.covered_through, 1, 10)
+              AND (
+                julianday(state.covered_through) IS NULL
+                OR julianday(copilot_seat_lifecycle_events.occurred_at) > julianday(state.covered_through)
+              )
             )
           )
       )`
@@ -479,11 +488,29 @@ export function recordSeatLifecycleEvents(
   const db = getDb();
   const detectedAt = new Date().toISOString();
   const stmt = db.prepare(`
-    INSERT OR REPLACE INTO copilot_seat_lifecycle_events (
+    INSERT INTO copilot_seat_lifecycle_events (
       enterprise_slug, org_slug, user_login, user_id, event_type, event_date,
       occurred_at, plan_type, assigning_team_slug, assigning_team_name,
       last_activity_at, source, detected_at
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(enterprise_slug, org_slug, user_login, event_type, event_date, source) DO UPDATE SET
+      -- Audit-log overlap replays often carry no seat metadata. Treat NULL as
+      -- "unknown" for user_id and seat-detail columns so a replay cannot erase
+      -- historical details; non-NULL replays can still fill or refresh them.
+      -- occurred_at and detected_at describe this observation, so refresh them.
+      user_id = COALESCE(excluded.user_id, copilot_seat_lifecycle_events.user_id),
+      occurred_at = excluded.occurred_at,
+      plan_type = COALESCE(excluded.plan_type, copilot_seat_lifecycle_events.plan_type),
+      assigning_team_slug = COALESCE(
+        excluded.assigning_team_slug,
+        copilot_seat_lifecycle_events.assigning_team_slug
+      ),
+      assigning_team_name = COALESCE(
+        excluded.assigning_team_name,
+        copilot_seat_lifecycle_events.assigning_team_name
+      ),
+      last_activity_at = COALESCE(excluded.last_activity_at, copilot_seat_lifecycle_events.last_activity_at),
+      detected_at = excluded.detected_at
   `);
 
   let written = 0;
@@ -552,6 +579,11 @@ export function backfillOnboardingFromSeats(enterpriseSlug?: string): number {
  * No-ops when the licensing-history tables are empty or absent, so it is safe
  * to call unconditionally. Login casing differs between the audit log and the
  * seat snapshot, so the seat join is `LOWER()`-normalized.
+ *
+ * Writes the same `(…, source='audit_log')` primary keys as the always-on audit
+ * sync, so it uses the same non-destructive upsert: the seat `LEFT JOIN` yields
+ * NULL metadata once an offboarded user is gone from `copilot_seats`, and a
+ * plain replace would erase details an earlier run had already captured.
  */
 export function projectAuditEventsToLifecycle(enterpriseSlug: string): number {
   const db = getDb();
@@ -559,7 +591,7 @@ export function projectAuditEventsToLifecycle(enterpriseSlug: string): number {
 
   try {
     const result = db.prepare(`
-      INSERT OR REPLACE INTO copilot_seat_lifecycle_events (
+      INSERT INTO copilot_seat_lifecycle_events (
         enterprise_slug, org_slug, user_login, user_id, event_type, event_date,
         occurred_at, plan_type, assigning_team_slug, assigning_team_name,
         last_activity_at, source, detected_at
@@ -593,6 +625,23 @@ export function projectAuditEventsToLifecycle(enterpriseSlug: string): number {
           OR seat.user_login IS NOT NULL
           OR audit.github_user_id IS NOT NULL
         )
+      ON CONFLICT(enterprise_slug, org_slug, user_login, event_type, event_date, source) DO UPDATE SET
+        user_id = COALESCE(excluded.user_id, copilot_seat_lifecycle_events.user_id),
+        occurred_at = excluded.occurred_at,
+        plan_type = COALESCE(excluded.plan_type, copilot_seat_lifecycle_events.plan_type),
+        assigning_team_slug = COALESCE(
+          excluded.assigning_team_slug,
+          copilot_seat_lifecycle_events.assigning_team_slug
+        ),
+        assigning_team_name = COALESCE(
+          excluded.assigning_team_name,
+          copilot_seat_lifecycle_events.assigning_team_name
+        ),
+        last_activity_at = COALESCE(
+          excluded.last_activity_at,
+          copilot_seat_lifecycle_events.last_activity_at
+        ),
+        detected_at = excluded.detected_at
     `).run(detectedAt, enterpriseSlug);
     return result.changes;
   } catch {
@@ -701,6 +750,26 @@ export function recordSeatAuditSyncState(state: SeatAuditSyncState): void {
     state.eventsWritten,
     state.truncated ? 1 : 0,
   );
+}
+
+/**
+ * Drop the recorded coverage window for one enterprise, keeping the rest of its
+ * state row.
+ *
+ * `recordSeatAuditSyncState` deliberately never shrinks coverage, because an
+ * ordinary failed run must not discard what an earlier successful run proved.
+ * Partial org-fallback success is the one case that needs the opposite: the
+ * state row is enterprise-scoped, so an enterprise-wide window would hand
+ * audit-log precedence to orgs that never answered, hiding their snapshot-
+ * derived offboards. Clearing the window costs nothing but a re-read.
+ */
+export function clearSeatAuditCoverageWindow(enterpriseSlug: string): void {
+  getDb().prepare(`
+    UPDATE copilot_seat_audit_sync_state
+    SET covered_from = NULL,
+        covered_through = NULL
+    WHERE enterprise_slug = ?
+  `).run(enterpriseSlug);
 }
 
 /**
@@ -963,7 +1032,24 @@ export function getSeatLifecycleCoverage(
     return inClause(column, enterpriseSlugs);
   };
 
-  const eventScope = buildScope("enterprise_slug");
+  const buildEventScope = (): SqlFragment => {
+    let sql = "";
+    const params: unknown[] = [];
+    const enterpriseScope = buildScope("enterprise_slug");
+    sql += enterpriseScope.sql;
+    params.push(...enterpriseScope.params);
+    if (query?.orgs?.length) {
+      const orgScope = inClause("org_slug", query.orgs);
+      sql += orgScope.sql;
+      params.push(...orgScope.params);
+    }
+    const loginScope = allowedLoginsClause("user_login", query?.allowedLogins);
+    sql += loginScope.sql;
+    params.push(...loginScope.params);
+    return { sql, params };
+  };
+
+  const eventScope = buildEventScope();
   const windowSql = query ? " AND event_date >= ? AND event_date <= ?" : "";
   const windowParams: unknown[] = query ? [query.start, query.end] : [];
   const counts = db.prepare(`
@@ -1039,7 +1125,9 @@ function summarizeAuditCoverage(states: SeatAuditSyncState[]): SeatLifecycleAudi
   const reason = status === "ok"
     // With mixed results, name the enterprise that is NOT covered rather than
     // reporting a clean "ok" that hides a gap.
-    ? failing.find((state) => state.reason)?.reason ?? null
+    ? failing.find((state) => state.reason)?.reason
+      ?? ok.find((state) => state.reason)?.reason
+      ?? null
     : relevant.find((state) => state.reason)?.reason ?? null;
 
   const coveredFroms = ok.map((state) => state.coveredFrom).filter((v): v is string => v !== null);

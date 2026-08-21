@@ -433,6 +433,27 @@ describe("projectAuditEventsToLifecycle", () => {
     projectAuditEventsToLifecycle("ent1");
     expect(getSeatLifecycleStats({ ...WINDOW }).onboardedEvents).toBe(0);
   });
+
+  it("does not erase enriched seat metadata once the seat is gone", () => {
+    // This writer shares its primary key with the always-on audit sync, and its
+    // seat LEFT JOIN goes NULL the moment an offboarded user leaves the
+    // snapshot. A destructive replace here would undo the enrichment on every
+    // later sync, permanently losing the plan and team of every departed user.
+    insertSeat({ user_login: "leaver", plan_type: "enterprise", assigning_team_slug: "platform" });
+    insertAuditEvent({
+      event_id: "gone1", action: "cancel", observed_login: "leaver",
+      occurred_at: "2026-06-12T00:00:00Z",
+    });
+    projectAuditEventsToLifecycle("ent1");
+
+    db.exec("DELETE FROM copilot_seats WHERE user_login = 'leaver'");
+    projectAuditEventsToLifecycle("ent1");
+
+    const row = getSeatLifecycleRows({ ...WINDOW }, "offboarded", PAGE).rows
+      .find((r) => r.user_login === "leaver");
+    expect(row?.plan_type).toBe("enterprise");
+    expect(row?.assigning_team_slug).toBe("platform");
+  });
 });
 
 describe("source precedence", () => {
@@ -674,6 +695,50 @@ describe("audit coverage-window precedence", () => {
 
     const logins = getSeatLifecycleRows({ ...WINDOW }, "offboarded", PAGE).rows.map((r) => r.user_login);
     expect(logins).toEqual(["audited"]);
+  });
+
+  it("keeps same-day sync_diff rows before the exact audit coverage start", () => {
+    recordSeatAuditSyncState(auditState({
+      coveredFrom: "2026-06-10T12:00:00.000Z",
+      coveredThrough: "2026-06-30T00:00:00.000Z",
+    }));
+    recordSeatLifecycleEvents("ent1", [
+      {
+        orgSlug: "org1", userLogin: "before-noon", eventType: "offboarded",
+        occurredAt: "2026-06-10T09:00:00.000Z", source: "sync_diff",
+      },
+      {
+        orgSlug: "org1", userLogin: "after-noon", eventType: "offboarded",
+        occurredAt: "2026-06-10T13:00:00.000Z", source: "sync_diff",
+      },
+    ]);
+    insertAuditEvent({ event_id: "c1", action: "cancel", observed_login: "audited", occurred_at: "2026-06-12T00:00:00Z" });
+    projectAuditEventsToLifecycle("ent1");
+
+    const logins = getSeatLifecycleRows({ ...WINDOW }, "offboarded", PAGE).rows
+      .map((r) => r.user_login).sort();
+    expect(logins).toEqual(["audited", "before-noon"]);
+  });
+
+  it("keeps sync_diff rows with ambiguous instants rather than suppressing them", () => {
+    recordSeatAuditSyncState(auditState({
+      coveredFrom: "2026-06-01T00:00:00.000Z",
+      coveredThrough: "2026-06-30T00:00:00.000Z",
+    }));
+    db.prepare(`
+      INSERT INTO copilot_seat_lifecycle_events (
+        enterprise_slug, org_slug, user_login, user_id, event_type, event_date,
+        occurred_at, plan_type, assigning_team_slug, assigning_team_name,
+        last_activity_at, source, detected_at
+      ) VALUES ('ent1', 'org1', 'ambiguous', NULL, 'offboarded', '2026-06-10',
+        'not-an-iso-instant', NULL, NULL, NULL, NULL, 'sync_diff', '2026-06-10T00:00:00Z')
+    `).run();
+    insertAuditEvent({ event_id: "c1", action: "cancel", observed_login: "audited", occurred_at: "2026-06-12T00:00:00Z" });
+    projectAuditEventsToLifecycle("ent1");
+
+    const logins = getSeatLifecycleRows({ ...WINDOW }, "offboarded", PAGE).rows
+      .map((r) => r.user_login).sort();
+    expect(logins).toEqual(["ambiguous", "audited"]);
   });
 
   it("does not suppress anything when the enterprise has no audit rows at all", () => {
@@ -1162,6 +1227,27 @@ describe("getSeatLifecycleCoverage", () => {
     });
   });
 
+  it("scopes source counts and verdict to selected orgs and users", () => {
+    markSeatLifecycleTrackingStarted("ent1", "2026-06-01T00:00:00Z");
+    recordSeatLifecycleEvents("ent1", [
+      { orgSlug: "org1", userLogin: "alice", eventType: "offboarded", occurredAt: "2026-06-02T00:00:00Z", source: "audit_log" },
+      { orgSlug: "org2", userLogin: "bob", eventType: "offboarded", occurredAt: "2026-06-03T00:00:00Z", source: "sync_diff" },
+    ]);
+
+    const coverage = getSeatLifecycleCoverage({
+      ...WINDOW,
+      orgs: ["org2"],
+      allowedLogins: new Set(["BOB"]),
+    });
+
+    expect(coverage.source).toBe("sync_diff");
+    expect(coverage.sourceBreakdown).toEqual({
+      audit_log: 0,
+      sync_diff: 1,
+      seat_created_at: 0,
+    });
+  });
+
   it("reports never_run before the audit sync has executed", () => {
     expect(getSeatLifecycleCoverage({ ...WINDOW }).audit).toMatchObject({
       status: "never_run",
@@ -1190,6 +1276,18 @@ describe("getSeatLifecycleCoverage", () => {
     expect(getSeatLifecycleCoverage({ ...WINDOW }).audit).toMatchObject({
       status: "unavailable",
       reason: "The token is missing the read:audit_log scope.",
+    });
+  });
+
+  it("surfaces warnings stored on a successful audit sync", () => {
+    recordSeatAuditSyncState(auditState({
+      status: "ok",
+      reason: "Audit log unavailable for 2 organization(s).",
+    }));
+
+    expect(getSeatLifecycleCoverage({ ...WINDOW }).audit).toMatchObject({
+      status: "ok",
+      reason: "Audit log unavailable for 2 organization(s).",
     });
   });
 
@@ -1264,6 +1362,66 @@ describe("recordSeatLifecycleEvents", () => {
     recordSeatLifecycleEvents("ent1", [event]);
     recordSeatLifecycleEvents("ent1", [{ ...event, occurredAt: "2026-06-10T22:00:00Z" }]);
     expect(getSeatLifecycleRows({ ...WINDOW }, "offboarded", PAGE).total).toBe(1);
+  });
+
+  it("keeps enriched metadata when an audit replay has no seat details", () => {
+    recordSeatLifecycleEvents("ent1", [{
+      orgSlug: "org1",
+      userLogin: "dev1",
+      eventType: "offboarded",
+      occurredAt: "2026-06-18T00:00:00Z",
+      source: "audit_log",
+      planType: "enterprise",
+      assigningTeamSlug: "core",
+      assigningTeamName: "Core",
+      lastActivityAt: "2026-06-01T00:00:00Z",
+    }]);
+
+    recordSeatLifecycleEvents("ent1", [{
+      orgSlug: "org1",
+      userLogin: "dev1",
+      eventType: "offboarded",
+      occurredAt: "2026-06-18T12:00:00Z",
+      source: "audit_log",
+    }]);
+
+    const [row] = getSeatLifecycleRows({ ...WINDOW }, "offboarded", PAGE).rows;
+    expect(row).toMatchObject({
+      plan_type: "enterprise",
+      assigning_team_slug: "core",
+      assigning_team_name: "Core",
+      last_activity_at: "2026-06-01T00:00:00Z",
+    });
+  });
+
+  it("fills missing audit metadata when a later replay supplies seat details", () => {
+    recordSeatLifecycleEvents("ent1", [{
+      orgSlug: "org1",
+      userLogin: "dev1",
+      eventType: "offboarded",
+      occurredAt: "2026-06-18T00:00:00Z",
+      source: "audit_log",
+    }]);
+
+    recordSeatLifecycleEvents("ent1", [{
+      orgSlug: "org1",
+      userLogin: "dev1",
+      eventType: "offboarded",
+      occurredAt: "2026-06-18T12:00:00Z",
+      source: "audit_log",
+      planType: "enterprise",
+      assigningTeamSlug: "core",
+      assigningTeamName: "Core",
+      lastActivityAt: "2026-06-01T00:00:00Z",
+    }]);
+
+    const [row] = getSeatLifecycleRows({ ...WINDOW }, "offboarded", PAGE).rows;
+    expect(row).toMatchObject({
+      plan_type: "enterprise",
+      assigning_team_slug: "core",
+      assigning_team_name: "Core",
+      last_activity_at: "2026-06-01T00:00:00Z",
+    });
   });
 
   it("keeps a re-onboarding on a later date as a separate event", () => {

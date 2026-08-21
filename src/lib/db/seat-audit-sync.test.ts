@@ -8,11 +8,13 @@ const recordSeatLifecycleEvents = vi.fn<(slug: string, events: SeatLifecycleEven
 const recordSeatAuditSyncState = vi.fn<(state: SeatAuditSyncState) => void>();
 const getSeatAuditSyncStates = vi.fn<(slugs?: string[]) => SeatAuditSyncState[]>(() => []);
 const enrichAuditLifecycleFromSeats = vi.fn<() => number>(() => 0);
+const clearSeatAuditCoverageWindow = vi.fn<(enterpriseSlug: string) => void>();
 
 vi.mock("./seat-lifecycle-repo", () => ({
   recordSeatLifecycleEvents: (...args: [string, SeatLifecycleEventInput[]]) => recordSeatLifecycleEvents(...args),
   recordSeatAuditSyncState: (...args: [SeatAuditSyncState]) => recordSeatAuditSyncState(...args),
   getSeatAuditSyncStates: (...args: [string[]?]) => getSeatAuditSyncStates(...args),
+  clearSeatAuditCoverageWindow: (...args: [string]) => clearSeatAuditCoverageWindow(...args),
   enrichAuditLifecycleFromSeats: () => enrichAuditLifecycleFromSeats(),
 }));
 
@@ -25,6 +27,12 @@ vi.mock("@/lib/github/copilot-audit-client", () => ({
   copilotAuditClient: {
     getEnterpriseAuditEvents: vi.fn(),
     getOrgAuditEvents: vi.fn(),
+  },
+}));
+
+vi.mock("./database", () => ({
+  getDb: () => {
+    throw new Error("seat-audit-sync must reach the database only through seat-lifecycle-repo");
   },
 }));
 
@@ -56,8 +64,8 @@ function auditEvent(overrides: Partial<NormalizedCopilotAuditEvent> = {}): Norma
   };
 }
 
-function ok(events: NormalizedCopilotAuditEvent[], truncated = false): AuditFetchResult {
-  return { status: "ok", events, truncated, warnings: [] };
+function ok(events: NormalizedCopilotAuditEvent[], truncated = false, warnings: string[] = []): AuditFetchResult {
+  return { status: "ok", events, truncated, warnings };
 }
 
 function makeDeps(overrides: Partial<SeatAuditSyncDeps> = {}): SeatAuditSyncDeps {
@@ -97,6 +105,11 @@ describe("resolveAuditCutoff", () => {
 
   it("falls back to the lookback for an unparseable watermark", () => {
     const cutoff = resolveAuditCutoff("not-a-date", NOW);
+    expect(cutoff).toBe(NOW.getTime() - SEAT_AUDIT_LOOKBACK_DAYS * 24 * 60 * 60 * 1000);
+  });
+
+  it("retries the full lookback after a truncated run left older pages unread", () => {
+    const cutoff = resolveAuditCutoff("2026-06-29T00:00:00.000Z", NOW, SEAT_AUDIT_LOOKBACK_DAYS, true);
     expect(cutoff).toBe(NOW.getTime() - SEAT_AUDIT_LOOKBACK_DAYS * 24 * 60 * 60 * 1000);
   });
 });
@@ -207,6 +220,28 @@ describe("syncSeatAuditEventsForEnterprise", () => {
     expect(result.reason).toMatch(/502/);
   });
 
+  it("reports org-only transient failures as errors when enterprise scope is disabled", async () => {
+    const deps = makeDeps({
+      isEnterpriseScopeEnabled: () => false,
+      getOrgs: () => ["org1", "org2"],
+      getOrgAuditEvents: vi.fn(async (org: string): Promise<AuditFetchResult> => ({
+        status: "unknown",
+        target: org,
+        message: `GitHub API error 502 fetching ${org}.`,
+      })),
+    });
+
+    const result = await syncSeatAuditEventsForEnterprise("acme", deps);
+
+    expect(result.status).toBe("error");
+    expect(result.reason).toMatch(/502/);
+    expect(recordSeatAuditSyncState).toHaveBeenCalledWith(expect.objectContaining({
+      status: "error",
+      coveredFrom: null,
+      coveredThrough: null,
+    }));
+  });
+
   it("does not claim coverage of the unread tail when the fetch was truncated", async () => {
     const deps = makeDeps({
       getEnterpriseAuditEvents: vi.fn(async () =>
@@ -280,13 +315,13 @@ describe("syncSeatAuditEventsForEnterprise", () => {
     expect(result.target).toBe("org");
   });
 
-  it("keeps partial org coverage when only some orgs answer", async () => {
+  it("writes partial org events without claiming enterprise-wide coverage", async () => {
     const deps = makeDeps({
       isEnterpriseScopeEnabled: () => false,
       getOrgs: () => ["good", "bad"],
       getOrgAuditEvents: vi.fn(async (org: string): Promise<AuditFetchResult> =>
         org === "good"
-          ? ok([auditEvent({ orgLogin: "good" })])
+          ? ok([auditEvent({ orgLogin: "good" })], false, ["Skipped a malformed audit event."])
           : { status: "unavailable", reason: "forbidden", target: org },
       ),
     });
@@ -295,6 +330,20 @@ describe("syncSeatAuditEventsForEnterprise", () => {
 
     expect(result.status).toBe("ok");
     expect(result.eventsWritten).toBe(1);
+    expect(result.coveredFrom).toBeNull();
+    expect(result.coveredThrough).toBeNull();
+    expect(recordSeatLifecycleEvents).toHaveBeenCalledWith("acme", [
+      expect.objectContaining({ orgSlug: "good", userLogin: "dev1" }),
+    ]);
+    expect(recordSeatAuditSyncState).toHaveBeenCalledWith(expect.objectContaining({
+      status: "ok",
+      target: "org",
+      reason: "Audit log unavailable for 1 organization(s).",
+      coveredFrom: null,
+      coveredThrough: null,
+    }));
+    expect(clearSeatAuditCoverageWindow).toHaveBeenCalledWith("acme");
+    expect(result.reason).toBe("Audit log unavailable for 1 organization(s).");
     expect(result.warnings.join(" ")).toMatch(/1 organization/);
   });
 });

@@ -321,7 +321,7 @@ describe("Seat onboarding & offboarding page", () => {
     );
 
     await waitFor(() =>
-      expect(screen.getByText(/sourced from the enterprise audit log/i)).toBeInTheDocument(),
+      expect(screen.getByText(/sourced from the GitHub audit log/i)).toBeInTheDocument(),
     );
   });
 
@@ -346,7 +346,7 @@ describe("Seat onboarding & offboarding page", () => {
     );
 
     await waitFor(() =>
-      expect(screen.getByText(/sourced from the enterprise audit log/i)).toBeInTheDocument(),
+      expect(screen.getByText(/sourced from the GitHub audit log/i)).toBeInTheDocument(),
     );
     expect(screen.getByText("2025-03-01")).toBeInTheDocument();
     expect(screen.getByText("2025-06-08")).toBeInTheDocument();

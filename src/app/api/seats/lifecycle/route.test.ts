@@ -231,6 +231,8 @@ describe("GET /api/seats/lifecycle", () => {
     expect(getSeatLifecycleCoverage).toHaveBeenCalledWith(
       expect.objectContaining({
         enterpriseSlugs: ["ent-a"],
+        orgs: ["org-a"],
+        allowedLogins: new Set(["alice"]),
         start: json.window.start,
         end: json.window.end,
       }),
