@@ -11,6 +11,7 @@ import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { SeatLifecycleTrendChart } from "@/components/charts/SeatLifecycleTrendChart";
 import { useScope } from "@/contexts/ScopeContext";
+import { useDateRangeParams } from "@/hooks/useDateRangeParams";
 
 type EventType = "onboarded" | "offboarded";
 
@@ -60,7 +61,6 @@ interface LifecycleResponse {
   available: boolean;
 }
 
-const DAY_PRESETS = [7, 14, 30, 60, 90];
 const PAGE_SIZE = 25;
 
 const SOURCE_LABELS: Record<LifecycleRow["source"], string> = {
@@ -181,45 +181,37 @@ function LifecycleTable({
 
 export default function SeatLifecyclePage() {
   const { buildScopeParams } = useScope();
-  const [days, setDays] = useState(30);
-  const [customStart, setCustomStart] = useState("");
-  const [customEnd, setCustomEnd] = useState("");
+  const { buildParams, dateLabel } = useDateRangeParams();
   const [onboardedPage, setOnboardedPage] = useState(1);
   const [offboardedPage, setOffboardedPage] = useState(1);
 
   const scopeParams = buildScopeParams();
   const scopeKey = scopeParams.toString();
-  const [lastScopeKey, setLastScopeKey] = useState(scopeKey);
+  const windowKey = buildParams().toString();
+  // Pagination is meaningless once the scope or the window moves — the page-3
+  // the reader was on describes a result set that no longer exists. Reset
+  // during render so React discards the stale-page query before it can fetch.
+  const [lastQueryKey, setLastQueryKey] = useState(`${scopeKey}|${windowKey}`);
 
-  if (lastScopeKey !== scopeKey) {
-    // Reset during render so React discards the stale-page query before it can fetch.
-    setLastScopeKey(scopeKey);
+  if (lastQueryKey !== `${scopeKey}|${windowKey}`) {
+    setLastQueryKey(`${scopeKey}|${windowKey}`);
     setOnboardedPage(1);
     setOffboardedPage(1);
   }
 
-  // Both custom dates must be set before the override is applied; a half-filled
-  // pair would otherwise make the API 400 on every keystroke.
-  const useCustomRange = customStart !== "" && customEnd !== "";
-  const rangeInvalid = useCustomRange && customEnd < customStart;
-
   const queryString = useMemo(() => {
-    const params = new URLSearchParams(scopeKey);
-    if (useCustomRange && !rangeInvalid) {
-      params.set("start", customStart);
-      params.set("end", customEnd);
-    } else {
-      params.set("days", String(days));
-    }
+    const params = buildParams(scopeParams);
     params.set("pageSize", String(PAGE_SIZE));
     params.set("onboardedPage", String(onboardedPage));
     params.set("offboardedPage", String(offboardedPage));
     return params.toString();
-  }, [scopeKey, useCustomRange, rangeInvalid, customStart, customEnd, days, onboardedPage, offboardedPage]);
+    // `scopeParams` is a fresh object each render; its serialised form is the
+    // real dependency.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [buildParams, scopeKey, onboardedPage, offboardedPage]);
 
   const { data, isLoading, error } = useQuery<LifecycleResponse>({
     queryKey: ["seat-lifecycle", queryString],
-    enabled: !rangeInvalid,
     queryFn: async () => {
       const res = await fetch(`/api/seats/lifecycle?${queryString}`);
       if (!res.ok) {
@@ -229,11 +221,6 @@ export default function SeatLifecyclePage() {
       return res.json();
     },
   });
-
-  const resetPages = () => {
-    setOnboardedPage(1);
-    setOffboardedPage(1);
-  };
 
   const stats = data?.stats;
   const coverage = data?.coverage;
@@ -263,92 +250,19 @@ export default function SeatLifecyclePage() {
       </PageHeader>
       <ScopeFilter />
 
-      {/* Window control: presets plus an optional explicit override */}
-      <div className="mb-6 flex flex-wrap items-end gap-4">
-        <div>
-          <span className="mb-1.5 block text-xs font-medium text-[hsl(var(--muted-foreground))]">Time window</span>
-          <div className="flex gap-1" role="group" aria-label="Preset time window">
-            {DAY_PRESETS.map((preset) => (
-              <button
-                key={preset}
-                onClick={() => {
-                  setDays(preset);
-                  setCustomStart("");
-                  setCustomEnd("");
-                  resetPages();
-                }}
-                aria-pressed={!useCustomRange && days === preset}
-                className={`rounded-md border px-3 py-1.5 text-sm ${
-                  !useCustomRange && days === preset
-                    ? "border-[hsl(var(--primary))] bg-[hsl(var(--primary))]/10 text-[hsl(var(--primary))]"
-                    : "hover:bg-[hsl(var(--muted))]"
-                }`}
-              >
-                {preset}d
-              </button>
-            ))}
-          </div>
-        </div>
-
-        <div className="flex items-end gap-2">
-          <div>
-            <label htmlFor="lifecycle-start" className="mb-1.5 block text-xs font-medium text-[hsl(var(--muted-foreground))]">
-              From
-            </label>
-            <input
-              id="lifecycle-start"
-              type="date"
-              value={customStart}
-              onChange={(e) => {
-                setCustomStart(e.target.value);
-                resetPages();
-              }}
-              className="h-9 rounded-md border bg-transparent px-2 text-sm"
-            />
-          </div>
-          <div>
-            <label htmlFor="lifecycle-end" className="mb-1.5 block text-xs font-medium text-[hsl(var(--muted-foreground))]">
-              To
-            </label>
-            <input
-              id="lifecycle-end"
-              type="date"
-              value={customEnd}
-              onChange={(e) => {
-                setCustomEnd(e.target.value);
-                resetPages();
-              }}
-              className="h-9 rounded-md border bg-transparent px-2 text-sm"
-            />
-          </div>
-          {useCustomRange && (
-            <button
-              onClick={() => {
-                setCustomStart("");
-                setCustomEnd("");
-                resetPages();
-              }}
-              className="h-9 rounded-md border px-3 text-sm hover:bg-[hsl(var(--muted))]"
-            >
-              Clear
-            </button>
-          )}
-        </div>
-
+      <p className="mb-6 text-xs text-[hsl(var(--muted-foreground))]">
+        {dateLabel}
         {data?.window && (
-          <p className="pb-2 text-xs text-[hsl(var(--muted-foreground))]">
-            Showing {data.window.start} → {data.window.end}
-          </p>
+          <>
+            <span aria-hidden="true" className="mx-2 opacity-40">
+              ·
+            </span>
+            {data.window.start} → {data.window.end}
+          </>
         )}
-      </div>
+      </p>
 
-      {rangeInvalid && (
-        <div className="mb-6 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-900 dark:bg-red-950/30 dark:text-red-400">
-          The &ldquo;From&rdquo; date must be on or before the &ldquo;To&rdquo; date.
-        </div>
-      )}
-
-      {error && !rangeInvalid && (
+      {error && (
         <div className="mb-6 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-900 dark:bg-red-950/30 dark:text-red-400">
           {error instanceof Error ? error.message : "Failed to load seat lifecycle data"}
         </div>

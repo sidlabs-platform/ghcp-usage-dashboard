@@ -13,6 +13,28 @@ const scopeState = vi.hoisted(() => ({
   query: "",
 }));
 
+type DateState = {
+  mode: "preset" | "custom" | "month";
+  days: number;
+  startDate: string;
+  endDate: string;
+  period: string | null;
+};
+
+const dateState = vi.hoisted(() => ({
+  value: {
+    mode: "preset",
+    days: 30,
+    startDate: "2025-05-10",
+    endDate: "2025-06-08",
+    period: null,
+  } as DateState,
+}));
+
+vi.mock("@/contexts/DateRangeContext", () => ({
+  useDateRange: () => dateState.value,
+}));
+
 vi.mock("@/contexts/ScopeContext", () => ({
   useScope: () => ({
     hasFilter: scopeState.query !== "",
@@ -159,6 +181,13 @@ describe("Seat onboarding & offboarding page", () => {
     vi.resetModules();
     chartState.props = undefined;
     scopeState.query = "";
+    dateState.value = {
+      mode: "preset",
+      days: 30,
+      startDate: "2025-05-10",
+      endDate: "2025-06-08",
+      period: null,
+    };
     calls.length = 0;
   });
 
@@ -229,7 +258,16 @@ describe("Seat onboarding & offboarding page", () => {
   it("renders an empty churn-rate value when there are no seats to compare", async () => {
     await renderPage(emptyPayload({ stats: { ...emptyPayload().stats, churnRate: null } }));
 
-    await waitFor(() => expect(screen.getByText(/Showing 2025-05-10/i)).toBeInTheDocument());
+    await waitFor(() =>
+      expect(
+        screen.getByText(
+          (_, el) =>
+            el?.tagName === "P" &&
+            /Last 30 days/.test(el.textContent ?? "") &&
+            /2025-05-10 → 2025-06-08/.test(el.textContent ?? ""),
+        ),
+      ).toBeInTheDocument(),
+    );
     expect(screen.getByTestId("metric-Churn Rate")).toHaveTextContent("—");
     expect(screen.getByTestId("metric-Churn Rate")).not.toHaveTextContent("0.0%");
     expect(screen.getByText("No seats to compare")).toBeInTheDocument();
@@ -287,13 +325,22 @@ describe("Seat onboarding & offboarding page", () => {
     );
   });
 
-  it("requests the selected preset window", async () => {
-    await renderPage(emptyPayload());
+  it("requests the preset window selected in the shared date range", async () => {
+    const { rerender, Page, queryClient } = await renderPage(emptyPayload());
 
     await waitFor(() => expect(calls.length).toBeGreaterThan(0));
     expect(calls[0]).toContain("days=30");
+    // A preset must never be sent as bounds — it means "the last N days ending
+    // yesterday", recomputed per request, not a frozen window.
+    expect(calls[0]).not.toContain("startDate=");
 
-    fireEvent.click(screen.getByRole("button", { name: "90d" }));
+    calls.length = 0;
+    dateState.value = { ...dateState.value, days: 90, startDate: "2025-03-11", endDate: "2025-06-08" };
+    rerender(
+      <QueryClientProvider client={queryClient}>
+        <Page />
+      </QueryClientProvider>,
+    );
 
     await waitFor(() => expect(calls.some((c) => c.includes("days=90"))).toBe(true));
   });
@@ -367,30 +414,96 @@ describe("Seat onboarding & offboarding page", () => {
     ).toBe(false);
   });
 
-  it("switches to an explicit start/end override once both dates are set", async () => {
+  it("sends explicit bounds when the shared selector is in month mode", async () => {
+    dateState.value = {
+      mode: "month",
+      days: 31,
+      startDate: "2025-01-01",
+      endDate: "2025-01-31",
+      period: "2025-01",
+    };
     await renderPage(emptyPayload());
-    await waitFor(() => expect(calls.length).toBeGreaterThan(0));
-
-    fireEvent.change(screen.getByLabelText("From"), { target: { value: "2025-01-01" } });
-    fireEvent.change(screen.getByLabelText("To"), { target: { value: "2025-01-31" } });
 
     await waitFor(() =>
-      expect(calls.some((c) => c.includes("start=2025-01-01") && c.includes("end=2025-01-31"))).toBe(true),
+      expect(
+        calls.some((c) => c.includes("startDate=2025-01-01") && c.includes("endDate=2025-01-31")),
+      ).toBe(true),
     );
-    // A half-filled pair must never be sent — it would 400 on every keystroke.
-    expect(calls.some((c) => c.includes("start=2025-01-01") && !c.includes("end="))).toBe(false);
+    // Sending `days` alongside a month would let the route silently resolve the
+    // rolling window instead of the month the reader picked.
+    expect(calls.some((c) => c.includes("days="))).toBe(false);
   });
 
-  it("blocks an inverted custom range client-side instead of requesting it", async () => {
+  it("sends explicit bounds for a custom range", async () => {
+    dateState.value = {
+      mode: "custom",
+      days: 15,
+      startDate: "2025-02-01",
+      endDate: "2025-02-15",
+      period: null,
+    };
     await renderPage(emptyPayload());
+
+    await waitFor(() =>
+      expect(
+        calls.some((c) => c.includes("startDate=2025-02-01") && c.includes("endDate=2025-02-15")),
+      ).toBe(true),
+    );
+  });
+
+  it("resets table pages when the shared window changes", async () => {
+    const { rerender, Page, queryClient } = await renderPage(
+      emptyPayload({
+        onboarded: {
+          rows: [makeRow()],
+          pagination: { page: 1, pageSize: 25, totalItems: 75, totalPages: 3 },
+        },
+        offboarded: {
+          rows: [makeRow({ user_login: "bob", event_type: "offboarded", source: "sync_diff" })],
+          pagination: { page: 1, pageSize: 25, totalItems: 75, totalPages: 3 },
+        },
+      }),
+    );
     await waitFor(() => expect(calls.length).toBeGreaterThan(0));
-    const before = calls.length;
 
-    fireEvent.change(screen.getByLabelText("From"), { target: { value: "2025-03-01" } });
-    fireEvent.change(screen.getByLabelText("To"), { target: { value: "2025-01-01" } });
+    const nextButtons = await screen.findAllByRole("button", { name: "Next" });
+    fireEvent.click(nextButtons[0]);
+    await waitFor(() =>
+      expect(calls.some((c) => paramsForCall(c).get("onboardedPage") === "2")).toBe(true),
+    );
+    calls.length = 0;
 
-    await waitFor(() => expect(screen.getByText(/must be on or before/i)).toBeInTheDocument());
-    expect(calls.length).toBe(before);
+    dateState.value = {
+      mode: "month",
+      days: 31,
+      startDate: "2025-01-01",
+      endDate: "2025-01-31",
+      period: "2025-01",
+    };
+    rerender(
+      <QueryClientProvider client={queryClient}>
+        <Page />
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() =>
+      expect(
+        calls.some((call) => {
+          const params = paramsForCall(call);
+          return (
+            params.get("startDate") === "2025-01-01" &&
+            params.get("onboardedPage") === "1" &&
+            params.get("offboardedPage") === "1"
+          );
+        }),
+      ).toBe(true),
+    );
+    expect(
+      calls.some((call) => {
+        const params = paramsForCall(call);
+        return params.get("startDate") === "2025-01-01" && params.get("onboardedPage") !== "1";
+      }),
+    ).toBe(false);
   });
 
   it("builds an export link covering the whole window, not just the current page", async () => {

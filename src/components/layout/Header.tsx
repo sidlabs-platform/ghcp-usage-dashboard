@@ -16,6 +16,7 @@ import { Badge } from "@/components/ui/badge";
 import { DATE_PRESETS } from "@/lib/constants";
 import { useDateRange } from "@/contexts/DateRangeContext";
 import { MonthSelector } from "@/components/filters/MonthSelector";
+import { CustomRangeFilter } from "@/components/filters/CustomRangeFilter";
 import { useSidebar } from "./SidebarContext";
 import { cn } from "@/lib/utils";
 
@@ -281,8 +282,14 @@ export function Header() {
         {/* Month selector (participates in the same flex-wrap row) */}
         <MonthSelector />
 
-        {/* Custom range badge */}
-        {mode === "custom" && (
+        {/*
+          Custom range. Lives here rather than in a per-page control so the app
+          has exactly one date selector covering all three modes.
+        */}
+        <CustomRangeFilter />
+
+        {/* Resolved bounds — the month selector shows a label, not dates */}
+        {mode === "month" && (
           <Badge variant="outline" className="text-xs">
             {startDate} — {endDate}
           </Badge>

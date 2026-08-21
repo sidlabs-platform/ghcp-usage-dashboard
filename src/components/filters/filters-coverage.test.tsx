@@ -3,7 +3,7 @@
 import React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { DateFilter } from "@/components/filters/DateFilter";
+import { CustomRangeFilter } from "@/components/filters/CustomRangeFilter";
 import { ScopeFilter } from "@/components/filters/ScopeFilter";
 import { useDateRange } from "@/contexts/DateRangeContext";
 import { useScope } from "@/contexts/ScopeContext";
@@ -26,7 +26,7 @@ afterEach(() => {
 });
 
 describe("filter components", () => {
-  it("switches presets and validates custom date ranges", () => {
+  it("validates custom date ranges", () => {
     const setDays = vi.fn();
     const setCustomRange = vi.fn();
     mockedUseDateRange.mockReturnValue({
@@ -38,10 +38,7 @@ describe("filter components", () => {
       setCustomRange,
     } as never);
 
-    render(<DateFilter />);
-
-    fireEvent.click(screen.getByRole("button", { name: "14 days" }));
-    expect(setDays).toHaveBeenCalledWith(14);
+    render(<CustomRangeFilter />);
 
     fireEvent.click(screen.getByRole("button", { name: "Custom Range" }));
     fireEvent.click(screen.getByRole("button", { name: "Apply" }));

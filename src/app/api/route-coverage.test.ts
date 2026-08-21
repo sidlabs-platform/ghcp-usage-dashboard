@@ -140,7 +140,7 @@ describe("additional API route coverage", { timeout: 15000 }, () => {
     );
 
     expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toEqual({
+    await expect(response.json()).resolves.toMatchObject({
       seats: [{ login: "octocat", lastActivity: "2024-01-10" }],
       stats: { total: 5, active30d: 4 },
       utilization: 80,

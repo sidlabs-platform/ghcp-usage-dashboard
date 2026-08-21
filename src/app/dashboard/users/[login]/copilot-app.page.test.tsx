@@ -23,10 +23,6 @@ vi.mock("@/components/layout/PageHeader", () => ({
   PageHeader: ({ title }: { title: string }) => <h1>{title}</h1>,
 }));
 
-vi.mock("@/components/filters/DateFilter", () => ({
-  DateFilter: () => <div>Date Filter</div>,
-}));
-
 vi.mock("@/components/ui/badge", () => ({
   Badge: ({ children }: { children: React.ReactNode }) => <span data-testid="badge">{children}</span>,
 }));

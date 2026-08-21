@@ -6,7 +6,7 @@ import { PageHeader } from "@/components/layout/PageHeader";
 import { MetricCard } from "@/components/cards/MetricCard";
 import { ScopeFilter } from "@/components/filters/ScopeFilter";
 import { ChartSkeleton } from "@/components/states/ChartSkeleton";
-import { useDateRange } from "@/contexts/DateRangeContext";
+import { useDateRangeParams } from "@/hooks/useDateRangeParams";
 import { useScope } from "@/contexts/ScopeContext";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { ExportMenu } from "@/components/ui/ExportMenu";
@@ -39,7 +39,7 @@ import {
 import { CHART_COLORS } from "@/lib/constants";
 
 export default function CodeGenerationPage() {
-  const { days } = useDateRange();
+  const { buildParams, dateLabel, filenameSuffix } = useDateRangeParams();
   const { buildScopeParams } = useScope();
   const [data, setData] = useState<CodeGenerationResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -50,9 +50,7 @@ export default function CodeGenerationPage() {
 
   const fetchData= useCallback(() => {
     setLoading(true);
-    const params = new URLSearchParams({ days: String(days) });
-    const scopeParams = buildScopeParams();
-    scopeParams.forEach((v, k) => params.set(k, v));
+    const params = buildParams(buildScopeParams());
 
     fetch(`/api/metrics/code-generation?${params}`)
       .then(async (res) => {
@@ -65,7 +63,7 @@ export default function CodeGenerationPage() {
       .then(setData)
       .catch((err) => setError(err.message))
       .finally(() => setLoading(false));
-  }, [days, buildScopeParams]);
+  }, [buildParams, buildScopeParams]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
@@ -85,10 +83,10 @@ export default function CodeGenerationPage() {
           pdf={{
             sectionRefs: [kpiRef, chartsRef],
             title: "Code Generation & Activity",
-            filename: `code-generation-report-${days}d`,
+            filename: `code-generation-report-${filenameSuffix}`,
             metadata: {
               reportName: "Code Generation & Activity",
-              dateRange: `Last ${days} days`,
+              dateRange: dateLabel,
               teams: buildScopeParams().get("teams") || undefined,
               orgs: buildScopeParams().get("orgs") || undefined,
             },
@@ -105,7 +103,7 @@ export default function CodeGenerationPage() {
           title="Total LoC Changed"
           value={kpis.totalLocChanged}
           icon={<Code2 className="h-4 w-4" />}
-          subtitle={`Completion + Agent + Copilot App (${days} days)`}
+          subtitle={`Completion + Agent + Copilot App · ${dateLabel}`}
         />
         <MetricCard
           title="Completion Acceptance"

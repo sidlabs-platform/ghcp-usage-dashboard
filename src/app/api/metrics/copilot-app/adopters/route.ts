@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getDateRange, parseAndClampDays } from "@/lib/utils";
+import { resolveWindow } from "@/lib/utils";
 import { parseScopeFilter } from "@/lib/api/scope-filter";
 import { parsePaginationParams } from "@/lib/api/pagination";
 import { withCache } from "@/lib/cache/with-cache";
@@ -12,12 +12,11 @@ import type { CopilotAppAdoptersResponse } from "@/lib/types/metrics";
 async function handler(request: NextRequest) {
   try {
     const params = request.nextUrl.searchParams;
-    const daysResult = parseAndClampDays(params.get("days"), 7);
-    if ("error" in daysResult) {
-      return NextResponse.json({ error: daysResult.error }, { status: 400 });
+    const window = resolveWindow(params, 7);
+    if ("error" in window) {
+      return NextResponse.json({ error: window.error }, { status: 400 });
     }
-    const { days } = daysResult;
-    const { start, end } = getDateRange(days);
+    const { days, start, end } = window;
 
     const scope = parseScopeFilter(params);
     const allowedLogins = scope.allowedLogins ? Array.from(scope.allowedLogins) : undefined;

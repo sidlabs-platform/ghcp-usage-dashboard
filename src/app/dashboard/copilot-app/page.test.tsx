@@ -297,7 +297,7 @@ describe("Copilot App analytics page", () => {
     // aggregate-specific "user-days" labels (see CopilotAppKpis JSDoc):
     // aggregate sources sum daily active-user counts, not distinct users.
     expect(screen.getByText("App Active User-Days")).toBeInTheDocument();
-    expect(screen.getByText("Sum of daily counts over 30 days")).toBeInTheDocument();
+    expect(screen.getByText(/^Sum of daily counts · /)).toBeInTheDocument();
     expect(screen.getByText("Share of active user-days")).toBeInTheDocument();
     expect(screen.queryByText("App Active Users")).not.toBeInTheDocument();
     await waitFor(() => {

@@ -12,7 +12,7 @@ import { Section } from "@/components/ui/Section";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { ExportMenu } from "@/components/ui/ExportMenu";
 import { PaginatedTable, type ColumnDef } from "@/components/tables/PaginatedTable";
-import { useDateRange } from "@/contexts/DateRangeContext";
+import { useDateRangeParams } from "@/hooks/useDateRangeParams";
 import { useScope } from "@/contexts/ScopeContext";
 import { formatNumber } from "@/lib/utils";
 import { COPILOT_APP_ROLLUP_NOTE } from "@/lib/constants";
@@ -88,20 +88,19 @@ async function fetchCopilotAppSummary(url: string): Promise<CopilotAppAnalyticsR
  * date ranges that predate the July 28, 2026 rollout.
  */
 export default function CopilotAppPage() {
-  const { days } = useDateRange();
+  const { buildParams, dateLabel, filenameSuffix } = useDateRangeParams();
   const { buildScopeParams } = useScope();
 
   const scopeParams = buildScopeParams();
   const scopeParamsKey = scopeParams.toString();
 
-  // Memoized once per (days, scope) pair — never mutated after creation, so
+  // Memoized once per (window, scope) pair — never mutated after creation, so
   // it stays a stable reference for PaginatedTable's extraParams and the
   // CSV export config across renders.
-  const summaryParams = useMemo(() => {
-    const params = new URLSearchParams(scopeParamsKey);
-    params.set("days", String(days));
-    return params;
-  }, [days, scopeParamsKey]);
+  const summaryParams = useMemo(
+    () => buildParams(scopeParamsKey ? new URLSearchParams(scopeParamsKey) : undefined),
+    [buildParams, scopeParamsKey],
+  );
 
   const kpiRef = useRef<HTMLDivElement>(null);
   const adoptionRef = useRef<HTMLDivElement>(null);
@@ -112,7 +111,7 @@ export default function CopilotAppPage() {
   const summaryParamsString = summaryParams.toString();
 
   const { data, isLoading, error, refetch } = useQuery<CopilotAppAnalyticsResponse>({
-    queryKey: ["copilot-app-summary", days, scopeParamsKey],
+    queryKey: ["copilot-app-summary", summaryParamsString],
     queryFn: () => fetchCopilotAppSummary(`/api/metrics/copilot-app?${summaryParamsString}`),
   });
 
@@ -202,10 +201,10 @@ export default function CopilotAppPage() {
                   extraParams: summaryParams,
                   columns: adopterExportColumns,
                   dataExtractor: (json) => json.adopters ?? [],
-                  filename: `copilot-app-adopters-${days}d`,
+                  filename: `copilot-app-adopters-${filenameSuffix}`,
                   metadata: {
                     reportName: "Copilot App Adopters",
-                    dateRange: `Last ${days} days`,
+                    dateRange: dateLabel,
                     teams: scopeParams.get("teams") ?? undefined,
                     orgs: scopeParams.get("orgs") ?? undefined,
                   },
@@ -217,10 +216,10 @@ export default function CopilotAppPage() {
               ? [kpiRef, adoptionRef, codeImpactRef, compositionRef, adoptersRef]
               : [kpiRef, adoptionRef, codeImpactRef, compositionRef],
             title: "Copilot App Analytics",
-            filename: `copilot-app-analytics-${days}d`,
+            filename: `copilot-app-analytics-${filenameSuffix}`,
             metadata: {
               reportName: "Copilot App Analytics",
-              dateRange: `Last ${days} days`,
+              dateRange: dateLabel,
               teams: scopeParams.get("teams") ?? undefined,
               orgs: scopeParams.get("orgs") ?? undefined,
             },
@@ -261,7 +260,7 @@ export default function CopilotAppPage() {
           title={isAggregateFallback ? "App Active User-Days" : "App Active Users"}
           value={kpis.appActiveUsers}
           icon={<Users className="h-4 w-4" />}
-          subtitle={isAggregateFallback ? `Sum of daily counts over ${days} days` : `${days}-day window`}
+          subtitle={isAggregateFallback ? `Sum of daily counts · ${dateLabel}` : dateLabel}
         />
         <MetricCard
           title="App Adoption"
@@ -373,13 +372,13 @@ export default function CopilotAppPage() {
               title="Prompt Tokens"
               value={kpis.promptTokens}
               icon={<MessageSquare className="h-4 w-4" />}
-              subtitle={`${days}-day total`}
+              subtitle={`Total · ${dateLabel}`}
             />
             <MetricCard
               title="Output Tokens"
               value={kpis.outputTokens}
               icon={<Send className="h-4 w-4" />}
-              subtitle={`${days}-day total`}
+              subtitle={`Total · ${dateLabel}`}
             />
             <MetricCard
               title="Weighted Tokens / Request"

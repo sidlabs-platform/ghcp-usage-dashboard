@@ -6,7 +6,7 @@ import Link from "next/link";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { MetricCard } from "@/components/cards/MetricCard";
 import { ChartSkeleton } from "@/components/states/ChartSkeleton";
-import { useDateRange } from "@/contexts/DateRangeContext";
+import { useDateRangeParams } from "@/hooks/useDateRangeParams";
 import { useScope } from "@/contexts/ScopeContext";
 import { Zap, Users, Brain, AlertTriangle, Search, X, Info, Building2, Wallet } from "lucide-react";
 import { safeNum } from "@/lib/utils";
@@ -95,7 +95,7 @@ const fmtTokenCount = (v: number) => {
  * @returns {JSX.Element} Billing dashboard page content.
  */
 export default function PremiumRequestsPage() {
-  const { days } = useDateRange();
+  const { buildParams: buildDateParams, dateLabel, filenameSuffix } = useDateRangeParams();
   const { hasFilter, buildScopeParams, selectedEntTeams, selectedOrgTeams, selectedOrgs: scopeOrgs } = useScope();
   const [kpis, setKpis] = useState<PremiumKPIs | null>(null);
   const [userSummary, setUserSummary] = useState<PremiumRequestUserSummary[]>([]);
@@ -136,8 +136,7 @@ export default function PremiumRequestsPage() {
   }, [userModelBreakdown]);
 
   const buildParams = useCallback(() => {
-    const p = new URLSearchParams();
-    p.set("days", String(days));
+    const p = buildDateParams();
     p.set("page", String(page));
     p.set("pageSize", "50");
     p.set("sort", sort);
@@ -150,14 +149,13 @@ export default function PremiumRequestsPage() {
     const scopeParams = buildScopeParams();
     scopeParams.forEach((v, k) => p.set(k, v));
     return p;
-  }, [days, page, sort, sortDir, search, selectedModel, selectedOrg, exceedsQuota, buildScopeParams]);
+  }, [buildDateParams, page, sort, sortDir, search, selectedModel, selectedOrg, exceedsQuota, buildScopeParams]);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
     try {
       const params = buildParams();
-      const summaryParams = new URLSearchParams();
-      summaryParams.set("days", String(days));
+      const summaryParams = buildDateParams();
       if (selectedModel.length) summaryParams.set("model", selectedModel.join(","));
       if (selectedOrg.length) summaryParams.set("organization", selectedOrg.join(","));
       if (exceedsQuota) summaryParams.set("exceedsQuota", exceedsQuota);
@@ -193,7 +191,7 @@ export default function PremiumRequestsPage() {
     } finally {
       setLoading(false);
     }
-  }, [buildParams, days, selectedModel, selectedOrg, exceedsQuota, buildScopeParams]);
+  }, [buildParams, buildDateParams, selectedModel, selectedOrg, exceedsQuota, buildScopeParams]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
@@ -201,9 +199,7 @@ export default function PremiumRequestsPage() {
   // never blocks the rest of the AI Credits page from rendering.
   useEffect(() => {
     let cancelled = false;
-    const p = new URLSearchParams();
-    p.set("days", String(days));
-    buildScopeParams().forEach((v, k) => p.set(k, v));
+    const p = buildDateParams(buildScopeParams());
     fetch(`/api/billing/tokens?${p.toString()}`)
       .then((r) => r.json())
       .then((json) => {
@@ -211,7 +207,7 @@ export default function PremiumRequestsPage() {
       })
       .catch(() => { if (!cancelled) setTokenKpis(null); });
     return () => { cancelled = true; };
-  }, [days, buildScopeParams]);
+  }, [buildDateParams, buildScopeParams]);
   useEffect(() => { setPage(1); }, [search, selectedModel, selectedOrg, exceedsQuota, sort, sortDir, hasFilter, selectedEntTeams, selectedOrgTeams, scopeOrgs]);
 
   // Model breakdown rows are cached per user; drop the cache whenever the query
@@ -219,7 +215,7 @@ export default function PremiumRequestsPage() {
   useEffect(() => {
     setUserModelBreakdown({});
     setExpandedUsers({});
-  }, [days, selectedModel, selectedOrg, exceedsQuota, hasFilter, selectedEntTeams, selectedOrgTeams, scopeOrgs]);
+  }, [buildDateParams, selectedModel, selectedOrg, exceedsQuota, hasFilter, selectedEntTeams, selectedOrgTeams, scopeOrgs]);
 
   const handleSort = (col: string) => {
     if (sort === col) setSortDir(d => d === "asc" ? "desc" : "asc");
@@ -234,8 +230,7 @@ export default function PremiumRequestsPage() {
 
     setLoadingUserModels((prev) => ({ ...prev, [key]: true }));
     try {
-      const p = new URLSearchParams();
-      p.set("days", String(days));
+      const p = buildDateParams();
       p.set("username", username);
       p.set("rowOrganization", organization || "");
       if (selectedModel.length) p.set("model", selectedModel.join(","));
@@ -252,7 +247,7 @@ export default function PremiumRequestsPage() {
     } finally {
       setLoadingUserModels((prev) => ({ ...prev, [key]: false }));
     }
-  }, [buildScopeParams, days, exceedsQuota, selectedModel, selectedOrg]);
+  }, [buildScopeParams, buildDateParams, exceedsQuota, selectedModel, selectedOrg]);
 
   const toggleUserExpanded = useCallback((username: string, organization: string) => {
     const key = getUserKey(username, organization);
@@ -330,20 +325,20 @@ export default function PremiumRequestsPage() {
             extraParams: buildParams(),
             columns: csvColumns,
             dataExtractor: (json) => json.records,
-            filename: `ai-credits-${days}d`,
+            filename: `ai-credits-${filenameSuffix}`,
             metadata: {
               reportName: "AI Credits Report",
-              dateRange: `Last ${days} days`,
+              dateRange: dateLabel,
               ...(hasFilter && { teams: [...selectedEntTeams, ...selectedOrgTeams].join(", "), orgs: scopeOrgs.join(", ") }),
             },
           }}
           pdf={{
             sectionRefs: [kpiRef, trendRef, chartsRef, tableRef],
             title: "AI Credits Report",
-            filename: `ai-credits-${days}d`,
+            filename: `ai-credits-${filenameSuffix}`,
             metadata: {
               reportName: "AI Credits Report",
-              dateRange: `Last ${days} days`,
+              dateRange: dateLabel,
               ...(hasFilter && { teams: [...selectedEntTeams, ...selectedOrgTeams].join(", "), orgs: scopeOrgs.join(", ") }),
             },
           }}
@@ -353,7 +348,7 @@ export default function PremiumRequestsPage() {
 
       {/* Polite live region for screen readers */}
       <div aria-live="polite" aria-atomic="true" className="sr-only">
-        {!loading && kpis && `Updated: AI Credits data, last ${days} days`}
+        {!loading && kpis && `Updated: AI Credits data, ${dateLabel.toLowerCase()}`}
       </div>
 
       {/* AI credit coverage caveat (2026-07-02 metrics accuracy update) */}
@@ -389,7 +384,7 @@ export default function PremiumRequestsPage() {
               value={hasMetricsAiCredits ? fmtCredits(kpis.metricsTotalAiCreditsUsed) : fmtCredits(kpis.totalAiCredits || kpis.totalRequests)}
               format="raw"
               icon={<Zap className="h-4 w-4" />}
-              subtitle={hasMetricsAiCredits ? "Usage Metrics API reported" : `Last ${days} days`}
+              subtitle={hasMetricsAiCredits ? "Usage Metrics API reported" : dateLabel}
             />
             <MetricCard
               title={hasMetricsAiCredits ? "Top Consumer" : "Users Over Quota"}

@@ -3,7 +3,7 @@ import { getSecretScanningDaily, computeMTTR } from "@/lib/db/ghas-repo";
 import { computeFixRate, computeTrendDirection, formatMTTR } from "@/lib/aggregation/ghas-aggregation";
 import { isMetricEnabled, isEnterpriseEnabled, getResolvedOrgs } from "@/lib/config/dashboard-config";
 import { resolveDefaultScope } from "@/lib/config/enterprise-config";
-import { getDateRange, parseAndClampDays } from "@/lib/utils";
+import { resolveWindow } from "@/lib/utils";
 
 export async function GET(request: NextRequest) {
   try {
@@ -12,12 +12,11 @@ export async function GET(request: NextRequest) {
     }
 
     const params = request.nextUrl.searchParams;
-    const daysResult = parseAndClampDays(params.get("days"), 28);
-    if ("error" in daysResult) {
-      return NextResponse.json({ error: daysResult.error }, { status: 400 });
+    const window = resolveWindow(params, 28);
+    if ("error" in window) {
+      return NextResponse.json({ error: window.error }, { status: 400 });
     }
-    const days = daysResult.days;
-    const { start, end } = getDateRange(days);
+    const { days, start, end } = window;
     // Resolve scope: use query params, then enterprise config, then first org
     let scope = params.get("scope") || "";
     let scopeId = params.get("scopeId") || "";

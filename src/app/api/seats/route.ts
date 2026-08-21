@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSeatsPaginated, getSeatStats } from "@/lib/db/seats-repo";
 import { parseScopeFilter } from "@/lib/api/scope-filter";
+import { parseDateRangeParams } from "@/lib/utils";
 import { withCache } from "@/lib/cache/with-cache";
 import { withTimeout } from "@/lib/api/timeout";
 import { CACHE_TTL } from "@/lib/cache/memory-cache";
@@ -12,6 +13,14 @@ async function handler(request: NextRequest) {
     const { enterpriseSlugs } = filter;
     const hasFilter = filter.selectedTeams.length > 0 || filter.selectedOrgs.length > 0;
 
+    // Seat rows are a live snapshot with no history, so the selected window can
+    // only govern the activity split, never the seat counts themselves.
+    const range = parseDateRangeParams(params, 30);
+    if ("error" in range) {
+      return NextResponse.json({ error: range.error }, { status: 400 });
+    }
+    const activitySince = `${range.start}T00:00:00.000Z`;
+
     const rawPage = parseInt(params.get("page") || "1", 10);
     const page = Math.max(1, Number.isNaN(rawPage) ? 1 : rawPage);
     const rawPageSize = parseInt(params.get("pageSize") || "50", 10);
@@ -19,7 +28,7 @@ async function handler(request: NextRequest) {
     const sort = params.get("sort") || "_lastActivity";
     const sortDir = (params.get("sortDir") === "asc" ? "asc" : "desc") as "asc" | "desc";
 
-    const stats = getSeatStats(enterpriseSlugs);
+    const stats = getSeatStats(enterpriseSlugs, activitySince);
 
     const result = getSeatsPaginated(page, pageSize, sort, sortDir, filter.allowedLogins, enterpriseSlugs);
 
@@ -31,6 +40,7 @@ async function handler(request: NextRequest) {
       seats: result.seats,
       stats,
       utilization,
+      window: { start: range.start, end: range.end },
       filtered: hasFilter,
       pagination: {
         page,

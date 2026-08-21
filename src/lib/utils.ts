@@ -144,3 +144,36 @@ export function parseDateRangeParams(
   if ("error" in daysResult) return daysResult;
   return getDateRange(daysResult.days);
 }
+
+/** Inclusive day count between two `YYYY-MM-DD` bounds. */
+export function spanDays(start: string, end: string): number {
+  const s = new Date(`${start}T00:00:00Z`).getTime();
+  const e = new Date(`${end}T00:00:00Z`).getTime();
+  return Math.round((e - s) / 86_400_000) + 1;
+}
+
+/**
+ * Resolve a request's time window, accepting either explicit
+ * `startDate`/`endDate` bounds or a rolling `days` preset.
+ *
+ * This is {@link parseDateRangeParams} plus the resolved `days`, for the many
+ * routes that also need the window *length* — to normalise a total into a
+ * per-day average, size an axis, or fill missing days.
+ *
+ * Deriving `days` from the resolved bounds rather than the raw param is the
+ * point: a caller sending `startDate=2026-03-01&endDate=2026-03-31` sends no
+ * `days` at all, and a caller sending both must get a length that matches the
+ * window actually queried, not the one it asked for.
+ *
+ * `days` here always means "length of the queried window". Where a route uses a
+ * day count for something else — such as a fixed rolling aggregation window
+ * defined by the GitHub API — that constant must stay separate.
+ */
+export function resolveWindow(
+  params: URLSearchParams,
+  defaultDays = 7,
+): { start: string; end: string; days: number } | { error: string } {
+  const range = parseDateRangeParams(params, defaultDays);
+  if ("error" in range) return range;
+  return { ...range, days: spanDays(range.start, range.end) };
+}

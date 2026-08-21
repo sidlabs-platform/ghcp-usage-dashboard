@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { isBillingSubEnabledForAnyEnterprise } from "@/lib/config/enterprise-config";
-import { getDateRange, parseAndClampDays } from "@/lib/utils";
+import { resolveWindow } from "@/lib/utils";
 import {
   getTokenKpis,
   getTokenModelSummary,
@@ -41,12 +41,11 @@ async function handler(request: NextRequest) {
     }
 
     const params = request.nextUrl.searchParams;
-    const daysResult = parseAndClampDays(params.get("days"), 28);
-    if ("error" in daysResult) {
-      return NextResponse.json({ error: daysResult.error }, { status: 400 });
+    const window = resolveWindow(params, 28);
+    if ("error" in window) {
+      return NextResponse.json({ error: window.error }, { status: 400 });
     }
-    const days = daysResult.days;
-    const { start, end } = getDateRange(days);
+    const { days, start, end } = window;
 
     const scope = parseScopeFilter(params);
     const enterpriseSlugs = scope.enterpriseSlugs;

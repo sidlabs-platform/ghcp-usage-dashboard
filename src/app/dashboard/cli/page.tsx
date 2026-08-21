@@ -6,7 +6,7 @@ import { PageHeader } from "@/components/layout/PageHeader";
 import { MetricCard } from "@/components/cards/MetricCard";
 import { ScopeFilter } from "@/components/filters/ScopeFilter";
 import { ChartSkeleton } from "@/components/states/ChartSkeleton";
-import { useDateRange } from "@/contexts/DateRangeContext";
+import { useDateRangeParams } from "@/hooks/useDateRangeParams";
 import { useScope } from "@/contexts/ScopeContext";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { ExportMenu } from "@/components/ui/ExportMenu";
@@ -91,7 +91,7 @@ const cliUserExportColumns: CSVColumn[] = [
 ];
 
 export default function CLIPage() {
-  const { days } = useDateRange();
+  const { buildParams, dateLabel, filenameSuffix } = useDateRangeParams();
   const { buildScopeParams } = useScope();
   const [data, setData] = useState<CLIData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -104,9 +104,7 @@ export default function CLIPage() {
 
   const fetchData= useCallback(() => {
     setLoading(true);
-    const params = new URLSearchParams({ days: String(days) });
-    const scopeParams = buildScopeParams();
-    scopeParams.forEach((v, k) => params.set(k, v));
+    const params = buildParams(buildScopeParams());
 
     fetch(`/api/metrics/cli?${params}`)
       .then((res) => {
@@ -116,7 +114,7 @@ export default function CLIPage() {
       .then((json) => setData(json))
       .catch((err) => setError(err.message))
       .finally(() => setLoading(false));
-  }, [days, buildScopeParams]);
+  }, [buildParams, buildScopeParams]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
@@ -167,13 +165,13 @@ export default function CLIPage() {
         <ExportMenu
           csv={{
             fetchUrl: "/api/metrics/cli",
-            extraParams: new URLSearchParams({ days: String(days), ...Object.fromEntries(buildScopeParams()) }),
+            extraParams: buildParams(buildScopeParams()),
             columns: cliUserExportColumns,
             dataExtractor: (json) => json.topCliUsers ?? [],
-            filename: `cli-users-export-${days}d`,
+            filename: `cli-users-export-${filenameSuffix}`,
             metadata: {
               reportName: "CLI Analytics — Top Users",
-              dateRange: `Last ${days} days`,
+              dateRange: dateLabel,
               teams: buildScopeParams().get("teams") || undefined,
               orgs: buildScopeParams().get("orgs") || undefined,
             },
@@ -181,10 +179,10 @@ export default function CLIPage() {
           pdf={{
             sectionRefs: [kpiRef, chartsRef, versionsRef, tableRef],
             title: "CLI Analytics",
-            filename: `cli-report-${days}d`,
+            filename: `cli-report-${filenameSuffix}`,
             metadata: {
               reportName: "CLI Analytics",
-              dateRange: `Last ${days} days`,
+              dateRange: dateLabel,
               teams: buildScopeParams().get("teams") || undefined,
               orgs: buildScopeParams().get("orgs") || undefined,
             },

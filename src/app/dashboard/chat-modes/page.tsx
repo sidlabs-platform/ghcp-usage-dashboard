@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useMemo, useCallback, useRef } from "react";
 import { PageHeader } from "@/components/layout/PageHeader";
-import { useDateRange } from "@/contexts/DateRangeContext";
+import { useDateRangeParams } from "@/hooks/useDateRangeParams";
 import { useScope } from "@/contexts/ScopeContext";
 import { MetricCard } from "@/components/cards/MetricCard";
 import { ScopeFilter } from "@/components/filters/ScopeFilter";
@@ -97,7 +97,7 @@ function formatDate(dateStr: string) {
 // ── Page Component ────────────────────────────────────────────────────
 
 export default function CopilotFeaturesPage() {
-  const { days } = useDateRange();
+  const { buildParams, dateLabel, filenameSuffix } = useDateRangeParams();
   const { buildScopeParams } = useScope();
   const [data, setData] = useState<FeaturesData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -110,9 +110,7 @@ export default function CopilotFeaturesPage() {
 
   const fetchData= useCallback(() => {
     setLoading(true);
-    const params = new URLSearchParams({ days: String(days) });
-    const scopeParams = buildScopeParams();
-    scopeParams.forEach((v, k) => params.set(k, v));
+    const params = buildParams(buildScopeParams());
 
     fetch(`/api/metrics/chat-modes?${params}`)
       .then((res) => {
@@ -122,7 +120,7 @@ export default function CopilotFeaturesPage() {
       .then((json) => setData(json))
       .catch((err) => setError(err.message))
       .finally(() => setLoading(false));
-  }, [days, buildScopeParams]);
+  }, [buildParams, buildScopeParams]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
@@ -185,13 +183,13 @@ export default function CopilotFeaturesPage() {
         <ExportMenu
           csv={{
             fetchUrl: "/api/metrics/chat-modes",
-            extraParams: new URLSearchParams({ days: String(days), ...Object.fromEntries(buildScopeParams()) }),
+            extraParams: buildParams(buildScopeParams()),
             columns: featureExportColumns,
             dataExtractor: (json) => json.featureDistribution ?? [],
-            filename: `features-export-${days}d`,
+            filename: `features-export-${filenameSuffix}`,
             metadata: {
               reportName: "Copilot Features",
-              dateRange: `Last ${days} days`,
+              dateRange: dateLabel,
               teams: buildScopeParams().get("teams") || undefined,
               orgs: buildScopeParams().get("orgs") || undefined,
             },
@@ -199,10 +197,10 @@ export default function CopilotFeaturesPage() {
           pdf={{
             sectionRefs: [kpiRef, chartsRef, adoptionRef, tableRef],
             title: "Copilot Features",
-            filename: `features-report-${days}d`,
+            filename: `features-report-${filenameSuffix}`,
             metadata: {
               reportName: "Copilot Features",
-              dateRange: `Last ${days} days`,
+              dateRange: dateLabel,
               teams: buildScopeParams().get("teams") || undefined,
               orgs: buildScopeParams().get("orgs") || undefined,
             },

@@ -33,10 +33,6 @@ vi.mock("@/components/filters/ScopeFilter", () => ({
   ScopeFilter: () => <div>Scope Filter</div>,
 }));
 
-vi.mock("@/components/filters/DateFilter", () => ({
-  DateFilter: () => <div>Date Filter</div>,
-}));
-
 vi.mock("@/components/cards/MetricCard", () => ({
   MetricCard: ({ title, value, subtitle }: { title: string; value: React.ReactNode; subtitle?: string }) => (
     <section>
@@ -77,7 +73,6 @@ describe("AI Credits users page", () => {
 
     expect(screen.getByRole("heading", { name: "AI Credits by User" })).toBeInTheDocument();
     expect(screen.getByText("Scope Filter")).toBeInTheDocument();
-    expect(screen.getByText("Date Filter")).toBeInTheDocument();
     expect(screen.getByText("Paginated AI Credits table")).toBeInTheDocument();
     expect(tableState.props).toMatchObject({
       fetchUrl: "/api/billing/ai-credits/users",

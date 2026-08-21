@@ -8,7 +8,7 @@ import { MetricCard } from "@/components/cards/MetricCard";
 import { Section } from "@/components/ui/Section";
 import { Card } from "@/components/ui/card";
 import { ChartSkeleton } from "@/components/states/ChartSkeleton";
-import { useDateRange } from "@/contexts/DateRangeContext";
+import { useDateRangeParams } from "@/hooks/useDateRangeParams";
 import { useScope } from "@/contexts/ScopeContext";
 import { safeNum } from "@/lib/utils";
 import {
@@ -88,7 +88,7 @@ type ModelSortKey = keyof TokenModelSummary;
  * correlated against AI credit consumption (allowance vs. additional) and USD.
  */
 export default function TokenUsagePage() {
-  const { days } = useDateRange();
+  const { buildParams, dateLabel, filenameSuffix } = useDateRangeParams();
   const { buildScopeParams } = useScope();
 
   const [data, setData] = useState<TokenResponse | null>(null);
@@ -105,12 +105,10 @@ export default function TokenUsagePage() {
   const kpiRef = useRef<HTMLDivElement>(null);
   const trendRef = useRef<HTMLDivElement>(null);
 
-  const queryString = useCallback(() => {
-    const p = new URLSearchParams();
-    p.set("days", String(days));
-    buildScopeParams().forEach((v, k) => p.set(k, v));
-    return p.toString();
-  }, [days, buildScopeParams]);
+  const queryString = useCallback(
+    () => buildParams(buildScopeParams()).toString(),
+    [buildParams, buildScopeParams],
+  );
 
   const fetchData = useCallback(async (signal?: AbortSignal) => {
     setLoading(true);
@@ -137,7 +135,7 @@ export default function TokenUsagePage() {
     }
   }, [queryString]);
 
-  // Abort the in-flight request whenever `days` or the scope changes, so a
+  // Abort the in-flight request whenever the window or the scope changes, so a
   // slow earlier response can never overwrite a newer one.
   useEffect(() => {
     const controller = new AbortController();

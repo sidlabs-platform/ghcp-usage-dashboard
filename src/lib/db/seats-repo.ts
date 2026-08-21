@@ -183,11 +183,37 @@ export function getSeatsPaginated(
   return { seats, total: countRow.total };
 }
 
-export function getSeatStats(enterpriseSlugs?: string[]): { total: number; active30d: number; inactive30d: number; pendingCancellation: number } {
+export interface SeatStats {
+  total: number;
+  /** Seats with activity at or after the cutoff. Named for the default 30-day window. */
+  active30d: number;
+  inactive30d: number;
+  pendingCancellation: number;
+  /** The activity cutoff actually applied, as an ISO timestamp. */
+  activitySince: string;
+}
+
+/**
+ * Seat counts plus an activity split.
+ *
+ * `copilot_seats` is a *live snapshot* — it holds today's seat assignments and
+ * no history — so `total` and `pendingCancellation` always describe now, no
+ * matter what window is selected. Only the active/inactive split can honour a
+ * window, because `last_activity_at` is a real timestamp on each seat row.
+ * Callers must present the two differently; see the Seat Management page.
+ *
+ * @param enterpriseSlugs Restrict to these enterprises.
+ * @param activitySince ISO timestamp; seats active at or after it count as
+ *   active. Defaults to 30 days ago so existing callers are unaffected.
+ */
+export function getSeatStats(enterpriseSlugs?: string[], activitySince?: string): SeatStats {
   const db = getDb();
-  const thirtyDaysAgo = new Date();
-  thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-  const cutoff = thirtyDaysAgo.toISOString();
+  let cutoff = activitySince;
+  if (!cutoff) {
+    const thirtyDaysAgo = new Date();
+    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+    cutoff = thirtyDaysAgo.toISOString();
+  }
 
   const efW = buildEnterpriseFilter(enterpriseSlugs);
   const efA = buildEnterpriseFilter(enterpriseSlugs, "AND");
@@ -201,5 +227,6 @@ export function getSeatStats(enterpriseSlugs?: string[]): { total: number; activ
     active30d,
     inactive30d: total - active30d,
     pendingCancellation,
+    activitySince: cutoff,
   };
 }
