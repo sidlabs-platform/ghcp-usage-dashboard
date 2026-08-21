@@ -8,8 +8,8 @@ import { getDb } from "./database";
 // call site (in this module and elsewhere, e.g. src/app/api/users/[login]/route.ts
 // and src/app/api/teams/[slug]/route.ts) keeps importing from
 // "@/lib/db/aggregation-queries" without any change.
-export { FEATURE_SQL, IS_COMPLETION_SQL, IS_AGENT_SQL, IS_COPILOT_APP_SQL, NOT_AGENT_OR_APP_SQL } from "./feature-classification";
-import { IS_COMPLETION_SQL, IS_AGENT_SQL, IS_COPILOT_APP_SQL, NOT_AGENT_OR_APP_SQL } from "./feature-classification";
+export { FEATURE_SQL, IS_COMPLETION_SQL, IS_AGENT_SQL, IS_COPILOT_APP_SQL, IS_CLI_SQL, IS_ACCEPTANCE_ELIGIBLE_SQL, NOT_AGENT_OR_APP_SQL } from "./feature-classification";
+import { IS_COMPLETION_SQL, IS_AGENT_SQL, IS_COPILOT_APP_SQL, IS_CLI_SQL, NOT_AGENT_OR_APP_SQL } from "./feature-classification";
 
 export interface ChatModeSums {
   ask: number;
@@ -166,6 +166,18 @@ export interface CompletionDailyRow {
   appDeleted: number;
   appGenCount: number;
   appAcceptCount: number;
+  // ── Copilot CLI, its own bucket (IS_CLI_SQL) ────────────────────────────
+  // The CLI writes to files directly, so `cliAdded` is NOT "accepted
+  // suggestions" and must never be pooled with completionAccepted. Its
+  // generation/acceptance counts ARE a real accept/reject signal, though, so
+  // they belong in the acceptance rate alongside the completion counts — use
+  // the `acceptanceRate*` helpers rather than compGenCount/compAcceptCount
+  // alone.
+  cliSuggested: number;
+  cliAdded: number;
+  cliDeleted: number;
+  cliGenCount: number;
+  cliAcceptCount: number;
 }
 
 export interface CliDailyVolumeRow {
@@ -1017,7 +1029,17 @@ export function getCompletionDailyTrend(
       COALESCE(SUM(CASE WHEN ${IS_COPILOT_APP_SQL}
         THEN json_extract(j.value, '$.code_generation_activity_count') ELSE 0 END), 0) as appGenCount,
       COALESCE(SUM(CASE WHEN ${IS_COPILOT_APP_SQL}
-        THEN json_extract(j.value, '$.code_acceptance_activity_count') ELSE 0 END), 0) as appAcceptCount
+        THEN json_extract(j.value, '$.code_acceptance_activity_count') ELSE 0 END), 0) as appAcceptCount,
+      COALESCE(SUM(CASE WHEN ${IS_CLI_SQL}
+        THEN json_extract(j.value, '$.loc_suggested_to_add_sum') ELSE 0 END), 0) as cliSuggested,
+      COALESCE(SUM(CASE WHEN ${IS_CLI_SQL}
+        THEN json_extract(j.value, '$.loc_added_sum') ELSE 0 END), 0) as cliAdded,
+      COALESCE(SUM(CASE WHEN ${IS_CLI_SQL}
+        THEN json_extract(j.value, '$.loc_deleted_sum') ELSE 0 END), 0) as cliDeleted,
+      COALESCE(SUM(CASE WHEN ${IS_CLI_SQL}
+        THEN json_extract(j.value, '$.code_generation_activity_count') ELSE 0 END), 0) as cliGenCount,
+      COALESCE(SUM(CASE WHEN ${IS_CLI_SQL}
+        THEN json_extract(j.value, '$.code_acceptance_activity_count') ELSE 0 END), 0) as cliAcceptCount
     FROM user_daily_metrics u, json_each(u.totals_by_feature) j
     WHERE u.day >= ? AND u.day <= ?
       AND u.totals_by_feature IS NOT NULL AND u.totals_by_feature != '[]'
@@ -1077,7 +1099,17 @@ export function getCompletionTotals(
       COALESCE(SUM(CASE WHEN ${IS_COPILOT_APP_SQL}
         THEN json_extract(j.value, '$.code_generation_activity_count') ELSE 0 END), 0) as appGenCount,
       COALESCE(SUM(CASE WHEN ${IS_COPILOT_APP_SQL}
-        THEN json_extract(j.value, '$.code_acceptance_activity_count') ELSE 0 END), 0) as appAcceptCount
+        THEN json_extract(j.value, '$.code_acceptance_activity_count') ELSE 0 END), 0) as appAcceptCount,
+      COALESCE(SUM(CASE WHEN ${IS_CLI_SQL}
+        THEN json_extract(j.value, '$.loc_suggested_to_add_sum') ELSE 0 END), 0) as cliSuggested,
+      COALESCE(SUM(CASE WHEN ${IS_CLI_SQL}
+        THEN json_extract(j.value, '$.loc_added_sum') ELSE 0 END), 0) as cliAdded,
+      COALESCE(SUM(CASE WHEN ${IS_CLI_SQL}
+        THEN json_extract(j.value, '$.loc_deleted_sum') ELSE 0 END), 0) as cliDeleted,
+      COALESCE(SUM(CASE WHEN ${IS_CLI_SQL}
+        THEN json_extract(j.value, '$.code_generation_activity_count') ELSE 0 END), 0) as cliGenCount,
+      COALESCE(SUM(CASE WHEN ${IS_CLI_SQL}
+        THEN json_extract(j.value, '$.code_acceptance_activity_count') ELSE 0 END), 0) as cliAcceptCount
     FROM user_daily_metrics u, json_each(u.totals_by_feature) j
     WHERE u.day >= ? AND u.day <= ?
       AND u.totals_by_feature IS NOT NULL AND u.totals_by_feature != '[]'
@@ -1088,7 +1120,32 @@ export function getCompletionTotals(
   return row ?? {
     day: '', completionSuggested: 0, completionAccepted: 0, completionDeleted: 0, completionSuggestedDelete: 0, agentAdded: 0, agentDeleted: 0,
     compGenCount: 0, compAcceptCount: 0, appAdded: 0, appDeleted: 0, appGenCount: 0, appAcceptCount: 0,
+    cliSuggested: 0, cliAdded: 0, cliDeleted: 0, cliGenCount: 0, cliAcceptCount: 0,
   };
+}
+
+/**
+ * Acceptance rate over every surface that reports a meaningful accept/reject
+ * signal: IDE completion plus the Copilot CLI.
+ *
+ * Single definition, shared by every caller, so the overview KPI, the daily
+ * trend, the per-user page and the per-team page can never drift apart.
+ *
+ * `agent_edit` is deliberately absent — it reports acceptances as a hard 0
+ * against non-zero generations, so including it can only deflate the rate.
+ * The CLI is deliberately present: it reports real generations *and*
+ * acceptances, and excluding it (as the code previously did, by accident, by
+ * classifying `copilot_cli` as nothing at all) discarded roughly three quarters
+ * of the fleet's genuine acceptance signal.
+ */
+export function acceptanceRateFrom(
+  row: Pick<CompletionDailyRow, "compGenCount" | "compAcceptCount"> &
+    Partial<Pick<CompletionDailyRow, "cliGenCount" | "cliAcceptCount">>,
+): number {
+  const generations = (row.compGenCount || 0) + (row.cliGenCount || 0);
+  if (generations <= 0) return 0;
+  const acceptances = (row.compAcceptCount || 0) + (row.cliAcceptCount || 0);
+  return (acceptances / generations) * 100;
 }
 
 // ── IDE breakdown (SQL via json_each) ─────────────────────────────────

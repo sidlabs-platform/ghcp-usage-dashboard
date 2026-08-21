@@ -1,10 +1,18 @@
-// Helper to separate code completion metrics from agent/edit and Copilot App metrics
-// Per GitHub docs: acceptance rate applies ONLY to code completions,
-// agent_edit writes code directly (loc_added_sum) without suggestions.
-// copilot_app (the standalone Copilot mobile/web app surface) is a distinct
-// surface that must not be classified as a completion feature either — its
-// code activity is reported separately so it can never dilute or inflate
-// the completion acceptance rate or completion LoC totals.
+// Helper to separate code completion metrics from agent/edit, CLI and Copilot
+// App metrics.
+//
+// Per GitHub docs: LoC "acceptance" applies ONLY to code completions —
+// agent_edit writes code directly (loc_added_sum) without ever showing a
+// suggestion, and reports code_acceptance_activity_count as a hard 0.
+//
+// copilot_app (the standalone Copilot mobile/web app surface) and copilot_cli
+// are each distinct surfaces that must not be classified as completion features
+// either — their code activity is reported separately so it can never dilute or
+// inflate completion LoC totals.
+//
+// The CLI is nonetheless included in the *acceptance rate* (see
+// isAcceptanceEligibleFeature): unlike agent_edit it reports real generation and
+// acceptance counts, so dropping it discards genuine accept/reject signal.
 
 import type { UserDayRecord, TotalsByFeature } from "@/lib/types/metrics";
 
@@ -21,6 +29,23 @@ export interface AgentMetrics {
   locDeleted: number;
 }
 
+/**
+ * Copilot CLI surface metrics.
+ *
+ * The CLI is its own bucket, not a completion feature and not an agent feature.
+ * It reports genuine generation *and* acceptance counts (so its acceptances are
+ * a real accept/reject signal, unlike `agent_edit` which always reports 0), but
+ * it writes to files directly, so its `loc_added_sum` is not "accepted
+ * suggestions" and must never be pooled with IDE completion LoC.
+ */
+export interface CliMetrics {
+  locSuggested: number;
+  locAdded: number;
+  locDeleted: number;
+  codeGenCount: number;
+  codeAcceptCount: number;
+}
+
 export interface CopilotAppMetrics {
   locAdded: number;
   locDeleted: number;
@@ -32,7 +57,15 @@ export interface SeparatedMetrics {
   completion: CompletionMetrics;
   agent: AgentMetrics;
   copilotApp: CopilotAppMetrics;
-  totalLocAdded: number; // completion accepted + agent added + copilot app added
+  cli: CliMetrics;
+  totalLocAdded: number; // completion accepted + agent added + copilot app added + cli added
+  /**
+   * Acceptance rate over every surface that reports a meaningful accept/reject
+   * signal — IDE completion plus the CLI. `agent_edit` is excluded because it
+   * reports acceptances as a hard 0 while still reporting generations, so it
+   * can only deflate the rate.
+   */
+  acceptanceRate: number;
 }
 
 /** Check if a feature is a completion/chat feature (not agent_edit, not copilot_app).
@@ -47,6 +80,28 @@ export function isCompletionFeature(feature: string): boolean {
 /** Check if a feature is an agent edit feature */
 export function isAgentFeature(feature: string): boolean {
   return feature === "agent_edit";
+}
+
+/**
+ * Check if a feature is the Copilot CLI surface.
+ *
+ * Kept separate from both {@link isCompletionFeature} and
+ * {@link isAgentFeature} — see {@link CliMetrics} for why.
+ */
+export function isCliFeature(feature: string): boolean {
+  return feature === "copilot_cli";
+}
+
+/**
+ * Check whether a feature's accept/reject counts belong in an acceptance rate.
+ *
+ * True for IDE completion surfaces and the CLI. False for `agent_edit` (always
+ * reports 0 acceptances against non-zero generations, so it only deflates the
+ * rate) and for `copilot_app` and unknown surfaces, which are reported
+ * separately.
+ */
+export function isAcceptanceEligibleFeature(feature: string): boolean {
+  return isCompletionFeature(feature) || isCliFeature(feature);
 }
 
 /** Check if a feature is the standalone Copilot App surface */
@@ -113,17 +168,44 @@ export function extractCopilotAppMetrics(features: TotalsByFeature[]): CopilotAp
   return { locAdded, locDeleted, codeGenCount, codeAcceptCount };
 }
 
+/** Extract Copilot CLI metrics from totals_by_feature array */
+export function extractCliMetrics(features: TotalsByFeature[]): CliMetrics {
+  let locSuggested = 0;
+  let locAdded = 0;
+  let locDeleted = 0;
+  let codeGenCount = 0;
+  let codeAcceptCount = 0;
+
+  for (const f of features) {
+    if (isCliFeature(f.feature)) {
+      locSuggested += f.loc_suggested_to_add_sum || 0;
+      locAdded += f.loc_added_sum || 0;
+      locDeleted += f.loc_deleted_sum || 0;
+      codeGenCount += f.code_generation_activity_count || 0;
+      codeAcceptCount += f.code_acceptance_activity_count || 0;
+    }
+  }
+
+  return { locSuggested, locAdded, locDeleted, codeGenCount, codeAcceptCount };
+}
+
 /** Get separated metrics from a user record's totals_by_feature */
 export function separateMetrics(features: TotalsByFeature[]): SeparatedMetrics {
   const completion = extractCompletionMetrics(features);
   const agent = extractAgentMetrics(features);
   const copilotApp = extractCopilotAppMetrics(features);
+  const cli = extractCliMetrics(features);
+
+  const acceptEligibleGen = completion.codeGenCount + cli.codeGenCount;
+  const acceptEligibleAccept = completion.codeAcceptCount + cli.codeAcceptCount;
 
   return {
     completion,
     agent,
     copilotApp,
-    totalLocAdded: completion.locAccepted + agent.locAdded + copilotApp.locAdded,
+    cli,
+    totalLocAdded: completion.locAccepted + agent.locAdded + copilotApp.locAdded + cli.locAdded,
+    acceptanceRate: acceptEligibleGen > 0 ? (acceptEligibleAccept / acceptEligibleGen) * 100 : 0,
   };
 }
 
@@ -132,6 +214,7 @@ export function aggregateSeparatedMetrics(records: UserDayRecord[]): SeparatedMe
   let compLocSuggested = 0, compLocAccepted = 0, compGenCount = 0, compAcceptCount = 0;
   let agentLocAdded = 0, agentLocDeleted = 0;
   let appLocAdded = 0, appLocDeleted = 0, appGenCount = 0, appAcceptCount = 0;
+  let cliLocSuggested = 0, cliLocAdded = 0, cliLocDeleted = 0, cliGenCount = 0, cliAcceptCount = 0;
 
   for (const r of records) {
     const features = r.totals_by_feature || [];
@@ -152,8 +235,18 @@ export function aggregateSeparatedMetrics(records: UserDayRecord[]): SeparatedMe
         appGenCount += f.code_generation_activity_count || 0;
         appAcceptCount += f.code_acceptance_activity_count || 0;
       }
+      if (isCliFeature(f.feature)) {
+        cliLocSuggested += f.loc_suggested_to_add_sum || 0;
+        cliLocAdded += f.loc_added_sum || 0;
+        cliLocDeleted += f.loc_deleted_sum || 0;
+        cliGenCount += f.code_generation_activity_count || 0;
+        cliAcceptCount += f.code_acceptance_activity_count || 0;
+      }
     }
   }
+
+  const acceptEligibleGen = compGenCount + cliGenCount;
+  const acceptEligibleAccept = compAcceptCount + cliAcceptCount;
 
   return {
     completion: {
@@ -170,6 +263,14 @@ export function aggregateSeparatedMetrics(records: UserDayRecord[]): SeparatedMe
       codeGenCount: appGenCount,
       codeAcceptCount: appAcceptCount,
     },
-    totalLocAdded: compLocAccepted + agentLocAdded + appLocAdded,
+    cli: {
+      locSuggested: cliLocSuggested,
+      locAdded: cliLocAdded,
+      locDeleted: cliLocDeleted,
+      codeGenCount: cliGenCount,
+      codeAcceptCount: cliAcceptCount,
+    },
+    totalLocAdded: compLocAccepted + agentLocAdded + appLocAdded + cliLocAdded,
+    acceptanceRate: acceptEligibleGen > 0 ? (acceptEligibleAccept / acceptEligibleGen) * 100 : 0,
   };
 }

@@ -9,7 +9,7 @@ import { getDb } from "./database";
 // `copilot_app`, `chat_inline`, or any future unknown feature as completion.
 // Both constants are built from json_extract(j.value, '$.feature') and every
 // query below aliases its json_each(...) row as `j`, matching that fragment.
-import { IS_COMPLETION_SQL, IS_AGENT_SQL } from "./aggregation-queries";
+import { IS_COMPLETION_SQL, IS_AGENT_SQL, IS_ACCEPTANCE_ELIGIBLE_SQL } from "./aggregation-queries";
 
 /**
  * Refresh user_period_summary for a given date range.
@@ -67,22 +67,24 @@ export function refreshUserSummary(periodStart: string, periodEnd: string, enter
     GROUP BY enterprise_slug, user_login
   `).run(periodStart, periodEnd, now, periodStart, periodEnd, ...extraParams);
 
-  // Override acceptance_rate with a completion-only rate using the shared
-  // IS_COMPLETION_SQL allowlist — not a bare `!= 'agent_edit'` exclusion,
-  // since that would silently fold `copilot_app`, `chat_inline`, or any
-  // future unknown feature into "completion". agent_edit has
+  // Override acceptance_rate with a completion+CLI rate using the shared
+  // IS_ACCEPTANCE_ELIGIBLE_SQL allowlist — not a bare `!= 'agent_edit'`
+  // exclusion, since that would silently fold `copilot_app`, `chat_inline`, or
+  // any future unknown feature into the rate. agent_edit has
   // code_generation_activity_count > 0 but code_acceptance_activity_count = 0,
-  // which would deflate the top-level rate if left in.
+  // which would deflate the rate if left in; copilot_cli reports both and so
+  // belongs. Must stay in lockstep with acceptanceRateFrom() and with
+  // summary-cache-migration.ts, or cached and live rates diverge.
   db.prepare(`
     UPDATE user_period_summary SET acceptance_rate = COALESCE(f.rate, 0)
     FROM (
       SELECT u.enterprise_slug, u.user_login,
-        CASE WHEN SUM(CASE WHEN ${IS_COMPLETION_SQL}
+        CASE WHEN SUM(CASE WHEN ${IS_ACCEPTANCE_ELIGIBLE_SQL}
             THEN json_extract(j.value, '$.code_generation_activity_count') ELSE 0 END) > 0
           THEN ROUND(
-            CAST(SUM(CASE WHEN ${IS_COMPLETION_SQL}
+            CAST(SUM(CASE WHEN ${IS_ACCEPTANCE_ELIGIBLE_SQL}
               THEN json_extract(j.value, '$.code_acceptance_activity_count') ELSE 0 END) AS REAL) /
-            SUM(CASE WHEN ${IS_COMPLETION_SQL}
+            SUM(CASE WHEN ${IS_ACCEPTANCE_ELIGIBLE_SQL}
               THEN json_extract(j.value, '$.code_generation_activity_count') ELSE 0 END) * 100, 1)
           ELSE 0 END as rate
       FROM user_daily_metrics u, json_each(u.totals_by_feature) j
@@ -278,19 +280,19 @@ export function refreshTeamSummary(periodStart: string, periodEnd: string, enter
     ) m ON t.enterprise_slug = m.enterprise_slug AND t.team_slug = m.team_slug AND t.source = m.source
   `).run(periodStart, periodEnd, totalDays, now, ...extraParams, periodStart, periodEnd, ...extraParams);
 
-  // Override overall_acceptance_rate with a completion-only rate using the
-  // shared IS_COMPLETION_SQL allowlist (not a bare `!= 'agent_edit'`
+  // Override overall_acceptance_rate with a completion+CLI rate using the
+  // shared IS_ACCEPTANCE_ELIGIBLE_SQL allowlist (not a bare `!= 'agent_edit'`
   // exclusion), so copilot_app/chat_inline/unknown features never leak in.
   db.prepare(`
     UPDATE team_summary_cache SET overall_acceptance_rate = COALESCE(f.rate, 0)
     FROM (
       SELECT tm.enterprise_slug, tm.team_slug, tm.source,
-        CASE WHEN SUM(CASE WHEN ${IS_COMPLETION_SQL}
+        CASE WHEN SUM(CASE WHEN ${IS_ACCEPTANCE_ELIGIBLE_SQL}
             THEN json_extract(j.value, '$.code_generation_activity_count') ELSE 0 END) > 0
           THEN ROUND(
-            CAST(SUM(CASE WHEN ${IS_COMPLETION_SQL}
+            CAST(SUM(CASE WHEN ${IS_ACCEPTANCE_ELIGIBLE_SQL}
               THEN json_extract(j.value, '$.code_acceptance_activity_count') ELSE 0 END) AS REAL) /
-            SUM(CASE WHEN ${IS_COMPLETION_SQL}
+            SUM(CASE WHEN ${IS_ACCEPTANCE_ELIGIBLE_SQL}
               THEN json_extract(j.value, '$.code_generation_activity_count') ELSE 0 END) * 100, 1)
           ELSE 0 END as rate
       FROM team_memberships tm

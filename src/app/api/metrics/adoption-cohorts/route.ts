@@ -182,6 +182,47 @@ function getEnterpriseAdoptionCohorts(
 }
 
 /**
+ * Users active in the window who carry no `ai_adoption_phase` at all.
+ *
+ * The API only assigns a phase to users who met its engagement criteria, so the
+ * cohort counts are a strict subset of the active-user count shown elsewhere on
+ * the dashboard. Left unreported, the two disagree by exactly this number while
+ * the cohort percentages still sum to 100% — which reads as one of the figures
+ * being wrong rather than as two different populations.
+ */
+function getUnclassifiedUserCount(
+  start: string,
+  end: string,
+  allowedLogins?: string[],
+  enterpriseSlugs?: string[],
+): { classified: number; unclassified: number; totalActive: number } {
+  const db = getDb();
+  const lf = buildLoginFilter(allowedLogins ?? [], "u.");
+  const ef = buildEnterpriseFilter(enterpriseSlugs, "u.");
+
+  const row = db.prepare(`
+    SELECT
+      COUNT(DISTINCT LOWER(u.user_login)) AS total_active,
+      COUNT(DISTINCT CASE
+        WHEN u.ai_adoption_phase IS NOT NULL AND ${USER_PHASE_SQL} IS NOT NULL
+        THEN LOWER(u.user_login)
+      END) AS classified
+    FROM user_daily_metrics u
+    WHERE u.day BETWEEN ? AND ?${lf.clause}${ef.clause}
+  `).get(start, end, ...lf.params, ...ef.params) as
+    | { total_active: number; classified: number }
+    | undefined;
+
+  const totalActive = row?.total_active ?? 0;
+  const classified = row?.classified ?? 0;
+  return {
+    classified,
+    totalActive,
+    unclassified: Math.max(0, totalActive - classified),
+  };
+}
+
+/**
  * Aggregate adoption phase distribution from user-level ai_adoption_phase.
  * Used when enterprise-level data is unavailable or when filters are active.
  */
@@ -310,6 +351,9 @@ async function handler(request: NextRequest) {
         totalMerged: 0,
         hasMergeData: false,
         countBasis: "window",
+        classified: 0,
+        unclassified: 0,
+        totalActive: 0,
         hasData: false,
         dataAsOf: end,
         daysLoaded: days,
@@ -342,6 +386,9 @@ async function handler(request: NextRequest) {
         totalMerged: 0,
         hasMergeData: false,
         countBasis: "window",
+        classified: 0,
+        unclassified: 0,
+        totalActive: 0,
         hasData: false,
         dataAsOf: end,
         daysLoaded: days,
@@ -352,6 +399,11 @@ async function handler(request: NextRequest) {
 
     return NextResponse.json({
       ...result,
+      // Cohort counts only ever cover users the API assigned a phase to. Report
+      // the active population and the unclassified remainder alongside them so a
+      // reader can reconcile this page against the overview's active-user count
+      // instead of concluding one of the two is wrong.
+      ...getUnclassifiedUserCount(start, end, allowedLoginsArray, enterpriseSlugs),
       hasData: true,
       dataAsOf: end,
       daysLoaded: days,

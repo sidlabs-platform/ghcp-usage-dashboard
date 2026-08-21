@@ -10,7 +10,7 @@ import type { MemberRow, TeamDetailResponse } from "@/lib/types/team-detail";
 // sites. Never re-declare a local copy or fall back to a bare
 // `!= 'agent_edit'` exclusion, since that would silently misclassify
 // `copilot_app`, `chat_inline`, or any future unknown feature as completion.
-import { IS_COMPLETION_SQL } from "@/lib/db/aggregation-queries";
+import { IS_ACCEPTANCE_ELIGIBLE_SQL } from "@/lib/db/aggregation-queries";
 
 async function handler(request: NextRequest) {
   try {
@@ -112,7 +112,7 @@ async function handler(request: NextRequest) {
         WHERE udm.day >= ? AND udm.day <= ?
           AND udm.totals_by_feature IS NOT NULL AND udm.totals_by_feature != '[]'
           AND json_valid(udm.totals_by_feature)
-          AND ${IS_COMPLETION_SQL}
+          AND ${IS_ACCEPTANCE_ELIGIBLE_SQL}
         GROUP BY udm.user_login
       )
       SELECT

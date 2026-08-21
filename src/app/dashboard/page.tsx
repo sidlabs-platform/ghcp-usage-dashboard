@@ -211,6 +211,31 @@ export default function DashboardOverview() {
 
   const licenseUtil    = isFiltered ? null : kpis.licenseUtilization;
 
+  // Seat counts come from a live snapshot of `copilot_seats`, which stores only
+  // each seat's latest-ever activity. For a historical window the active/inactive
+  // split is instead derived from usage recorded inside that window; say which,
+  // so a reader never compares a live figure against a period figure unknowingly.
+  const seatsFromUsage = kpis.seatActivityBasis === "usage";
+  const seatBasisNote = seatsFromUsage
+    ? `active in ${dateRangeLabel.toLowerCase()}`
+    : "no activity 30 d";
+
+  const coverage = data.coverage;
+  const coverageWarning =
+    coverage && coverage.isEmpty
+      ? `No usage data has been synced for ${dateRangeLabel.toLowerCase()}.` +
+        (coverage.earliest && coverage.latest
+          ? ` Synced usage data covers ${coverage.earliest} to ${coverage.latest}.`
+          : "") +
+        " The figures below are zeros because nothing was synced, not because Copilot went unused."
+      : coverage && coverage.isPartial
+      ? `Only ${coverage.daysCovered} of ${coverage.daysRequested} days in ${dateRangeLabel.toLowerCase()} have synced usage data` +
+        (coverage.earliest && coverage.latest
+          ? ` (coverage: ${coverage.earliest} to ${coverage.latest})`
+          : "") +
+        ". Totals for this period are understated."
+      : null;
+
   return (
     <div>
       <PageHeader
@@ -235,6 +260,16 @@ export default function DashboardOverview() {
 
       <ScopeFilter />
 
+      {coverageWarning && (
+        <div
+          role="status"
+          className="mb-4 flex items-start gap-3 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-200"
+        >
+          <TrendingDown className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+          <p>{coverageWarning}</p>
+        </div>
+      )}
+
       {/* ── KPI Row: ≤6 cards, answering the 4 program-owner questions ── */}
       {/* Call sites where accent should become value-derived (TODO for MetricCard wiring):
           1. Completion Acceptance — threshold already wired below (good ≥70, bad <40)
@@ -252,7 +287,11 @@ export default function DashboardOverview() {
             title="Active Users"
             value={kpis.periodActiveUsers ?? 0}
             icon={<Users className="h-4 w-4" />}
-            subtitle={`DAU ${kpis.dailyActiveUsers} · Period total`}
+            subtitle={
+              (kpis.activeUsersWithoutSeat ?? 0) > 0
+                ? `DAU ${kpis.dailyActiveUsers} · ${kpis.activeUsersWithoutSeat.toLocaleString()} without a current seat`
+                : `DAU ${kpis.dailyActiveUsers} · Period total`
+            }
             accent="blue"
             stagger={1}
             trend={dailyTrendValues}
@@ -264,7 +303,7 @@ export default function DashboardOverview() {
             value={kpis.completionAcceptanceRate ?? 0}
             format="percent"
             icon={<CheckSquare className="h-4 w-4" />}
-            subtitle="Completion events accepted"
+            subtitle="Completion + CLI events accepted"
             thresholds={{ good: 70, bad: 40, higherIsBetter: true }}
             stagger={2}
           />
@@ -278,7 +317,7 @@ export default function DashboardOverview() {
             subtitle={
               licenseUtil === null
                 ? "N/A when filtered"
-                : `${totalSeats ?? 0} total seats`
+                : `${totalSeats ?? 0} seats (current snapshot)`
             }
             thresholds={{ good: 80, bad: 60, higherIsBetter: true }}
             stagger={3}
@@ -293,7 +332,7 @@ export default function DashboardOverview() {
               inactiveSeats === null
                 ? "N/A when filtered"
                 : inactivePct !== null
-                ? `${inactivePct}% of total — no activity 30 d`
+                ? `${inactivePct}% of seats — not ${seatBasisNote}`
                 : "No seat data"
             }
             accent="amber"

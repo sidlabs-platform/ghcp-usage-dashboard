@@ -1251,6 +1251,49 @@ export function getPhaseCostFromBilling(
 }
 
 /**
+ * Average billed cost of one Copilot seat for one month, in USD, over a window.
+ *
+ * ROI's per-developer cost previously counted only AI-credit consumption and
+ * silently omitted the seat subscription — by far the larger number. For June
+ * 2026 that reported $0.64 per developer per month against roughly $46 of real
+ * spend, because $54,150 of `user-months` charges were never looked at.
+ *
+ * Seat charges cannot be attributed per user for most of the billing history:
+ * `billing_usage_records.username` is NULL on `user-months` rows before
+ * 2026-07. So rather than attribute, this returns the *rate* — total
+ * `user-months` USD divided by total `user-months` quantity — which callers
+ * apply uniformly per developer. Every developer in an ROI group holds a seat,
+ * so a uniform per-seat rate is the correct allocation regardless.
+ *
+ * Only `unit_type = 'user-months'` rows are summed. Quantities of different
+ * unit types (credits, requests, token units) are never additive; mixing them
+ * would produce a rate that reproduces no GitHub report.
+ *
+ * Returns 0 when no seat charges are present, so callers degrade to the
+ * consumption-only figure rather than failing.
+ */
+export function getSeatCostPerUserMonth(
+  startDay: string,
+  endDay: string,
+  filters?: RoiCostFilters
+): number {
+  const db = getDb();
+  const ef = buildEnterpriseFilter(filters?.enterpriseSlugs);
+
+  const row = db.prepare(`
+    SELECT
+      COALESCE(SUM(net_amount), 0) AS cost_usd,
+      COALESCE(SUM(quantity), 0) AS user_months
+    FROM billing_usage_records
+    WHERE date >= ? AND date <= ?
+      AND unit_type = 'user-months'${ef.clause}
+  `).get(startDay, endDay, ...ef.params) as { cost_usd: number; user_months: number } | undefined;
+
+  if (!row || !row.user_months || row.user_months <= 0) return 0;
+  return row.cost_usd / row.user_months;
+}
+
+/**
  * Aggregate developer counts and estimated cost per adoption phase from
  * user-level AI-credit consumption.
  *

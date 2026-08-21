@@ -124,13 +124,14 @@ describe("additional API route coverage", { timeout: 15000 }, () => {
       selectedOrgs: [],
     }));
     const getSeatStats = vi.fn(() => ({ total: 5, active30d: 4 }));
+    const getSeatStatsForWindow = vi.fn(() => ({ total: 5, active30d: 4 }));
     const getSeatsPaginated = vi.fn(() => ({
       seats: [{ login: "octocat", lastActivity: "2024-01-10" }],
       total: 1,
     }));
 
     vi.doMock("@/lib/api/scope-filter", () => ({ parseScopeFilter }));
-    vi.doMock("@/lib/db/seats-repo", () => ({ getSeatStats, getSeatsPaginated }));
+    vi.doMock("@/lib/db/seats-repo", () => ({ getSeatStats, getSeatStatsForWindow, getSeatsPaginated }));
 
     const { GET } = await import("./seats/route");
     const response = await GET(

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getEnterpriseMetrics, getAggregatedDailySummary, resolveEnterpriseId, countEffectiveEnterprises } from "@/lib/db/metrics-repo";
-import { getSeatStats } from "@/lib/db/seats-repo";
+import { getSeatStatsForWindow, countActiveUsersWithoutSeat } from "@/lib/db/seats-repo";
 import { parseScopeFilter } from "@/lib/api/scope-filter";
 import { resolveSeatActivityWindow } from "@/lib/api/seat-activity-window";
 import {
@@ -10,6 +10,7 @@ import {
   getActiveUsersRollingTrend,
   getCompletionDailyTrend,
   getCompletionTotals,
+  acceptanceRateFrom,
   getFeatureUsageDaily,
   estimateRowCount,
   buildLoginFilter,
@@ -17,8 +18,9 @@ import {
   buildUserScopeFilter,
 } from "@/lib/db/aggregation-queries";
 import { getDb } from "@/lib/db/database";
+import { getUsageCoverage } from "@/lib/db/data-coverage";
 import { parseDateRangeParams } from "@/lib/utils";
-import { extractCompletionMetrics, extractAgentMetrics, isCompletionFeature, isAgentFeature } from "@/lib/aggregation/separate-metrics";
+import { extractCompletionMetrics, extractAgentMetrics, extractCliMetrics, isCompletionFeature, isAgentFeature } from "@/lib/aggregation/separate-metrics";
 import { withCache } from "@/lib/cache/with-cache";
 import { withTimeout } from "@/lib/api/timeout";
 import { CACHE_TTL } from "@/lib/cache/memory-cache";
@@ -72,8 +74,14 @@ async function handler(request: NextRequest) {
     const useAggregated = metrics.length === 0;
     const aggregated = useAggregated && !hasFilter ? getAggregatedDailySummary(start, end, enterpriseSlugs) : [];
 
-    const { activitySince, activityUntil } = resolveSeatActivityWindow(start, end);
-    const seatStats = getSeatStats(enterpriseSlugs, activitySince, activityUntil);
+    const { activitySince, activityUntil, isCurrentWindow } = resolveSeatActivityWindow(start, end);
+    const seatStats = getSeatStatsForWindow(start, end, isCurrentWindow, enterpriseSlugs, activitySince, activityUntil);
+    // Active users are measured from usage; seats from a live snapshot. The two
+    // populations legitimately differ, so report the gap rather than leaving a
+    // reader to infer that one of the two numbers is broken.
+    const activeUsersWithoutSeat = hasFilter
+      ? 0
+      : countActiveUsersWithoutSeat(start, end, enterpriseSlugs);
 
     // Feature usage (incl. Copilot App) via SQL — always computed up front so
     // every data-source branch below (enterprise-direct, aggregated, and
@@ -160,7 +168,8 @@ async function handler(request: NextRequest) {
           suggested: r?.completionSuggested ?? 0,
           accepted: r?.completionAccepted ?? 0,
           agentAdded: r?.agentAdded ?? 0,
-          rate: r && r.compGenCount > 0 ? (r.compAcceptCount / r.compGenCount) * 100 : 0,
+          cliAdded: r?.cliAdded ?? 0,
+          rate: r ? acceptanceRateFrom(r) : 0,
         };
       });
 
@@ -232,12 +241,16 @@ async function handler(request: NextRequest) {
       acceptanceRateTrend = metrics.map((d) => {
         const comp = extractCompletionMetrics(d.totals_by_feature || []);
         const agent = extractAgentMetrics(d.totals_by_feature || []);
+        const cli = extractCliMetrics(d.totals_by_feature || []);
+        // Same accept/reject basis as the SQL branch above: completion + CLI.
+        const generations = comp.codeGenCount + cli.codeGenCount;
         return {
           day: d.day,
           suggested: comp.locSuggested,
           accepted: comp.locAccepted,
           agentAdded: agent.locAdded,
-          rate: comp.codeGenCount > 0 ? (comp.codeAcceptCount / comp.codeGenCount) * 100 : 0,
+          cliAdded: cli.locAdded,
+          rate: generations > 0 ? ((comp.codeAcceptCount + cli.codeAcceptCount) / generations) * 100 : 0,
         };
       });
 
@@ -320,8 +333,9 @@ async function handler(request: NextRequest) {
       allowedUserScopes,
     );
 
-    // Period-wide completion acceptance rate — single aggregated query, consistent
-    // across enterprise/aggregated/filtered paths.
+    // Period-wide acceptance rate — single aggregated query, consistent across
+    // the enterprise/aggregated/filtered paths. Covers completion *and* CLI;
+    // see acceptanceRateFrom for why the CLI belongs and agent_edit does not.
     const completionTotals = getCompletionTotals(
       start,
       end,
@@ -330,10 +344,7 @@ async function handler(request: NextRequest) {
       emptyScopeMeansNoRows,
       allowedUserScopes,
     );
-    const completionAcceptanceRate =
-      completionTotals.compGenCount > 0
-        ? (completionTotals.compAcceptCount / completionTotals.compGenCount) * 100
-        : 0;
+    const completionAcceptanceRate = acceptanceRateFrom(completionTotals);
 
     // AI credits consumed from usage API (ai_credits_used column on user_daily_metrics)
     let aiCreditsConsumed: number | null = null;
@@ -414,12 +425,34 @@ async function handler(request: NextRequest) {
       completionAcceptanceRate,
       inactiveSeats: hasFilter ? 0 : (seatStats.inactive30d ?? 0),
       totalSeats: hasFilter ? 0 : (seatStats.total ?? 0),
+      // How the active/inactive seat split was derived. `"usage"` means the
+      // window is historical and the split counts seat holders with recorded
+      // usage in it; `"last_activity"` means the window runs up to now and the
+      // live per-seat stamp was used. Seat *totals* always describe now either
+      // way — `copilot_seats` is a snapshot with no history — which is why the
+      // UI labels them separately.
+      seatActivityBasis: hasFilter ? null : seatStats.activityBasis,
+      seatSnapshotIsLive: isCurrentWindow,
+      activeUsersWithoutSeat,
+      // LoC by surface, kept apart on purpose. `completionLocAccepted` is the
+      // only one that means "a human accepted a suggestion"; agent and CLI
+      // write to files directly. Pooling them produced a ~300x disagreement
+      // between this page and the Languages page.
+      completionLocAccepted: completionTotals.completionAccepted ?? 0,
+      completionLocSuggested: completionTotals.completionSuggested ?? 0,
+      agentLocAdded: completionTotals.agentAdded ?? 0,
+      cliLocAdded: completionTotals.cliAdded ?? 0,
       monthlyNetCost,
       aiCreditsConsumed,
       billingAvailable,
     };
 
     const totalDays = activeUsersTrend.length;
+
+    // Whether the selected window is actually backed by synced usage data.
+    // Without this the UI cannot tell a genuinely quiet month from one that was
+    // never synced, and renders zeros with the same confidence as real numbers.
+    const coverage = getUsageCoverage(start, end);
 
     return NextResponse.json({
       kpis,
@@ -437,6 +470,7 @@ async function handler(request: NextRequest) {
       cliVsIde,
       dataAsOf: end,
       daysLoaded: totalDays,
+      coverage,
       dataSource: hasFilter ? "filtered-users" : (resolvedId ? "enterprise" : (isMultiEnterprise ? "multi-enterprise" : (aggregated.length > 0 ? "aggregated" : "user-aggregated"))),
       filtered: hasFilter || !!enterpriseSlugs,
     }, {

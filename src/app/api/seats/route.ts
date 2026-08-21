@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSeatsPaginated, getSeatStats } from "@/lib/db/seats-repo";
+import { getSeatsPaginated, getSeatStatsForWindow } from "@/lib/db/seats-repo";
 import { parseScopeFilter } from "@/lib/api/scope-filter";
 import { resolveSeatActivityWindow } from "@/lib/api/seat-activity-window";
 import { parseDateRangeParams } from "@/lib/utils";
@@ -50,7 +50,7 @@ async function handler(request: NextRequest) {
     if ("error" in range) {
       return NextResponse.json({ error: range.error }, { status: 400 });
     }
-    const { activitySince, activityUntil } = resolveSeatActivityWindow(range.start, range.end);
+    const { activitySince, activityUntil, isCurrentWindow } = resolveSeatActivityWindow(range.start, range.end);
 
     const pageResult = parsePaginationInt(params.get("page"), "page", 1);
     if (typeof pageResult === "object") {
@@ -65,7 +65,7 @@ async function handler(request: NextRequest) {
     const sort = params.get("sort") || "_lastActivity";
     const sortDir = (params.get("sortDir") === "asc" ? "asc" : "desc") as "asc" | "desc";
 
-    const stats = getSeatStats(enterpriseSlugs, activitySince, activityUntil);
+    const stats = getSeatStatsForWindow(range.start, range.end, isCurrentWindow, enterpriseSlugs, activitySince, activityUntil);
 
     const result = getSeatsPaginated(page, pageSize, sort, sortDir, filter.allowedLogins, enterpriseSlugs);
 

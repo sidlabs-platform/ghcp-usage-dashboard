@@ -18,6 +18,11 @@ const state = vi.hoisted(() => ({
     appDeleted: number;
     appGenCount: number;
     appAcceptCount: number;
+    cliSuggested: number;
+    cliAdded: number;
+    cliDeleted: number;
+    cliGenCount: number;
+    cliAcceptCount: number;
   }[],
   languageBreakdown: [] as unknown[],
   featureBreakdown: [] as unknown[],
@@ -35,6 +40,11 @@ const state = vi.hoisted(() => ({
     appDeleted: 0,
     appGenCount: 0,
     appAcceptCount: 0,
+    cliSuggested: 0,
+    cliAdded: 0,
+    cliDeleted: 0,
+    cliGenCount: 0,
+    cliAcceptCount: 0,
   },
 }));
 
@@ -42,14 +52,20 @@ vi.mock("@/lib/api/scope-filter", () => ({
   parseScopeFilter: vi.fn(() => state.scope),
 }));
 
-vi.mock("@/lib/db/aggregation-queries", () => ({
-  estimateRowCount: vi.fn(() => state.estimate),
-  getCompletionDailyTrend: vi.fn(() => state.trendRows),
-  getCompletionTotals: vi.fn(() => state.totals),
-  getLanguageBreakdown: vi.fn(() => state.languageBreakdown),
-  getFeatureBreakdown: vi.fn(() => state.featureBreakdown),
-  getModelBreakdown: vi.fn(() => state.modelBreakdown),
-}));
+vi.mock("@/lib/db/aggregation-queries", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/db/aggregation-queries")>(
+    "@/lib/db/aggregation-queries",
+  );
+  return {
+    acceptanceRateFrom: actual.acceptanceRateFrom,
+    estimateRowCount: vi.fn(() => state.estimate),
+    getCompletionDailyTrend: vi.fn(() => state.trendRows),
+    getCompletionTotals: vi.fn(() => state.totals),
+    getLanguageBreakdown: vi.fn(() => state.languageBreakdown),
+    getFeatureBreakdown: vi.fn(() => state.featureBreakdown),
+    getModelBreakdown: vi.fn(() => state.modelBreakdown),
+  };
+});
 
 async function getHandler() {
   const route = await import("./route");
@@ -76,6 +92,11 @@ beforeEach(() => {
     appDeleted: 0,
     appGenCount: 0,
     appAcceptCount: 0,
+    cliSuggested: 0,
+    cliAdded: 0,
+    cliDeleted: 0,
+    cliGenCount: 0,
+    cliAcceptCount: 0,
   };
 });
 
@@ -126,6 +147,11 @@ describe("GET /api/metrics/code-generation", () => {
         appDeleted: 4,
         appGenCount: 6,
         appAcceptCount: 5,
+        cliSuggested: 0,
+        cliAdded: 0,
+        cliDeleted: 0,
+        cliGenCount: 0,
+        cliAcceptCount: 0,
       },
     ];
     const GET = await getHandler();
@@ -155,6 +181,11 @@ describe("GET /api/metrics/code-generation", () => {
       appDeleted: 800,
       appGenCount: 9999,
       appAcceptCount: 1, // if this leaked in, rate would collapse toward 0
+      cliSuggested: 0,
+      cliAdded: 0,
+      cliDeleted: 0,
+      cliGenCount: 0,
+      cliAcceptCount: 0,
     };
     const GET = await getHandler();
     const res = await GET(new NextRequest("http://localhost/api/metrics/code-generation?days=7"));
@@ -176,6 +207,11 @@ describe("GET /api/metrics/code-generation", () => {
       appDeleted: 8,
       appGenCount: 9,
       appAcceptCount: 7,
+      cliSuggested: 0,
+      cliAdded: 0,
+      cliDeleted: 0,
+      cliGenCount: 0,
+      cliAcceptCount: 0,
     };
     const GET = await getHandler();
     const res = await GET(new NextRequest("http://localhost/api/metrics/code-generation?days=7"));
@@ -201,6 +237,11 @@ describe("GET /api/metrics/code-generation", () => {
       appDeleted: 8,
       appGenCount: 9,
       appAcceptCount: 7,
+      cliSuggested: 0,
+      cliAdded: 0,
+      cliDeleted: 0,
+      cliGenCount: 0,
+      cliAcceptCount: 0,
     };
     const GET = await getHandler();
     const res = await GET(new NextRequest("http://localhost/api/metrics/code-generation?days=7"));
@@ -223,6 +264,11 @@ describe("GET /api/metrics/code-generation", () => {
       appDeleted: 0,
       appGenCount: 0,
       appAcceptCount: 0,
+      cliSuggested: 0,
+      cliAdded: 0,
+      cliDeleted: 0,
+      cliGenCount: 0,
+      cliAcceptCount: 0,
     };
     const GET = await getHandler();
     const res = await GET(new NextRequest("http://localhost/api/metrics/code-generation?days=7"));

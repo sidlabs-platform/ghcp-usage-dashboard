@@ -2,7 +2,7 @@
 // Computes team metrics by cross-referencing user-level data with team membership
 
 import type { UserDayRecord } from "@/lib/types/metrics";
-import { extractCompletionMetrics } from "./separate-metrics";
+import { extractCompletionMetrics, extractCliMetrics } from "./separate-metrics";
 
 export interface TeamDayMetrics {
   teamSlug: string;
@@ -102,13 +102,16 @@ export function computeTeamDayMetrics(
       custom: dayRecords.reduce((s, u) => s + (u.chat_panel_custom_mode || 0), 0),
       unknown: dayRecords.reduce((s, u) => s + (u.chat_panel_unknown_mode || 0), 0),
     },
-    // Acceptance rate: completion-only (excludes agent_edit)
+    // Acceptance rate: completion + CLI (excludes agent_edit, which always
+    // reports 0 acceptances). Same basis as the overview and code-generation
+    // APIs so a team's rate is comparable to the fleet-wide one.
     acceptanceRate: (() => {
       let gen = 0, acc = 0;
       for (const r of dayRecords) {
         const comp = extractCompletionMetrics(r.totals_by_feature || []);
-        gen += comp.codeGenCount;
-        acc += comp.codeAcceptCount;
+        const cli = extractCliMetrics(r.totals_by_feature || []);
+        gen += comp.codeGenCount + cli.codeGenCount;
+        acc += comp.codeAcceptCount + cli.codeAcceptCount;
       }
       return gen > 0 ? (acc / gen) * 100 : 0;
     })(),
@@ -133,12 +136,13 @@ export function computeTeamSummary(
     computeTeamDayMetrics(teamSlug, teamName, members, userRecords, day)
   );
 
-  // Aggregate stats — completion-only acceptance rate
+  // Aggregate stats — acceptance rate over completion + CLI
   let compGenTotal = 0, compAcceptTotal = 0;
   for (const r of teamRecords) {
     const comp = extractCompletionMetrics(r.totals_by_feature || []);
-    compGenTotal += comp.codeGenCount;
-    compAcceptTotal += comp.codeAcceptCount;
+    const cli = extractCliMetrics(r.totals_by_feature || []);
+    compGenTotal += comp.codeGenCount + cli.codeGenCount;
+    compAcceptTotal += comp.codeAcceptCount + cli.codeAcceptCount;
   }
 
   // Unique users who used each feature in the period

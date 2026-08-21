@@ -10,6 +10,7 @@ import {
   countEffectiveEnterprises,
   getPhaseCostFromBilling,
   getPhaseCostFromCredits,
+  getSeatCostPerUserMonth,
   hasBillingCostData,
   type PhaseCostRow,
   type RoiCostFilters,
@@ -92,6 +93,7 @@ function emptyResponse(days: number, end: string, currency: string, creditToUsd:
     costSource: "none",
     currency,
     creditToUsd,
+    seatCostPerUserMonth: 0,
     groups: [],
     windowDays: days,
     dataAsOf: end,
@@ -146,7 +148,17 @@ async function handler(request: NextRequest) {
     }
 
     const totalCost = costRows.reduce((s, r) => s + (r.total_cost_usd || 0), 0);
-    const costSource: RoiCostSource = totalCost > 0 ? (useBilling ? "billing" : "credits") : "none";
+
+    // Seat subscription cost, applied uniformly per developer. The consumption
+    // figures above cover AI credits only; on this fleet seat charges are two
+    // orders of magnitude larger, so omitting them made the whole comparison
+    // meaningless. See getSeatCostPerUserMonth for why this is a rate rather
+    // than a per-user attribution.
+    const seatCostPerUserMonth = getSeatCostPerUserMonth(start, end, costFilters);
+    const costSource: RoiCostSource =
+      totalCost > 0 || seatCostPerUserMonth > 0
+        ? (useBilling || seatCostPerUserMonth > 0 ? "billing" : "credits")
+        : "none";
 
     // Merged-PR totals come from a single enterprise row. Across several
     // enterprises that row covers only one of them, so it cannot describe the
@@ -165,17 +177,23 @@ async function handler(request: NextRequest) {
 
     const groups: RoiGroup[] = GROUP_DEFINITIONS.map((def) => {
       let developers = 0;
-      let totalCostUsd = 0;
+      let usageCostUsd = 0;
       let prsMerged = 0;
 
       for (const phase of def.phases) {
         const row = costByPhase.get(phase);
         if (row) {
           developers += row.developers || 0;
-          totalCostUsd += row.total_cost_usd || 0;
+          usageCostUsd += row.total_cost_usd || 0;
         }
         if (mergedByPhase) prsMerged += mergedByPhase[phase] || 0;
       }
+
+      // A developer accrues days/DAYS_PER_MONTH seat-months over the window, so
+      // this term contributes exactly `seatCostPerUserMonth` to the per-dev
+      // monthly figure — independent of window length, as a subscription should be.
+      const seatCostUsd = developers * seatCostPerUserMonth * (days / DAYS_PER_MONTH);
+      const totalCostUsd = usageCostUsd + seatCostUsd;
 
       return {
         key: def.key,
@@ -183,6 +201,8 @@ async function handler(request: NextRequest) {
         phases: def.phases,
         developers,
         totalCostUsd,
+        usageCostUsd,
+        seatCostUsd,
         costPerDevPerMonth: developers > 0 ? (totalCostUsd / developers) * costMonthlyFactor : 0,
         prsMerged,
         prsMergedPerDevPerMonth: developers > 0 ? (prsMerged / developers) * prMonthlyFactor : 0,
@@ -198,6 +218,7 @@ async function handler(request: NextRequest) {
       costSource,
       currency,
       creditToUsd,
+      seatCostPerUserMonth,
       groups,
       windowDays: days,
       dataAsOf: end,

@@ -15,6 +15,7 @@ describe("resolveSeatActivityWindow", () => {
     expect(window).toEqual({
       activitySince: "2026-08-01T00:00:00.000Z",
       activityUntil: null,
+      isCurrentWindow: true,
     });
   });
 
@@ -27,6 +28,7 @@ describe("resolveSeatActivityWindow", () => {
     expect(window).toEqual({
       activitySince: "2026-08-01T00:00:00.000Z",
       activityUntil: null,
+      isCurrentWindow: true,
     });
   });
 
@@ -39,6 +41,7 @@ describe("resolveSeatActivityWindow", () => {
     expect(window).toEqual({
       activitySince: "2026-07-01T00:00:00.000Z",
       activityUntil: "2026-07-31T23:59:59.999Z",
+      isCurrentWindow: false,
     });
   });
 });

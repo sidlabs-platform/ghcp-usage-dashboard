@@ -3,6 +3,7 @@ import { NextRequest } from "next/server";
 
 const repoState = vi.hoisted(() => ({
   getSeatStats: vi.fn(),
+  getSeatStatsForWindow: vi.fn(),
   getSeatsPaginated: vi.fn(),
 }));
 
@@ -21,6 +22,7 @@ vi.mock("@/lib/api/scope-filter", () => ({
 
 vi.mock("@/lib/db/seats-repo", () => ({
   getSeatStats: (...args: unknown[]) => repoState.getSeatStats(...args),
+  getSeatStatsForWindow: (...args: unknown[]) => repoState.getSeatStatsForWindow(...args),
   getSeatsPaginated: (...args: unknown[]) => repoState.getSeatsPaginated(...args),
 }));
 
@@ -44,6 +46,16 @@ beforeEach(() => {
     pendingCancellation: 0,
     activitySince: "2024-06-01T00:00:00.000Z",
     activityUntil: null,
+    activityBasis: "last_activity",
+  });
+  repoState.getSeatStatsForWindow.mockReturnValue({
+    total: 0,
+    active30d: 0,
+    inactive30d: 0,
+    pendingCancellation: 0,
+    activitySince: "2024-06-01T00:00:00.000Z",
+    activityUntil: null,
+    activityBasis: "last_activity",
   });
   repoState.getSeatsPaginated.mockReturnValue({ seats: [], total: 0 });
 });
@@ -65,6 +77,7 @@ describe("GET /api/seats", () => {
     expect(response.status).toBe(400);
     expect(body.error).toMatch(pattern);
     expect(repoState.getSeatStats).not.toHaveBeenCalled();
+    expect(repoState.getSeatStatsForWindow).not.toHaveBeenCalled();
     expect(repoState.getSeatsPaginated).not.toHaveBeenCalled();
   });
 
