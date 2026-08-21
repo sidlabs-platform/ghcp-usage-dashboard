@@ -45,6 +45,7 @@
 // into the caller: seat sync is the primary job.
 
 import {
+  COPILOT_AUDIT_TARGET_DEADLINE_MS,
   copilotAuditClient,
   type AuditFetchResult,
   type NormalizedCopilotAuditEvent,
@@ -80,10 +81,14 @@ export const SEAT_AUDIT_OVERLAP_HOURS = 48;
 
 /**
  * Wall-clock budget for one enterprise's audit read, including enterprise and
- * org fallback attempts. Keep this comfortably below the 15-minute global sync
- * lock TTL so seat sync can heartbeat again before another process may start.
+ * org fallback attempts. Each audit client request is capped to the remaining
+ * budget so the combined read stays comfortably below the 15-minute global sync
+ * lock TTL and seat sync can heartbeat again before another process may start.
  */
 export const SEAT_AUDIT_ENTERPRISE_BUDGET_MS = 5 * 60 * 1000;
+
+/** Minimum useful per-request budget; smaller slices are skipped as exhausted. */
+export const SEAT_AUDIT_MIN_REQUEST_SLICE_MS = 5 * 1000;
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 const MS_PER_HOUR = 60 * 60 * 1000;
@@ -120,11 +125,13 @@ export interface SeatAuditSyncDeps {
   getEnterpriseAuditEvents: (
     enterpriseSlug: string,
     cutoffMs: number,
+    targetDeadlineMs: number,
   ) => Promise<AuditFetchResult>;
   getOrgAuditEvents: (
     org: string,
     enterpriseSlug: string,
     cutoffMs: number,
+    targetDeadlineMs: number,
   ) => Promise<AuditFetchResult>;
   getOrgs: (enterpriseSlug: string) => string[];
   isEnterpriseScopeEnabled: (enterpriseSlug: string) => boolean;
@@ -134,10 +141,10 @@ export interface SeatAuditSyncDeps {
 
 export function createDefaultSeatAuditSyncDeps(): SeatAuditSyncDeps {
   return {
-    getEnterpriseAuditEvents: (enterpriseSlug, cutoffMs) =>
-      copilotAuditClient.getEnterpriseAuditEvents(enterpriseSlug, { cutoffMs, enterpriseSlug }),
-    getOrgAuditEvents: (org, enterpriseSlug, cutoffMs) =>
-      copilotAuditClient.getOrgAuditEvents(org, { cutoffMs, enterpriseSlug }),
+    getEnterpriseAuditEvents: (enterpriseSlug, cutoffMs, targetDeadlineMs) =>
+      copilotAuditClient.getEnterpriseAuditEvents(enterpriseSlug, { cutoffMs, enterpriseSlug, targetDeadlineMs }),
+    getOrgAuditEvents: (org, enterpriseSlug, cutoffMs, targetDeadlineMs) =>
+      copilotAuditClient.getOrgAuditEvents(org, { cutoffMs, enterpriseSlug, targetDeadlineMs }),
     getOrgs: (enterpriseSlug) => getResolvedOrgsForEnterprise(enterpriseSlug),
     isEnterpriseScopeEnabled: (enterpriseSlug) =>
       isCopilotSubEnabledForEnterprise(enterpriseSlug, "enterprise"),
@@ -245,6 +252,8 @@ export async function syncSeatAuditEventsForEnterprise(
   const nowIso = now.toISOString();
   const currentTimeMs = () => deps.nowMs?.() ?? Date.now();
   const auditReadDeadlineMs = currentTimeMs() + SEAT_AUDIT_ENTERPRISE_BUDGET_MS;
+  const targetDeadlineFromRemainingBudget = (remainingBudgetMs: number) =>
+    Math.min(COPILOT_AUDIT_TARGET_DEADLINE_MS, Math.max(0, remainingBudgetMs));
   const [existing] = getSeatAuditSyncStates([enterpriseSlug]);
   const cutoffMs = resolveAuditCutoff(
     existing?.coveredThrough ?? null,
@@ -267,7 +276,12 @@ export async function syncSeatAuditEventsForEnterprise(
   let fetchDroppedEventCount = 0;
 
   if (deps.isEnterpriseScopeEnabled(enterpriseSlug)) {
-    result = await deps.getEnterpriseAuditEvents(enterpriseSlug, cutoffMs);
+    const remainingBudgetMs = auditReadDeadlineMs - currentTimeMs();
+    result = await deps.getEnterpriseAuditEvents(
+      enterpriseSlug,
+      cutoffMs,
+      targetDeadlineFromRemainingBudget(remainingBudgetMs),
+    );
     if (result.status === "ok") {
       target = "enterprise";
       events.push(...result.events);
@@ -289,7 +303,8 @@ export async function syncSeatAuditEventsForEnterprise(
     const orgFailures: string[] = [];
 
     for (const [index, org] of orgs.entries()) {
-      if (currentTimeMs() >= auditReadDeadlineMs) {
+      const remainingBudgetMs = auditReadDeadlineMs - currentTimeMs();
+      if (remainingBudgetMs < SEAT_AUDIT_MIN_REQUEST_SLICE_MS) {
         const skippedCount = orgs.length - index;
         orgFallbackHadFailure = true;
         sawTransientFailure = true;
@@ -297,7 +312,12 @@ export async function syncSeatAuditEventsForEnterprise(
         warnings.push(orgBudgetWarning);
         break;
       }
-      const orgResult = await deps.getOrgAuditEvents(org, enterpriseSlug, cutoffMs);
+      const orgResult = await deps.getOrgAuditEvents(
+        org,
+        enterpriseSlug,
+        cutoffMs,
+        targetDeadlineFromRemainingBudget(remainingBudgetMs),
+      );
       if (orgResult.status === "ok") {
         anyOrgSucceeded = true;
         events.push(...orgResult.events);

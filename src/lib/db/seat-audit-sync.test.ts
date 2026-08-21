@@ -1,5 +1,9 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import type { AuditFetchResult, NormalizedCopilotAuditEvent } from "@/lib/github/copilot-audit-client";
+import {
+  COPILOT_AUDIT_TARGET_DEADLINE_MS,
+  type AuditFetchResult,
+  type NormalizedCopilotAuditEvent,
+} from "@/lib/github/copilot-audit-client";
 import type { SeatAuditSyncState, SeatLifecycleEventInput } from "./seat-lifecycle-repo";
 
 const recordSeatLifecycleEvents = vi.fn<(slug: string, events: SeatLifecycleEventInput[]) => number>(
@@ -24,6 +28,7 @@ vi.mock("@/lib/config/enterprise-config", () => ({
 }));
 
 vi.mock("@/lib/github/copilot-audit-client", () => ({
+  COPILOT_AUDIT_TARGET_DEADLINE_MS: 2 * 60 * 1000,
   copilotAuditClient: {
     getEnterpriseAuditEvents: vi.fn(),
     getOrgAuditEvents: vi.fn(),
@@ -42,6 +47,7 @@ import {
   resolveAuditCutoff,
   toLifecycleEvents,
   SEAT_AUDIT_ENTERPRISE_BUDGET_MS,
+  SEAT_AUDIT_MIN_REQUEST_SLICE_MS,
   SEAT_AUDIT_LOOKBACK_DAYS,
   SEAT_AUDIT_OVERLAP_HOURS,
   type SeatAuditSyncDeps,
@@ -424,13 +430,47 @@ describe("syncSeatAuditEventsForEnterprise", () => {
     const result = await syncSeatAuditEventsForEnterprise("acme", deps);
 
     expect(getOrgAuditEvents).toHaveBeenCalledTimes(1);
-    expect(getOrgAuditEvents).toHaveBeenCalledWith("first", "acme", expect.any(Number));
+    expect(getOrgAuditEvents).toHaveBeenCalledWith("first", "acme", expect.any(Number), expect.any(Number));
     expect(result.status).toBe("ok");
     expect(result.eventsWritten).toBe(1);
     expect(result.coveredFrom).toBeNull();
     expect(result.coveredThrough).toBeNull();
     expect(result.reason).toBe("Audit log org fallback budget exhausted before 2 organization(s) were attempted.");
     expect(result.warnings).toContain("Audit log org fallback budget exhausted before 2 organization(s) were attempted.");
+    expect(recordSeatAuditSyncState).toHaveBeenCalledWith(expect.objectContaining({ clearCoverage: true }));
+  });
+
+  it("caps org audit deadlines to remaining enterprise budget and skips tiny remaining slices", async () => {
+    let nowMs = 0;
+    const getOrgAuditEvents = vi.fn(async (org: string) => {
+      if (org === "first") nowMs = 4 * 60 * 1000;
+      if (org === "second") nowMs = SEAT_AUDIT_ENTERPRISE_BUDGET_MS - SEAT_AUDIT_MIN_REQUEST_SLICE_MS + 1;
+      return ok([auditEvent({ orgLogin: org })]);
+    });
+    const deps = makeDeps({
+      isEnterpriseScopeEnabled: () => false,
+      getOrgs: () => ["first", "second", "third"],
+      getOrgAuditEvents,
+      nowMs: () => nowMs,
+    });
+
+    const result = await syncSeatAuditEventsForEnterprise("acme", deps);
+
+    expect(getOrgAuditEvents).toHaveBeenCalledTimes(2);
+    expect(getOrgAuditEvents.mock.calls[0]).toEqual([
+      "first",
+      "acme",
+      expect.any(Number),
+      COPILOT_AUDIT_TARGET_DEADLINE_MS,
+    ]);
+    expect(getOrgAuditEvents.mock.calls[1]).toEqual([
+      "second",
+      "acme",
+      expect.any(Number),
+      60 * 1000,
+    ]);
+    expect(result.reason).toBe("Audit log org fallback budget exhausted before 1 organization(s) were attempted.");
+    expect(result.warnings).toContain("Audit log org fallback budget exhausted before 1 organization(s) were attempted.");
     expect(recordSeatAuditSyncState).toHaveBeenCalledWith(expect.objectContaining({ clearCoverage: true }));
   });
 });
