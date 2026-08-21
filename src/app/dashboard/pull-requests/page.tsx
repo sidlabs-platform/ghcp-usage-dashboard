@@ -6,7 +6,7 @@ import { PageHeader } from "@/components/layout/PageHeader";
 import { MetricCard } from "@/components/cards/MetricCard";
 import { ScopeFilter } from "@/components/filters/ScopeFilter";
 import { ChartSkeleton } from "@/components/states/ChartSkeleton";
-import { useDateRange } from "@/contexts/DateRangeContext";
+import { useDateRangeParams } from "@/hooks/useDateRangeParams";
 import { useScope } from "@/contexts/ScopeContext";
 import { ExportMenu } from "@/components/ui/ExportMenu";
 
@@ -60,7 +60,7 @@ interface PRData {
 }
 
 export default function PullRequestsPage() {
-  const { days } = useDateRange();
+  const { buildParams, dateLabel, filenameSuffix } = useDateRangeParams();
   const { selectedOrgs } = useScope();
   const [data, setData] = useState<PRData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -71,7 +71,7 @@ export default function PullRequestsPage() {
 
   const fetchData= useCallback(() => {
     setLoading(true);
-    const params = new URLSearchParams({ days: String(days) });
+    const params = buildParams();
     if (selectedOrgs.length > 0) params.set("orgs", selectedOrgs.join(","));
 
     fetch(`/api/metrics/pull-requests?${params}`)
@@ -82,7 +82,7 @@ export default function PullRequestsPage() {
       .then((json) => setData(json))
       .catch((err) => setError(err.message))
       .finally(() => setLoading(false));
-  }, [days, selectedOrgs]);
+  }, [buildParams, selectedOrgs]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
@@ -150,10 +150,10 @@ export default function PullRequestsPage() {
           pdf={{
             sectionRefs: [kpiRef, chartsRef],
             title: "Pull Request Impact",
-            filename: `pull-requests-report-${days}d`,
+            filename: `pull-requests-report-${filenameSuffix}`,
             metadata: {
               reportName: "Pull Request Impact",
-              dateRange: `Last ${days} days`,
+              dateRange: dateLabel,
               orgs: selectedOrgs.length > 0 ? selectedOrgs.join(", ") : undefined,
             },
           }}

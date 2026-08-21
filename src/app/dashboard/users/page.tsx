@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { PageHeader } from "@/components/layout/PageHeader";
-import { useDateRange } from "@/contexts/DateRangeContext";
+import { useDateRangeParams } from "@/hooks/useDateRangeParams";
 import { useScope } from "@/contexts/ScopeContext";
 import { MetricCard } from "@/components/cards/MetricCard";
 import { ScopeFilter } from "@/components/filters/ScopeFilter";
@@ -12,7 +12,6 @@ import Link from "next/link";
 import { Users } from "lucide-react";
 import { PaginatedTable, type ColumnDef } from "@/components/tables/PaginatedTable";
 import { ExportMenu } from "@/components/ui/ExportMenu";
-import { DateFilter } from "@/components/filters/DateFilter";
 import { formatNumber, safeNum } from "@/lib/utils";
 import { userExportColumns } from "@/lib/export/user-export";
 
@@ -66,23 +65,14 @@ const userColumns: ColumnDef<UserRow>[] = [
 ];
 
 export default function UsersPage() {
-  const { mode, days, startDate, endDate } = useDateRange();
   const { hasFilter, buildScopeParams } = useScope();
   const [totalUsers, setTotalUsers] = useState(0);
   const [includeInactive, setIncludeInactive] = useState(false);
 
-  const extraParams = new URLSearchParams();
-  if (mode === "custom") {
-    extraParams.set("startDate", startDate);
-    extraParams.set("endDate", endDate);
-  } else {
-    extraParams.set("days", String(days));
-  }
-  if (includeInactive) extraParams.set("includeInactive", "true");
+  const { buildParams, dateLabel, filenameSuffix } = useDateRangeParams();
   const scopeParams = buildScopeParams();
-  scopeParams.forEach((v, k) => extraParams.set(k, v));
-
-  const dateLabel = mode === "custom" ? `${startDate} to ${endDate}` : `Last ${days} days`;
+  const extraParams = buildParams(scopeParams);
+  if (includeInactive) extraParams.set("includeInactive", "true");
 
   return (
     <div>
@@ -93,7 +83,7 @@ export default function UsersPage() {
             extraParams,
             columns: userExportColumns,
             dataExtractor: (json) => json.users ?? [],
-            filename: `users-export-${mode === "custom" ? `${startDate}_${endDate}` : `${days}d`}`,
+            filename: `users-export-${filenameSuffix}`,
             metadata: {
               reportName: "User Explorer",
               dateRange: dateLabel,
@@ -104,7 +94,6 @@ export default function UsersPage() {
         />
       </PageHeader>
       <ScopeFilter />
-      <DateFilter />
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 mb-8">
         <MetricCard

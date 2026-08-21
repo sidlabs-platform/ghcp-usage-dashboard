@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getEnterpriseMetrics, getAggregatedDailySummary, resolveEnterpriseId, countEffectiveEnterprises } from "@/lib/db/metrics-repo";
 import { getSeatStats } from "@/lib/db/seats-repo";
 import { parseScopeFilter } from "@/lib/api/scope-filter";
+import { resolveSeatActivityWindow } from "@/lib/api/seat-activity-window";
 import {
   getChatModeSums,
   getAdoptionStats,
@@ -71,7 +72,8 @@ async function handler(request: NextRequest) {
     const useAggregated = metrics.length === 0;
     const aggregated = useAggregated && !hasFilter ? getAggregatedDailySummary(start, end, enterpriseSlugs) : [];
 
-    const seatStats = getSeatStats(enterpriseSlugs);
+    const { activitySince, activityUntil } = resolveSeatActivityWindow(start, end);
+    const seatStats = getSeatStats(enterpriseSlugs, activitySince, activityUntil);
 
     // Feature usage (incl. Copilot App) via SQL — always computed up front so
     // every data-source branch below (enterprise-direct, aggregated, and

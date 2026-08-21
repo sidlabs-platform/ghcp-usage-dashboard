@@ -5,11 +5,11 @@ import { Bot, CreditCard, Users, Zap } from "lucide-react";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { MetricCard } from "@/components/cards/MetricCard";
 import { ScopeFilter } from "@/components/filters/ScopeFilter";
-import { DateFilter } from "@/components/filters/DateFilter";
+
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ExportMenu } from "@/components/ui/ExportMenu";
 import { PaginatedTable, type ColumnDef } from "@/components/tables/PaginatedTable";
-import { useDateRange } from "@/contexts/DateRangeContext";
+import { useDateRangeParams } from "@/hooks/useDateRangeParams";
 import { useScope } from "@/contexts/ScopeContext";
 import { safeNum } from "@/lib/utils";
 import { useEffect, useState } from "react";
@@ -93,23 +93,14 @@ interface Reconciliation {
  * Renders a sortable per-user AI Credit consumption dashboard.
  */
 export default function AiCreditsUsersPage() {
-  const { mode, days, startDate, endDate } = useDateRange();
   const { hasFilter, buildScopeParams } = useScope();
   const [totalUsers, setTotalUsers] = useState(0);
   const [metricsCredits, setMetricsCredits] = useState<number | null>(null);
   const [recon, setRecon] = useState<Reconciliation | null>(null);
 
-  const extraParams = new URLSearchParams();
-  if (mode === "custom") {
-    extraParams.set("startDate", startDate);
-    extraParams.set("endDate", endDate);
-  } else {
-    extraParams.set("days", String(days));
-  }
+  const { buildParams, dateLabel, filenameSuffix } = useDateRangeParams();
   const scopeParams = buildScopeParams();
-  scopeParams.forEach((value, key) => extraParams.set(key, value));
-
-  const dateLabel = mode === "custom" ? `${startDate} to ${endDate}` : `Last ${days} days`;
+  const extraParams = buildParams(scopeParams);
 
   const queryString = extraParams.toString();
   useEffect(() => {
@@ -143,7 +134,7 @@ export default function AiCreditsUsersPage() {
             extraParams,
             columns: exportColumns,
             dataExtractor: (json) => json.users ?? [],
-            filename: `ai-credits-users-${mode === "custom" ? `${startDate}_${endDate}` : `${days}d`}`,
+            filename: `ai-credits-users-${filenameSuffix}`,
             metadata: {
               reportName: "AI Credits by User",
               dateRange: dateLabel,
@@ -154,7 +145,6 @@ export default function AiCreditsUsersPage() {
         />
       </PageHeader>
       <ScopeFilter />
-      <DateFilter />
 
       <div className="mb-4 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <MetricCard

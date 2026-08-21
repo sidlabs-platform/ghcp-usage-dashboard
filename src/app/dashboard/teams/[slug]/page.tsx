@@ -4,11 +4,10 @@ import { useEffect, useState } from "react";
 import { useParams, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { PageHeader } from "@/components/layout/PageHeader";
-import { useDateRange } from "@/contexts/DateRangeContext";
+import { useDateRangeParams } from "@/hooks/useDateRangeParams";
 import { MetricCard } from "@/components/cards/MetricCard";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { DateFilter } from "@/components/filters/DateFilter";
 import { Users, Activity, Code, TrendingUp, Bot, MessageSquare, Terminal } from "lucide-react";
 import { formatNumber, safeNum } from "@/lib/utils";
 import type { TeamDetailResponse } from "@/lib/types/team-detail";
@@ -18,23 +17,19 @@ export default function TeamDetailPage() {
   const searchParams = useSearchParams();
   const source = searchParams.get("source");
   const enterprise = searchParams.get("enterprise");
-  const { mode, days, startDate, endDate } = useDateRange();
+  const { buildParams } = useDateRangeParams();
   const [data, setData] = useState<TeamDetailResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  const dateQuery = buildParams().toString();
 
   useEffect(() => {
     if (!slug) return;
     setLoading(true);
     setError(null);
 
-    const qp = new URLSearchParams();
-    if (mode === "custom") {
-      qp.set("startDate", startDate);
-      qp.set("endDate", endDate);
-    } else {
-      qp.set("days", String(days));
-    }
+    const qp = new URLSearchParams(dateQuery);
     if (source) {
       qp.set("source", source);
     }
@@ -50,7 +45,7 @@ export default function TeamDetailPage() {
       .then((json) => setData(json as TeamDetailResponse))
       .catch((err) => setError(err instanceof Error ? err.message : String(err)))
       .finally(() => setLoading(false));
-  }, [slug, mode, days, startDate, endDate]);
+  }, [slug, dateQuery, source, enterprise]);
 
   if (loading) {
     return (
@@ -106,7 +101,6 @@ export default function TeamDetailPage() {
         title={team.name}
         description={team.org ? `Organization: ${team.org}` : "Enterprise team"}
       />
-      <DateFilter />
 
       {/* KPI Cards */}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-7 mb-8">

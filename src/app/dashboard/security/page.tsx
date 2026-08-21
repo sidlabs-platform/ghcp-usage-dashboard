@@ -6,7 +6,7 @@ import { PageHeader } from "@/components/layout/PageHeader";
 import { MetricCard } from "@/components/cards/MetricCard";
 import { ScopeFilter } from "@/components/filters/ScopeFilter";
 import { ChartSkeleton } from "@/components/states/ChartSkeleton";
-import { useDateRange } from "@/contexts/DateRangeContext";
+import { useDateRangeParams } from "@/hooks/useDateRangeParams";
 import { useScope } from "@/contexts/ScopeContext";
 import { ShieldCheck, ShieldAlert, Bug, Key, Sparkles, TrendingDown } from "lucide-react";
 import { safeNum } from "@/lib/utils";
@@ -57,7 +57,7 @@ interface CategoryData {
 }
 
 export default function SecurityPage() {
-  const { days } = useDateRange();
+  const { buildParams, dateLabel, filenameSuffix } = useDateRangeParams();
   const { selectedOrgs } = useScope();
   const [overview, setOverview] = useState<SecurityOverviewData | null>(null);
   const [csData, setCsData] = useState<CategoryData | null>(null);
@@ -76,15 +76,18 @@ export default function SecurityPage() {
     setLoading(true);
     try {
       // When an org is selected, use scope=org&scopeId=<org>
-      const scopeParams = selectedOrgs.length === 1
-        ? `&scope=org&scopeId=${encodeURIComponent(selectedOrgs[0])}`
-        : "";
+      const params = buildParams();
+      if (selectedOrgs.length === 1) {
+        params.set("scope", "org");
+        params.set("scopeId", selectedOrgs[0]);
+      }
+      const qs = params.toString();
 
       const [overviewRes, csRes, depRes, ssRes] = await Promise.all([
-        fetch(`/api/security/overview?days=${days}${scopeParams}`),
-        fetch(`/api/security/code-scanning?days=${days}${scopeParams}`),
-        fetch(`/api/security/dependabot?days=${days}${scopeParams}`),
-        fetch(`/api/security/secret-scanning?days=${days}${scopeParams}`),
+        fetch(`/api/security/overview?${qs}`),
+        fetch(`/api/security/code-scanning?${qs}`),
+        fetch(`/api/security/dependabot?${qs}`),
+        fetch(`/api/security/secret-scanning?${qs}`),
       ]);
 
       setOverview(await overviewRes.json());
@@ -96,7 +99,7 @@ export default function SecurityPage() {
     } finally {
       setLoading(false);
     }
-  }, [days, selectedOrgs]);
+  }, [buildParams, selectedOrgs]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
@@ -156,10 +159,10 @@ export default function SecurityPage() {
           pdf={{
             sectionRefs: [kpiRef, csRef, depRef, ssRef],
             title: "Security Dashboard",
-            filename: `security-report-${days}d`,
+            filename: `security-report-${filenameSuffix}`,
             metadata: {
               reportName: "Security Dashboard",
-              dateRange: `Last ${days} days`,
+              dateRange: dateLabel,
               orgs: selectedOrgs.length > 0 ? selectedOrgs.join(", ") : undefined,
             },
           }}

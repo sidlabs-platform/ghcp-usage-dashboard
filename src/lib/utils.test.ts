@@ -1,5 +1,5 @@
 import { afterEach, describe, it, expect, vi } from "vitest";
-import { cn, formatNumber, formatPercent, formatDelta, formatMinutes, safeNum, getDateRange, datesBetween, parseAndClampDays, MAX_DAYS, parseDateRangeParams } from "./utils";
+import { cn, formatNumber, formatPercent, formatDelta, formatMinutes, safeNum, getDateRange, datesBetween, parseAndClampDays, MAX_DAYS, parseDateRangeParams, spanDays, resolveWindow } from "./utils";
 
 // ── cn ──────────────────────────────────────────────────────────────────
 
@@ -318,6 +318,20 @@ describe("parseDateRangeParams", () => {
     expect("error" in result).toBe(true);
   });
 
+  it("returns error for empty explicit date range values instead of falling back to days", () => {
+    const result = parseDateRangeParams(new URLSearchParams("startDate=&endDate=&days=7"));
+    expect(result).toEqual({
+      error: "Both startDate and endDate must be provided together.",
+    });
+  });
+
+  it("returns error for a single empty explicit date range boundary", () => {
+    const result = parseDateRangeParams(new URLSearchParams({ startDate: "", endDate: "2024-01-15" }));
+    expect(result).toEqual({
+      error: "Both startDate and endDate must be provided together.",
+    });
+  });
+
   it("returns error for invalid date format", () => {
     const params = new URLSearchParams({ startDate: "01-01-2024", endDate: "01-15-2024" });
     const result = parseDateRangeParams(params);
@@ -380,5 +394,57 @@ describe("parseDateRangeParams", () => {
     const result = parseDateRangeParams(params);
     expect("error" in result).toBe(true);
     if ("error" in result) expect(result.error).toContain("not a valid date");
+  });
+
+  it("returns error for regex-valid but impossible calendar dates", () => {
+    for (const date of ["2026-02-29", "2026-04-31"]) {
+      expect(parseDateRangeParams(new URLSearchParams({ startDate: date, endDate: "2026-05-01" }))).toEqual({
+        error: "startDate or endDate is not a valid date.",
+      });
+      expect(parseDateRangeParams(new URLSearchParams({ startDate: "2026-01-01", endDate: date }))).toEqual({
+        error: "startDate or endDate is not a valid date.",
+      });
+    }
+  });
+});
+
+// ── spanDays / resolveWindow ─────────────────────────────────────────
+
+describe("spanDays", () => {
+  it("counts both bounds inclusively", () => {
+    expect(spanDays("2026-03-01", "2026-03-31")).toBe(31);
+    expect(spanDays("2026-06-15", "2026-06-15")).toBe(1);
+  });
+
+  it("is unaffected by a DST transition", () => {
+    // Both bounds are parsed as UTC midnight, so a 23-hour local day cannot
+    // round the span down to 30.
+    expect(spanDays("2026-03-01", "2026-03-31")).toBe(31);
+  });
+});
+
+describe("resolveWindow", () => {
+  it("derives days from explicit bounds, ignoring any days param", () => {
+    const params = new URLSearchParams({ days: "7", startDate: "2024-03-01", endDate: "2024-03-31" });
+    // A month-mode caller sends no `days`; one that sends both must still get
+    // the length of the window actually queried.
+    expect(resolveWindow(params)).toEqual({ start: "2024-03-01", end: "2024-03-31", days: 31 });
+  });
+
+  it("resolves a rolling preset to bounds plus its own length", () => {
+    const result = resolveWindow(new URLSearchParams({ days: "14" }));
+    expect("start" in result).toBe(true);
+    if ("start" in result) expect(result.days).toBe(14);
+  });
+
+  it("applies the caller's default when no params are supplied", () => {
+    const result = resolveWindow(new URLSearchParams(), 28);
+    expect("start" in result).toBe(true);
+    if ("start" in result) expect(result.days).toBe(28);
+  });
+
+  it("propagates a validation error instead of a window", () => {
+    const result = resolveWindow(new URLSearchParams({ startDate: "2024-03-31", endDate: "2024-03-01" }));
+    expect("error" in result).toBe(true);
   });
 });

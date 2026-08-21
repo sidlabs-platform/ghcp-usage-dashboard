@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { isBillingSubEnabledForAnyEnterprise } from "@/lib/config/enterprise-config";
-import { getDateRange, parseAndClampDays } from "@/lib/utils";
+import { resolveWindow } from "@/lib/utils";
 import { getPremiumUserModelBreakdown } from "@/lib/db/billing-repo";
 import type { PremiumFilters } from "@/lib/db/billing-repo";
 import { parseScopeFilter } from "@/lib/api/scope-filter";
@@ -22,13 +22,11 @@ async function handler(request: NextRequest) {
       return NextResponse.json({ error: "username is required" }, { status: 400 });
     }
 
-    const daysResult = parseAndClampDays(params.get("days"), 28);
-    if ("error" in daysResult) {
-      return NextResponse.json({ error: daysResult.error }, { status: 400 });
+    const window = resolveWindow(params, 28);
+    if ("error" in window) {
+      return NextResponse.json({ error: window.error }, { status: 400 });
     }
-
-    const days = daysResult.days;
-    const { start, end } = getDateRange(days);
+    const { start, end } = window;
 
     // Parse scope filter (teams/orgs/enterprises) via the shared parser
     const scopeFilter = parseScopeFilter(params);

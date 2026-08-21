@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/db/database";
 import { parseScopeFilter } from "@/lib/api/scope-filter";
-import { getDateRange, parseAndClampDays } from "@/lib/utils";
+import { resolveWindow } from "@/lib/utils";
 import { withCache } from "@/lib/cache/with-cache";
 import { withTimeout } from "@/lib/api/timeout";
 import { CACHE_TTL } from "@/lib/cache/memory-cache";
@@ -105,12 +105,11 @@ const CACHE_HEADERS = { "Cache-Control": "private, max-age=300, stale-while-reva
 async function handler(request: NextRequest) {
   try {
     const params = request.nextUrl.searchParams;
-    const daysResult = parseAndClampDays(params.get("days"), 28);
-    if ("error" in daysResult) {
-      return NextResponse.json({ error: daysResult.error }, { status: 400 });
+    const window = resolveWindow(params, 28);
+    if ("error" in window) {
+      return NextResponse.json({ error: window.error }, { status: 400 });
     }
-    const days = daysResult.days;
-    const { start, end } = getDateRange(days);
+    const { days, start, end } = window;
 
     // `creditToUsd` / `currency` live in the server-only licensing config block
     // (deliberately stripped from /api/config). Only derived USD values are

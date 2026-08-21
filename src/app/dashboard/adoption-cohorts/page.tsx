@@ -7,7 +7,7 @@ import { MetricCard } from "@/components/cards/MetricCard";
 import { ScopeFilter } from "@/components/filters/ScopeFilter";
 import { ChartSkeleton, KPISkeleton } from "@/components/states/ChartSkeleton";
 import { Section } from "@/components/ui/Section";
-import { useDateRange } from "@/contexts/DateRangeContext";
+import { useDateRangeParams } from "@/hooks/useDateRangeParams";
 import { useScope } from "@/contexts/ScopeContext";
 import { ExportMenu } from "@/components/ui/ExportMenu";
 import { Users, TrendingUp, Code2, Bot, Layers, GitMerge } from "lucide-react";
@@ -61,7 +61,7 @@ const PHASE_ACCENTS: Record<number, "blue" | "green" | "amber" | "violet" | "red
 };
 
 export default function AdoptionCohortsPage() {
-  const { days } = useDateRange();
+  const { buildParams, dateLabel, filenameSuffix } = useDateRangeParams();
   const { buildScopeParams } = useScope();
   const [data, setData] = useState<AdoptionCohortsData | null>(null);
   const [roi, setRoi] = useState<RoiResponse | null>(null);
@@ -76,9 +76,7 @@ export default function AdoptionCohortsPage() {
   const fetchData = useCallback(() => {
     setLoading(true);
     const controller = new AbortController();
-    const params = new URLSearchParams({ days: String(days) });
-    const scopeParams = buildScopeParams();
-    scopeParams.forEach((value, key) => params.set(key, value));
+    const params = buildParams(buildScopeParams());
 
     fetch(`/api/metrics/adoption-cohorts?${params}`, { signal: controller.signal })
       .then((res) => res.json())
@@ -101,7 +99,7 @@ export default function AdoptionCohortsPage() {
       .catch(() => setRoi(null));
 
     return () => controller.abort();
-  }, [days, buildScopeParams]);
+  }, [buildParams, buildScopeParams]);
 
   useEffect(() => {
     const cleanup = fetchData();
@@ -170,10 +168,10 @@ export default function AdoptionCohortsPage() {
           pdf={{
             sectionRefs: [kpiRef, chartsRef, mergedRef, roiRef],
             title: "AI Adoption Cohorts",
-            filename: `adoption-cohorts-${days}d`,
+            filename: `adoption-cohorts-${filenameSuffix}`,
             metadata: {
               reportName: "AI Adoption Cohorts",
-              dateRange: `Last ${days} days`,
+              dateRange: dateLabel,
               teams: buildScopeParams().get("teams") || undefined,
               orgs: buildScopeParams().get("orgs") || undefined,
             },

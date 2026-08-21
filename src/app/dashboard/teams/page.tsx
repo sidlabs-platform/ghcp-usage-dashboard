@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { PageHeader } from "@/components/layout/PageHeader";
-import { useDateRange } from "@/contexts/DateRangeContext";
+import { useDateRangeParams } from "@/hooks/useDateRangeParams";
 import { useScope } from "@/contexts/ScopeContext";
 import { MetricCard } from "@/components/cards/MetricCard";
 import { ScopeFilter } from "@/components/filters/ScopeFilter";
@@ -12,7 +12,6 @@ import Link from "next/link";
 import { Users } from "lucide-react";
 import { PaginatedTable, type ColumnDef } from "@/components/tables/PaginatedTable";
 import { ExportMenu } from "@/components/ui/ExportMenu";
-import { DateFilter } from "@/components/filters/DateFilter";
 import type { CSVColumn } from "@/lib/export/csv";
 import { formatNumber, safeNum } from "@/lib/utils";
 
@@ -107,22 +106,14 @@ const teamExportColumns: CSVColumn[] = [
 ];
 
 export default function TeamsPage() {
-  const { mode, days, startDate, endDate } = useDateRange();
   const { selectedEntTeams, selectedOrgTeams, selectedOrgs, hasFilter } = useScope();
   const [totalTeams, setTotalTeams] = useState(0);
 
-  const extraParams = new URLSearchParams();
-  if (mode === "custom") {
-    extraParams.set("startDate", startDate);
-    extraParams.set("endDate", endDate);
-  } else {
-    extraParams.set("days", String(days));
-  }
+  const { buildParams, dateLabel, filenameSuffix } = useDateRangeParams();
+  const extraParams = buildParams();
   const allTeams = [...selectedEntTeams, ...selectedOrgTeams];
   if (allTeams.length > 0) extraParams.set("teams", allTeams.join(","));
   if (selectedOrgs.length > 0) extraParams.set("orgs", selectedOrgs.join(","));
-
-  const dateLabel = mode === "custom" ? `${startDate} to ${endDate}` : `Last ${days} days`;
 
   return (
     <div>
@@ -133,7 +124,7 @@ export default function TeamsPage() {
             extraParams,
             columns: teamExportColumns,
             dataExtractor: (json) => json.teams ?? [],
-            filename: `teams-export-${mode === "custom" ? `${startDate}_${endDate}` : `${days}d`}`,
+            filename: `teams-export-${filenameSuffix}`,
             metadata: {
               reportName: "Team Analytics",
               dateRange: dateLabel,
@@ -144,7 +135,6 @@ export default function TeamsPage() {
         />
       </PageHeader>
       <ScopeFilter />
-      <DateFilter />
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 mb-8">
         <MetricCard

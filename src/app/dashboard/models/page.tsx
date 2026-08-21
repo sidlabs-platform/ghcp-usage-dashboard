@@ -6,7 +6,7 @@ import { PageHeader } from "@/components/layout/PageHeader";
 import { MetricCard } from "@/components/cards/MetricCard";
 import { ScopeFilter } from "@/components/filters/ScopeFilter";
 import { ChartSkeleton } from "@/components/states/ChartSkeleton";
-import { useDateRange } from "@/contexts/DateRangeContext";
+import { useDateRangeParams } from "@/hooks/useDateRangeParams";
 import { useScope } from "@/contexts/ScopeContext";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { ExportMenu } from "@/components/ui/ExportMenu";
@@ -28,7 +28,7 @@ import { Brain, Hash, Trophy, Percent } from "lucide-react";
 import type { ModelStatsResponse } from "@/app/api/metrics/models/route";
 
 export default function ModelsPage() {
-  const { days } = useDateRange();
+  const { buildParams, dateLabel, filenameSuffix } = useDateRangeParams();
   const { buildScopeParams } = useScope();
   const [data, setData] = useState<ModelStatsResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -41,9 +41,7 @@ export default function ModelsPage() {
 
   const fetchData= useCallback(() => {
     setLoading(true);
-    const params = new URLSearchParams({ days: String(days) });
-    const scopeParams = buildScopeParams();
-    scopeParams.forEach((v, k) => params.set(k, v));
+    const params = buildParams(buildScopeParams());
 
     fetch(`/api/metrics/models?${params}`)
       .then(async (res) => {
@@ -56,7 +54,7 @@ export default function ModelsPage() {
       .then(setData)
       .catch((err) => setError(err.message))
       .finally(() => setLoading(false));
-  }, [days, buildScopeParams]);
+  }, [buildParams, buildScopeParams]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
@@ -106,10 +104,10 @@ export default function ModelsPage() {
           pdf={{
             sectionRefs: [kpiRef, chartsRef, featureRef, langRef],
             title: "Model Statistics",
-            filename: `models-report-${days}d`,
+            filename: `models-report-${filenameSuffix}`,
             metadata: {
               reportName: "Model Statistics",
-              dateRange: `Last ${days} days`,
+              dateRange: dateLabel,
               teams: buildScopeParams().get("teams") || undefined,
               orgs: buildScopeParams().get("orgs") || undefined,
             },

@@ -108,16 +108,21 @@ export function parseDateRangeParams(
   const rawStart = params.get("startDate");
   const rawEnd = params.get("endDate");
 
-  if (rawStart || rawEnd) {
+  if (rawStart !== null || rawEnd !== null) {
     if (!rawStart || !rawEnd) {
       return { error: "Both startDate and endDate must be provided together." };
     }
     if (!DATE_RE.test(rawStart) || !DATE_RE.test(rawEnd)) {
       return { error: "startDate and endDate must be in YYYY-MM-DD format." };
     }
-    const s = new Date(rawStart);
-    const e = new Date(rawEnd);
-    if (isNaN(s.getTime()) || isNaN(e.getTime())) {
+    const s = new Date(`${rawStart}T00:00:00Z`);
+    const e = new Date(`${rawEnd}T00:00:00Z`);
+    if (
+      Number.isNaN(s.getTime()) ||
+      Number.isNaN(e.getTime()) ||
+      s.toISOString().slice(0, 10) !== rawStart ||
+      e.toISOString().slice(0, 10) !== rawEnd
+    ) {
       return { error: "startDate or endDate is not a valid date." };
     }
     if (s > e) {
@@ -143,4 +148,37 @@ export function parseDateRangeParams(
   const daysResult = parseAndClampDays(params.get("days"), defaultDays);
   if ("error" in daysResult) return daysResult;
   return getDateRange(daysResult.days);
+}
+
+/** Inclusive day count between two `YYYY-MM-DD` bounds. */
+export function spanDays(start: string, end: string): number {
+  const s = new Date(`${start}T00:00:00Z`).getTime();
+  const e = new Date(`${end}T00:00:00Z`).getTime();
+  return Math.round((e - s) / 86_400_000) + 1;
+}
+
+/**
+ * Resolve a request's time window, accepting either explicit
+ * `startDate`/`endDate` bounds or a rolling `days` preset.
+ *
+ * This is {@link parseDateRangeParams} plus the resolved `days`, for the many
+ * routes that also need the window *length* — to normalise a total into a
+ * per-day average, size an axis, or fill missing days.
+ *
+ * Deriving `days` from the resolved bounds rather than the raw param is the
+ * point: a caller sending `startDate=2026-03-01&endDate=2026-03-31` sends no
+ * `days` at all, and a caller sending both must get a length that matches the
+ * window actually queried, not the one it asked for.
+ *
+ * `days` here always means "length of the queried window". Where a route uses a
+ * day count for something else — such as a fixed rolling aggregation window
+ * defined by the GitHub API — that constant must stay separate.
+ */
+export function resolveWindow(
+  params: URLSearchParams,
+  defaultDays = 7,
+): { start: string; end: string; days: number } | { error: string } {
+  const range = parseDateRangeParams(params, defaultDays);
+  if ("error" in range) return range;
+  return { ...range, days: spanDays(range.start, range.end) };
 }

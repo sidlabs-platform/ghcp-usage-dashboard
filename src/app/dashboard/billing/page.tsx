@@ -5,11 +5,10 @@ import dynamic from "next/dynamic";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { MetricCard } from "@/components/cards/MetricCard";
 import { ChartSkeleton } from "@/components/states/ChartSkeleton";
-import { useDateRange } from "@/contexts/DateRangeContext";
+import { useDateRangeParams } from "@/hooks/useDateRangeParams";
 import { useScope } from "@/contexts/ScopeContext";
 
 import { CopilotCostBasisPanel, type CopilotCostBasis } from "@/components/billing/CopilotCostBasisPanel";
-import { periodLabel } from "@/lib/date/month-range";
 import { Receipt, DollarSign, TrendingDown, Building2, Users, Package } from "lucide-react";
 import { safeNum } from "@/lib/utils";
 import { ExportMenu } from "@/components/ui/ExportMenu";
@@ -55,7 +54,7 @@ const fmtCurrency = (v: number) => {
 };
 
 export default function BillingOverviewPage() {
-  const { days, mode, period } = useDateRange();
+  const { buildParams: buildDateParams, dateLabel: windowLabel, filenameSuffix: exportSlug, mode, period } = useDateRangeParams();
   const { hasFilter, buildScopeParams, selectedEntTeams, selectedOrgTeams, selectedOrgs: scopeOrgs } = useScope();
   const [kpis, setKpis] = useState<BillingOverviewKPIs | null>(null);
   const [dailyTrend, setDailyTrend] = useState<DailyTrend[]>([]);
@@ -67,12 +66,11 @@ export default function BillingOverviewPage() {
   const [loading, setLoading] = useState(true);
   const [enabled, setEnabled] = useState(true);
 
-  // Billing is billed by calendar month, so a selected month is the honest
-  // window; it is also the only basis on which this page can agree with
-  // License & AI Credits, which is keyed by month throughout.
   const activePeriod = mode === "month" && period ? period : null;
-  const windowLabel = activePeriod ? periodLabel(activePeriod) : `Last ${days} days`;
-  const exportSlug = activePeriod ?? `${days}d`;
+  const buildBillingDateParams = useCallback(
+    () => (activePeriod ? new URLSearchParams({ period: activePeriod }) : buildDateParams()),
+    [activePeriod, buildDateParams],
+  );
 
   const kpiRef = useRef<HTMLDivElement>(null);
   const chartsRef = useRef<HTMLDivElement>(null);
@@ -83,7 +81,7 @@ export default function BillingOverviewPage() {
     setLoading(true);
     try {
       const params = new URLSearchParams(
-        activePeriod ? { period: activePeriod } : { days: String(days) }
+        buildBillingDateParams()
       );
       const scopeParams = buildScopeParams();
       scopeParams.forEach((v, k) => params.set(k, v));
@@ -106,7 +104,7 @@ export default function BillingOverviewPage() {
     } finally {
       setLoading(false);
     }
-  }, [activePeriod, days, buildScopeParams]);
+  }, [buildBillingDateParams, buildScopeParams]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
 

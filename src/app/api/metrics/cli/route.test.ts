@@ -93,4 +93,25 @@ describe("GET /api/metrics/cli", () => {
     const res = await GET(new Request("http://localhost/api/metrics/cli?days=abc"));
     expect(res.status).toBe(400);
   });
+
+  it("queries the explicit window when startDate/endDate are supplied", async () => {
+    const { getCliDailyVolume } = await import("@/lib/db/aggregation-queries");
+    const GET = await getHandler();
+    const res = await GET(
+      new Request("http://localhost/api/metrics/cli?startDate=2026-03-01&endDate=2026-03-31"),
+    );
+
+    expect(res.status).toBe(200);
+    // Month mode sends bounds and no `days`; resolving them as a rolling window
+    // would silently query a different month.
+    expect(getCliDailyVolume).toHaveBeenCalledWith("2026-03-01", "2026-03-31", undefined, undefined);
+  });
+
+  it("returns 400 for an inverted explicit window", async () => {
+    const GET = await getHandler();
+    const res = await GET(
+      new Request("http://localhost/api/metrics/cli?startDate=2026-03-31&endDate=2026-03-01"),
+    );
+    expect(res.status).toBe(400);
+  });
 });

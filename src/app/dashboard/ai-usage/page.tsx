@@ -7,7 +7,7 @@ import { PageHeader } from "@/components/layout/PageHeader";
 import { MetricCard } from "@/components/cards/MetricCard";
 import { ScopeFilter } from "@/components/filters/ScopeFilter";
 import { ChartSkeleton } from "@/components/states/ChartSkeleton";
-import { useDateRange } from "@/contexts/DateRangeContext";
+import { useDateRangeParams } from "@/hooks/useDateRangeParams";
 import { useScope } from "@/contexts/ScopeContext";
 import { ExportMenu } from "@/components/ui/ExportMenu";
 import { Users, Activity, Percent, FileCode, Bot, MousePointerClick } from "lucide-react";
@@ -40,7 +40,7 @@ const LanguageBarChart = dynamic(
 );
 
 export default function AiUsagePage() {
-  const { days } = useDateRange();
+  const { buildParams, dateLabel, filenameSuffix } = useDateRangeParams();
   const { buildScopeParams } = useScope();
   const [data, setData] = useState<AiUsageResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -55,9 +55,7 @@ export default function AiUsagePage() {
     const requestId = ++requestIdRef.current;
     const controller = new AbortController();
     setLoading(true);
-    const params = new URLSearchParams({ days: String(days) });
-    const scopeParams = buildScopeParams();
-    scopeParams.forEach((v, k) => params.set(k, v));
+    const params = buildParams(buildScopeParams());
 
     fetch(`/api/metrics/ai-usage?${params}`, { signal: controller.signal })
       .then(async (res) => {
@@ -81,7 +79,7 @@ export default function AiUsagePage() {
       });
 
     return () => controller.abort();
-  }, [days, buildScopeParams]);
+  }, [buildParams, buildScopeParams]);
 
   useEffect(() => fetchData(), [fetchData]);
 
@@ -137,10 +135,10 @@ export default function AiUsagePage() {
           pdf={{
             sectionRefs: [kpiRef, chartsRef],
             title: "AI Usage",
-            filename: `ai-usage-report-${days}d`,
+            filename: `ai-usage-report-${filenameSuffix}`,
             metadata: {
               reportName: "AI Usage",
-              dateRange: `Last ${days} days`,
+              dateRange: dateLabel,
               teams: buildScopeParams().get("teams") || undefined,
               orgs: buildScopeParams().get("orgs") || undefined,
             },
@@ -167,7 +165,7 @@ export default function AiUsagePage() {
               value={Math.round(kpis.avgDailyActiveUsers)}
               icon={<Activity className="h-4 w-4" />}
               accent="teal"
-              subtitle={`Average DAU over ${days} days`}
+              subtitle={`Average DAU · ${dateLabel}`}
             />
             <MetricCard
               title="Engagement (DAU/MAU)"

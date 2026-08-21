@@ -19,8 +19,7 @@ vi.mock("@/lib/api/rate-limit/rate-limiter", () => ({ withRateLimit: (h: unknown
 vi.mock("@/lib/cache/memory-cache", () => ({ CACHE_TTL: { MEDIUM: 300 } }));
 
 vi.mock("@/lib/utils", () => ({
-  parseAndClampDays: vi.fn(() => ({ days: 28 })),
-  getDateRange: vi.fn(() => ({ start: "2026-06-01", end: "2026-06-28" })),
+  resolveWindow: vi.fn(() => ({ start: "2026-06-01", end: "2026-06-28", days: 28 })),
 }));
 
 vi.mock("@/lib/config/enterprise-config", () => ({

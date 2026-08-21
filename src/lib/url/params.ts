@@ -17,7 +17,7 @@
 
 import { DEFAULT_DATE_RANGE_DAYS } from "@/lib/constants";
 import { MAX_DAYS } from "@/lib/utils";
-import { isValidPeriod, periodOf } from "@/lib/date/month-range";
+import { isRealCalendarDate, isValidPeriod, latestAvailableDate, periodOf } from "@/lib/date/month-range";
 
 // ---------------------------------------------------------------------------
 // Date range
@@ -49,7 +49,24 @@ export function parseDateRangeFromURL(
 
   // Custom range: ?from=...&to=...
   if (from && to) {
-    if (DATE_RE.test(from) && DATE_RE.test(to) && from <= to) {
+    // `DATE_RE` only checks the shape, and `Date.parse` happily rolls
+    // "2026-02-29" forward into March rather than failing. Without the strict
+    // check a deep link could seed state with a day that does not exist, which
+    // the API then rejects with a 400 - so validate here and fall back to the
+    // default range instead.
+    //
+    // The same argument caps the range at UTC yesterday. `parseDateRangeParams`
+    // rejects a later end date outright, so a bookmarked future range would
+    // restore as custom mode and then 400 on every page until the reader
+    // noticed and changed the selector by hand.
+    if (
+      DATE_RE.test(from) &&
+      DATE_RE.test(to) &&
+      isRealCalendarDate(from) &&
+      isRealCalendarDate(to) &&
+      from <= to &&
+      to <= latestAvailableDate()
+    ) {
       const ms =
         Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`);
       if (!Number.isNaN(ms)) {

@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { resolveEnterpriseId, getEnterpriseMetrics, getAggregatedDailySummary, countEffectiveEnterprises } from "@/lib/db/metrics-repo";
-import { getDateRange, parseAndClampDays } from "@/lib/utils";
+import { resolveWindow } from "@/lib/utils";
 import { parseScopeFilter } from "@/lib/api/scope-filter";
 import {
   getActiveUsersDailyTrend,
@@ -15,12 +15,11 @@ import {
 export async function GET(request: Request) {
   try {
     const { searchParams } = new URL(request.url);
-    const daysResult = parseAndClampDays(searchParams.get("days"), 7);
-    if ("error" in daysResult) {
-      return NextResponse.json({ error: daysResult.error }, { status: 400 });
+    const window = resolveWindow(searchParams, 7);
+    if ("error" in window) {
+      return NextResponse.json({ error: window.error }, { status: 400 });
     }
-    const { days } = daysResult;
-    const { start, end } = getDateRange(days);
+    const { start, end } = window;
 
     const scopeFilter = parseScopeFilter(searchParams);
     const allowedLogins = scopeFilter.allowedLogins ? Array.from(scopeFilter.allowedLogins) : undefined;

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getDateRange, datesBetween, parseAndClampDays } from "@/lib/utils";
+import { datesBetween, resolveWindow } from "@/lib/utils";
 import { parseScopeFilter } from "@/lib/api/scope-filter";
 import { withCache } from "@/lib/cache/with-cache";
 import { withTimeout } from "@/lib/api/timeout";
@@ -169,12 +169,11 @@ function aggregateCodeImpactTrend(days: string[], rows: CopilotAppAggregateDay[]
 async function handler(request: NextRequest) {
   try {
     const params = request.nextUrl.searchParams;
-    const daysResult = parseAndClampDays(params.get("days"), 7);
-    if ("error" in daysResult) {
-      return NextResponse.json({ error: daysResult.error }, { status: 400 });
+    const window = resolveWindow(params, 7);
+    if ("error" in window) {
+      return NextResponse.json({ error: window.error }, { status: 400 });
     }
-    const { days } = daysResult;
-    const { start, end } = getDateRange(days);
+    const { start, end } = window;
     const allDays = datesBetween(start, end);
 
     const scope = parseScopeFilter(params);

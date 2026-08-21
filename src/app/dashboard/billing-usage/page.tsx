@@ -4,9 +4,8 @@ import { useEffect, useState, useCallback, useRef, useMemo } from "react";
 import dynamic from "next/dynamic";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { ChartSkeleton } from "@/components/states/ChartSkeleton";
-import { useDateRange } from "@/contexts/DateRangeContext";
+import { useDateRangeParams } from "@/hooks/useDateRangeParams";
 import { useScope } from "@/contexts/ScopeContext";
-import { periodLabel } from "@/lib/date/month-range";
 import { DollarSign, Search, Filter, Building2, Users, ChevronDown, X } from "lucide-react";
 import { safeNum } from "@/lib/utils";
 import { ExportMenu } from "@/components/ui/ExportMenu";
@@ -52,7 +51,7 @@ const fmtCurrency = (v: number) => {
 };
 
 export default function MeteredUsagePage() {
-  const { days, mode, period } = useDateRange();
+  const { buildParams: buildDateParams, dateLabel: windowLabel, filenameSuffix: exportSlug, mode, period } = useDateRangeParams();
   const { hasFilter, buildScopeParams, selectedEntTeams, selectedOrgTeams, selectedOrgs: scopeOrgs } = useScope();
   const [records, setRecords] = useState<BillingUsageRecord[]>([]);
   const [pagination, setPagination] = useState<PaginationInfo>({ page: 1, pageSize: 50, totalItems: 0, totalPages: 0 });
@@ -80,20 +79,14 @@ export default function MeteredUsagePage() {
   const chartRef = useRef<HTMLDivElement>(null);
   const insightsRef = useRef<HTMLDivElement>(null);
 
-  // Billing is billed by calendar month, so a selected month is the honest
-  // window — and the only basis on which this page can agree with Billing and
-  // License & AI Credits, which are both keyed by month.
   const activePeriod = mode === "month" && period ? period : null;
-  const windowParam = useMemo<[string, string]>(
-    () => (activePeriod ? ["period", activePeriod] : ["days", String(days)]),
-    [activePeriod, days],
+  const buildBillingDateParams = useCallback(
+    () => (activePeriod ? new URLSearchParams({ period: activePeriod }) : buildDateParams()),
+    [activePeriod, buildDateParams],
   );
-  const windowLabel = activePeriod ? periodLabel(activePeriod) : `last ${days} days`;
-  const exportSlug = activePeriod ?? `${days}d`;
 
   const buildParams = useCallback(() => {
-    const p = new URLSearchParams();
-    p.set(...windowParam);
+    const p = buildBillingDateParams();
     p.set("page", String(page));
     p.set("pageSize", "50");
     p.set("sort", sort);
@@ -107,14 +100,13 @@ export default function MeteredUsagePage() {
     const scopeParams = buildScopeParams();
     scopeParams.forEach((v, k) => p.set(k, v));
     return p;
-  }, [windowParam, page, sort, sortDir, search, selectedProducts, selectedOrgs, selectedCostCenter, chargeScope, buildScopeParams]);
+  }, [buildBillingDateParams, page, sort, sortDir, search, selectedProducts, selectedOrgs, selectedCostCenter, chargeScope, buildScopeParams]);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
     try {
       const params = buildParams();
-      const trendParams = new URLSearchParams();
-      trendParams.set(...windowParam);
+      const trendParams = buildBillingDateParams();
       trendParams.set("groupBy", "daily");
       if (chargeScope) trendParams.set("chargeScope", chargeScope);
       if (selectedProducts.length) trendParams.set("product", selectedProducts.join(","));
@@ -125,16 +117,14 @@ export default function MeteredUsagePage() {
       const scopeParams = buildScopeParams();
       scopeParams.forEach((v, k) => trendParams.set(k, v));
 
-      const costCenterParams = new URLSearchParams();
-      costCenterParams.set(...windowParam);
+      const costCenterParams = buildBillingDateParams();
       costCenterParams.set("groupBy", "costCenter");
       scopeParams.forEach((v, k) => costCenterParams.set(k, v));
       if (selectedProducts.length) costCenterParams.set("product", selectedProducts.join(","));
       if (selectedOrgs.length) costCenterParams.set("organization", selectedOrgs.join(","));
       if (chargeScope) costCenterParams.set("chargeScope", chargeScope);
 
-      const repoParams = new URLSearchParams();
-      repoParams.set(...windowParam);
+      const repoParams = buildBillingDateParams();
       repoParams.set("groupBy", "repository");
       scopeParams.forEach((v, k) => repoParams.set(k, v));
       if (selectedProducts.length) repoParams.set("product", selectedProducts.join(","));
@@ -178,7 +168,7 @@ export default function MeteredUsagePage() {
     } finally {
       setLoading(false);
     }
-  }, [buildParams, windowParam, chargeScope, selectedProducts, selectedOrgs, selectedCostCenter, search, buildScopeParams]);
+  }, [buildParams, buildBillingDateParams, chargeScope, selectedProducts, selectedOrgs, selectedCostCenter, search, buildScopeParams]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
@@ -245,7 +235,7 @@ export default function MeteredUsagePage() {
             filename: `metered-usage-${exportSlug}`,
             metadata: {
               reportName: "Metered Usage Report",
-              dateRange: activePeriod ? periodLabel(activePeriod) : `Last ${days} days`,
+              dateRange: windowLabel,
               ...(hasFilter && { teams: [...selectedEntTeams, ...selectedOrgTeams].join(", "), orgs: scopeOrgs.join(", ") }),
             },
           }}
@@ -255,7 +245,7 @@ export default function MeteredUsagePage() {
             filename: `metered-usage-${exportSlug}`,
             metadata: {
               reportName: "Metered Usage Report",
-              dateRange: activePeriod ? periodLabel(activePeriod) : `Last ${days} days`,
+              dateRange: windowLabel,
               ...(hasFilter && { teams: [...selectedEntTeams, ...selectedOrgTeams].join(", "), orgs: scopeOrgs.join(", ") }),
             },
           }}

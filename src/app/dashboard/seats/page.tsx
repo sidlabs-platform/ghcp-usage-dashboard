@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { MetricCard } from "@/components/cards/MetricCard";
 import { ScopeFilter } from "@/components/filters/ScopeFilter";
@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import Link from "next/link";
 import { CreditCard, UserCheck, UserX, Percent } from "lucide-react";
 import { useScope } from "@/contexts/ScopeContext";
+import { useDateRangeParams } from "@/hooks/useDateRangeParams";
 import { useQuery } from "@tanstack/react-query";
 import { PaginatedTable, type ColumnDef } from "@/components/tables/PaginatedTable";
 import { ExportMenu } from "@/components/ui/ExportMenu";
@@ -33,6 +34,10 @@ interface SeatStats {
   active30d: number;
   inactive30d: number;
   pendingCancellation: number;
+  /** ISO timestamp the API used as the activity cutoff for this window. */
+  activitySince?: string;
+  /** Inclusive upper bound for historical windows; null/absent means current live activity is included. */
+  activityUntil?: string | null;
 }
 
 function daysAgo(dateStr: string | null): string {
@@ -43,61 +48,70 @@ function daysAgo(dateStr: string | null): string {
   return `${diff}d ago`;
 }
 
-const thirtyDaysAgo = new Date();
-thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-const cutoff = thirtyDaysAgo.toISOString();
+function fallbackCutoff(): string {
+  const d = new Date();
+  d.setDate(d.getDate() - 30);
+  return d.toISOString();
+}
 
-const seatColumns: ColumnDef<SeatRow>[] = [
-  { key: "user_login", label: "User", render: (row) => <span className="font-medium">{row.user_login}</span> },
-  { key: "org_slug", label: "Org", render: (row) => row.org_slug },
-  { key: "plan_type", label: "Plan", render: (row) => row.plan_type },
-  { key: "last_activity_at", label: "Last Activity", render: (row) => daysAgo(row.last_activity_at) },
-  { key: "last_activity_editor", label: "Editor", render: (row) => row.last_activity_editor ?? "—" },
-  {
-    key: "status",
-    label: "Status",
-    sortable: false,
-    render: (row) => {
-      const isActive = row.last_activity_at && row.last_activity_at >= cutoff;
-      const isPending = !!row.pending_cancellation_date;
-      return isPending ? (
-        <Badge variant="warning">Pending Cancel</Badge>
-      ) : isActive ? (
-        <Badge variant="success">Active</Badge>
-      ) : (
-        <Badge variant="secondary">Inactive</Badge>
-      );
-    },
-  },
-];
+function seatStatus(row: SeatRow, cutoff: string, until: string | null): "Pending Cancel" | "Active" | "Inactive" {
+  if (row.pending_cancellation_date) return "Pending Cancel";
+  return row.last_activity_at && row.last_activity_at >= cutoff && (until === null || row.last_activity_at <= until)
+    ? "Active"
+    : "Inactive";
+}
 
-const seatExportColumns: CSVColumn[] = [
-  { key: "user_login", label: "User" },
-  { key: "org_slug", label: "Organization" },
-  { key: "plan_type", label: "Plan" },
-  { key: "last_activity_at", label: "Last Activity", format: (row) => row.last_activity_at ?? "Never" },
-  { key: "last_activity_editor", label: "Editor", format: (row) => row.last_activity_editor ?? "" },
-  {
-    key: "status", label: "Status", format: (row) => {
-      if (row.pending_cancellation_date) return "Pending Cancel";
-      if (row.last_activity_at && row.last_activity_at >= cutoff) return "Active";
-      return "Inactive";
+/**
+ * Seat table columns. The active/inactive cutoff is a parameter rather than a
+ * module constant because the status badge must agree with the KPI tiles above
+ * it, and those follow the selected window.
+ */
+function buildSeatColumns(cutoff: string, until: string | null): ColumnDef<SeatRow>[] {
+  return [
+    { key: "user_login", label: "User", render: (row) => <span className="font-medium">{row.user_login}</span> },
+    { key: "org_slug", label: "Org", render: (row) => row.org_slug },
+    { key: "plan_type", label: "Plan", render: (row) => row.plan_type },
+    { key: "last_activity_at", label: "Last Activity", render: (row) => daysAgo(row.last_activity_at) },
+    { key: "last_activity_editor", label: "Editor", render: (row) => row.last_activity_editor ?? "—" },
+    {
+      key: "status",
+      label: "Status",
+      sortable: false,
+      render: (row) => {
+        const status = seatStatus(row, cutoff, until);
+        if (status === "Pending Cancel") return <Badge variant="warning">Pending Cancel</Badge>;
+        if (status === "Active") return <Badge variant="success">Active</Badge>;
+        return <Badge variant="secondary">Inactive</Badge>;
+      },
     },
-  },
-];
+  ];
+}
+
+function buildSeatExportColumns(cutoff: string, until: string | null): CSVColumn[] {
+  return [
+    { key: "user_login", label: "User" },
+    { key: "org_slug", label: "Organization" },
+    { key: "plan_type", label: "Plan" },
+    { key: "last_activity_at", label: "Last Activity", format: (row) => row.last_activity_at ?? "Never" },
+    { key: "last_activity_editor", label: "Editor", format: (row) => row.last_activity_editor ?? "" },
+    { key: "status", label: "Status", format: (row) => seatStatus(row as unknown as SeatRow, cutoff, until) },
+  ];
+}
 
 export default function SeatsPage() {
   const { buildScopeParams } = useScope();
+  const { buildParams, dateLabel, filenameSuffix } = useDateRangeParams();
   const [showInactiveOnly, setShowInactiveOnly] = useState(false);
 
   const scopeParams = buildScopeParams();
+  const windowParams = buildParams(scopeParams);
+  const windowKey = windowParams.toString();
 
   // Lightweight summary query for KPI cards
   const { data: statsData } = useQuery({
-    queryKey: ["seats-stats", scopeParams.toString()],
+    queryKey: ["seats-stats", windowKey],
     queryFn: async () => {
-      const url = scopeParams.toString() ? `/api/seats?pageSize=1&${scopeParams}` : "/api/seats?pageSize=1";
-      const res = await fetch(url);
+      const res = await fetch(`/api/seats?pageSize=1&${windowKey}`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       return res.json();
     },
@@ -105,8 +119,16 @@ export default function SeatsPage() {
 
   const stats: SeatStats | undefined = statsData?.stats;
   const utilization: number | undefined = statsData?.utilization;
+  const defaultCutoff = useMemo(() => fallbackCutoff(), []);
+  const cutoff = stats?.activitySince ?? defaultCutoff;
+  // Absent on responses cached before this field existed, which correctly means
+  // "no upper bound", so today's live activity still counts.
+  const until = stats?.activityUntil ?? null;
 
-  const extraParams = new URLSearchParams(scopeParams.toString());
+  const seatColumns = useMemo(() => buildSeatColumns(cutoff, until), [cutoff, until]);
+  const seatExportColumns = useMemo(() => buildSeatExportColumns(cutoff, until), [cutoff, until]);
+
+  const extraParams = new URLSearchParams(windowKey);
   if (showInactiveOnly) extraParams.set("inactiveOnly", "true");
 
   return (
@@ -118,9 +140,10 @@ export default function SeatsPage() {
             extraParams,
             columns: seatExportColumns,
             dataExtractor: (json) => json.seats ?? [],
-            filename: `seats-export${showInactiveOnly ? "-inactive" : ""}`,
+            filename: `seats-export-${filenameSuffix}${showInactiveOnly ? "-inactive" : ""}`,
             metadata: {
               reportName: "Seat Management",
+              dateRange: dateLabel,
               orgs: scopeParams.get("orgs") || undefined,
             },
           }}
@@ -128,21 +151,27 @@ export default function SeatsPage() {
       </PageHeader>
       <ScopeFilter />
 
+      <p className="text-xs text-[hsl(var(--muted-foreground))] mb-4">
+        Seat assignments are a live snapshot of today — GitHub does not report seat history, so Total
+        Seats cannot be scoped to a past window. Activity split window: {dateLabel}
+        {until === null ? ", including today's live activity." : "."}
+      </p>
+
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4 mb-8">
         <MetricCard
           title="Total Seats"
           value={stats?.total ?? 0}
           icon={<CreditCard className="h-4 w-4" />}
-          subtitle="Assigned licenses"
+          subtitle="Assigned licenses (current snapshot)"
         />
         <MetricCard
-          title="Active (30d)"
+          title="Active in window"
           value={stats?.active30d ?? 0}
           icon={<UserCheck className="h-4 w-4" />}
-          subtitle="Used in last 30 days"
+          subtitle={`Used during ${dateLabel}`}
         />
         <MetricCard
-          title="Inactive (30d)"
+          title="Inactive in window"
           value={stats?.inactive30d ?? 0}
           icon={<UserX className="h-4 w-4" />}
           subtitle={`${stats?.pendingCancellation ?? 0} pending cancellation`}
@@ -152,7 +181,7 @@ export default function SeatsPage() {
           value={utilization ?? 0}
           format="percent"
           icon={<Percent className="h-4 w-4" />}
-          subtitle="Active / total seats"
+          subtitle="Active in window / total seats"
         />
       </div>
 

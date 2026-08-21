@@ -101,6 +101,28 @@ describe("seats-repo", () => {
       expect(stats.total).toBe(4);
       expect(stats.active30d + stats.inactive30d).toBe(stats.total);
     });
+
+    it("applies an optional activity upper bound without changing unbounded behavior", () => {
+      upsertSeats("activity-window", "org-window", [
+        makeSeat("window-before", 100, "active_user", "2024-06-10T12:00:00Z", "vscode"),
+        makeSeat("window-after", 101, "active_user", "2024-06-20T12:00:00Z", "vscode"),
+        makeSeat("window-never", 102, "active_user", null, null),
+      ]);
+
+      const bounded = getSeatStats(
+        ["activity-window"],
+        "2024-06-01T00:00:00.000Z",
+        "2024-06-15T23:59:59.999Z",
+      );
+      const unbounded = getSeatStats(["activity-window"], "2024-06-01T00:00:00.000Z");
+
+      expect(bounded.active30d).toBe(1);
+      expect(bounded.inactive30d).toBe(2);
+      expect(bounded.activityUntil).toBe("2024-06-15T23:59:59.999Z");
+      expect(unbounded.active30d).toBe(2);
+      expect(unbounded.inactive30d).toBe(1);
+      expect(unbounded.activityUntil).toBeNull();
+    });
   });
 
   describe("replaceEnterpriseSeats", () => {

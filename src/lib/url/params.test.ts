@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { afterEach, describe, it, expect, vi } from "vitest";
 import {
   parseDateRangeFromURL,
   serializeDateRangeToURL,
@@ -15,6 +15,10 @@ import { DEFAULT_DATE_RANGE_DAYS } from "@/lib/constants";
 function sp(record: Record<string, string>): URLSearchParams {
   return new URLSearchParams(record);
 }
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 // ---------------------------------------------------------------------------
 // parseDateRangeFromURL
@@ -73,6 +77,44 @@ describe("parseDateRangeFromURL", () => {
 
   it("rejects custom range with invalid date format", () => {
     expect(parseDateRangeFromURL(sp({ from: "not-a-date", to: "2026-08-15" }))).toBeNull();
+  });
+
+  it("rejects a deep-linked day that does not exist rather than rolling it forward", () => {
+    // Date.parse would turn these into March 1 and May 1 respectively, seeding
+    // state with a window the API then rejects.
+    expect(parseDateRangeFromURL(sp({ from: "2026-02-29", to: "2026-03-05" }))).toBeNull();
+    expect(parseDateRangeFromURL(sp({ from: "2026-04-01", to: "2026-04-31" }))).toBeNull();
+    expect(parseDateRangeFromURL(sp({ from: "2026-03-00", to: "2026-03-05" }))).toBeNull();
+  });
+
+  it("still accepts a real leap day", () => {
+    const result = parseDateRangeFromURL(sp({ from: "2024-02-29", to: "2024-03-05" }));
+    expect(result).not.toBeNull();
+    expect(result!.customStart).toBe("2024-02-29");
+  });
+
+  it("rejects a future custom range where both bounds are after UTC yesterday", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-21T12:00:00Z"));
+
+    expect(parseDateRangeFromURL(sp({ from: "2026-08-21", to: "2026-08-22" }))).toBeNull();
+  });
+
+  it("rejects a custom range whose end is after UTC yesterday", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-21T12:00:00Z"));
+
+    expect(parseDateRangeFromURL(sp({ from: "2026-08-20", to: "2026-08-21" }))).toBeNull();
+  });
+
+  it("accepts a custom range ending exactly on UTC yesterday", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-21T12:00:00Z"));
+
+    const result = parseDateRangeFromURL(sp({ from: "2026-08-14", to: "2026-08-20" }));
+    expect(result).not.toBeNull();
+    expect(result!.customStart).toBe("2026-08-14");
+    expect(result!.customEnd).toBe("2026-08-20");
   });
 
   it("custom takes precedence over range when both present", () => {

@@ -510,6 +510,59 @@ describe("License reconciliation page", () => {
     expect(csvConfig.extraParams.get("days")).toBe("28");
   });
 
+  it("sends custom startDate/endDate to reconciliation and export params, not days", async () => {
+    dateRangeState.mode = "custom";
+    dateRangeState.days = 31;
+    dateRangeState.startDate = "2026-03-01";
+    dateRangeState.endDate = "2026-03-31";
+
+    const Page = (await import("./page")).default;
+    render(<Page />);
+
+    await waitFor(() => {
+      const calls = (fetch as unknown as ReturnType<typeof vi.fn>).mock.calls;
+      expect(calls.some((call: unknown[]) => String(call[0]).includes("/api/billing/license-reconciliation"))).toBe(true);
+    });
+    const call = (fetch as unknown as ReturnType<typeof vi.fn>).mock.calls.find((args: unknown[]) =>
+      String(args[0]).includes("/api/billing/license-reconciliation?"),
+    );
+    const params = new URL(String(call?.[0]), "http://localhost").searchParams;
+    expect(params.get("startDate")).toBe("2026-03-01");
+    expect(params.get("endDate")).toBe("2026-03-31");
+    expect(params.has("days")).toBe(false);
+
+    const csvConfig = exportMenuState.props!.csv as {
+      filename: string;
+      extraParams: URLSearchParams;
+      metadata: { dateRange: string };
+    };
+    expect(csvConfig.extraParams.get("startDate")).toBe("2026-03-01");
+    expect(csvConfig.extraParams.get("endDate")).toBe("2026-03-31");
+    expect(csvConfig.extraParams.has("days")).toBe(false);
+    expect(csvConfig.filename).toBe("license-ai-credits-2026-03-01_2026-03-31");
+    expect(csvConfig.metadata.dateRange).toBe("2026-03-01 to 2026-03-31");
+  });
+
+  it("names the month a partial custom range actually reads, instead of implying day-accurate rows", async () => {
+    dateRangeState.mode = "custom";
+    dateRangeState.days = 6;
+    dateRangeState.startDate = "2026-03-15";
+    dateRangeState.endDate = "2026-03-20";
+
+    const Page = (await import("./page")).default;
+    render(<Page />);
+
+    // Per-user rows are keyed by month, so the server widens this six-day
+    // selection to all of March. The caption must say so.
+    await waitFor(() => {
+      expect(screen.getByText(/covers all of March 2026/i)).toBeInTheDocument();
+    });
+    expect(screen.getByText(/wider than the selected 2026-03-15 to 2026-03-20/i)).toBeInTheDocument();
+
+    const csvConfig = exportMenuState.props!.csv as { metadata: { dateRange: string } };
+    expect(csvConfig.metadata.dateRange).toBe("2026-03-15 to 2026-03-20 (per-user rows cover March 2026)");
+  });
+
   it("shows an error state with a retry button", async () => {
     const fetchMock = vi.fn(() => jsonResponse({ error: "boom" }, false));
     vi.stubGlobal("fetch", fetchMock);

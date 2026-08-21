@@ -7,7 +7,7 @@ import { MetricCard } from "@/components/cards/MetricCard";
 import { ScopeFilter } from "@/components/filters/ScopeFilter";
 import { ChartSkeleton, KPISkeleton } from "@/components/states/ChartSkeleton";
 import { Section } from "@/components/ui/Section";
-import { useDateRange } from "@/contexts/DateRangeContext";
+import { useDateRangeParams } from "@/hooks/useDateRangeParams";
 import { useScope } from "@/contexts/ScopeContext";
 import { CHART_COLORS } from "@/lib/constants";
 import { ExportMenu } from "@/components/ui/ExportMenu";
@@ -54,7 +54,7 @@ function formatCost(v: number | null): string {
 }
 
 export default function DashboardOverview() {
-  const { mode, days, startDate, endDate } = useDateRange();
+  const { buildParams, dateLabel: dateRangeLabel, filenameSuffix: dateRangeKey } = useDateRangeParams();
   const { hasFilter, buildScopeParams, clearAll } = useScope();
   const [data, setData] = useState<OverviewData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -74,8 +74,6 @@ export default function DashboardOverview() {
   const chartsRef = useRef<HTMLDivElement>(null);
   const securityRef = useRef<HTMLDivElement>(null);
   const requestIdRef = useRef(0);
-  const dateRangeLabel = mode === "preset" ? `Last ${days} days` : `${startDate} to ${endDate}`;
-  const dateRangeKey = mode === "preset" ? `${days}d` : `${startDate}_${endDate}`;
 
   useEffect(() => {
     fetch("/api/config")
@@ -92,15 +90,7 @@ export default function DashboardOverview() {
 
   const fetchData = useCallback((requestId: number) => {
     setLoading(true);
-    const params = new URLSearchParams();
-    if (mode === "preset") {
-      params.set("days", String(days));
-    } else {
-      params.set("startDate", startDate);
-      params.set("endDate", endDate);
-    }
-    const scopeParams = buildScopeParams();
-    scopeParams.forEach((value, key) => params.set(key, value));
+    const params = buildParams(buildScopeParams());
 
     fetch(`/api/metrics/overview?${params}`)
       .then((res) => res.json())
@@ -127,7 +117,7 @@ export default function DashboardOverview() {
     } else {
       setSecurityData(null);
     }
-  }, [mode, days, startDate, endDate, buildScopeParams, securityEnabled]);
+  }, [buildParams, buildScopeParams, securityEnabled]);
 
   useEffect(() => {
     const requestId = ++requestIdRef.current;

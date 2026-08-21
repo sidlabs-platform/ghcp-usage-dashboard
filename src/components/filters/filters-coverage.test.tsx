@@ -3,7 +3,7 @@
 import React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { DateFilter } from "@/components/filters/DateFilter";
+import { CustomRangeFilter } from "@/components/filters/CustomRangeFilter";
 import { ScopeFilter } from "@/components/filters/ScopeFilter";
 import { useDateRange } from "@/contexts/DateRangeContext";
 import { useScope } from "@/contexts/ScopeContext";
@@ -20,13 +20,26 @@ vi.mock("@/contexts/ScopeContext", () => ({
 const mockedUseDateRange = vi.mocked(useDateRange);
 const mockedUseScope = vi.mocked(useScope);
 
+function mockCustomRangeFilter(setCustomRange = vi.fn()) {
+  mockedUseDateRange.mockReturnValue({
+    mode: "preset",
+    days: 7,
+    startDate: "",
+    endDate: "",
+    setDays: vi.fn(),
+    setCustomRange,
+  } as never);
+  return setCustomRange;
+}
+
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   vi.clearAllMocks();
 });
 
 describe("filter components", () => {
-  it("switches presets and validates custom date ranges", () => {
+  it("validates custom date ranges", () => {
     const setDays = vi.fn();
     const setCustomRange = vi.fn();
     mockedUseDateRange.mockReturnValue({
@@ -38,10 +51,7 @@ describe("filter components", () => {
       setCustomRange,
     } as never);
 
-    render(<DateFilter />);
-
-    fireEvent.click(screen.getByRole("button", { name: "14 days" }));
-    expect(setDays).toHaveBeenCalledWith(14);
+    render(<CustomRangeFilter />);
 
     fireEvent.click(screen.getByRole("button", { name: "Custom Range" }));
     fireEvent.click(screen.getByRole("button", { name: "Apply" }));
@@ -61,6 +71,103 @@ describe("filter components", () => {
     fireEvent.change(screen.getByLabelText("End Date"), { target: { value: "2025-01-10" } });
     fireEvent.click(screen.getByRole("button", { name: "Apply" }));
     expect(setCustomRange).toHaveBeenCalledWith("2025-01-01", "2025-01-10");
+  });
+
+  it("rejects a custom start date after yesterday", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-21T12:00:00Z"));
+    const setCustomRange = mockCustomRangeFilter();
+
+    render(<CustomRangeFilter />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Custom Range" }));
+    fireEvent.change(screen.getByLabelText("Start Date"), { target: { value: "2026-08-21" } });
+    fireEvent.change(screen.getByLabelText("End Date"), { target: { value: "2026-08-21" } });
+    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+
+    expect(screen.getByText("Dates cannot be later than yesterday.")).toBeInTheDocument();
+    expect(setCustomRange).not.toHaveBeenCalled();
+  });
+
+  it("rejects a custom end date after yesterday", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-21T12:00:00Z"));
+    const setCustomRange = mockCustomRangeFilter();
+
+    render(<CustomRangeFilter />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Custom Range" }));
+    fireEvent.change(screen.getByLabelText("Start Date"), { target: { value: "2026-08-20" } });
+    fireEvent.change(screen.getByLabelText("End Date"), { target: { value: "2026-08-21" } });
+    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+
+    expect(screen.getByText("Dates cannot be later than yesterday.")).toBeInTheDocument();
+    expect(setCustomRange).not.toHaveBeenCalled();
+  });
+
+  it("accepts a custom range ending yesterday", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-21T12:00:00Z"));
+    const setCustomRange = mockCustomRangeFilter();
+
+    render(<CustomRangeFilter />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Custom Range" }));
+    fireEvent.change(screen.getByLabelText("Start Date"), { target: { value: "2026-08-14" } });
+    fireEvent.change(screen.getByLabelText("End Date"), { target: { value: "2026-08-20" } });
+    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+
+    expect(screen.queryByText("Dates cannot be later than yesterday.")).toBeNull();
+    expect(setCustomRange).toHaveBeenCalledWith("2026-08-14", "2026-08-20");
+  });
+
+  it("sets the date input max to yesterday in UTC", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-21T00:30:00Z"));
+    mockCustomRangeFilter();
+
+    render(<CustomRangeFilter />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Custom Range" }));
+
+    expect(screen.getByLabelText("Start Date")).toHaveAttribute("max", "2026-08-20");
+    expect(screen.getByLabelText("End Date")).toHaveAttribute("max", "2026-08-20");
+  });
+
+  it("refreshes the date input cap when a re-render happens after UTC midnight", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-21T23:59:00Z"));
+    mockCustomRangeFilter();
+
+    render(<CustomRangeFilter />);
+    fireEvent.click(screen.getByRole("button", { name: "Custom Range" }));
+    expect(screen.getByLabelText("Start Date")).toHaveAttribute("max", "2026-08-20");
+
+    vi.setSystemTime(new Date("2026-08-22T00:01:00Z"));
+    // Any state change re-renders. The bound is computed during render, so the
+    // inputs must now advertise the 21st rather than the cap frozen at mount.
+    fireEvent.change(screen.getByLabelText("End Date"), { target: { value: "2026-08-19" } });
+    expect(screen.getByLabelText("Start Date")).toHaveAttribute("max", "2026-08-21");
+  });
+
+  it("accepts the newly available UTC-yesterday date after midnight without remounting", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-21T23:59:00Z"));
+    const setCustomRange = mockCustomRangeFilter();
+
+    render(<CustomRangeFilter />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Custom Range" }));
+    fireEvent.change(screen.getByLabelText("Start Date"), { target: { value: "2026-08-21" } });
+    fireEvent.change(screen.getByLabelText("End Date"), { target: { value: "2026-08-21" } });
+
+    // Cross midnight with no further interaction, so nothing re-renders between
+    // here and the click. Validation has to read the clock itself.
+    vi.setSystemTime(new Date("2026-08-22T00:01:00Z"));
+    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+
+    expect(screen.queryByText("Dates cannot be later than yesterday.")).toBeNull();
+    expect(setCustomRange).toHaveBeenCalledWith("2026-08-21", "2026-08-21");
   });
 
   it("renders and filters multi-enterprise scope selections", () => {
