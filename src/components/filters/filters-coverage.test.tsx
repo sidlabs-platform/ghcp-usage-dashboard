@@ -75,7 +75,7 @@ describe("filter components", () => {
 
   it("rejects a custom start date after yesterday", () => {
     vi.useFakeTimers();
-    vi.setSystemTime(new Date(2026, 7, 21, 12));
+    vi.setSystemTime(new Date("2026-08-21T12:00:00Z"));
     const setCustomRange = mockCustomRangeFilter();
 
     render(<CustomRangeFilter />);
@@ -91,7 +91,7 @@ describe("filter components", () => {
 
   it("rejects a custom end date after yesterday", () => {
     vi.useFakeTimers();
-    vi.setSystemTime(new Date(2026, 7, 21, 12));
+    vi.setSystemTime(new Date("2026-08-21T12:00:00Z"));
     const setCustomRange = mockCustomRangeFilter();
 
     render(<CustomRangeFilter />);
@@ -107,7 +107,7 @@ describe("filter components", () => {
 
   it("accepts a custom range ending yesterday", () => {
     vi.useFakeTimers();
-    vi.setSystemTime(new Date(2026, 7, 21, 12));
+    vi.setSystemTime(new Date("2026-08-21T12:00:00Z"));
     const setCustomRange = mockCustomRangeFilter();
 
     render(<CustomRangeFilter />);
@@ -121,9 +121,9 @@ describe("filter components", () => {
     expect(setCustomRange).toHaveBeenCalledWith("2026-08-14", "2026-08-20");
   });
 
-  it("sets the date input max to yesterday in the local calendar", () => {
+  it("sets the date input max to yesterday in UTC", () => {
     vi.useFakeTimers();
-    vi.setSystemTime(new Date(2026, 7, 21, 0, 30));
+    vi.setSystemTime(new Date("2026-08-21T00:30:00Z"));
     mockCustomRangeFilter();
 
     render(<CustomRangeFilter />);

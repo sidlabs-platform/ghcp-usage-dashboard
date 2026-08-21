@@ -16,7 +16,7 @@ import { ExportMenu } from "@/components/ui/ExportMenu";
 import { useDateRange } from "@/contexts/DateRangeContext";
 
 import { CopilotCostBasisPanel, type CopilotCostBasis } from "@/components/billing/CopilotCostBasisPanel";
-import { periodLabel } from "@/lib/date/month-range";
+import { monthsCoveringRange, periodLabel } from "@/lib/date/month-range";
 import { useScope } from "@/contexts/ScopeContext";
 import { safeNum } from "@/lib/utils";
 import { LicensePeriodFilters } from "@/components/licensing/LicensePeriodFilters";
@@ -438,6 +438,17 @@ export default function LicenseReconciliationPage() {
   const hasRosterData = !!kpis && (kpis.totalUsers > 0 || pagination.totalItems > 0);
   const hasData = hasBilledData || hasRosterData;
 
+  // A custom range is answered by the *month-keyed* per-user tables:
+  // `resolveReconciliationFilters` expands the range to the calendar months it
+  // touches. A partial month therefore renders whole-month per-user rows beside
+  // billed totals covering only the selected days. Rather than forbid partial
+  // custom ranges — which would put this page back to disagreeing with the
+  // app-wide selector — name the granularity the rows actually have.
+  const customMonthCoverage =
+    dateMode === "custom" && startDate && endDate ? monthsCoveringRange(startDate, endDate) : null;
+  const isPartialMonthRange = customMonthCoverage?.partial ?? false;
+  const historicalMonthsLabel = customMonthCoverage?.months.map(periodLabel).join(", ") ?? "";
+
   const selectedWindowLabel =
     periods.length > 0
       ? `Periods: ${periods.join(", ")}`
@@ -458,7 +469,12 @@ export default function LicenseReconciliationPage() {
 
   const exportMeta = {
     reportName: "License & AI Credits Reconciliation",
-    dateRange: selectedWindowLabel,
+    // Per-user rows are month-granular, so an export of a partial range must not
+    // claim its file covers only the selected days.
+    dateRange:
+      isPartialMonthRange && dataSource !== "live_snapshot_only"
+        ? `${selectedWindowLabel} (per-user rows cover ${historicalMonthsLabel})`
+        : selectedWindowLabel,
     view,
     ...(hasFilter && { teams: [...selectedEntTeams, ...selectedOrgTeams].join(", "), orgs: selectedOrgs.join(", ") }),
   };
@@ -497,7 +513,9 @@ export default function LicenseReconciliationPage() {
   const rosterCaption =
     dataSource === "live_snapshot_only"
       ? `Current seat-holders, with AI-credit consumption from ${windowName} joined on. This is today's roster, not a ${windowName} census — for period-accurate licence and cost figures, use the billed totals above.`
-      : `Per-user licence and AI-credit detail materialized for ${windowName}.`;
+      : isPartialMonthRange
+        ? `Per-user licence and AI-credit detail is materialized by calendar month, so this table covers all of ${historicalMonthsLabel} — wider than the selected ${startDate} to ${endDate}. The billed totals above cover exactly the selected days.`
+        : `Per-user licence and AI-credit detail materialized for ${windowName}.`;
 
   return (
     <div className="space-y-8">

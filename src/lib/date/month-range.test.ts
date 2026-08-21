@@ -8,6 +8,7 @@ import {
   recentPeriods,
   periodLabel,
   periodLabelShort,
+  monthsCoveringRange,
 } from "./month-range";
 
 // A fixed "now" mid-month so partial-month clamping is observable.
@@ -138,5 +139,48 @@ describe("periodLabel / periodLabelShort", () => {
     expect(periodLabel("nonsense")).toBe("nonsense");
     expect(periodLabel("2026-13")).toBe("2026-13");
     expect(periodLabelShort("2026-13")).toBe("2026-13");
+  });
+});
+
+describe("monthsCoveringRange", () => {
+  it("reports a whole month as complete coverage", () => {
+    expect(monthsCoveringRange("2026-03-01", "2026-03-31")).toEqual({
+      months: ["2026-03"],
+      partial: false,
+    });
+  });
+
+  it("flags a partial month, which month-keyed rows would silently widen", () => {
+    expect(monthsCoveringRange("2026-03-15", "2026-03-20")).toEqual({
+      months: ["2026-03"],
+      partial: true,
+    });
+  });
+
+  it("expands a range across a year boundary in ascending order", () => {
+    expect(monthsCoveringRange("2025-11-10", "2026-02-05")).toEqual({
+      months: ["2025-11", "2025-12", "2026-01", "2026-02"],
+      partial: true,
+    });
+  });
+
+  it("treats consecutive whole months as complete coverage", () => {
+    expect(monthsCoveringRange("2026-01-01", "2026-02-28")).toEqual({
+      months: ["2026-01", "2026-02"],
+      partial: false,
+    });
+  });
+
+  it("uses the real length of the end month, including leap February", () => {
+    expect(monthsCoveringRange("2024-02-01", "2024-02-29")?.partial).toBe(false);
+    expect(monthsCoveringRange("2026-02-01", "2026-02-28")?.partial).toBe(false);
+    expect(monthsCoveringRange("2024-02-01", "2024-02-28")?.partial).toBe(true);
+  });
+
+  it("returns null for malformed or inverted input", () => {
+    expect(monthsCoveringRange("2026-03", "2026-03-20")).toBeNull();
+    expect(monthsCoveringRange("nonsense", "2026-03-20")).toBeNull();
+    expect(monthsCoveringRange("2026-03-20", "2026-03-15")).toBeNull();
+    expect(monthsCoveringRange("2026-13-01", "2026-13-28")).toBeNull();
   });
 });

@@ -125,3 +125,54 @@ export function periodLabelShort(period: string): string {
   const [name, year] = full.split(" ");
   return `${name.slice(0, 3)} ${year}`;
 }
+
+/** The calendar months an inclusive day range touches, and whether it fills them. */
+export interface RangeMonthCoverage {
+  /** Every "YYYY-MM" period the range overlaps, in ascending order. */
+  months: string[];
+  /**
+   * True when the range does *not* start on the first day of its first month
+   * and end on the last day of its last month — i.e. month-keyed data answering
+   * this range covers strictly more days than the range itself.
+   */
+  partial: boolean;
+}
+
+const ISO_DATE_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
+
+/**
+ * Expand an inclusive `YYYY-MM-DD` range to the calendar months it touches.
+ *
+ * Month-keyed tables (licensing history, billing periods) can only answer a
+ * day range by widening it to whole months. Surfaces that render such data for
+ * an arbitrary range need to say so, otherwise a six-day selection silently
+ * labels a whole month's rows. Returns `null` for malformed or inverted input.
+ */
+export function monthsCoveringRange(startDate: string, endDate: string): RangeMonthCoverage | null {
+  const start = ISO_DATE_RE.exec(startDate);
+  const end = ISO_DATE_RE.exec(endDate);
+  if (!start || !end || startDate > endDate) return null;
+
+  const startYear = Number(start[1]);
+  const startMonth = Number(start[2]);
+  const endYear = Number(end[1]);
+  const endMonth = Number(end[2]);
+  if (startMonth < 1 || startMonth > 12 || endMonth < 1 || endMonth > 12) return null;
+
+  const months: string[] = [];
+  let year = startYear;
+  let month = startMonth;
+  while (year < endYear || (year === endYear && month <= endMonth)) {
+    months.push(`${year}-${pad2(month)}`);
+    month += 1;
+    if (month > 12) {
+      month = 1;
+      year += 1;
+    }
+  }
+
+  // Day 0 of the following month is the last day of this one.
+  const lastDayOfEndMonth = new Date(Date.UTC(endYear, endMonth, 0)).getUTCDate();
+  const fillsMonths = Number(start[3]) === 1 && Number(end[3]) === lastDayOfEndMonth;
+  return { months, partial: !fillsMonths };
+}

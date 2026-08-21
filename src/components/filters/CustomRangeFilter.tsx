@@ -26,13 +26,15 @@ export function CustomRangeFilter({ className }: Readonly<CustomRangeFilterProps
   const [error, setError] = useState<string | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
+  // UTC, deliberately: `DateRangeContext` derives its own latest-available day
+  // with `setUTCDate`, `month-range.ts` formats every bound in UTC, and the API
+  // rejects end dates after UTC yesterday. A local-calendar cap would disagree
+  // with the requests this picker drives — capping a UTC+13 reader a day past
+  // what the API accepts, and a UTC-8 reader a day short of it.
   const maxDate = useMemo(() => {
     const yesterday = new Date();
-    yesterday.setDate(yesterday.getDate() - 1);
-    const year = yesterday.getFullYear();
-    const month = String(yesterday.getMonth() + 1).padStart(2, "0");
-    const day = String(yesterday.getDate()).padStart(2, "0");
-    return `${year}-${month}-${day}`;
+    yesterday.setUTCDate(yesterday.getUTCDate() - 1);
+    return yesterday.toISOString().slice(0, 10);
   }, []);
 
   const close = useCallback(() => {
