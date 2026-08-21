@@ -4,6 +4,7 @@ import {
   periodOf,
   monthBounds,
   isPartialMonth,
+  latestAvailableDate,
   monthDayCount,
   recentPeriods,
   periodLabel,
@@ -42,6 +43,18 @@ describe("periodOf", () => {
     // 23:30 UTC on the last day of July is still July regardless of the
     // machine's timezone; a local-time implementation could report August.
     expect(periodOf(new Date("2026-07-31T23:30:00Z"))).toBe("2026-07");
+  });
+});
+
+describe("latestAvailableDate", () => {
+  it("returns UTC yesterday as the latest day synced data can cover", () => {
+    expect(latestAvailableDate(new Date("2026-08-21T12:00:00Z"))).toBe("2026-08-20");
+  });
+
+  it("uses UTC rather than the runner timezone across day and month boundaries", () => {
+    expect(latestAvailableDate(new Date("2026-03-01T00:01:00Z"))).toBe("2026-02-28");
+    expect(latestAvailableDate(new Date("2024-03-01T00:01:00Z"))).toBe("2024-02-29");
+    expect(latestAvailableDate(new Date("2026-01-01T00:01:00Z"))).toBe("2025-12-31");
   });
 });
 

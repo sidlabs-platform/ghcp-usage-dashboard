@@ -44,6 +44,19 @@ export function periodOf(date: Date): string {
 }
 
 /**
+ * Latest day that synced Copilot data can cover.
+ *
+ * GitHub's daily usage reports lag by one calendar day, and the rest of the
+ * date layer treats that boundary as UTC. Sharing this helper keeps client URL
+ * parsing and picker validation aligned with the API's "UTC yesterday" cap.
+ */
+export function latestAvailableDate(now: Date = new Date()): string {
+  const latest = new Date(now.getTime());
+  latest.setUTCDate(latest.getUTCDate() - 1);
+  return toIsoDate(latest);
+}
+
+/**
  * Inclusive day bounds for a calendar month.
  *
  * The end is clamped to `now` so the *current* month reports only elapsed

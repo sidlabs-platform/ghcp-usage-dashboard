@@ -134,6 +134,42 @@ describe("filter components", () => {
     expect(screen.getByLabelText("End Date")).toHaveAttribute("max", "2026-08-20");
   });
 
+  it("refreshes the date input cap when a re-render happens after UTC midnight", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-21T23:59:00Z"));
+    mockCustomRangeFilter();
+
+    render(<CustomRangeFilter />);
+    fireEvent.click(screen.getByRole("button", { name: "Custom Range" }));
+    expect(screen.getByLabelText("Start Date")).toHaveAttribute("max", "2026-08-20");
+
+    vi.setSystemTime(new Date("2026-08-22T00:01:00Z"));
+    // Any state change re-renders. The bound is computed during render, so the
+    // inputs must now advertise the 21st rather than the cap frozen at mount.
+    fireEvent.change(screen.getByLabelText("End Date"), { target: { value: "2026-08-19" } });
+    expect(screen.getByLabelText("Start Date")).toHaveAttribute("max", "2026-08-21");
+  });
+
+  it("accepts the newly available UTC-yesterday date after midnight without remounting", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-21T23:59:00Z"));
+    const setCustomRange = mockCustomRangeFilter();
+
+    render(<CustomRangeFilter />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Custom Range" }));
+    fireEvent.change(screen.getByLabelText("Start Date"), { target: { value: "2026-08-21" } });
+    fireEvent.change(screen.getByLabelText("End Date"), { target: { value: "2026-08-21" } });
+
+    // Cross midnight with no further interaction, so nothing re-renders between
+    // here and the click. Validation has to read the clock itself.
+    vi.setSystemTime(new Date("2026-08-22T00:01:00Z"));
+    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+
+    expect(screen.queryByText("Dates cannot be later than yesterday.")).toBeNull();
+    expect(setCustomRange).toHaveBeenCalledWith("2026-08-21", "2026-08-21");
+  });
+
   it("renders and filters multi-enterprise scope selections", () => {
     const setSelectedEnterprises = vi.fn();
     const setSelectedEntTeams = vi.fn();

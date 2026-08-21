@@ -1,9 +1,10 @@
 "use client";
 
-import { useState, useMemo, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import { CalendarDays } from "lucide-react";
 import { useDateRange } from "@/contexts/DateRangeContext";
 import { MAX_DAYS, cn } from "@/lib/utils";
+import { latestAvailableDate } from "@/lib/date/month-range";
 
 interface CustomRangeFilterProps {
   className?: string;
@@ -31,11 +32,10 @@ export function CustomRangeFilter({ className }: Readonly<CustomRangeFilterProps
   // rejects end dates after UTC yesterday. A local-calendar cap would disagree
   // with the requests this picker drives — capping a UTC+13 reader a day past
   // what the API accepts, and a UTC-8 reader a day short of it.
-  const maxDate = useMemo(() => {
-    const yesterday = new Date();
-    yesterday.setUTCDate(yesterday.getUTCDate() - 1);
-    return yesterday.toISOString().slice(0, 10);
-  }, []);
+  //
+  // Deliberately not memoized: a dashboard left open across UTC midnight would
+  // otherwise keep rejecting the day that just became available.
+  const maxDate = latestAvailableDate();
 
   const close = useCallback(() => {
     setOpen(false);
@@ -78,7 +78,8 @@ export function CustomRangeFilter({ className }: Readonly<CustomRangeFilterProps
       setError("Start date must be before end date.");
       return;
     }
-    if (localStart > maxDate || localEnd > maxDate) {
+    const currentMaxDate = latestAvailableDate();
+    if (localStart > currentMaxDate || localEnd > currentMaxDate) {
       setError("Dates cannot be later than yesterday.");
       return;
     }
