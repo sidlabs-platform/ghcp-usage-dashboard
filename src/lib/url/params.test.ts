@@ -75,6 +75,20 @@ describe("parseDateRangeFromURL", () => {
     expect(parseDateRangeFromURL(sp({ from: "not-a-date", to: "2026-08-15" }))).toBeNull();
   });
 
+  it("rejects a deep-linked day that does not exist rather than rolling it forward", () => {
+    // Date.parse would turn these into March 1 and May 1 respectively, seeding
+    // state with a window the API then rejects.
+    expect(parseDateRangeFromURL(sp({ from: "2026-02-29", to: "2026-03-05" }))).toBeNull();
+    expect(parseDateRangeFromURL(sp({ from: "2026-04-01", to: "2026-04-31" }))).toBeNull();
+    expect(parseDateRangeFromURL(sp({ from: "2026-03-00", to: "2026-03-05" }))).toBeNull();
+  });
+
+  it("still accepts a real leap day", () => {
+    const result = parseDateRangeFromURL(sp({ from: "2024-02-29", to: "2024-03-05" }));
+    expect(result).not.toBeNull();
+    expect(result!.customStart).toBe("2024-02-29");
+  });
+
   it("custom takes precedence over range when both present", () => {
     const result = parseDateRangeFromURL(sp({ from: "2026-08-01", to: "2026-08-15", range: "28d" }));
     expect(result).not.toBeNull();

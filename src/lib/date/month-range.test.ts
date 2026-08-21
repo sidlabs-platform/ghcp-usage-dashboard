@@ -177,10 +177,23 @@ describe("monthsCoveringRange", () => {
     expect(monthsCoveringRange("2024-02-01", "2024-02-28")?.partial).toBe(true);
   });
 
+  it("accepts a real leap day without widening it to a different month", () => {
+    expect(monthsCoveringRange("2024-02-29", "2024-02-29")).toEqual({
+      months: ["2024-02"],
+      partial: true,
+    });
+  });
+
   it("returns null for malformed or inverted input", () => {
     expect(monthsCoveringRange("2026-03", "2026-03-20")).toBeNull();
     expect(monthsCoveringRange("nonsense", "2026-03-20")).toBeNull();
     expect(monthsCoveringRange("2026-03-20", "2026-03-15")).toBeNull();
     expect(monthsCoveringRange("2026-13-01", "2026-13-28")).toBeNull();
+  });
+
+  it("returns null for impossible calendar dates that still match YYYY-MM-DD", () => {
+    expect(monthsCoveringRange("2026-02-29", "2026-03-01")).toBeNull();
+    expect(monthsCoveringRange("2026-04-01", "2026-04-31")).toBeNull();
+    expect(monthsCoveringRange("2026-03-00", "2026-03-20")).toBeNull();
   });
 });
