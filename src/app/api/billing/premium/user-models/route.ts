@@ -26,7 +26,7 @@ async function handler(request: NextRequest) {
     if ("error" in window) {
       return NextResponse.json({ error: window.error }, { status: 400 });
     }
-    const { days, start, end } = window;
+    const { start, end } = window;
 
     // Parse scope filter (teams/orgs/enterprises) via the shared parser
     const scopeFilter = parseScopeFilter(params);

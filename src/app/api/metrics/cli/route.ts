@@ -19,7 +19,7 @@ export async function GET(request: Request) {
     if ("error" in window) {
       return NextResponse.json({ error: window.error }, { status: 400 });
     }
-    const { days, start, end } = window;
+    const { start, end } = window;
 
     const scopeFilter = parseScopeFilter(searchParams);
     const allowedLogins = scopeFilter.allowedLogins ? Array.from(scopeFilter.allowedLogins) : undefined;

@@ -16,7 +16,7 @@ export async function GET(request: NextRequest) {
     if ("error" in window) {
       return NextResponse.json({ error: window.error }, { status: 400 });
     }
-    const { days, start, end } = window;
+    const { start, end } = window;
     // Resolve scope: use query params, then enterprise config, then first org
     let scope = params.get("scope") || "";
     let scopeId = params.get("scopeId") || "";

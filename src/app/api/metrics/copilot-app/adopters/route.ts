@@ -16,7 +16,7 @@ async function handler(request: NextRequest) {
     if ("error" in window) {
       return NextResponse.json({ error: window.error }, { status: 400 });
     }
-    const { days, start, end } = window;
+    const { start, end } = window;
 
     const scope = parseScopeFilter(params);
     const allowedLogins = scope.allowedLogins ? Array.from(scope.allowedLogins) : undefined;
