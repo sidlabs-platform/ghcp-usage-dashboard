@@ -25,6 +25,7 @@ import type { NormalizedIdentityRecord as ImportedIdentityMapRecord } from "@/li
 import type { LicenseRunDiagnosticsInput, StartLicenseRunInput } from "./license-run-repo";
 import type {
   LicenseAicConsumptionInput,
+  LicenseAuditEventInput,
   PersistedLicenseAuditEvent,
   PersistedLicenseSeatSnapshot,
   PersistedLicenseIdentityRecord,
@@ -447,6 +448,47 @@ describe("license-history-sync-service", () => {
       // Configured imports (archive) happen before API audit consumption.
       expect(importOrder).toEqual(["archive", "audit_api"]);
       expect(deps.buildSeatLedger).toHaveBeenCalled();
+    });
+
+    it("records a truncated ok audit API result as an incomplete warning source while retaining fetched events", async () => {
+      const apiEvent: NormalizedCopilotAuditEvent = {
+        eventId: "api-partial-1",
+        orgLogin: "acme-org",
+        action: "assign",
+        occurredAt: "2025-01-06T00:00:00.000Z",
+        githubUserId: 1,
+        observedLogin: "alice",
+        externalIdentity: null,
+        team: null,
+        source: "audit_log",
+        raw: {} as never,
+      };
+      const capturedEvents: { eventId: string; source: string }[] = [];
+      const capturedSourceStates: { source: string; status: string; errorMessage?: string | null }[] = [];
+      const deps = makeDeps({
+        getEnterpriseAuditEvents: vi.fn(async (): Promise<AuditFetchResult> => ({
+          status: "ok",
+          events: [apiEvent],
+          truncated: true,
+          warnings: ["Copilot audit log pagination truncated after reaching the 200-page limit while more results were still available."],
+          droppedEventCount: 0,
+        })),
+        upsertAuditEvents: vi.fn((_enterpriseSlug: string, events: LicenseAuditEventInput[]) => {
+          capturedEvents.push(...events.map((e) => ({ eventId: e.eventId, source: e.source })));
+          return events.length;
+        }),
+        recordLicenseRunDiagnostics: vi.fn((input: LicenseRunDiagnosticsInput) => {
+          for (const s of input.sourceStates ?? []) capturedSourceStates.push({ source: s.source, status: s.status ?? "", errorMessage: s.errorMessage });
+        }),
+      });
+
+      const result = await syncLicenseHistoryForEnterprise("acme", deps);
+
+      expect(capturedEvents).toContainEqual({ eventId: "api-partial-1", source: "audit_log" });
+      expect(result.warnings.some((w) => /audit log pagination truncated/i.test(w))).toBe(true);
+      const auditState = capturedSourceStates.find((s) => s.source === "audit_api");
+      expect(auditState?.status).toBe("warning");
+      expect(auditState?.errorMessage).toMatch(/audit log pagination truncated/i);
     });
 
     it("archive event wins over an API event sharing the same (eventId, source key)", async () => {

@@ -128,7 +128,7 @@ Set these in `.env.local` at the project root.
 | `GITHUB_ENTERPRISE` | **Yes**\* | — | Your enterprise slug (as shown in `github.com/enterprises/<slug>`). \*Not required if you disable enterprise mode in `dashboard-config.json`. |
 | `GITHUB_ORGS` | No | — | Comma-separated list of organization slugs to track. If empty, the dashboard discovers orgs from the enterprise. |
 | `BACKFILL_DAYS` | No | `90` | Number of days to backfill on first sync (max: 365) |
-| `SEAT_AUDIT_LOOKBACK_DAYS` | No | `90` | How far back the *first* audit-log read reaches when reconstructing seat onboarding/offboarding. Later syncs are incremental from a stored watermark, so this only bounds the initial catch-up. |
+| `SEAT_AUDIT_LOOKBACK_DAYS` | No | `90` | How far back the *first* audit-log read reaches when reconstructing seat onboarding/offboarding. Later syncs are incremental from a stored watermark, so this only bounds the initial catch-up. Must be a positive whole number of days; any other value falls back to `90`. |
 | `GITHUB_API_BASE` | No | `https://api.github.com` | Base URL for the GitHub API. Set this for GHES installations (e.g., `https://github.example.com/api/v3`). |
 | `GITHUB_APP_ID` | No | — | GitHub App ID (numeric). Required for GitHub App authentication. |
 | `GITHUB_APP_PRIVATE_KEY` | No | — | GitHub App private key in PEM format. Use literal `\n` for newlines in env vars. |
@@ -392,7 +392,7 @@ Every row is labelled with the source it came from, and the page states the cove
 
 Audit-log events are fetched and stored during the normal sync, so the page loads from the local database with no live API call. Inside the window the audit log has actually covered, audit rows take precedence over snapshot-diff rows for the same period; outside it — before the audit log's retention/lookback, or after the last successful audit read — the snapshot-derived rows are still shown, and the page says so. If the token lacks `read:audit_log`, the page names that as the reason and falls back to snapshot diffing.
 
-Set `SEAT_AUDIT_LOOKBACK_DAYS` (default `90`) to change how far back a first audit sync reaches. Subsequent syncs are incremental from a stored watermark.
+Set `SEAT_AUDIT_LOOKBACK_DAYS` (default `90`) to change how far back a first audit sync reaches. It must be a positive whole number of days; a zero, negative, or non-numeric value would place the read cutoff in the future and silently skip events, so any such value is rejected and `90` is used instead. Subsequent syncs are incremental from a stored watermark.
 
 ### 🖥️ IDE & Languages
 

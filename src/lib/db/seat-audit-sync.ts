@@ -68,9 +68,27 @@ function sanitizeForLog(value: string): string {
   return value.replace(/\n|\r/g, "");
 }
 
+const DEFAULT_SEAT_AUDIT_LOOKBACK_DAYS = 90;
+
+function isPositiveFiniteInteger(value: number): boolean {
+  return Number.isFinite(value) && Number.isInteger(value) && value > 0;
+}
+
+/**
+ * Parse the configured first-run audit lookback.
+ *
+ * Negative or zero values can put the cutoff in the future and silently skip
+ * audit events, so invalid input deliberately falls back to the safe default.
+ */
+export function parseSeatAuditLookbackDays(value: string | undefined): number {
+  const parsed = Number(value);
+  return isPositiveFiniteInteger(parsed) ? parsed : DEFAULT_SEAT_AUDIT_LOOKBACK_DAYS;
+}
+
 /** How far back a first run reads the audit log. */
-export const SEAT_AUDIT_LOOKBACK_DAYS =
-  parseInt(process.env.SEAT_AUDIT_LOOKBACK_DAYS || "90", 10) || 90;
+export const SEAT_AUDIT_LOOKBACK_DAYS = parseSeatAuditLookbackDays(
+  process.env.SEAT_AUDIT_LOOKBACK_DAYS,
+);
 
 /**
  * Overlap re-read before the stored watermark on incremental runs. Audit log
@@ -174,7 +192,10 @@ export function resolveAuditCutoff(
   lookbackDays = SEAT_AUDIT_LOOKBACK_DAYS,
   previousRunTruncated = false,
 ): number {
-  const floor = now.getTime() - lookbackDays * MS_PER_DAY;
+  const effectiveLookbackDays = isPositiveFiniteInteger(lookbackDays)
+    ? lookbackDays
+    : SEAT_AUDIT_LOOKBACK_DAYS;
+  const floor = now.getTime() - effectiveLookbackDays * MS_PER_DAY;
   // A truncated newest-first read did not reach the oldest end of the requested
   // window. Retrying only from the watermark would permanently strand those
   // older pages, so the next run must keep reaching back to the lookback floor.

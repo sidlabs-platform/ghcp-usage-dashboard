@@ -183,7 +183,7 @@ export interface CopilotAuditFetchOptions {
   enterpriseSlug?: string;
   /** Per-page request timeout in milliseconds. Default: COPILOT_AUDIT_REQUEST_TIMEOUT_MS. */
   requestTimeoutMs?: number;
-  /** Overall wall-clock deadline for one paginated target. Default: COPILOT_AUDIT_TARGET_DEADLINE_MS. */
+  /** Optional overall wall-clock deadline for one paginated target. Undefined means unbounded. */
   targetDeadlineMs?: number;
 }
 
@@ -310,13 +310,15 @@ async function fetchAuditEvents(
     perPage = 100,
     enterpriseSlug,
     requestTimeoutMs = COPILOT_AUDIT_REQUEST_TIMEOUT_MS,
-    targetDeadlineMs = COPILOT_AUDIT_TARGET_DEADLINE_MS,
+    targetDeadlineMs,
   } = options;
   if (!Number.isInteger(maxPages) || maxPages < 1) {
     throw new Error(`copilotAuditClient: maxPages must be an integer >= 1 (received ${maxPages}).`);
   }
   const pageTimeoutMs = requirePositiveIntegerOption("requestTimeoutMs", requestTimeoutMs);
-  const runDeadlineMs = requirePositiveIntegerOption("targetDeadlineMs", targetDeadlineMs);
+  const runDeadlineMs = targetDeadlineMs === undefined
+    ? null
+    : requirePositiveIntegerOption("targetDeadlineMs", targetDeadlineMs);
 
   const separator = basePath.includes("?") ? "&" : "?";
   // `phrase=action:copilot` is GitHub's audit-log search syntax for
@@ -333,25 +335,26 @@ async function fetchAuditEvents(
   const markDeadlineTruncated = () => {
     if (truncated) return;
     truncated = true;
+    const deadlineDescription = runDeadlineMs === null ? "configured" : `${runDeadlineMs}ms`;
     warnings.push(
-      `Copilot audit log pagination truncated after reaching the ${runDeadlineMs}ms target deadline while more results may still be available.`,
+      `Copilot audit log pagination truncated after reaching the ${deadlineDescription} target deadline while more results may still be available.`,
     );
   };
 
   try {
     for (let page = 0; page < maxPages && url; page++) {
-      const remainingRunMs = runDeadlineMs - (Date.now() - startedAt);
-      if (remainingRunMs <= 0) {
+      const remainingRunMs = runDeadlineMs === null ? null : runDeadlineMs - (Date.now() - startedAt);
+      if (remainingRunMs !== null && remainingRunMs <= 0) {
         markDeadlineTruncated();
         url = null;
         break;
       }
-      const timeoutForPageMs = Math.min(pageTimeoutMs, remainingRunMs);
+      const timeoutForPageMs = remainingRunMs === null ? pageTimeoutMs : Math.min(pageTimeoutMs, remainingRunMs);
       const requestPath = url;
 
       const result = await withAuditRequestTimeout(
         timeoutForPageMs,
-        timeoutForPageMs < pageTimeoutMs ? "target_deadline" : "request_timeout",
+        remainingRunMs !== null && timeoutForPageMs < pageTimeoutMs ? "target_deadline" : "request_timeout",
         (signal) => githubFetchWithMeta<RawCopilotAuditEvent[]>(requestPath, { enterpriseSlug, signal }),
       );
       const events = Array.isArray(result.data) ? result.data : [];
@@ -404,7 +407,7 @@ async function fetchAuditEvents(
         break;
       }
 
-      if (nextUrl && Date.now() - startedAt >= runDeadlineMs) {
+      if (nextUrl && runDeadlineMs !== null && Date.now() - startedAt >= runDeadlineMs) {
         markDeadlineTruncated();
         url = null;
         break;

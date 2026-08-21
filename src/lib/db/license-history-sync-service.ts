@@ -1305,7 +1305,18 @@ export async function syncLicenseHistoryForEnterprise(
           });
         }
         warnings.push(...auditApiResult.warnings);
-        sourceStates.push({ enterpriseSlug, source: "audit_api", lastSyncedAt: now.toISOString(), status: "ok" });
+        const truncationMessage = auditApiResult.truncated
+          ? auditApiResult.warnings.find((warning) => /truncat/i.test(warning))
+            ?? "Audit API fetch returned a truncated result; the audit_api source is incomplete."
+          : null;
+        if (truncationMessage !== null && !warnings.includes(truncationMessage)) warnings.push(truncationMessage);
+        sourceStates.push({
+          enterpriseSlug,
+          source: "audit_api",
+          lastSyncedAt: now.toISOString(),
+          status: truncationMessage === null ? "ok" : "warning",
+          ...(truncationMessage === null ? {} : { errorMessage: truncationMessage }),
+        });
       } else {
         const message = auditApiResult.status === "unavailable" ? `Audit log unavailable: ${auditApiResult.reason}` : auditApiResult.message;
         warnings.push(message);

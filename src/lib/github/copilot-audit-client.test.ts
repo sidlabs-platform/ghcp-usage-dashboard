@@ -388,6 +388,32 @@ describe("CopilotAuditClient", () => {
       }
     });
 
+    it("does not apply the target deadline unless targetDeadlineMs is supplied", async () => {
+      const dateNowSpy = vi.spyOn(Date, "now")
+        .mockReturnValueOnce(1_000)
+        .mockReturnValueOnce(1_000)
+        .mockReturnValueOnce(121_001);
+      mockFetchWithMeta
+        .mockResolvedValueOnce(
+          page(
+            [{ action: "cfb_seat_added", user: "a", user_id: 1, "@timestamp": 1, _document_id: "a" }],
+            "https://api.github.com/orgs/acme/audit-log?after=c1",
+          ),
+        )
+        .mockResolvedValueOnce(page([{ action: "cfb_seat_added", user: "b", user_id: 2, "@timestamp": 2, _document_id: "b" }]));
+
+      try {
+        const result = await client.getOrgAuditEvents("acme", { requestTimeoutMs: 100 });
+        expectOk(result);
+        expect(result.events.map((e) => e.eventId)).toEqual(["a", "b"]);
+        expect(result.truncated).toBe(false);
+        expect(result.warnings).toEqual([]);
+        expect(mockFetchWithMeta).toHaveBeenCalledTimes(2);
+      } finally {
+        dateNowSpy.mockRestore();
+      }
+    });
+
     it("surfaces target deadline truncation when the deadline expires during a page request", async () => {
       mockFetchWithMeta.mockReturnValueOnce(new Promise(() => {}));
       const result = await client.getOrgAuditEvents("acme", { targetDeadlineMs: 1, requestTimeoutMs: 100 });

@@ -45,6 +45,7 @@ import {
   syncSeatAuditEventsForEnterprise,
   syncSeatAuditEventsSafely,
   resolveAuditCutoff,
+  parseSeatAuditLookbackDays,
   toLifecycleEvents,
   SEAT_AUDIT_ENTERPRISE_BUDGET_MS,
   SEAT_AUDIT_MIN_REQUEST_SLICE_MS,
@@ -99,6 +100,23 @@ beforeEach(() => {
   enrichAuditLifecycleFromSeats.mockReturnValue(0);
 });
 
+describe("parseSeatAuditLookbackDays", () => {
+  it.each([
+    ["-5"],
+    ["0"],
+    ["abc"],
+    [""],
+    ["45.9"],
+    [undefined],
+  ])("falls back to 90 for invalid configured lookback %s", (value) => {
+    expect(parseSeatAuditLookbackDays(value)).toBe(90);
+  });
+
+  it("accepts a positive integer configured lookback", () => {
+    expect(parseSeatAuditLookbackDays("45")).toBe(45);
+  });
+});
+
 describe("resolveAuditCutoff", () => {
   it("reaches back the full lookback on a first run", () => {
     const cutoff = resolveAuditCutoff(null, NOW);
@@ -123,6 +141,11 @@ describe("resolveAuditCutoff", () => {
 
   it("retries the full lookback after a truncated run left older pages unread", () => {
     const cutoff = resolveAuditCutoff("2026-06-29T00:00:00.000Z", NOW, SEAT_AUDIT_LOOKBACK_DAYS, true);
+    expect(cutoff).toBe(NOW.getTime() - SEAT_AUDIT_LOOKBACK_DAYS * 24 * 60 * 60 * 1000);
+  });
+
+  it("falls back to the default lookback when a caller passes an invalid override", () => {
+    const cutoff = resolveAuditCutoff(null, NOW, -5);
     expect(cutoff).toBe(NOW.getTime() - SEAT_AUDIT_LOOKBACK_DAYS * 24 * 60 * 60 * 1000);
   });
 });
