@@ -1305,17 +1305,28 @@ export async function syncLicenseHistoryForEnterprise(
           });
         }
         warnings.push(...auditApiResult.warnings);
-        const truncationMessage = auditApiResult.truncated
-          ? auditApiResult.warnings.find((warning) => /truncat/i.test(warning))
-            ?? "Audit API fetch returned a truncated result; the audit_api source is incomplete."
-          : null;
-        if (truncationMessage !== null && !warnings.includes(truncationMessage)) warnings.push(truncationMessage);
+        const incompleteMessages: string[] = [];
+        if (auditApiResult.truncated) {
+          incompleteMessages.push(
+            auditApiResult.warnings.find((warning) => /truncat/i.test(warning))
+              ?? "Audit API fetch returned a truncated result; the audit_api source is incomplete.",
+          );
+        }
+        if (auditApiResult.droppedEventCount > 0) {
+          incompleteMessages.push(
+            `Audit API fetch dropped ${auditApiResult.droppedEventCount} seat event(s) with no parseable timestamp; the audit_api source is incomplete.`,
+          );
+        }
+        for (const message of incompleteMessages) {
+          if (!warnings.includes(message)) warnings.push(message);
+        }
+        const incompleteMessage = incompleteMessages.length === 0 ? null : incompleteMessages.join(" ");
         sourceStates.push({
           enterpriseSlug,
           source: "audit_api",
           lastSyncedAt: now.toISOString(),
-          status: truncationMessage === null ? "ok" : "warning",
-          ...(truncationMessage === null ? {} : { errorMessage: truncationMessage }),
+          status: incompleteMessage === null ? "ok" : "warning",
+          ...(incompleteMessage === null ? {} : { errorMessage: incompleteMessage }),
         });
       } else {
         const message = auditApiResult.status === "unavailable" ? `Audit log unavailable: ${auditApiResult.reason}` : auditApiResult.message;
