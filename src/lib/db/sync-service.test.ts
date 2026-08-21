@@ -60,6 +60,20 @@ vi.mock("./seat-lifecycle-repo", async () => {
     markSeatLifecycleTrackingStarted: vi.fn(),
   };
 });
+vi.mock("./seat-audit-sync", () => ({
+  syncSeatAuditEventsSafely: vi.fn(async (slug: string) => ({
+    enterpriseSlug: slug,
+    status: "ok" as const,
+    reason: null,
+    target: "enterprise" as const,
+    eventsWritten: 0,
+    coveredFrom: null,
+    coveredThrough: null,
+    lastEventAt: null,
+    truncated: false,
+    warnings: [],
+  })),
+}));
 vi.mock("./summary-tables", () => ({ refreshAllSummaries: vi.fn() }));
 vi.mock("@/lib/cache/memory-cache", () => ({ cache: { invalidateByPrefix: vi.fn(), invalidateAll: vi.fn() } }));
 vi.mock("./teams-repo", () => ({ upsertAllTeams: vi.fn() }));
@@ -129,6 +143,7 @@ import {
   projectAuditEventsToLifecycle,
   markSeatLifecycleTrackingStarted,
 } from "./seat-lifecycle-repo";
+import { syncSeatAuditEventsSafely } from "./seat-audit-sync";
 import { batchUpsertUserTeams } from "./user-teams-repo";
 import { datesBetween } from "@/lib/utils";
 import { syncLicenseHistoryForEnterprise, captureCurrentLicenseSeatSnapshot, createDefaultLicenseHistorySyncDeps } from "./license-history-sync-service";
@@ -275,6 +290,11 @@ describe("sync-service", () => {
       (backfillOnboardingFromSeats as ReturnType<typeof vi.fn>).mockImplementation(() => 0);
       (projectAuditEventsToLifecycle as ReturnType<typeof vi.fn>).mockImplementation(() => 0);
       (markSeatLifecycleTrackingStarted as ReturnType<typeof vi.fn>).mockImplementation(() => {});
+      (syncSeatAuditEventsSafely as ReturnType<typeof vi.fn>).mockImplementation(async () => ({
+        status: "ok",
+        eventsWritten: 0,
+        warnings: [],
+      }));
     };
 
     beforeEach(resetLifecycleMocks);
@@ -327,6 +347,32 @@ describe("sync-service", () => {
       expect(backfillOnboardingFromSeats).toHaveBeenCalledWith("test-ent");
       expect(projectAuditEventsToLifecycle).toHaveBeenCalledWith("test-ent");
       expect(markSeatLifecycleTrackingStarted).toHaveBeenCalledWith("test-ent");
+    });
+
+    it("pulls the audit log for seat offboarding on every seat sync", async () => {
+      await syncSeats();
+
+      // Audit-log offboarding is a first-class part of seat sync, not something
+      // gated behind the optional licensing-history feature flag.
+      expect(syncSeatAuditEventsSafely).toHaveBeenCalledWith("test-ent");
+    });
+
+    it("reads the audit log only after the seat snapshot is in place", async () => {
+      const order: string[] = [];
+      (replaceEnterpriseSeats as ReturnType<typeof vi.fn>).mockImplementation(() => {
+        order.push("replace");
+        return 1;
+      });
+      (syncSeatAuditEventsSafely as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+        order.push("audit");
+        return { status: "ok", eventsWritten: 0, warnings: [] };
+      });
+
+      await syncSeats();
+
+      // Audit rows are enriched from the current seat table, so the snapshot
+      // has to be current first.
+      expect(order).toEqual(["replace", "audit"]);
     });
 
     it("never fails seat sync when the ledger update throws", async () => {

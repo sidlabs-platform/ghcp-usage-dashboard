@@ -321,8 +321,311 @@ describe("Seat onboarding & offboarding page", () => {
     );
 
     await waitFor(() =>
-      expect(screen.getByText(/sourced from the enterprise audit log/i)).toBeInTheDocument(),
+      expect(screen.getByText(/sourced from the GitHub audit log/i)).toBeInTheDocument(),
     );
+  });
+
+  it("states the window the audit log actually covers", async () => {
+    await renderPage(
+      emptyPayload({
+        coverage: {
+          source: "audit_log",
+          trackingStartedAt: null,
+          onboardingOnly: false,
+          sourceBreakdown: { audit_log: 4, sync_diff: 0, seat_created_at: 2 },
+          audit: {
+            status: "ok",
+            reason: null,
+            coveredFrom: "2025-03-01T00:00:00.000Z",
+            coveredThrough: "2025-06-08T00:00:00.000Z",
+            lastSyncedAt: "2025-06-08T06:00:00.000Z",
+            truncated: false,
+          },
+        },
+      }),
+    );
+
+    await waitFor(() =>
+      expect(screen.getByText(/sourced from the GitHub audit log/i)).toBeInTheDocument(),
+    );
+    expect(screen.getByText("2025-03-01")).toBeInTheDocument();
+    expect(screen.getByText("2025-06-08")).toBeInTheDocument();
+  });
+
+  it("renders an audit warning carried on an otherwise successful audit sync", async () => {
+    await renderPage(
+      emptyPayload({
+        coverage: {
+          source: "audit_log",
+          trackingStartedAt: null,
+          onboardingOnly: false,
+          sourceBreakdown: { audit_log: 4, sync_diff: 0, seat_created_at: 2 },
+          audit: {
+            status: "ok",
+            reason: "Audit log unavailable for 1 organization(s).",
+            coveredFrom: "2025-03-01T00:00:00.000Z",
+            coveredThrough: "2025-06-08T00:00:00.000Z",
+            lastSyncedAt: "2025-06-08T06:00:00.000Z",
+            truncated: false,
+          },
+        },
+      }),
+    );
+
+    await waitFor(() =>
+      expect(screen.getByText(/sourced from the GitHub audit log/i)).toBeInTheDocument(),
+    );
+    expect(screen.getByText(/Audit log unavailable for 1 organization\(s\)\./)).toBeInTheDocument();
+  });
+
+  it("renders an audit warning from a successful sync with no usable audit rows", async () => {
+    await renderPage(
+      emptyPayload({
+        coverage: {
+          source: "sync_diff",
+          trackingStartedAt: "2025-05-01T00:00:00Z",
+          onboardingOnly: false,
+          sourceBreakdown: { audit_log: 0, sync_diff: 3, seat_created_at: 2 },
+          audit: {
+            status: "ok",
+            reason: "Skipped 2 audit event(s) without a parseable actor.",
+            coveredFrom: "2025-03-01T00:00:00.000Z",
+            coveredThrough: "2025-06-08T00:00:00.000Z",
+            lastSyncedAt: "2025-06-08T06:00:00.000Z",
+            truncated: false,
+          },
+        },
+      }),
+    );
+
+    await waitFor(() =>
+      expect(screen.getByText(/did not produce usable audit-log events/i)).toBeInTheDocument(),
+    );
+    expect(screen.getByText(/Skipped 2 audit event\(s\) without a parseable actor\./)).toBeInTheDocument();
+    expect(screen.queryByText(/sourced from the GitHub audit log/i)).not.toBeInTheDocument();
+    expect(screen.getAllByText(/derived from seat-sync snapshots/i).length).toBeGreaterThan(0);
+  });
+
+  it("renders a standalone truncation warning when a successful sync has no usable audit rows", async () => {
+    await renderPage(
+      emptyPayload({
+        coverage: {
+          source: "sync_diff",
+          trackingStartedAt: "2025-05-01T00:00:00Z",
+          onboardingOnly: false,
+          sourceBreakdown: { audit_log: 0, sync_diff: 3, seat_created_at: 2 },
+          audit: {
+            status: "ok",
+            reason:
+              "Copilot audit log pagination truncated after reaching the 100-page limit while more results were still available.",
+            coveredFrom: "2025-03-01T00:00:00.000Z",
+            coveredThrough: "2025-06-08T00:00:00.000Z",
+            lastSyncedAt: "2025-06-08T06:00:00.000Z",
+            truncated: true,
+          },
+        },
+      }),
+    );
+
+    await waitFor(() =>
+      expect(screen.getByText(/more pages than a single sync reads/i)).toBeInTheDocument(),
+    );
+    expect(screen.getByText(/did not produce usable audit-log events/i)).toBeInTheDocument();
+    expect(screen.queryByText(/pagination truncated after reaching/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/sourced from the GitHub audit log/i)).not.toBeInTheDocument();
+  });
+
+  it("does not render an audit warning for a clean successful sync with no audit rows", async () => {
+    await renderPage(
+      emptyPayload({
+        coverage: {
+          source: "sync_diff",
+          trackingStartedAt: "2025-05-01T00:00:00Z",
+          onboardingOnly: false,
+          sourceBreakdown: { audit_log: 0, sync_diff: 3, seat_created_at: 2 },
+          audit: {
+            status: "ok",
+            reason: null,
+            coveredFrom: "2025-03-01T00:00:00.000Z",
+            coveredThrough: "2025-06-08T00:00:00.000Z",
+            lastSyncedAt: "2025-06-08T06:00:00.000Z",
+            truncated: false,
+          },
+        },
+      }),
+    );
+
+    await waitFor(() =>
+      expect(screen.getByText(/derived from seat-sync snapshots/i)).toBeInTheDocument(),
+    );
+    expect(screen.queryByText(/did not produce usable audit-log events/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/more pages than a single sync reads/i)).not.toBeInTheDocument();
+  });
+
+  it("does not duplicate an audit warning when usable audit rows exist", async () => {
+    await renderPage(
+      emptyPayload({
+        coverage: {
+          source: "audit_log",
+          trackingStartedAt: null,
+          onboardingOnly: false,
+          sourceBreakdown: { audit_log: 4, sync_diff: 0, seat_created_at: 2 },
+          audit: {
+            status: "ok",
+            reason: "Audit log unavailable for 1 organization(s).",
+            coveredFrom: "2025-03-01T00:00:00.000Z",
+            coveredThrough: "2025-06-08T00:00:00.000Z",
+            lastSyncedAt: "2025-06-08T06:00:00.000Z",
+            truncated: false,
+          },
+        },
+      }),
+    );
+
+    await waitFor(() =>
+      expect(screen.getByText(/sourced from the GitHub audit log/i)).toBeInTheDocument(),
+    );
+    expect(screen.getAllByText(/Audit log unavailable for 1 organization\(s\)\./)).toHaveLength(1);
+    expect(screen.queryByText(/did not produce usable audit-log events/i)).not.toBeInTheDocument();
+  });
+
+  it("explains an incomplete audit run instead of claiming tracking has not started", async () => {
+    await renderPage(
+      emptyPayload({
+        coverage: {
+          source: "none",
+          trackingStartedAt: null,
+          onboardingOnly: false,
+          sourceBreakdown: { audit_log: 0, sync_diff: 0, seat_created_at: 2 },
+          audit: {
+            status: "ok",
+            reason:
+              "Copilot audit log pagination truncated after reaching the target deadline while more results were still available.",
+            coveredFrom: null,
+            coveredThrough: null,
+            lastSyncedAt: "2025-06-08T06:00:00.000Z",
+            truncated: true,
+          },
+        },
+      }),
+    );
+
+    await waitFor(() =>
+      expect(screen.getByText(/did not produce usable audit-log events/i)).toBeInTheDocument(),
+    );
+    expect(
+      screen.queryByRole("heading", { name: /Offboarding tracking has not started yet/i }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByText(/more pages than a single sync reads/i)).toBeInTheDocument();
+    expect(screen.getByText(/no offboarding events are shown for this window/i)).toBeInTheDocument();
+    expect(screen.queryByText(/derived from seat-sync snapshots/i)).not.toBeInTheDocument();
+  });
+
+  it("distinguishes snapshot-derived offboarding outside the audit window", async () => {
+    await renderPage(
+      emptyPayload({
+        coverage: {
+          source: "audit_log",
+          trackingStartedAt: "2025-01-15T00:00:00Z",
+          onboardingOnly: false,
+          sourceBreakdown: { audit_log: 4, sync_diff: 3, seat_created_at: 2 },
+          audit: {
+            status: "ok",
+            reason: null,
+            coveredFrom: "2025-03-01T00:00:00.000Z",
+            coveredThrough: "2025-06-08T00:00:00.000Z",
+            lastSyncedAt: "2025-06-08T06:00:00.000Z",
+            truncated: false,
+          },
+        },
+      }),
+    );
+
+    await waitFor(() =>
+      expect(screen.getByText(/Outside that window, offboarding/i)).toBeInTheDocument(),
+    );
+    expect(screen.getByText(/derived from seat-sync snapshots/i)).toBeInTheDocument();
+    expect(screen.getByText("2025-01-15")).toBeInTheDocument();
+  });
+
+  it("says so, with the reason, when the audit log is unavailable", async () => {
+    await renderPage(
+      emptyPayload({
+        coverage: {
+          source: "sync_diff",
+          trackingStartedAt: "2025-05-01T00:00:00Z",
+          onboardingOnly: false,
+          sourceBreakdown: { audit_log: 0, sync_diff: 3, seat_created_at: 2 },
+          audit: {
+            status: "unavailable",
+            reason: "The configured token is missing the read:audit_log scope.",
+            coveredFrom: null,
+            coveredThrough: null,
+            lastSyncedAt: "2025-06-08T06:00:00.000Z",
+            truncated: false,
+          },
+        },
+      }),
+    );
+
+    await waitFor(() =>
+      expect(screen.getByText(/The audit log is not available/i)).toBeInTheDocument(),
+    );
+    expect(screen.getByText(/read:audit_log scope/i)).toBeInTheDocument();
+    // The snapshot fallback must still be named as the source in use.
+    expect(screen.getByText(/derived from seat-sync snapshots/i)).toBeInTheDocument();
+  });
+
+  it("warns when the last audit sync failed", async () => {
+    await renderPage(
+      emptyPayload({
+        coverage: {
+          source: "sync_diff",
+          trackingStartedAt: "2025-05-01T00:00:00Z",
+          onboardingOnly: false,
+          sourceBreakdown: { audit_log: 0, sync_diff: 3, seat_created_at: 0 },
+          audit: {
+            status: "error",
+            reason: "GitHub API error 502 fetching Copilot audit log events.",
+            coveredFrom: null,
+            coveredThrough: null,
+            lastSyncedAt: "2025-06-08T06:00:00.000Z",
+            truncated: false,
+          },
+        },
+      }),
+    );
+
+    await waitFor(() =>
+      expect(screen.getByText(/last audit log sync did not complete/i)).toBeInTheDocument(),
+    );
+  });
+
+  it("flags a truncated audit fetch as still filling in", async () => {
+    await renderPage(
+      emptyPayload({
+        coverage: {
+          source: "audit_log",
+          trackingStartedAt: null,
+          onboardingOnly: false,
+          sourceBreakdown: { audit_log: 9, sync_diff: 0, seat_created_at: 0 },
+          audit: {
+            status: "ok",
+            reason:
+              "Copilot audit log pagination truncated after reaching the 100-page limit while more results were still available.",
+            coveredFrom: "2025-05-01T00:00:00.000Z",
+            coveredThrough: "2025-06-08T00:00:00.000Z",
+            lastSyncedAt: "2025-06-08T06:00:00.000Z",
+            truncated: true,
+          },
+        },
+      }),
+    );
+
+    await waitFor(() =>
+      expect(screen.getByText(/more pages than a single sync reads/i)).toBeInTheDocument(),
+    );
+    expect(screen.queryByText(/pagination truncated after reaching/i)).not.toBeInTheDocument();
   });
 
   it("requests the preset window selected in the shared date range", async () => {

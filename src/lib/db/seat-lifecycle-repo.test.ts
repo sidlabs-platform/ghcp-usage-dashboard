@@ -57,6 +57,10 @@ import {
   recordSeatLifecycleEvents,
   backfillOnboardingFromSeats,
   projectAuditEventsToLifecycle,
+  enrichAuditLifecycleFromSeats,
+  recordSeatAuditSyncState,
+  getSeatAuditSyncStates,
+  getSeatAuditWatermark,
   diffSeatSnapshot,
   getSeatSnapshotForDiff,
   markSeatLifecycleTrackingStarted,
@@ -192,6 +196,7 @@ beforeEach(() => {
   db.exec("DELETE FROM copilot_seats");
   db.exec("DELETE FROM copilot_seat_lifecycle_events");
   db.exec("DELETE FROM copilot_seat_lifecycle_coverage");
+  db.exec("DELETE FROM copilot_seat_audit_sync_state");
   db.exec("DELETE FROM license_audit_events");
   db.exec("DELETE FROM license_identity_records");
   db.exec("DELETE FROM license_period_rows");
@@ -428,6 +433,27 @@ describe("projectAuditEventsToLifecycle", () => {
     projectAuditEventsToLifecycle("ent1");
     expect(getSeatLifecycleStats({ ...WINDOW }).onboardedEvents).toBe(0);
   });
+
+  it("does not erase enriched seat metadata once the seat is gone", () => {
+    // This writer shares its primary key with the always-on audit sync, and its
+    // seat LEFT JOIN goes NULL the moment an offboarded user leaves the
+    // snapshot. A destructive replace here would undo the enrichment on every
+    // later sync, permanently losing the plan and team of every departed user.
+    insertSeat({ user_login: "leaver", plan_type: "enterprise", assigning_team_slug: "platform" });
+    insertAuditEvent({
+      event_id: "gone1", action: "cancel", observed_login: "leaver",
+      occurred_at: "2026-06-12T00:00:00Z",
+    });
+    projectAuditEventsToLifecycle("ent1");
+
+    db.exec("DELETE FROM copilot_seats WHERE user_login = 'leaver'");
+    projectAuditEventsToLifecycle("ent1");
+
+    const row = getSeatLifecycleRows({ ...WINDOW }, "offboarded", PAGE).rows
+      .find((r) => r.user_login === "leaver");
+    expect(row?.plan_type).toBe("enterprise");
+    expect(row?.assigning_team_slug).toBe("platform");
+  });
 });
 
 describe("source precedence", () => {
@@ -503,6 +529,405 @@ describe("source precedence", () => {
     const logins = getSeatLifecycleRows({ ...WINDOW }, "offboarded", PAGE).rows
       .map((r) => r.user_login).sort();
     expect(logins).toEqual(["ent1-user", "ent2-user"]);
+  });
+});
+
+function auditState(overrides: Partial<Parameters<typeof recordSeatAuditSyncState>[0]> = {}) {
+  return {
+    enterpriseSlug: "ent1",
+    status: "ok" as const,
+    reason: null,
+    target: "enterprise" as const,
+    coveredFrom: "2026-06-10T00:00:00.000Z",
+    coveredThrough: "2026-06-25T00:00:00.000Z",
+    lastEventAt: "2026-06-24T00:00:00.000Z",
+    lastSyncedAt: "2026-06-25T00:00:00.000Z",
+    eventsWritten: 2,
+    truncated: false,
+    ...overrides,
+  };
+}
+
+describe("recordSeatAuditSyncState", () => {
+  it("stores and reads back a run", () => {
+    recordSeatAuditSyncState(auditState());
+    expect(getSeatAuditSyncStates(["ent1"])).toEqual([auditState()]);
+  });
+
+  it("widens coverage in both directions across runs", () => {
+    recordSeatAuditSyncState(auditState());
+    recordSeatAuditSyncState(auditState({
+      coveredFrom: "2026-05-01T00:00:00.000Z",
+      coveredThrough: "2026-06-20T00:00:00.000Z",
+    }));
+    recordSeatAuditSyncState(auditState({
+      coveredFrom: "2026-06-15T00:00:00.000Z",
+      coveredThrough: "2026-06-28T00:00:00.000Z",
+    }));
+
+    const [state] = getSeatAuditSyncStates(["ent1"]);
+    expect(state.coveredFrom).toBe("2026-05-01T00:00:00.000Z");
+    expect(state.coveredThrough).toBe("2026-06-28T00:00:00.000Z");
+  });
+
+  it("does not let a failed run shrink an earlier successful run's coverage", () => {
+    recordSeatAuditSyncState(auditState());
+    recordSeatAuditSyncState(auditState({
+      status: "error",
+      reason: "GitHub API error 502",
+      coveredFrom: null,
+      coveredThrough: null,
+      lastEventAt: null,
+      eventsWritten: 0,
+    }));
+
+    const [state] = getSeatAuditSyncStates(["ent1"]);
+    expect(state.status).toBe("error");
+    expect(state.reason).toBe("GitHub API error 502");
+    expect(state.coveredFrom).toBe("2026-06-10T00:00:00.000Z");
+    expect(state.coveredThrough).toBe("2026-06-25T00:00:00.000Z");
+  });
+
+  it("does not let a failed run clear an earlier truncated retry marker", () => {
+    recordSeatAuditSyncState(auditState({ truncated: true }));
+    recordSeatAuditSyncState(auditState({
+      status: "error",
+      reason: "GitHub API error 502",
+      coveredFrom: null,
+      coveredThrough: null,
+      lastEventAt: null,
+      eventsWritten: 0,
+      truncated: false,
+    }));
+
+    const [state] = getSeatAuditSyncStates(["ent1"]);
+    expect(state.truncated).toBe(true);
+  });
+
+  it("clears coverage atomically when requested by a partial org run", () => {
+    recordSeatAuditSyncState(auditState({
+      coveredFrom: "2026-05-01T00:00:00.000Z",
+      coveredThrough: "2026-06-30T00:00:00.000Z",
+    }));
+
+    recordSeatAuditSyncState(auditState({
+      reason: "Audit log unavailable for 1 organization(s).",
+      target: "org",
+      coveredFrom: null,
+      coveredThrough: null,
+      eventsWritten: 1,
+      clearCoverage: true,
+    }));
+
+    const [state] = getSeatAuditSyncStates(["ent1"]);
+    expect(state.status).toBe("ok");
+    expect(state.reason).toBe("Audit log unavailable for 1 organization(s).");
+    expect(state.target).toBe("org");
+    expect(state.coveredFrom).toBeNull();
+    expect(state.coveredThrough).toBeNull();
+    expect(state.eventsWritten).toBe(1);
+  });
+
+  it("keeps default monotonic widening and retry-marker preservation when clearCoverage is false", () => {
+    recordSeatAuditSyncState(auditState({
+      coveredFrom: "2026-06-10T00:00:00.000Z",
+      coveredThrough: "2026-06-25T00:00:00.000Z",
+      truncated: true,
+    }));
+
+    recordSeatAuditSyncState(auditState({
+      status: "error",
+      reason: "GitHub API error 502",
+      target: "org",
+      coveredFrom: null,
+      coveredThrough: null,
+      lastEventAt: null,
+      eventsWritten: 0,
+      truncated: false,
+      clearCoverage: false,
+    }));
+
+    const [state] = getSeatAuditSyncStates(["ent1"]);
+    expect(state.status).toBe("error");
+    expect(state.reason).toBe("GitHub API error 502");
+    expect(state.target).toBe("org");
+    expect(state.coveredFrom).toBe("2026-06-10T00:00:00.000Z");
+    expect(state.coveredThrough).toBe("2026-06-25T00:00:00.000Z");
+    expect(state.truncated).toBe(true);
+  });
+
+  it("rolls back the state update when clearing coverage fails", () => {
+    recordSeatAuditSyncState(auditState({
+      status: "ok",
+      reason: null,
+      target: "enterprise",
+      coveredFrom: "2026-05-01T00:00:00.000Z",
+      coveredThrough: "2026-06-30T00:00:00.000Z",
+      eventsWritten: 5,
+      truncated: true,
+    }));
+    db.exec(`
+      CREATE TRIGGER fail_clear_audit_coverage
+      BEFORE UPDATE OF covered_from, covered_through ON copilot_seat_audit_sync_state
+      WHEN NEW.covered_from IS NULL AND NEW.covered_through IS NULL
+      BEGIN
+        SELECT RAISE(ABORT, 'forced coverage clear failure');
+      END
+    `);
+
+    try {
+      expect(() => recordSeatAuditSyncState(auditState({
+        reason: "Audit log unavailable for 1 organization(s).",
+        target: "org",
+        coveredFrom: null,
+        coveredThrough: null,
+        eventsWritten: 1,
+        truncated: false,
+        clearCoverage: true,
+      }))).toThrow("forced coverage clear failure");
+
+      expect(getSeatAuditSyncStates(["ent1"])).toEqual([auditState({
+        status: "ok",
+        reason: null,
+        target: "enterprise",
+        coveredFrom: "2026-05-01T00:00:00.000Z",
+        coveredThrough: "2026-06-30T00:00:00.000Z",
+        eventsWritten: 5,
+        truncated: true,
+      })]);
+      expect(() => recordSeatAuditSyncState(auditState({ enterpriseSlug: "ent2" }))).not.toThrow();
+    } finally {
+      db.exec("DROP TRIGGER IF EXISTS fail_clear_audit_coverage");
+    }
+  });
+
+  it("keeps state per enterprise", () => {
+    recordSeatAuditSyncState(auditState());
+    recordSeatAuditSyncState(auditState({ enterpriseSlug: "ent2", status: "unavailable" }));
+    expect(getSeatAuditSyncStates(["ent2"]).map((s) => s.status)).toEqual(["unavailable"]);
+    expect(getSeatAuditSyncStates().length).toBe(2);
+  });
+});
+
+describe("getSeatAuditWatermark", () => {
+  it("is null before the audit sync has ever run", () => {
+    expect(getSeatAuditWatermark("ent1")).toBeNull();
+  });
+
+  it("returns the covered-through instant once recorded", () => {
+    recordSeatAuditSyncState(auditState());
+    expect(getSeatAuditWatermark("ent1")).toBe("2026-06-25T00:00:00.000Z");
+  });
+});
+
+describe("enrichAuditLifecycleFromSeats", () => {
+  it("backfills plan and team columns the audit log cannot supply", () => {
+    insertSeat({ user_login: "Dev1", plan_type: "enterprise", assigning_team_slug: "core", assigning_team_name: "Core" });
+    recordSeatLifecycleEvents("ent1", [{
+      orgSlug: "org1", userLogin: "dev1", eventType: "offboarded",
+      occurredAt: "2026-06-18T00:00:00Z", source: "audit_log",
+    }]);
+
+    expect(enrichAuditLifecycleFromSeats("ent1")).toBe(1);
+
+    const [row] = getSeatLifecycleRows({ ...WINDOW }, "offboarded", PAGE).rows;
+    expect(row.plan_type).toBe("enterprise");
+    expect(row.assigning_team_slug).toBe("core");
+  });
+
+  it("leaves non-audit rows alone", () => {
+    insertSeat({ user_login: "dev1", plan_type: "enterprise" });
+    recordSeatLifecycleEvents("ent1", [{
+      orgSlug: "org1", userLogin: "dev1", eventType: "offboarded",
+      occurredAt: "2026-06-18T00:00:00Z", source: "sync_diff",
+    }]);
+    expect(enrichAuditLifecycleFromSeats("ent1")).toBe(0);
+  });
+
+  it("does not overwrite values the audit sync already provided", () => {
+    insertSeat({ user_login: "dev1", plan_type: "business" });
+    recordSeatLifecycleEvents("ent1", [{
+      orgSlug: "org1", userLogin: "dev1", eventType: "offboarded",
+      occurredAt: "2026-06-18T00:00:00Z", source: "audit_log", planType: "enterprise",
+    }]);
+    enrichAuditLifecycleFromSeats("ent1");
+
+    const [row] = getSeatLifecycleRows({ ...WINDOW }, "offboarded", PAGE).rows;
+    expect(row.plan_type).toBe("enterprise");
+  });
+});
+
+describe("audit coverage-window precedence", () => {
+  it("keeps sync_diff rows that predate the audit log's coverage window", () => {
+    recordSeatAuditSyncState(auditState({
+      coveredFrom: "2026-06-10T00:00:00.000Z",
+      coveredThrough: "2026-06-30T00:00:00.000Z",
+    }));
+    recordSeatLifecycleEvents("ent1", [
+      // Before the audit log reaches back to — the only record we will ever have.
+      { orgSlug: "org1", userLogin: "pre-coverage", eventType: "offboarded", occurredAt: "2026-06-02T00:00:00Z", source: "sync_diff" },
+      // Inside the window, where the audit log is authoritative.
+      { orgSlug: "org1", userLogin: "in-coverage", eventType: "offboarded", occurredAt: "2026-06-18T00:00:00Z", source: "sync_diff" },
+    ]);
+    insertAuditEvent({ event_id: "c1", action: "cancel", observed_login: "audited", occurred_at: "2026-06-12T00:00:00Z" });
+    projectAuditEventsToLifecycle("ent1");
+
+    const logins = getSeatLifecycleRows({ ...WINDOW }, "offboarded", PAGE).rows
+      .map((r) => r.user_login).sort();
+    expect(logins).toEqual(["audited", "pre-coverage"]);
+  });
+
+  it("keeps sync_diff rows recorded after the audit log was last read", () => {
+    recordSeatAuditSyncState(auditState({
+      coveredFrom: "2026-06-01T00:00:00.000Z",
+      coveredThrough: "2026-06-15T00:00:00.000Z",
+    }));
+    recordSeatLifecycleEvents("ent1", [{
+      orgSlug: "org1", userLogin: "post-coverage", eventType: "offboarded",
+      occurredAt: "2026-06-22T00:00:00Z", source: "sync_diff",
+    }]);
+    insertAuditEvent({ event_id: "c1", action: "cancel", observed_login: "audited", occurred_at: "2026-06-10T00:00:00Z" });
+    projectAuditEventsToLifecycle("ent1");
+
+    const logins = getSeatLifecycleRows({ ...WINDOW }, "offboarded", PAGE).rows
+      .map((r) => r.user_login).sort();
+    expect(logins).toEqual(["audited", "post-coverage"]);
+  });
+
+  it("suppresses sync_diff duplicates inside the covered window", () => {
+    recordSeatAuditSyncState(auditState({
+      coveredFrom: "2026-06-01T00:00:00.000Z",
+      coveredThrough: "2026-06-30T00:00:00.000Z",
+    }));
+    recordSeatLifecycleEvents("ent1", [{
+      orgSlug: "org1", userLogin: "diff-only", eventType: "offboarded",
+      occurredAt: "2026-06-18T00:00:00Z", source: "sync_diff",
+    }]);
+    insertAuditEvent({ event_id: "c1", action: "cancel", observed_login: "audited", occurred_at: "2026-06-12T00:00:00Z" });
+    projectAuditEventsToLifecycle("ent1");
+
+    const logins = getSeatLifecycleRows({ ...WINDOW }, "offboarded", PAGE).rows.map((r) => r.user_login);
+    expect(logins).toEqual(["audited"]);
+  });
+
+  it("keeps sync_diff rows when partial org fallback cleared the coverage window", () => {
+    recordSeatAuditSyncState(auditState({
+      reason: "Audit log unavailable for 1 organization(s).",
+      target: "org",
+      coveredFrom: null,
+      coveredThrough: null,
+      eventsWritten: 1,
+    }));
+    recordSeatLifecycleEvents("ent1", [
+      {
+        orgSlug: "org1",
+        userLogin: "diff-from-uncovered-org",
+        eventType: "offboarded",
+        occurredAt: "2026-06-18T00:00:00.000Z",
+        source: "sync_diff",
+      },
+      {
+        orgSlug: "org2",
+        userLogin: "audited-org-user",
+        eventType: "offboarded",
+        occurredAt: "2026-06-12T00:00:00.000Z",
+        source: "audit_log",
+      },
+    ]);
+
+    const logins = getSeatLifecycleRows({ ...WINDOW }, "offboarded", PAGE).rows
+      .map((r) => r.user_login).sort();
+    expect(logins).toEqual(["audited-org-user", "diff-from-uncovered-org"]);
+  });
+
+  it("suppresses sync_diff rows covered by licensing-history projection despite a null audit-sync window", () => {
+    recordSeatAuditSyncState(auditState({
+      status: "error",
+      reason: "GitHub API error 502",
+      target: null,
+      coveredFrom: null,
+      coveredThrough: null,
+      lastEventAt: null,
+      eventsWritten: 0,
+    }));
+    recordSeatLifecycleEvents("ent1", [{
+      orgSlug: "org1",
+      userLogin: "diff-duplicate",
+      eventType: "offboarded",
+      occurredAt: "2026-06-18T00:00:00.000Z",
+      source: "sync_diff",
+    }]);
+    insertAuditEvent({
+      event_id: "license-cancel",
+      action: "cancel",
+      observed_login: "audited-license-row",
+      occurred_at: "2026-06-18T12:00:00.000Z",
+    });
+    projectAuditEventsToLifecycle("ent1");
+
+    const logins = getSeatLifecycleRows({ ...WINDOW }, "offboarded", PAGE).rows
+      .map((r) => r.user_login).sort();
+    expect(logins).toEqual(["audited-license-row"]);
+  });
+
+  it("keeps same-day sync_diff rows before the exact audit coverage start", () => {
+    recordSeatAuditSyncState(auditState({
+      coveredFrom: "2026-06-10T12:00:00.000Z",
+      coveredThrough: "2026-06-30T00:00:00.000Z",
+    }));
+    recordSeatLifecycleEvents("ent1", [
+      {
+        orgSlug: "org1", userLogin: "before-noon", eventType: "offboarded",
+        occurredAt: "2026-06-10T09:00:00.000Z", source: "sync_diff",
+      },
+      {
+        orgSlug: "org1", userLogin: "after-noon", eventType: "offboarded",
+        occurredAt: "2026-06-10T13:00:00.000Z", source: "sync_diff",
+      },
+    ]);
+    insertAuditEvent({ event_id: "c1", action: "cancel", observed_login: "audited", occurred_at: "2026-06-12T00:00:00Z" });
+    projectAuditEventsToLifecycle("ent1");
+
+    const logins = getSeatLifecycleRows({ ...WINDOW }, "offboarded", PAGE).rows
+      .map((r) => r.user_login).sort();
+    expect(logins).toEqual(["audited", "before-noon"]);
+  });
+
+  it("keeps sync_diff rows with ambiguous instants rather than suppressing them", () => {
+    recordSeatAuditSyncState(auditState({
+      coveredFrom: "2026-06-01T00:00:00.000Z",
+      coveredThrough: "2026-06-30T00:00:00.000Z",
+    }));
+    db.prepare(`
+      INSERT INTO copilot_seat_lifecycle_events (
+        enterprise_slug, org_slug, user_login, user_id, event_type, event_date,
+        occurred_at, plan_type, assigning_team_slug, assigning_team_name,
+        last_activity_at, source, detected_at
+      ) VALUES ('ent1', 'org1', 'ambiguous', NULL, 'offboarded', '2026-06-10',
+        'not-an-iso-instant', NULL, NULL, NULL, NULL, 'sync_diff', '2026-06-10T00:00:00Z')
+    `).run();
+    insertAuditEvent({ event_id: "c1", action: "cancel", observed_login: "audited", occurred_at: "2026-06-12T00:00:00Z" });
+    projectAuditEventsToLifecycle("ent1");
+
+    const logins = getSeatLifecycleRows({ ...WINDOW }, "offboarded", PAGE).rows
+      .map((r) => r.user_login).sort();
+    expect(logins).toEqual(["ambiguous", "audited"]);
+  });
+
+  it("does not suppress anything when the enterprise has no audit rows at all", () => {
+    recordSeatAuditSyncState(auditState({
+      status: "unavailable",
+      coveredFrom: null,
+      coveredThrough: null,
+      eventsWritten: 0,
+    }));
+    recordSeatLifecycleEvents("ent1", [{
+      orgSlug: "org1", userLogin: "diff-only", eventType: "offboarded",
+      occurredAt: "2026-06-18T00:00:00Z", source: "sync_diff",
+    }]);
+
+    const logins = getSeatLifecycleRows({ ...WINDOW }, "offboarded", PAGE).rows.map((r) => r.user_login);
+    expect(logins).toEqual(["diff-only"]);
   });
 });
 
@@ -959,6 +1384,120 @@ describe("getSeatLifecycleCoverage", () => {
     expect(getSeatLifecycleCoverage({ ...WINDOW, enterpriseSlugs: ["ent1"] }).source).toBe("none");
     expect(getSeatLifecycleCoverage({ ...WINDOW, enterpriseSlugs: ["ent2"] }).source).toBe("sync_diff");
   });
+
+  it("breaks down how many rows each source contributed", () => {
+    recordSeatLifecycleEvents("ent1", [
+      { orgSlug: "org1", userLogin: "a", eventType: "onboarded", occurredAt: "2026-06-02T00:00:00Z", source: "seat_created_at" },
+      { orgSlug: "org1", userLogin: "b", eventType: "offboarded", occurredAt: "2026-06-03T00:00:00Z", source: "sync_diff" },
+      { orgSlug: "org1", userLogin: "c", eventType: "offboarded", occurredAt: "2026-06-04T00:00:00Z", source: "audit_log" },
+      { orgSlug: "org1", userLogin: "d", eventType: "offboarded", occurredAt: "2026-06-05T00:00:00Z", source: "audit_log" },
+    ]);
+
+    expect(getSeatLifecycleCoverage({ ...WINDOW }).sourceBreakdown).toEqual({
+      audit_log: 2,
+      sync_diff: 1,
+      seat_created_at: 1,
+    });
+  });
+
+  it("scopes source counts and verdict to selected orgs and users", () => {
+    markSeatLifecycleTrackingStarted("ent1", "2026-06-01T00:00:00Z");
+    recordSeatLifecycleEvents("ent1", [
+      { orgSlug: "org1", userLogin: "alice", eventType: "offboarded", occurredAt: "2026-06-02T00:00:00Z", source: "audit_log" },
+      { orgSlug: "org2", userLogin: "bob", eventType: "offboarded", occurredAt: "2026-06-03T00:00:00Z", source: "sync_diff" },
+    ]);
+
+    const coverage = getSeatLifecycleCoverage({
+      ...WINDOW,
+      orgs: ["org2"],
+      allowedLogins: new Set(["BOB"]),
+    });
+
+    expect(coverage.source).toBe("sync_diff");
+    expect(coverage.sourceBreakdown).toEqual({
+      audit_log: 0,
+      sync_diff: 1,
+      seat_created_at: 0,
+    });
+  });
+
+  it("reports never_run before the audit sync has executed", () => {
+    expect(getSeatLifecycleCoverage({ ...WINDOW }).audit).toMatchObject({
+      status: "never_run",
+      coveredFrom: null,
+      coveredThrough: null,
+    });
+  });
+
+  it("surfaces the audit coverage window and last sync time", () => {
+    recordSeatAuditSyncState(auditState());
+    expect(getSeatLifecycleCoverage({ ...WINDOW }).audit).toMatchObject({
+      status: "ok",
+      coveredFrom: "2026-06-10T00:00:00.000Z",
+      coveredThrough: "2026-06-25T00:00:00.000Z",
+      lastSyncedAt: "2026-06-25T00:00:00.000Z",
+    });
+  });
+
+  it("surfaces the reason when the audit log is unavailable", () => {
+    recordSeatAuditSyncState(auditState({
+      status: "unavailable",
+      reason: "The token is missing the read:audit_log scope.",
+      coveredFrom: null,
+      coveredThrough: null,
+    }));
+    expect(getSeatLifecycleCoverage({ ...WINDOW }).audit).toMatchObject({
+      status: "unavailable",
+      reason: "The token is missing the read:audit_log scope.",
+    });
+  });
+
+  it("surfaces warnings stored on a successful audit sync", () => {
+    recordSeatAuditSyncState(auditState({
+      status: "ok",
+      reason: "Audit log unavailable for 2 organization(s).",
+    }));
+
+    expect(getSeatLifecycleCoverage({ ...WINDOW }).audit).toMatchObject({
+      status: "ok",
+      reason: "Audit log unavailable for 2 organization(s).",
+    });
+  });
+
+  it("intersects the covered window across enterprises so it never overstates coverage", () => {
+    recordSeatAuditSyncState(auditState({
+      enterpriseSlug: "ent1",
+      coveredFrom: "2026-05-01T00:00:00.000Z",
+      coveredThrough: "2026-06-28T00:00:00.000Z",
+    }));
+    recordSeatAuditSyncState(auditState({
+      enterpriseSlug: "ent2",
+      coveredFrom: "2026-06-10T00:00:00.000Z",
+      coveredThrough: "2026-06-20T00:00:00.000Z",
+    }));
+
+    expect(getSeatLifecycleCoverage({ ...WINDOW }).audit).toMatchObject({
+      coveredFrom: "2026-06-10T00:00:00.000Z",
+      coveredThrough: "2026-06-20T00:00:00.000Z",
+    });
+  });
+
+  it("stays 'ok' when one enterprise is covered but names the gap in the reason", () => {
+    recordSeatAuditSyncState(auditState({ enterpriseSlug: "ent1" }));
+    recordSeatAuditSyncState(auditState({
+      enterpriseSlug: "ent2",
+      status: "unavailable",
+      reason: "No audit log access for ent2.",
+      coveredFrom: null,
+      coveredThrough: null,
+    }));
+
+    const audit = getSeatLifecycleCoverage({ ...WINDOW }).audit;
+    expect(audit.status).toBe("ok");
+    expect(audit.reason).toBe("No audit log access for ent2.");
+    // ent2 has no window, so the scope-wide intersection is unknowable.
+    expect(audit.coveredFrom).toBe("2026-06-10T00:00:00.000Z");
+  });
 });
 
 describe("getSeatSnapshotForDiff", () => {
@@ -996,6 +1535,66 @@ describe("recordSeatLifecycleEvents", () => {
     recordSeatLifecycleEvents("ent1", [event]);
     recordSeatLifecycleEvents("ent1", [{ ...event, occurredAt: "2026-06-10T22:00:00Z" }]);
     expect(getSeatLifecycleRows({ ...WINDOW }, "offboarded", PAGE).total).toBe(1);
+  });
+
+  it("keeps enriched metadata when an audit replay has no seat details", () => {
+    recordSeatLifecycleEvents("ent1", [{
+      orgSlug: "org1",
+      userLogin: "dev1",
+      eventType: "offboarded",
+      occurredAt: "2026-06-18T00:00:00Z",
+      source: "audit_log",
+      planType: "enterprise",
+      assigningTeamSlug: "core",
+      assigningTeamName: "Core",
+      lastActivityAt: "2026-06-01T00:00:00Z",
+    }]);
+
+    recordSeatLifecycleEvents("ent1", [{
+      orgSlug: "org1",
+      userLogin: "dev1",
+      eventType: "offboarded",
+      occurredAt: "2026-06-18T12:00:00Z",
+      source: "audit_log",
+    }]);
+
+    const [row] = getSeatLifecycleRows({ ...WINDOW }, "offboarded", PAGE).rows;
+    expect(row).toMatchObject({
+      plan_type: "enterprise",
+      assigning_team_slug: "core",
+      assigning_team_name: "Core",
+      last_activity_at: "2026-06-01T00:00:00Z",
+    });
+  });
+
+  it("fills missing audit metadata when a later replay supplies seat details", () => {
+    recordSeatLifecycleEvents("ent1", [{
+      orgSlug: "org1",
+      userLogin: "dev1",
+      eventType: "offboarded",
+      occurredAt: "2026-06-18T00:00:00Z",
+      source: "audit_log",
+    }]);
+
+    recordSeatLifecycleEvents("ent1", [{
+      orgSlug: "org1",
+      userLogin: "dev1",
+      eventType: "offboarded",
+      occurredAt: "2026-06-18T12:00:00Z",
+      source: "audit_log",
+      planType: "enterprise",
+      assigningTeamSlug: "core",
+      assigningTeamName: "Core",
+      lastActivityAt: "2026-06-01T00:00:00Z",
+    }]);
+
+    const [row] = getSeatLifecycleRows({ ...WINDOW }, "offboarded", PAGE).rows;
+    expect(row).toMatchObject({
+      plan_type: "enterprise",
+      assigning_team_slug: "core",
+      assigning_team_name: "Core",
+      last_activity_at: "2026-06-01T00:00:00Z",
+    });
   });
 
   it("keeps a re-onboarding on a later date as a separate event", () => {

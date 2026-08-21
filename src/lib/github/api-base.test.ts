@@ -665,6 +665,70 @@ describe("githubFetchWithMeta", () => {
     expect(JSON.parse(init.body)).toEqual({ query: "{ viewer { login } }" });
   });
 
+  it("passes a caller-provided abort signal to fetch", async () => {
+    const mockFetch = fetch as unknown as ReturnType<typeof vi.fn>;
+    const controller = new AbortController();
+    mockFetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ ok: true }),
+      headers: new Map(),
+    });
+
+    await githubFetchWithMeta("/orgs/my-org/info", { signal: controller.signal });
+
+    const [, init] = mockFetch.mock.calls[0];
+    expect(init.signal).toBe(controller.signal);
+  });
+
+  it("does not retry when fetch rejects because the provided signal was aborted", async () => {
+    const mockFetch = fetch as unknown as ReturnType<typeof vi.fn>;
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const controller = new AbortController();
+    mockFetch.mockImplementationOnce(() => {
+      controller.abort();
+      return Promise.reject(new DOMException("The operation was aborted.", "AbortError"));
+    });
+
+    try {
+      await expect(
+        githubFetchWithMeta("/orgs/my-org/info", { retries: 3, signal: controller.signal }),
+      ).rejects.toMatchObject({ name: "AbortError" });
+
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it("does not wait out a retry backoff after the provided signal aborts", async () => {
+    vi.useFakeTimers();
+    const mockFetch = fetch as unknown as ReturnType<typeof vi.fn>;
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const controller = new AbortController();
+    mockFetch.mockResolvedValueOnce({
+      ok: false,
+      status: 429,
+      headers: new Map([["retry-after", "60"]]),
+      text: () => Promise.resolve("rate limited"),
+    });
+
+    const promise = githubFetchWithMeta("/orgs/my-org/info", {
+      retries: 3,
+      signal: controller.signal,
+    });
+    await vi.advanceTimersByTimeAsync(1);
+    controller.abort();
+
+    try {
+      await expect(promise).rejects.toMatchObject({ name: "AbortError" });
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+    } finally {
+      warnSpy.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
   it("returns null data and selected headers on a real 204 response (ok:true, per the Fetch spec)", async () => {
     const mockFetch = fetch as unknown as ReturnType<typeof vi.fn>;
     mockFetch.mockResolvedValue({

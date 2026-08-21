@@ -25,6 +25,7 @@ import type { NormalizedIdentityRecord as ImportedIdentityMapRecord } from "@/li
 import type { LicenseRunDiagnosticsInput, StartLicenseRunInput } from "./license-run-repo";
 import type {
   LicenseAicConsumptionInput,
+  LicenseAuditEventInput,
   PersistedLicenseAuditEvent,
   PersistedLicenseSeatSnapshot,
   PersistedLicenseIdentityRecord,
@@ -204,7 +205,7 @@ function makeDeps(overrides: Partial<LicenseHistorySyncDeps> = {}): LicenseHisto
     importAicConsumptionCsv: vi.fn(() => emptyImport<AicCsvConsumptionRecord>()),
 
     getEnterpriseSeatsNormalized: vi.fn(async () => ({ totalSeats: 1, seats: [makeSeat()] })),
-    getEnterpriseAuditEvents: vi.fn(async (): Promise<AuditFetchResult> => ({ status: "ok", events: [], truncated: false, warnings: [] })),
+    getEnterpriseAuditEvents: vi.fn(async (): Promise<AuditFetchResult> => ({ status: "ok", events: [], truncated: false, warnings: [], droppedEventCount: 0 })),
     getEnterpriseIdentities: vi.fn(async (): Promise<IdentityFetchResult> => ({ identities: [], warnings: [] })),
     getOrgIdentities: vi.fn(async (): Promise<IdentityFetchResult> => ({ identities: [], warnings: [] })),
     getEnterpriseScimUsers: vi.fn(async (): Promise<ScimFetchResult> => ({ status: "ok", records: [] })),
@@ -356,6 +357,22 @@ describe("license-history-sync-service", () => {
 
   // ── archive-before-audit-API merge/dedupe ───────────────────────────
   describe("configured imports precede API audit consumption", () => {
+    function makeApiAuditEvent(overrides: Partial<NormalizedCopilotAuditEvent> = {}): NormalizedCopilotAuditEvent {
+      return {
+        eventId: "api-event-1",
+        orgLogin: "acme-org",
+        action: "assign",
+        occurredAt: "2025-01-06T00:00:00.000Z",
+        githubUserId: 1,
+        observedLogin: "alice",
+        externalIdentity: null,
+        team: null,
+        source: "audit_log",
+        raw: {} as never,
+        ...overrides,
+      };
+    }
+
     it("materializes an archive-backed period older than the live audit retention window", async () => {
       const archiveEvent: NormalizedAuditEvent = {
         eventId: "archive-old-assign",
@@ -433,7 +450,7 @@ describe("license-history-sync-service", () => {
         }),
         getEnterpriseAuditEvents: vi.fn(async (): Promise<AuditFetchResult> => {
           importOrder.push("audit_api");
-          return { status: "ok", events: [apiEvent], truncated: false, warnings: [] };
+          return { status: "ok", events: [apiEvent], truncated: false, warnings: [], droppedEventCount: 0 };
         }),
         buildSeatLedger: vi.fn((options: BuildSeatLedgerOptions) => {
           // Assert the merged, deduped audit events reach the ledger builder with both events present.
@@ -447,6 +464,122 @@ describe("license-history-sync-service", () => {
       // Configured imports (archive) happen before API audit consumption.
       expect(importOrder).toEqual(["archive", "audit_api"]);
       expect(deps.buildSeatLedger).toHaveBeenCalled();
+    });
+
+    it("records a truncated ok audit API result as an incomplete warning source while retaining fetched events", async () => {
+      const apiEvent: NormalizedCopilotAuditEvent = {
+        eventId: "api-partial-1",
+        orgLogin: "acme-org",
+        action: "assign",
+        occurredAt: "2025-01-06T00:00:00.000Z",
+        githubUserId: 1,
+        observedLogin: "alice",
+        externalIdentity: null,
+        team: null,
+        source: "audit_log",
+        raw: {} as never,
+      };
+      const capturedEvents: { eventId: string; source: string }[] = [];
+      const capturedSourceStates: { source: string; status: string; errorMessage?: string | null }[] = [];
+      const deps = makeDeps({
+        getEnterpriseAuditEvents: vi.fn(async (): Promise<AuditFetchResult> => ({
+          status: "ok",
+          events: [apiEvent],
+          truncated: true,
+          warnings: ["Copilot audit log pagination truncated after reaching the 200-page limit while more results were still available."],
+          droppedEventCount: 0,
+        })),
+        upsertAuditEvents: vi.fn((_enterpriseSlug: string, events: LicenseAuditEventInput[]) => {
+          capturedEvents.push(...events.map((e) => ({ eventId: e.eventId, source: e.source })));
+          return events.length;
+        }),
+        recordLicenseRunDiagnostics: vi.fn((input: LicenseRunDiagnosticsInput) => {
+          for (const s of input.sourceStates ?? []) capturedSourceStates.push({ source: s.source, status: s.status ?? "", errorMessage: s.errorMessage });
+        }),
+      });
+
+      const result = await syncLicenseHistoryForEnterprise("acme", deps);
+
+      expect(capturedEvents).toContainEqual({ eventId: "api-partial-1", source: "audit_log" });
+      expect(result.warnings.some((w) => /audit log pagination truncated/i.test(w))).toBe(true);
+      const auditState = capturedSourceStates.find((s) => s.source === "audit_api");
+      expect(auditState?.status).toBe("warning");
+      expect(auditState?.errorMessage).toMatch(/audit log pagination truncated/i);
+    });
+
+    it("records dropped audit API events as an incomplete warning source while retaining fetched events", async () => {
+      const apiEvent = makeApiAuditEvent({ eventId: "api-dropped-partial-1" });
+      const capturedEvents: { eventId: string; source: string }[] = [];
+      const capturedSourceStates: { source: string; status: string; errorMessage?: string | null }[] = [];
+      const deps = makeDeps({
+        getEnterpriseAuditEvents: vi.fn(async (): Promise<AuditFetchResult> => ({
+          status: "ok",
+          events: [apiEvent],
+          truncated: false,
+          warnings: ['Skipped a Copilot audit "assign" event (id missing-ts-1) with no parseable timestamp.'],
+          droppedEventCount: 2,
+        })),
+        upsertAuditEvents: vi.fn((_enterpriseSlug: string, events: LicenseAuditEventInput[]) => {
+          capturedEvents.push(...events.map((e) => ({ eventId: e.eventId, source: e.source })));
+          return events.length;
+        }),
+        recordLicenseRunDiagnostics: vi.fn((input: LicenseRunDiagnosticsInput) => {
+          for (const s of input.sourceStates ?? []) capturedSourceStates.push({ source: s.source, status: s.status ?? "", errorMessage: s.errorMessage });
+        }),
+      });
+
+      const result = await syncLicenseHistoryForEnterprise("acme", deps);
+
+      expect(capturedEvents).toContainEqual({ eventId: "api-dropped-partial-1", source: "audit_log" });
+      expect(result.warnings.some((w) => /Skipped a Copilot audit "assign" event/i.test(w))).toBe(true);
+      const auditState = capturedSourceStates.find((s) => s.source === "audit_api");
+      expect(auditState?.status).toBe("warning");
+      expect(auditState?.errorMessage).toMatch(/dropped 2 seat event\(s\) with no parseable timestamp/i);
+    });
+
+    it("records audit API truncation and dropped events together in the incomplete warning message", async () => {
+      const capturedSourceStates: { source: string; status: string; errorMessage?: string | null }[] = [];
+      const deps = makeDeps({
+        getEnterpriseAuditEvents: vi.fn(async (): Promise<AuditFetchResult> => ({
+          status: "ok",
+          events: [makeApiAuditEvent({ eventId: "api-truncated-dropped-1" })],
+          truncated: true,
+          warnings: ["Copilot audit log pagination truncated after reaching the 200-page limit while more results were still available."],
+          droppedEventCount: 1,
+        })),
+        recordLicenseRunDiagnostics: vi.fn((input: LicenseRunDiagnosticsInput) => {
+          for (const s of input.sourceStates ?? []) capturedSourceStates.push({ source: s.source, status: s.status ?? "", errorMessage: s.errorMessage });
+        }),
+      });
+
+      await syncLicenseHistoryForEnterprise("acme", deps);
+
+      const auditState = capturedSourceStates.find((s) => s.source === "audit_api");
+      expect(auditState?.status).toBe("warning");
+      expect(auditState?.errorMessage).toMatch(/audit log pagination truncated/i);
+      expect(auditState?.errorMessage).toMatch(/dropped 1 seat event\(s\) with no parseable timestamp/i);
+    });
+
+    it("records a clean ok audit API result as an ok source without an error message", async () => {
+      const capturedSourceStates: { source: string; status: string; errorMessage?: string | null }[] = [];
+      const deps = makeDeps({
+        getEnterpriseAuditEvents: vi.fn(async (): Promise<AuditFetchResult> => ({
+          status: "ok",
+          events: [makeApiAuditEvent({ eventId: "api-clean-1" })],
+          truncated: false,
+          warnings: [],
+          droppedEventCount: 0,
+        })),
+        recordLicenseRunDiagnostics: vi.fn((input: LicenseRunDiagnosticsInput) => {
+          for (const s of input.sourceStates ?? []) capturedSourceStates.push({ source: s.source, status: s.status ?? "", errorMessage: s.errorMessage });
+        }),
+      });
+
+      await syncLicenseHistoryForEnterprise("acme", deps);
+
+      const auditState = capturedSourceStates.find((s) => s.source === "audit_api");
+      expect(auditState?.status).toBe("ok");
+      expect(auditState?.errorMessage).toBeUndefined();
     });
 
     it("archive event wins over an API event sharing the same (eventId, source key)", async () => {
@@ -511,7 +644,7 @@ describe("license-history-sync-service", () => {
       let capturedEvents: { eventId: string; source: string; githubUserId: number | null }[] = [];
       const deps = makeDeps({
         importAuditArchive: vi.fn(() => ({ records: [archiveEvent], warnings: [], skippedRows: 0, sourceFingerprint: "fp" })),
-        getEnterpriseAuditEvents: vi.fn(async (): Promise<AuditFetchResult> => ({ status: "ok", events: [apiEvent], truncated: false, warnings: [] })),
+        getEnterpriseAuditEvents: vi.fn(async (): Promise<AuditFetchResult> => ({ status: "ok", events: [apiEvent], truncated: false, warnings: [], droppedEventCount: 0 })),
         upsertAuditEvents: vi.fn((_enterpriseSlug: string, events) => {
           capturedEvents = events.map((e: { eventId: string; source: string; githubUserId: number | null }) => ({ eventId: e.eventId, source: e.source, githubUserId: e.githubUserId }));
           return events.length;
@@ -554,7 +687,7 @@ describe("license-history-sync-service", () => {
       let ledgerAuditEvents: { eventId: string; holderKey: string; action: string }[] = [];
       const deps = makeDeps({
         importAuditArchive: vi.fn(() => ({ records: [archiveAssign], warnings: [], skippedRows: 0, sourceFingerprint: "fp" })),
-        getEnterpriseAuditEvents: vi.fn(async (): Promise<AuditFetchResult> => ({ status: "ok", events: [apiCancel], truncated: false, warnings: [] })),
+        getEnterpriseAuditEvents: vi.fn(async (): Promise<AuditFetchResult> => ({ status: "ok", events: [apiCancel], truncated: false, warnings: [], droppedEventCount: 0 })),
         buildSeatLedger: vi.fn((options: BuildSeatLedgerOptions) => {
           ledgerAuditEvents = (options.auditEvents ?? []).map((e) => ({ eventId: e.eventId, holderKey: e.holderKey, action: e.action }));
           return { rows: options.periods.map((p) => makeLedgerRow(p)), coverage: [], warnings: [] };
@@ -602,7 +735,7 @@ describe("license-history-sync-service", () => {
       const deps = makeDeps({
         getEnterpriseSeatsNormalized: vi.fn(async () => ({ totalSeats: 1, seats: [seatWithId10] })),
         importAuditArchive: vi.fn(() => ({ records: [archiveEvent], warnings: [], skippedRows: 0, sourceFingerprint: "fp" })),
-        getEnterpriseAuditEvents: vi.fn(async (): Promise<AuditFetchResult> => ({ status: "ok", events: [apiEventWithId11], truncated: false, warnings: [] })),
+        getEnterpriseAuditEvents: vi.fn(async (): Promise<AuditFetchResult> => ({ status: "ok", events: [apiEventWithId11], truncated: false, warnings: [], droppedEventCount: 0 })),
         buildSeatLedger: vi.fn((options: BuildSeatLedgerOptions) => {
           capturedEvents = (options.auditEvents ?? []).map((e) => ({ eventId: e.eventId, holderKey: e.holderKey }));
           return { rows: options.periods.map((p) => makeLedgerRow(p)), coverage: [], warnings: [] };
@@ -634,7 +767,7 @@ describe("license-history-sync-service", () => {
         }),
         getEnterpriseAuditEvents: vi.fn(async (): Promise<AuditFetchResult> => {
           order.push("audit_api");
-          return { status: "ok", events: [], truncated: false, warnings: [] };
+          return { status: "ok", events: [], truncated: false, warnings: [], droppedEventCount: 0 };
         }),
       });
 
@@ -1505,7 +1638,7 @@ describe("license-history-sync-service", () => {
       const deps = makeDeps({
         listLicenseRuns: vi.fn(() => [{ status: "success", sourceStats: { periodFingerprints: priorFingerprints } }]),
         hasMaterializedRows: vi.fn(() => true),
-        getEnterpriseAuditEvents: vi.fn(async (): Promise<AuditFetchResult> => ({ status: "ok", events: [newAuditEvent], truncated: false, warnings: [] })),
+        getEnterpriseAuditEvents: vi.fn(async (): Promise<AuditFetchResult> => ({ status: "ok", events: [newAuditEvent], truncated: false, warnings: [], droppedEventCount: 0 })),
       });
 
       const result = await syncLicenseHistoryForEnterprise("acme", deps);

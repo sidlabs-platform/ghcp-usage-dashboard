@@ -36,6 +36,15 @@ const EMPTY_COVERAGE: SeatLifecycleCoverage = {
   source: "none",
   trackingStartedAt: null,
   onboardingOnly: false,
+  sourceBreakdown: { audit_log: 0, sync_diff: 0, seat_created_at: 0 },
+  audit: {
+    status: "never_run",
+    reason: null,
+    coveredFrom: null,
+    coveredThrough: null,
+    lastSyncedAt: null,
+    truncated: false,
+  },
 };
 
 function clampPage(raw: string | null): number {

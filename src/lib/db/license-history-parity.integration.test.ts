@@ -211,6 +211,7 @@ function buildDeps(): LicenseHistorySyncDeps {
       events: [...scenario.enterprises[slug as keyof typeof scenario.enterprises].auditApiEvents],
       truncated: false,
       warnings: [],
+      droppedEventCount: 0,
     }),
     getEnterpriseIdentities: async (slug: string) => ({
       identities: [...scenario.enterprises[slug as keyof typeof scenario.enterprises].enterpriseIdentities],
