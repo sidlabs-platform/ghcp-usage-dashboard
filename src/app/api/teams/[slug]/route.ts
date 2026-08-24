@@ -54,7 +54,7 @@ async function handler(request: NextRequest) {
     }
 
     // Count members
-    let countRowSql = `SELECT COUNT(DISTINCT user_login) as cnt FROM team_memberships WHERE team_slug = ?`;
+    let countRowSql = `SELECT COUNT(DISTINCT LOWER(user_login)) as cnt FROM team_memberships WHERE team_slug = ?`;
     const countRowParams: any[] = [slug];
     if (source) {
       countRowSql += ` AND source = ?`;
@@ -71,7 +71,7 @@ async function handler(request: NextRequest) {
     // inline_chat, chat_panel, chat_panel_*) via json_each — not a bare
     // `!= 'agent_edit'` exclusion — so copilot_app/chat_inline/unknown features
     // never leak into a team member's completion acceptance rate.
-    let teamLoginsSql = `SELECT DISTINCT user_login FROM team_memberships WHERE team_slug = ?`;
+    let teamLoginsSql = `SELECT LOWER(user_login) AS login_key, MIN(user_login) AS user_login FROM team_memberships WHERE team_slug = ?`;
     const teamLoginsParams: any[] = [slug];
     if (source) {
       teamLoginsSql += ` AND source = ?`;
@@ -81,6 +81,7 @@ async function handler(request: NextRequest) {
       teamLoginsSql += ` AND enterprise_slug = ?`;
       teamLoginsParams.push(enterprise);
     }
+    teamLoginsSql += ` GROUP BY LOWER(user_login)`;
 
     const members = db.prepare(`
       WITH team_logins AS (
@@ -88,7 +89,7 @@ async function handler(request: NextRequest) {
       ),
       member_metrics AS (
         SELECT
-          udm.user_login,
+          LOWER(udm.user_login) AS login_key,
           COUNT(DISTINCT udm.day) AS active_days,
           SUM(udm.loc_added_sum) AS loc_added,
           SUM(udm.user_initiated_interaction_count) AS interactions,
@@ -97,23 +98,23 @@ async function handler(request: NextRequest) {
           MAX(udm.used_cli) AS used_cli,
           MAX(udm.used_copilot_code_review_active) AS used_code_review
         FROM user_daily_metrics udm
-        INNER JOIN team_logins tl ON tl.user_login = udm.user_login
+        INNER JOIN team_logins tl ON tl.login_key = LOWER(udm.user_login)
         WHERE udm.day >= ? AND udm.day <= ?
-        GROUP BY udm.user_login
+        GROUP BY LOWER(udm.user_login)
       ),
       completion_rates AS (
         SELECT
-          udm.user_login,
+          LOWER(udm.user_login) AS login_key,
           COALESCE(SUM(json_extract(j.value, '$.code_generation_activity_count')), 0) AS comp_gen,
           COALESCE(SUM(json_extract(j.value, '$.code_acceptance_activity_count')), 0) AS comp_accept
         FROM user_daily_metrics udm
-        INNER JOIN team_logins tl ON tl.user_login = udm.user_login,
+        INNER JOIN team_logins tl ON tl.login_key = LOWER(udm.user_login),
         json_each(udm.totals_by_feature) j
         WHERE udm.day >= ? AND udm.day <= ?
           AND udm.totals_by_feature IS NOT NULL AND udm.totals_by_feature != '[]'
           AND json_valid(udm.totals_by_feature)
           AND ${IS_ACCEPTANCE_ELIGIBLE_SQL}
-        GROUP BY udm.user_login
+        GROUP BY LOWER(udm.user_login)
       )
       SELECT
         tl.user_login AS login,
@@ -130,8 +131,8 @@ async function handler(request: NextRequest) {
         COALESCE(mm.used_cli, 0) AS usedCli,
         COALESCE(mm.used_code_review, 0) AS usedCodeReview
       FROM team_logins tl
-      LEFT JOIN member_metrics mm ON mm.user_login = tl.user_login
-      LEFT JOIN completion_rates cr ON cr.user_login = tl.user_login
+      LEFT JOIN member_metrics mm ON mm.login_key = tl.login_key
+      LEFT JOIN completion_rates cr ON cr.login_key = tl.login_key
       ORDER BY activeDays DESC
     `).all(...teamLoginsParams, start, end, start, end) as MemberRow[];
 

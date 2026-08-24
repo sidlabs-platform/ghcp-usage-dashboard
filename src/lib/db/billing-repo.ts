@@ -113,8 +113,8 @@ function appendBillingFilters(
     params.push(...filters.organization);
   }
   if (filters.username) {
-    clauses.push(`username = ?`);
-    params.push(filters.username);
+    clauses.push(`LOWER(username) = ?`);
+    params.push(filters.username.toLowerCase());
   }
   if (filters.chargeScope) {
     clauses.push(`charge_scope = ?`);
@@ -132,8 +132,8 @@ function appendBillingFilters(
       clauses.push("1 = 0");
       return;
     }
-    const qualifiedUsers = `(enterprise_slug, username) IN (${filters.allowedUserScopes.map(() => "(?, ?)").join(", ")})`;
-    params.push(...filters.allowedUserScopes.flatMap((scope) => [scope.enterpriseSlug, scope.userLogin]));
+    const qualifiedUsers = `(enterprise_slug, LOWER(username)) IN (${filters.allowedUserScopes.map(() => "(?, ?)").join(", ")})`;
+    params.push(...filters.allowedUserScopes.flatMap((scope) => [scope.enterpriseSlug, scope.userLogin.toLowerCase()]));
     if (filters.scopeOrgs?.length && !scopeOrgsHandled) {
       clauses.push(`(${qualifiedUsers} OR (charge_scope = 'org' AND organization IN (${filters.scopeOrgs.map(() => "?").join(",")})))`);
       params.push(...filters.scopeOrgs);
@@ -153,9 +153,9 @@ function appendBillingFilters(
     const scopeParts: string[] = [];
     if (hasLogins) {
       scopeParts.push(
-        `username IN (${filters.allowedLogins!.map(() => "?").join(",")})`
+        `LOWER(username) IN (${filters.allowedLogins!.map(() => "?").join(",")})`
       );
-      params.push(...filters.allowedLogins!);
+      params.push(...filters.allowedLogins!.map((login) => login.toLowerCase()));
     }
     if (hasOrgs) {
       scopeParts.push(
@@ -176,8 +176,8 @@ function appendPremiumFilters(
 ): void {
   if (!filters) return;
   if (filters.username) {
-    clauses.push(`username = ?`);
-    params.push(filters.username);
+    clauses.push(`LOWER(username) = ?`);
+    params.push(filters.username.toLowerCase());
   }
   // Organization filter: intersect with scopeOrgs when both are present
   if (filters.organization?.length && filters.scopeOrgs?.length) {
@@ -211,8 +211,8 @@ function appendPremiumFilters(
       clauses.push("1 = 0");
       return;
     }
-    clauses.push(`(enterprise_slug, username) IN (${filters.allowedUserScopes.map(() => "(?, ?)").join(", ")})`);
-    params.push(...filters.allowedUserScopes.flatMap((scope) => [scope.enterpriseSlug, scope.userLogin]));
+    clauses.push(`(enterprise_slug, LOWER(username)) IN (${filters.allowedUserScopes.map(() => "(?, ?)").join(", ")})`);
+    params.push(...filters.allowedUserScopes.flatMap((scope) => [scope.enterpriseSlug, scope.userLogin.toLowerCase()]));
     return;
   }
   if (filters.allowedLogins !== undefined || (filters.scopeOrgs?.length && !scopeOrgsHandled)) {
@@ -225,9 +225,9 @@ function appendPremiumFilters(
     const scopeParts: string[] = [];
     if (hasLogins) {
       scopeParts.push(
-        `username IN (${filters.allowedLogins!.map(() => "?").join(",")})`
+        `LOWER(username) IN (${filters.allowedLogins!.map(() => "?").join(",")})`
       );
-      params.push(...filters.allowedLogins!);
+      params.push(...filters.allowedLogins!.map((login) => login.toLowerCase()));
     }
     if (hasOrgs) {
       scopeParts.push(
@@ -660,14 +660,14 @@ export function getUserBreakdown(
     .prepare(
       `
     SELECT
-      username,
+      MIN(username) AS username,
       organization,
       COALESCE(SUM(gross_amount), 0)     AS total_gross,
       COALESCE(SUM(discount_amount), 0)  AS total_discount,
       COALESCE(SUM(net_amount), 0)       AS total_net
     FROM billing_usage_records
     ${buildWhereClause(clauses)}
-    GROUP BY username, organization
+    GROUP BY LOWER(username), organization
     ORDER BY total_net DESC
   `
     )
@@ -812,7 +812,7 @@ export function getPremiumUserSummary(
     .prepare(
       `
     SELECT
-      username,
+      MIN(username) AS username,
       organization,
       COALESCE(SUM(aic_quantity), 0)  AS total_requests,
       COALESCE(SUM(CASE WHEN exceeds_quota = 'FALSE' THEN aic_quantity ELSE 0 END), 0) AS within_quota,
@@ -833,7 +833,7 @@ export function getPremiumUserSummary(
       COALESCE(SUM(aic_gross_amount), 0) AS total_aic_gross
     FROM billing_premium_requests
     ${buildWhereClause(clauses)}
-    GROUP BY username, organization
+    GROUP BY LOWER(username), organization
     ORDER BY total_requests DESC
   `
     )
@@ -860,7 +860,7 @@ export function getPremiumModelSummary(
       model,
       COALESCE(SUM(aic_quantity), 0) AS total_requests,
       COALESCE(SUM(aic_gross_amount), 0) AS total_net,
-      COUNT(DISTINCT username)           AS unique_users,
+      COUNT(DISTINCT LOWER(username))    AS unique_users,
       COALESCE(SUM(input_tokens), 0)  AS total_input_tokens,
       COALESCE(SUM(output_tokens), 0) AS total_output_tokens,
       COALESCE(SUM(cached_tokens), 0) AS total_cached_tokens,
@@ -896,8 +896,8 @@ export function getPremiumUserModelBreakdown(
   enterpriseSlugs?: string[]
 ): PremiumUserModelBreakdown[] {
   const db = getDb();
-  const clauses: string[] = ["date >= ?", "date <= ?", "username = ?", `date >= '${AI_CREDITS_START_DATE}'`];
-  const params: unknown[] = [start, end, username];
+  const clauses: string[] = ["date >= ?", "date <= ?", "LOWER(username) = ?", `date >= '${AI_CREDITS_START_DATE}'`];
+  const params: unknown[] = [start, end, username.toLowerCase()];
   const { clause: entClause, params: entParams } = buildEnterpriseFilter(enterpriseSlugs);
   if (entClause) { clauses.push(entClause.replace(/^\s*AND\s+/, "")); params.push(...entParams); }
 
@@ -968,7 +968,7 @@ export function getPremiumCostCenterBreakdown(
       COALESCE(cost_center_name, '')     AS cost_center_name,
       COALESCE(SUM(aic_quantity), 0)     AS total_aic_quantity,
       COALESCE(SUM(aic_gross_amount), 0) AS total_aic_gross,
-      COUNT(DISTINCT username)           AS unique_users,
+      COUNT(DISTINCT LOWER(username))    AS unique_users,
       COUNT(*)                           AS record_count
     FROM billing_premium_requests
     ${buildWhereClause(clauses)}
@@ -1015,7 +1015,7 @@ export function getPremiumOrgBreakdown(
       COALESCE(organization, '')         AS organization,
       COALESCE(SUM(aic_quantity), 0)     AS total_aic_quantity,
       COALESCE(SUM(aic_gross_amount), 0) AS total_aic_gross,
-      COUNT(DISTINCT username)           AS unique_users,
+      COUNT(DISTINCT LOWER(username))    AS unique_users,
       COUNT(*)                           AS record_count
     FROM billing_premium_requests
     ${buildWhereClause(clauses)}
@@ -1110,7 +1110,7 @@ export function getPremiumDailyTrend(
       date AS day,
       COALESCE(SUM(aic_quantity), 0) AS total_requests,
       COALESCE(SUM(aic_gross_amount), 0) AS total_net,
-      COUNT(DISTINCT username)     AS unique_users,
+      COUNT(DISTINCT LOWER(username)) AS unique_users,
       COALESCE(SUM(input_tokens), 0)  AS total_input_tokens,
       COALESCE(SUM(output_tokens), 0) AS total_output_tokens,
       COALESCE(SUM(cached_tokens), 0) AS total_cached_tokens,
@@ -1327,7 +1327,10 @@ export function getPremiumFilterOptions(
   const users = (
     db
       .prepare(
-        `SELECT DISTINCT username FROM billing_premium_requests ${where} AND username != '' ORDER BY username`
+        `SELECT MIN(username) AS username
+         FROM billing_premium_requests ${where} AND username != ''
+         GROUP BY LOWER(username)
+         ORDER BY username`
       )
       .all(...params) as { username: string }[]
   ).map((r) => r.username);
@@ -1484,7 +1487,7 @@ export function getTokenKpis(
       ${TOKEN_SUMS_SQL},
       COALESCE(SUM(discount_amount), 0) AS pool_usd,
       COALESCE(SUM(net_amount), 0)      AS paid_usd,
-      COUNT(DISTINCT username)          AS unique_users,
+      COUNT(DISTINCT LOWER(username))   AS unique_users,
       COUNT(DISTINCT model)             AS unique_models,
       COUNT(*)                          AS record_count
     FROM billing_premium_requests
@@ -1533,7 +1536,7 @@ export function getTokenModelSummary(
       ${TOKEN_SUMS_SQL},
       COALESCE(SUM(discount_amount), 0) AS pool_usd,
       COALESCE(SUM(net_amount), 0)      AS paid_usd,
-      COUNT(DISTINCT username)          AS unique_users,
+      COUNT(DISTINCT LOWER(username))   AS unique_users,
       COUNT(*)                          AS record_count
     FROM billing_premium_requests
     ${where}
@@ -1572,7 +1575,7 @@ export function getTokenDailyTrend(
     SELECT
       date AS day,
       ${TOKEN_SUMS_SQL},
-      COUNT(DISTINCT username) AS unique_users
+      COUNT(DISTINCT LOWER(username)) AS unique_users
     FROM billing_premium_requests
     ${where}
     GROUP BY date
@@ -1598,7 +1601,7 @@ export function getTokenUserSummary(
     .prepare(
       `
     SELECT
-      username,
+      MIN(username) AS username,
       organization,
       ${TOKEN_SUMS_SQL},
       COALESCE(SUM(discount_amount), 0) AS pool_usd,
@@ -1606,7 +1609,7 @@ export function getTokenUserSummary(
       COUNT(DISTINCT model)             AS unique_models
     FROM billing_premium_requests
     ${where}
-    GROUP BY username, organization
+    GROUP BY LOWER(username), organization
     ORDER BY total_tokens DESC, username ASC
     LIMIT ?
   `
@@ -1643,7 +1646,7 @@ export function getTokenAttribution(
     SELECT
       ${column} AS key,
       ${TOKEN_SUMS_SQL},
-      COUNT(DISTINCT username) AS unique_users,
+      COUNT(DISTINCT LOWER(username)) AS unique_users,
       COUNT(*)                 AS record_count
     FROM billing_premium_requests
     ${where}
@@ -1710,14 +1713,14 @@ export function getTokenUserModelEfficiency(
     .prepare(
       `
     SELECT
-      username,
+      MIN(username) AS username,
       model,
       COALESCE(SUM(input_tokens + output_tokens + cache_read_tokens + cache_write_tokens), 0) AS total_tokens,
       COALESCE(SUM(aic_quantity), 0)     AS total_credits,
       COALESCE(SUM(aic_gross_amount), 0) AS total_gross_usd
     FROM billing_premium_requests
     ${where}
-    GROUP BY username, model
+    GROUP BY LOWER(username), model
     HAVING total_tokens > 0
     ORDER BY total_credits DESC
   `

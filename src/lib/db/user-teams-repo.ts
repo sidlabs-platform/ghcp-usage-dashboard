@@ -42,7 +42,7 @@ export function getCopilotTeams(startDay: string, endDay: string, enterpriseSlug
   const db = getDb();
   const ef = buildEnterpriseFilter(enterpriseSlugs);
   return db.prepare(`
-    SELECT team_slug, enterprise_slug, org_slug, COUNT(DISTINCT user_login) as member_count
+    SELECT team_slug, enterprise_slug, org_slug, COUNT(DISTINCT user_id) as member_count
     FROM copilot_user_teams
     WHERE day >= ? AND day <= ?${ef.clause}
     GROUP BY enterprise_slug, team_slug, org_slug
@@ -68,9 +68,10 @@ export function getCopilotTeamMembers(
   const orgClause = orgSlug ? " AND org_slug = ?" : "";
   const orgParams = orgSlug ? [orgSlug] : [];
   const rows = db.prepare(`
-    SELECT DISTINCT user_login
+    SELECT MAX(user_login) AS user_login
     FROM copilot_user_teams
     WHERE team_slug = ? AND day >= ? AND day <= ?${ef.clause}${orgClause}
+    GROUP BY user_id
     ORDER BY user_login
   `).all(teamSlug, startDay, endDay, ...ef.params, ...orgParams) as { user_login: string }[];
   return rows.map((row) => row.user_login);
@@ -88,7 +89,7 @@ export function getCopilotTeamsByUser(
   return db.prepare(`
     SELECT DISTINCT team_slug
     FROM copilot_user_teams
-    WHERE user_login = ? AND day >= ? AND day <= ?${ef.clause}
+    WHERE LOWER(user_login) = LOWER(?) AND day >= ? AND day <= ?${ef.clause}
     ORDER BY team_slug
   `).all(userLogin, startDay, endDay, ...ef.params) as { team_slug: string }[];
 }

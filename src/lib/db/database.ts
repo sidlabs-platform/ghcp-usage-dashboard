@@ -86,6 +86,7 @@ export function getDb(): SqliteDatabase {
     "DROP INDEX IF EXISTS idx_billing_usage_dedup",
     // Summary tables
     "ALTER TABLE user_period_summary ADD COLUMN enterprise_slug TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE user_period_summary ADD COLUMN user_id INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE daily_aggregate_cache ADD COLUMN enterprise_slug TEXT NOT NULL DEFAULT ''",
     "ALTER TABLE team_summary_cache ADD COLUMN enterprise_slug TEXT NOT NULL DEFAULT ''",
     // AI adoption cohorts
@@ -97,6 +98,44 @@ export function getDb(): SqliteDatabase {
   ];
   for (const sql of migrations) {
     try { _db.exec(sql); } catch { /* column already exists or table not yet created */ }
+  }
+
+  // user_period_summary is a derived cache, but its legacy login-based primary
+  // key cannot represent login reuse by a different GitHub user. Re-key it by
+  // stable user_id while preserving existing cached rows with synthetic IDs;
+  // the next normal summary refresh replaces those rows with real IDs.
+  const userSummarySchema = _db.prepare(
+    `SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'user_period_summary'`
+  ).get() as { sql: string } | undefined;
+  if (userSummarySchema && !userSummarySchema.sql.includes("PRIMARY KEY (enterprise_slug, user_id")) {
+    const migrateUserSummaryIdentity = _db.transaction(() => {
+      _db!.exec("DROP INDEX IF EXISTS idx_user_summary_period");
+      _db!.exec("DROP INDEX IF EXISTS idx_user_summary_slug");
+      _db!.exec("ALTER TABLE user_period_summary RENAME TO user_period_summary_legacy");
+      _db!.exec(summarySchema);
+      _db!.exec(`
+        INSERT INTO user_period_summary (
+          enterprise_slug, user_id, user_login, period_start, period_end,
+          active_days, loc_added, loc_deleted, interactions,
+          code_gen, code_accept, acceptance_rate,
+          used_agent, used_chat, used_cli,
+          used_code_review_active, used_code_review_passive, used_coding_agent,
+          computed_at
+        )
+        SELECT
+          enterprise_slug,
+          CASE WHEN user_id != 0 THEN user_id ELSE -rowid END,
+          user_login, period_start, period_end,
+          active_days, loc_added, loc_deleted, interactions,
+          code_gen, code_accept, acceptance_rate,
+          used_agent, used_chat, used_cli,
+          used_code_review_active, used_code_review_passive, used_coding_agent,
+          computed_at
+        FROM user_period_summary_legacy
+      `);
+      _db!.exec("DROP TABLE user_period_summary_legacy");
+    });
+    migrateUserSummaryIdentity();
   }
 
   // Now safe to run schema files (CREATE TABLE IF NOT EXISTS + CREATE INDEX).

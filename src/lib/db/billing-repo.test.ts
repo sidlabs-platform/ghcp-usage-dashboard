@@ -24,6 +24,7 @@ import {
   getUsageRecordsPaginated,
   getPremiumRequestsPaginated,
   getPremiumUserSummary,
+  getPremiumUserModelBreakdown,
   getPremiumModelSummary,
   getCostCenterBreakdown,
   getPremiumCostCenterBreakdown,
@@ -762,6 +763,32 @@ describe("getPremiumUserSummary", () => {
     expect(summary[0].total_input_tokens).toBe(1500);
     expect(summary[0].total_output_tokens).toBe(600);
     expect(summary[0].total_cached_tokens).toBe(350);
+  });
+
+  it("deduplicates username casing variants", () => {
+    upsertPremiumRequests("ent1", [
+      makePremiumRecord({ sku: "case-1", username: "OctoCat", aic_quantity: 40 }),
+      makePremiumRecord({ date: "2026-06-11", sku: "case-2", username: "octocat", aic_quantity: 60 }),
+    ]);
+
+    const summary = getPremiumUserSummary("2026-06-01", "2026-06-30");
+    expect(summary).toHaveLength(1);
+    expect(summary[0].total_requests).toBe(100);
+  });
+
+  it("applies user filters case-insensitively", () => {
+    upsertPremiumRequests("ent1", [
+      makePremiumRecord({ sku: "case-filter-1", username: "OctoCat", model: "gpt-4", aic_quantity: 40 }),
+      makePremiumRecord({ date: "2026-06-11", sku: "case-filter-2", username: "octocat", model: "gpt-4", aic_quantity: 60 }),
+    ]);
+
+    const summary = getPremiumUserSummary("2026-06-01", "2026-06-30", { username: "OCTOCAT" });
+    const models = getPremiumUserModelBreakdown("2026-06-01", "2026-06-30", "OCTOCAT");
+
+    expect(summary).toHaveLength(1);
+    expect(summary[0].total_requests).toBe(100);
+    expect(models).toHaveLength(1);
+    expect(models[0].ai_credits).toBe(100);
   });
 });
 

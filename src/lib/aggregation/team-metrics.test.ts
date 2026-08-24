@@ -45,6 +45,19 @@ describe("computeTeamDayMetrics", () => {
     expect(result.totalMembers).toBe(2);
   });
 
+  it("deduplicates casing variants by stable user ID", () => {
+    const records: UserDayRecord[] = [
+      makeRecord({ enterprise_id: "ent-a", user_id: 42, user_login: "Alice" }),
+      makeRecord({ enterprise_id: "ent-b", user_id: 42, user_login: "alice" }),
+    ];
+
+    const result = computeTeamDayMetrics("team-a", "Team A", ["alice", "ALICE"], records, "2024-01-15");
+
+    expect(result.totalMembers).toBe(1);
+    expect(result.activeUsers).toBe(1);
+    expect(result.chatUsers).toBe(1);
+  });
+
   it("aggregates code metrics across members", () => {
     const records: UserDayRecord[] = [
       makeRecord({ user_login: "alice", day: "2024-01-15", loc_added_sum: 50 }),

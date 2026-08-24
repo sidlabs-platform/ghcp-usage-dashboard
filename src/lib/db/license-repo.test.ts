@@ -237,11 +237,11 @@ describe("getLicenseReconciliationRows", () => {
   });
 
   it("filters by allowedLogins", () => {
-    insertSeat({ user_login: "a" });
+    insertSeat({ user_login: "A" });
     insertSeat({ user_login: "b" });
     const rows = getLicenseReconciliationRows({ ...WINDOW, filters: { allowedLogins: new Set(["a"]) } });
     expect(rows).toHaveLength(1);
-    expect(rows[0].user_login).toBe("a");
+    expect(rows[0].user_login).toBe("A");
   });
 
   it("filters by allowedLogins with multiple allowed logins", () => {

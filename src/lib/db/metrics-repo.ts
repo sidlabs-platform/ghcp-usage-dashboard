@@ -632,7 +632,7 @@ export function getUserMetricsByLogin(userLogin: string, startDay: string, endDa
   const rows = db.prepare(`
     SELECT ${USER_COLUMNS}
     FROM user_daily_metrics
-    WHERE user_login = ? AND day >= ? AND day <= ?${ef.clause}
+    WHERE LOWER(user_login) = LOWER(?) AND day >= ? AND day <= ?${ef.clause}
     ORDER BY day ASC
   `).all(userLogin, startDay, endDay, ...ef.params) as Record<string, unknown>[];
 
@@ -643,8 +643,9 @@ export function getDistinctUsers(enterpriseId: string, startDay: string, endDay:
   const db = getDb();
   const ef = buildEnterpriseFilter(enterpriseSlugs);
   const rows = db.prepare(`
-    SELECT DISTINCT user_login FROM user_daily_metrics
+    SELECT MAX(user_login) AS user_login FROM user_daily_metrics
     WHERE enterprise_id = ? AND day >= ? AND day <= ?${ef.clause}
+    GROUP BY user_id
     ORDER BY user_login ASC
   `).all(enterpriseId, startDay, endDay, ...ef.params) as { user_login: string }[];
 
@@ -757,14 +758,14 @@ export function getUserAiCreditsSummary(
 
   return db.prepare(`
     SELECT
-      user_login,
+      MAX(user_login) AS user_login,
       COALESCE(SUM(ai_credits_used), 0) AS total_ai_credits_used,
       COUNT(DISTINCT day) AS active_days,
       COALESCE(SUM(ai_credits_used), 0) * 1.0 / COUNT(DISTINCT day) AS avg_daily_ai_credits,
       MAX(day) AS last_active_day
     FROM user_daily_metrics
     WHERE ${clauses.join(" AND ")}
-    GROUP BY user_login
+    GROUP BY user_id
     ORDER BY total_ai_credits_used DESC, user_login ASC
     ${limitSql}
   `).all(...queryParams) as UserAiCreditsSummary[];
@@ -806,23 +807,23 @@ export function getUserAiCreditsUsersPaginated(
   const total = (db.prepare(`
     SELECT COUNT(*) AS cnt
     FROM (
-      SELECT user_login
+      SELECT user_id
       FROM user_daily_metrics
       WHERE ${where}
-      GROUP BY user_login
+      GROUP BY user_id
     )
   `).get(...params) as { cnt: number }).cnt;
 
   const users = db.prepare(`
     SELECT
-      user_login,
+      MAX(user_login) AS user_login,
       COALESCE(SUM(ai_credits_used), 0) AS total_ai_credits_used,
       COUNT(DISTINCT day) AS active_days,
       COALESCE(SUM(ai_credits_used), 0) * 1.0 / COUNT(DISTINCT day) AS avg_daily_ai_credits,
       MAX(day) AS last_active_day
     FROM user_daily_metrics
     WHERE ${where}
-    GROUP BY user_login
+    GROUP BY user_id
     ORDER BY ${safeSort} ${safeDir}, user_login ASC
     LIMIT ? OFFSET ?
   `).all(...params, pageSize, offset) as UserAiCreditsSummary[];
@@ -849,16 +850,16 @@ function buildUserAiCreditsWhere(
   }
 
   if (filters?.userLogin) {
-    clauses.push("user_login = ?");
-    params.push(filters.userLogin);
+    clauses.push("LOWER(user_login) = ?");
+    params.push(filters.userLogin.toLowerCase());
   }
 
   if (filters?.allowedLogins !== undefined) {
     if (filters.allowedLogins.length === 0) {
       clauses.push("1 = 0");
     } else {
-      clauses.push(`user_login IN (${filters.allowedLogins.map(() => "?").join(",")})`);
-      params.push(...filters.allowedLogins);
+      clauses.push(`LOWER(user_login) IN (${filters.allowedLogins.map(() => "?").join(",")})`);
+      params.push(...filters.allowedLogins.map((login) => login.toLowerCase()));
     }
   }
 
@@ -888,11 +889,12 @@ export function getUserAiCreditsTotals(
   const row = db.prepare(`
     WITH user_totals AS (
       SELECT
-        user_login,
+        user_id,
+        MAX(user_login) AS user_login,
         COALESCE(SUM(ai_credits_used), 0) AS total_ai_credits_used
       FROM user_daily_metrics
       WHERE ${clauses.join(" AND ")}
-      GROUP BY user_login
+      GROUP BY user_id
     ),
     ranked AS (
       SELECT user_login, total_ai_credits_used
@@ -1133,11 +1135,12 @@ function buildPhaseAssignmentWhere(
  */
 const PHASE_ASSIGNMENT_CTE = `
   phase_assignment AS (
-    SELECT user_login, phase FROM (
+    SELECT user_id, user_login, phase FROM (
       SELECT
+        u.user_id,
         u.user_login,
         ${phaseNumberSql("u.ai_adoption_phase")} AS phase,
-        ROW_NUMBER() OVER (PARTITION BY u.user_login ORDER BY u.day DESC) AS rn
+        ROW_NUMBER() OVER (PARTITION BY u.user_id ORDER BY u.day DESC) AS rn
       FROM user_daily_metrics u
       WHERE {{WHERE}}
     ) WHERE rn = 1
@@ -1312,20 +1315,19 @@ export function getPhaseCostFromCredits(
   return db.prepare(`
     WITH ${PHASE_ASSIGNMENT_CTE.replace("{{WHERE}}", clause)},
     user_credits AS (
-      SELECT u.user_login AS user_login, COALESCE(SUM(u.ai_credits_used), 0) AS credits
+      SELECT u.user_id AS user_id, COALESCE(SUM(u.ai_credits_used), 0) AS credits
       FROM user_daily_metrics u
       WHERE ${clause}
-      GROUP BY u.user_login
+      GROUP BY u.user_id
     )
     SELECT
       p.phase AS phase,
       COUNT(*) AS developers,
       COALESCE(SUM(c.credits), 0) * ? AS total_cost_usd
     FROM phase_assignment p
-    LEFT JOIN user_credits c ON c.user_login = p.user_login
+    LEFT JOIN user_credits c ON c.user_id = p.user_id
     WHERE p.phase IS NOT NULL
     GROUP BY p.phase
     ORDER BY p.phase ASC
   `).all(...params, ...params, creditToUsd) as PhaseCostRow[];
 }
-

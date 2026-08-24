@@ -37,12 +37,18 @@ function makeSeat(login: string, id: number, lastActivity: string | null): Copil
   } as unknown as CopilotSeat;
 }
 
-let userIdSeq = 100;
 function addUsage(login: string, day: string, enterprise = "acme") {
+  const userIds: Record<string, number> = {
+    alice: 1,
+    bob: 2,
+    carol: 3,
+    dan: 4,
+    erin: 5,
+  };
   db.prepare(
     `INSERT OR REPLACE INTO user_daily_metrics (day, user_login, user_id, enterprise_id, enterprise_slug)
      VALUES (?, ?, ?, ?, ?)`,
-  ).run(day, login, `u-${login}-${userIdSeq++}`, 1, enterprise);
+  ).run(day, login, userIds[login], 1, enterprise);
 }
 
 beforeAll(() => {

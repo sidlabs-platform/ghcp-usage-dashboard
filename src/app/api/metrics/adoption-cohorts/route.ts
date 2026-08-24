@@ -15,7 +15,10 @@ const USER_PHASE_SQL = phaseNumberSql("u.ai_adoption_phase");
 function buildLoginFilter(logins: string[], alias = ""): { clause: string; params: string[] } {
   if (logins.length === 0) return { clause: "", params: [] };
   const placeholders = logins.map(() => "?").join(",");
-  return { clause: ` AND ${alias}user_login IN (${placeholders})`, params: logins };
+  return {
+    clause: ` AND LOWER(${alias}user_login) IN (${placeholders})`,
+    params: logins.map((login) => login.toLowerCase()),
+  };
 }
 
 function buildEnterpriseFilter(slugs?: string[], alias = ""): { clause: string; params: string[] } {
@@ -202,10 +205,10 @@ function getUnclassifiedUserCount(
 
   const row = db.prepare(`
     SELECT
-      COUNT(DISTINCT LOWER(u.user_login)) AS total_active,
+      COUNT(DISTINCT u.user_id) AS total_active,
       COUNT(DISTINCT CASE
         WHEN u.ai_adoption_phase IS NOT NULL AND ${USER_PHASE_SQL} IS NOT NULL
-        THEN LOWER(u.user_login)
+        THEN u.user_id
       END) AS classified
     FROM user_daily_metrics u
     WHERE u.day BETWEEN ? AND ?${lf.clause}${ef.clause}
@@ -237,17 +240,17 @@ function getUserAdoptionCohorts(
   const ef = buildEnterpriseFilter(enterpriseSlugs, "u.");
 
   // Get latest phase per user. Uses ROW_NUMBER to pick exactly one row per
-  // user_login (the most recent day), avoiding duplicates in multi-enterprise
-  // scenarios where the same login appears under different enterprise_slugs.
+  // stable GitHub user ID (the most recent day), avoiding duplicates when a
+  // login changes casing or is renamed.
   // The phase is resolved to an integer in SQL via the shared expression, since
   // the stored JSON carries it either as a number or as a display string.
   const rows = db.prepare(`
     SELECT phase, COUNT(*) as user_count FROM (
-      SELECT user_login, phase FROM (
+      SELECT user_id, phase FROM (
         SELECT
-          u.user_login,
+          u.user_id,
           ${USER_PHASE_SQL} as phase,
-          ROW_NUMBER() OVER (PARTITION BY u.user_login ORDER BY u.day DESC) as rn
+          ROW_NUMBER() OVER (PARTITION BY u.user_id ORDER BY u.day DESC) as rn
         FROM user_daily_metrics u
         WHERE u.day >= ? AND u.day <= ?
           AND u.ai_adoption_phase IS NOT NULL${lf.clause}${ef.clause}
@@ -273,7 +276,7 @@ function getUserAdoptionCohorts(
     SELECT
       u.day as day,
       ${USER_PHASE_SQL} as phase,
-      COUNT(DISTINCT u.user_login) as user_count
+      COUNT(DISTINCT u.user_id) as user_count
     FROM user_daily_metrics u
     WHERE u.day >= ? AND u.day <= ?
       AND u.ai_adoption_phase IS NOT NULL${lf.clause}${ef.clause}

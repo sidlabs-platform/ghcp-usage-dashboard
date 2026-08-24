@@ -50,7 +50,7 @@ export function getAllTeams(enterpriseSlugs?: string[]): TeamRow[] {
   const ef = buildEnterpriseFilter(enterpriseSlugs);
   const where = ef.clause ? `WHERE 1=1${ef.clause}` : "";
   return db.prepare(`
-    SELECT enterprise_slug, team_slug, team_name, source, org_slug, COUNT(DISTINCT user_login) as member_count
+    SELECT enterprise_slug, team_slug, team_name, source, org_slug, COUNT(DISTINCT LOWER(user_login)) as member_count
     FROM team_memberships
     ${where}
     GROUP BY enterprise_slug, team_slug, source, org_slug, team_name
@@ -62,7 +62,11 @@ export function getTeamMembers(teamSlug: string, enterpriseSlugs?: string[]): st
   const db = getDb();
   const ef = buildEnterpriseFilter(enterpriseSlugs);
   const rows = db.prepare(`
-    SELECT user_login FROM team_memberships WHERE team_slug = ?${ef.clause} ORDER BY user_login
+    SELECT MIN(user_login) AS user_login
+    FROM team_memberships
+    WHERE team_slug = ?${ef.clause}
+    GROUP BY LOWER(user_login)
+    ORDER BY user_login
   `).all(teamSlug, ...ef.params) as { user_login: string }[];
 
   return rows.map((r) => r.user_login);
@@ -72,7 +76,7 @@ export function getTeamsByUser(userLogin: string, enterpriseSlugs?: string[]): {
   const db = getDb();
   const ef = buildEnterpriseFilter(enterpriseSlugs);
   return db.prepare(`
-    SELECT DISTINCT team_slug, team_name FROM team_memberships WHERE user_login = ?${ef.clause}
+    SELECT DISTINCT team_slug, team_name FROM team_memberships WHERE LOWER(user_login) = LOWER(?)${ef.clause}
   `).all(userLogin, ...ef.params) as { team_slug: string; team_name: string }[];
 }
 
@@ -83,8 +87,9 @@ export function getTeamMembersMulti(teamSlugs: string[], enterpriseSlugs?: strin
   const placeholders = teamSlugs.map(() => "?").join(",");
   const ef = buildEnterpriseFilter(enterpriseSlugs);
   const rows = db.prepare(`
-    SELECT DISTINCT user_login FROM team_memberships
+    SELECT MIN(user_login) AS user_login FROM team_memberships
     WHERE team_slug IN (${placeholders})${ef.clause}
+    GROUP BY LOWER(user_login)
     ORDER BY user_login
   `).all(...teamSlugs, ...ef.params) as { user_login: string }[];
   return rows.map((r) => r.user_login);
@@ -97,8 +102,9 @@ export function getMembersForOrgs(orgSlugs: string[], enterpriseSlugs?: string[]
   const placeholders = orgSlugs.map(() => "?").join(",");
   const ef = buildEnterpriseFilter(enterpriseSlugs);
   const rows = db.prepare(`
-    SELECT DISTINCT user_login FROM team_memberships
+    SELECT MIN(user_login) AS user_login FROM team_memberships
     WHERE org_slug IN (${placeholders})${ef.clause}
+    GROUP BY LOWER(user_login)
     ORDER BY user_login
   `).all(...orgSlugs, ...ef.params) as { user_login: string }[];
   return rows.map((r) => r.user_login);
@@ -122,9 +128,10 @@ export function getAllTeamsWithMembers(enterpriseSlugs?: string[]): { enterprise
   const ef = buildEnterpriseFilter(enterpriseSlugs);
   const where = ef.clause ? `WHERE 1=1${ef.clause}` : "";
   const rows = db.prepare(`
-    SELECT enterprise_slug, team_slug, team_name, source, org_slug, user_login
+    SELECT enterprise_slug, team_slug, team_name, source, org_slug, MIN(user_login) AS user_login
     FROM team_memberships
     ${where}
+    GROUP BY enterprise_slug, team_slug, team_name, source, org_slug, LOWER(user_login)
     ORDER BY enterprise_slug, source, org_slug, team_slug, user_login
   `).all(...ef.params) as { enterprise_slug: string; team_slug: string; team_name: string; source: string; org_slug: string | null; user_login: string }[];
 
@@ -182,23 +189,24 @@ export function resolveFilteredUserScopes(
     : "";
 
   const rows = db.prepare(`
-    SELECT DISTINCT tm.enterprise_slug, tm.user_login
+    SELECT tm.enterprise_slug, MIN(tm.user_login) AS user_login
     FROM team_memberships tm
     WHERE EXISTS (
       SELECT 1
       FROM team_memberships team_match
       WHERE team_match.enterprise_slug = tm.enterprise_slug
-        AND team_match.user_login = tm.user_login
+        AND LOWER(team_match.user_login) = LOWER(tm.user_login)
         AND team_match.team_slug IN (${teamPlaceholders})
     )
       AND EXISTS (
         SELECT 1
         FROM team_memberships org_match
         WHERE org_match.enterprise_slug = tm.enterprise_slug
-          AND org_match.user_login = tm.user_login
+          AND LOWER(org_match.user_login) = LOWER(tm.user_login)
           AND org_match.org_slug IN (${orgPlaceholders})
       )
       ${enterpriseFilter}
+    GROUP BY tm.enterprise_slug, LOWER(tm.user_login)
     ORDER BY tm.enterprise_slug, tm.user_login
   `).all(...teamSlugs, ...orgSlugs, ...(enterpriseSlugs ?? [])) as FilteredUserScopeRow[];
 

@@ -65,14 +65,17 @@ export function computeTeamDayMetrics(
   userRecords: UserDayRecord[],
   day: string
 ): TeamDayMetrics {
-  const memberSet = new Set(members);
+  const memberSet = new Set(members.map((login) => login.toLowerCase()));
   const dayRecords = userRecords.filter(
-    (u) => u.day === day && memberSet.has(u.user_login)
+    (u) => u.day === day && memberSet.has(u.user_login.toLowerCase())
   );
 
-  const activeUsers = dayRecords.filter(
+  const countUsers = (predicate: (record: UserDayRecord) => boolean) =>
+    new Set(dayRecords.filter(predicate).map((record) => record.user_id)).size;
+
+  const activeUsers = countUsers(
     (u) => u.code_generation_activity_count > 0 || u.user_initiated_interaction_count > 0 || u.used_agent || u.used_chat || u.used_cli
-  ).length;
+  );
 
   const codeGenCount = dayRecords.reduce((s, u) => s + u.code_generation_activity_count, 0);
   const codeAcceptCount = dayRecords.reduce((s, u) => s + u.code_acceptance_activity_count, 0);
@@ -81,13 +84,13 @@ export function computeTeamDayMetrics(
     teamSlug,
     teamName,
     day,
-    totalMembers: members.length,
+    totalMembers: memberSet.size,
     activeUsers,
-    agentUsers: dayRecords.filter((u) => u.used_agent).length,
-    chatUsers: dayRecords.filter((u) => u.used_chat).length,
-    cliUsers: dayRecords.filter((u) => u.used_cli).length,
-    codeReviewActiveUsers: dayRecords.filter((u) => u.used_copilot_code_review_active).length,
-    codeReviewPassiveUsers: dayRecords.filter((u) => u.used_copilot_code_review_passive).length,
+    agentUsers: countUsers((u) => u.used_agent),
+    chatUsers: countUsers((u) => u.used_chat),
+    cliUsers: countUsers((u) => u.used_cli),
+    codeReviewActiveUsers: countUsers((u) => !!u.used_copilot_code_review_active),
+    codeReviewPassiveUsers: countUsers((u) => !!u.used_copilot_code_review_passive),
     codeGenerationCount: codeGenCount,
     codeAcceptanceCount: codeAcceptCount,
     userInteractionCount: dayRecords.reduce((s, u) => s + u.user_initiated_interaction_count, 0),
@@ -126,10 +129,10 @@ export function computeTeamSummary(
 ): TeamSummary {
   // Get unique days
   const days = [...new Set(userRecords.map((u) => u.day))].sort();
-  const memberSet = new Set(members);
+  const memberSet = new Set(members.map((login) => login.toLowerCase()));
 
   // Filter records to team members
-  const teamRecords = userRecords.filter((u) => memberSet.has(u.user_login));
+  const teamRecords = userRecords.filter((u) => memberSet.has(u.user_login.toLowerCase()));
 
   // Daily breakdown
   const dailyMetrics = days.map((day) =>
@@ -146,11 +149,10 @@ export function computeTeamSummary(
   }
 
   // Unique users who used each feature in the period
-  const uniqueMembers = new Set(teamRecords.map((u) => u.user_login));
-  const uniqueAgentUsers = new Set(teamRecords.filter((u) => u.used_agent).map((u) => u.user_login));
-  const uniqueChatUsers = new Set(teamRecords.filter((u) => u.used_chat).map((u) => u.user_login));
-  const uniqueCliUsers = new Set(teamRecords.filter((u) => u.used_cli).map((u) => u.user_login));
-  const uniqueCodeReviewUsers = new Set(teamRecords.filter((u) => u.used_copilot_code_review_active).map((u) => u.user_login));
+  const uniqueAgentUsers = new Set(teamRecords.filter((u) => u.used_agent).map((u) => u.user_id));
+  const uniqueChatUsers = new Set(teamRecords.filter((u) => u.used_chat).map((u) => u.user_id));
+  const uniqueCliUsers = new Set(teamRecords.filter((u) => u.used_cli).map((u) => u.user_id));
+  const uniqueCodeReviewUsers = new Set(teamRecords.filter((u) => u.used_copilot_code_review_active).map((u) => u.user_id));
 
   const avgDailyActive = dailyMetrics.length > 0
     ? dailyMetrics.reduce((s, d) => s + d.activeUsers, 0) / dailyMetrics.length
@@ -159,7 +161,7 @@ export function computeTeamSummary(
   return {
     teamSlug,
     teamName,
-    totalMembers: members.length,
+    totalMembers: memberSet.size,
     avgDailyActiveUsers: Math.round(avgDailyActive * 10) / 10,
     totalLocAdded: teamRecords.reduce((s, u) => s + u.loc_added_sum, 0),
     totalLocSuggested: teamRecords.reduce((s, u) => s + u.loc_suggested_to_add_sum, 0),
@@ -167,10 +169,10 @@ export function computeTeamSummary(
     totalCodeGenCount: compGenTotal,
     totalCodeAcceptCount: compAcceptTotal,
     overallAcceptanceRate: compGenTotal > 0 ? (compAcceptTotal / compGenTotal) * 100 : 0,
-    agentAdoptionRate: members.length > 0 ? (uniqueAgentUsers.size / members.length) * 100 : 0,
-    chatAdoptionRate: members.length > 0 ? (uniqueChatUsers.size / members.length) * 100 : 0,
-    cliAdoptionRate: members.length > 0 ? (uniqueCliUsers.size / members.length) * 100 : 0,
-    codeReviewAdoptionRate: members.length > 0 ? (uniqueCodeReviewUsers.size / members.length) * 100 : 0,
+    agentAdoptionRate: memberSet.size > 0 ? (uniqueAgentUsers.size / memberSet.size) * 100 : 0,
+    chatAdoptionRate: memberSet.size > 0 ? (uniqueChatUsers.size / memberSet.size) * 100 : 0,
+    cliAdoptionRate: memberSet.size > 0 ? (uniqueCliUsers.size / memberSet.size) * 100 : 0,
+    codeReviewAdoptionRate: memberSet.size > 0 ? (uniqueCodeReviewUsers.size / memberSet.size) * 100 : 0,
     chatModes: {
       ask: teamRecords.reduce((s, u) => s + (u.chat_panel_ask_mode || 0), 0),
       edit: teamRecords.reduce((s, u) => s + (u.chat_panel_edit_mode || 0), 0),

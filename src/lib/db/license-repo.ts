@@ -268,11 +268,14 @@ export function getLicenseReconciliationDataset(
   }
 
   const searchLower = filters?.search?.trim().toLowerCase();
+  const allowedLoginKeys = filters?.allowedLogins
+    ? new Set(Array.from(filters.allowedLogins, (login) => login.toLowerCase()))
+    : undefined;
   const rows: LicenseReconciliationRow[] = [];
   const matchedLogins = new Set<string>();
 
   for (const acc of byUser.values()) {
-    if (filters?.allowedLogins && !filters.allowedLogins.has(acc.login)) continue;
+    if (allowedLoginKeys && !allowedLoginKeys.has(acc.login.toLowerCase())) continue;
 
     if (searchLower) {
       const inLogin = acc.login.toLowerCase().includes(searchLower);

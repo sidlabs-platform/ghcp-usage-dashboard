@@ -48,7 +48,7 @@ beforeEach(() => {
         })),
       };
     }
-    if (sql.includes("COUNT(DISTINCT user_login)")) {
+    if (sql.includes("COUNT(DISTINCT LOWER(user_login))")) {
       return { get: vi.fn(() => ({ cnt: 2 })) };
     }
     if (sql.includes("WITH team_logins AS")) {

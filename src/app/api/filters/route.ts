@@ -22,14 +22,14 @@ async function handler(request: NextRequest) {
 
     // Enterprise teams (source = 'enterprise')
     const entTeams = db.prepare(`
-      SELECT team_slug as slug, team_name as name, enterprise_slug as enterpriseSlug, COUNT(DISTINCT user_login) as memberCount
+      SELECT team_slug as slug, team_name as name, enterprise_slug as enterpriseSlug, COUNT(DISTINCT LOWER(user_login)) as memberCount
       FROM team_memberships WHERE source = 'enterprise'${entFilter}
       GROUP BY team_slug, enterprise_slug ORDER BY team_name ASC
     `).all(...entParams) as { slug: string; name: string; enterpriseSlug: string; memberCount: number }[];
 
     // Org teams (source = 'org'), grouped by org
     const orgTeams = db.prepare(`
-      SELECT team_slug as slug, team_name as name, org_slug as orgSlug, enterprise_slug as enterpriseSlug, COUNT(DISTINCT user_login) as memberCount
+      SELECT team_slug as slug, team_name as name, org_slug as orgSlug, enterprise_slug as enterpriseSlug, COUNT(DISTINCT LOWER(user_login)) as memberCount
       FROM team_memberships WHERE source = 'org'${entFilter}
       GROUP BY team_slug, org_slug, enterprise_slug ORDER BY team_name ASC
     `).all(...entParams) as { slug: string; name: string; orgSlug: string; enterpriseSlug: string; memberCount: number }[];

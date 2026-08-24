@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
+import { parseScopeFilter } from "@/lib/api/scope-filter";
 
 vi.mock("@/lib/cache/with-cache", () => ({
   withCache: (handler: unknown) => handler,
@@ -16,9 +17,12 @@ vi.mock("@/lib/cache/memory-cache", () => ({
 vi.mock("@/lib/api/scope-filter", () => ({
   parseScopeFilter: vi.fn(() => ({
     allowedLogins: undefined,
+    allowedUserScopes: undefined,
     enterpriseSlugs: undefined,
     selectedTeams: [],
     selectedOrgs: [],
+    selectedEnterprises: [],
+    hasFilter: false,
   })),
 }));
 
@@ -66,6 +70,15 @@ function makePhase(phase: number, label: string, engaged: number, merged: number
 afterEach(() => {
   vi.clearAllMocks();
   getPhaseDeveloperCountsMock.mockReturnValue([]);
+  vi.mocked(parseScopeFilter).mockReturnValue({
+    allowedLogins: undefined,
+    allowedUserScopes: undefined,
+    enterpriseSlugs: undefined,
+    selectedTeams: [],
+    selectedOrgs: [],
+    selectedEnterprises: [],
+    hasFilter: false,
+  });
 });
 
 describe("adoption-cohorts merged-by-phase", () => {
@@ -130,6 +143,26 @@ describe("adoption-cohorts merged-by-phase", () => {
 });
 
 describe("adoption-cohorts window-wide user counts", () => {
+  it("normalizes scoped logins before querying user metrics", async () => {
+    vi.mocked(parseScopeFilter).mockReturnValue({
+      allowedLogins: new Set(["OctoCat"]),
+      allowedUserScopes: undefined,
+      enterpriseSlugs: ["acme"],
+      selectedTeams: ["team-a"],
+      selectedOrgs: [],
+      selectedEnterprises: ["acme"],
+      hasFilter: true,
+    });
+    allMock.mockReturnValue([]);
+
+    const GET = await getHandler();
+    const res = await GET(new NextRequest("http://localhost/api/metrics/adoption-cohorts?days=28&teams=team-a"));
+
+    expect(res.status).toBe(200);
+    expect(allMock.mock.calls.flat()).toContain("octocat");
+    expect(allMock.mock.calls.flat()).not.toContain("OctoCat");
+  });
+
   it("counts every user active in the window, not just the final day", async () => {
     const phases = [
       makePhase(1, "Code first", 30, 40),

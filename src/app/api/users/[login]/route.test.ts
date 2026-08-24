@@ -221,6 +221,20 @@ afterEach(() => {
 });
 
 describe("user detail route", { timeout: 10000 }, () => {
+  it("authorizes scoped login casing variants", async () => {
+    mockState.scopeFilter = {
+      allowedLogins: new Set(["OctoCat"]),
+      enterpriseSlugs: ["ent-a"],
+    };
+
+    const { GET } = await routePromise;
+    const response = await GET(new NextRequest("http://localhost/api/users/octocat?days=7"));
+
+    expect(response.status).toBe(200);
+    const sql = mockState.prepare.mock.calls.map(([statement]) => String(statement));
+    expect(sql.some((statement) => /\buser_login\s*=\s*\?/i.test(statement))).toBe(false);
+  });
+
   it("returns user-level activity, completion metrics, and breakdowns", async () => {
     const { GET } = await routePromise;
     const response = await GET(new NextRequest("http://localhost/api/users/octocat?days=7"));

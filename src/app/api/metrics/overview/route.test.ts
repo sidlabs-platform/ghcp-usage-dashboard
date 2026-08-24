@@ -74,6 +74,7 @@ beforeEach(() => {
   db.exec("DELETE FROM user_daily_metrics");
   db.exec("DELETE FROM enterprise_daily_metrics");
   db.exec("DELETE FROM team_memberships");
+  db.exec("DELETE FROM copilot_seats");
 });
 
 async function getHandler() {
@@ -127,6 +128,7 @@ describe("overview route — explicit date range regression", () => {
         totals_by_model_feature: [],
         totals_by_language_model: [],
       });
+
     }
 
     const GET = await getHandler();
@@ -142,6 +144,52 @@ describe("overview route — explicit date range regression", () => {
     ]);
     expect(json.kpis.dailyActiveUsers).toBe(7);
     expect(json.daysLoaded).toBe(2);
+  });
+});
+
+describe("overview route — active-user seat consistency", () => {
+  it("does not count login casing variants as separate active users", async () => {
+    const end = yesterday();
+    const startDate = new Date(`${end}T00:00:00Z`);
+    startDate.setUTCDate(startDate.getUTCDate() - 1);
+    const start = startDate.toISOString().split("T")[0];
+
+    db.prepare(`
+      INSERT INTO copilot_seats (
+        enterprise_slug, org_slug, user_login, user_id, plan_type,
+        last_activity_at, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      "ent1",
+      "org1",
+      "octocat",
+      42,
+      "business",
+      `${end}T12:00:00Z`,
+      "2026-01-01T00:00:00Z",
+      `${end}T12:00:00Z`,
+    );
+
+    const insertMetric = db.prepare(`
+      INSERT INTO user_daily_metrics (
+        day, enterprise_id, enterprise_slug, user_id, user_login,
+        used_agent, used_chat, used_cli, used_copilot_app
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    insertMetric.run(start, "ent1", "ent1", 42, "OctoCat", 0, 0, 0, 0);
+    insertMetric.run(end, "ent1", "ent1", 42, "octocat", 0, 0, 0, 0);
+
+    const GET = await getHandler();
+    const res = await GET(new NextRequest(
+      `http://localhost/api/metrics/overview?startDate=${start}&endDate=${end}`,
+    ));
+
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    expect(json.kpis.periodActiveUsers).toBe(1);
+    expect(json.kpis.totalSeats).toBe(1);
+    expect(json.kpis.activeUsersWithoutSeat).toBe(0);
+    expect(json.kpis.licenseUtilization).toBe(100);
   });
 });
 

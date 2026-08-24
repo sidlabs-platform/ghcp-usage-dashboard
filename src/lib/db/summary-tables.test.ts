@@ -97,6 +97,22 @@ describe("refreshUserSummary", () => {
     const count = refreshUserSummary("2024-01-01", "2024-01-31", "ent1");
     expect(count).toBe(1);
   });
+
+  it("keeps distinct user IDs separate when a login is reused", () => {
+    insertMetric({ day: "2024-01-10", user_id: 1, user_login: "shared-login" });
+    insertMetric({ day: "2024-01-11", user_id: 1, user_login: "renamed-user" });
+    insertMetric({ day: "2024-01-12", user_id: 2, user_login: "shared-login" });
+
+    expect(refreshUserSummary("2024-01-01", "2024-01-31")).toBe(2);
+    const rows = db.prepare(
+      "SELECT user_id, user_login FROM user_period_summary ORDER BY user_id"
+    ).all() as { user_id: number; user_login: string }[];
+
+    expect(rows).toEqual([
+      { user_id: 1, user_login: "shared-login" },
+      { user_id: 2, user_login: "shared-login" },
+    ]);
+  });
 });
 
 describe("refreshDailyAggregate", () => {
@@ -155,6 +171,23 @@ describe("refreshTeamSummary", () => {
     const count = refreshTeamSummary("2024-01-01", "2024-01-31");
     expect(count).toBe(1);
     const row = db.prepare("SELECT * FROM team_summary_cache WHERE team_slug = 'team-a'").get() as any;
+    expect(row.active_members).toBe(1);
+    expect(row.total_loc_added).toBe(15);
+  });
+
+  it("does not double team metrics for membership casing variants", () => {
+    insertMetric({ day: "2024-01-10", user_login: "octocat", user_id: 42 });
+    db.prepare(`
+      INSERT INTO team_memberships (enterprise_slug, team_slug, team_name, source, org_slug, user_login, updated_at)
+      VALUES
+        ('ent1', 'case-team', 'Case Team', 'org', 'org1', 'OctoCat', '2024-01-01'),
+        ('ent1', 'case-team', 'Case Team', 'org', 'org1', 'octocat', '2024-01-01')
+    `).run();
+
+    refreshTeamSummary("2024-01-01", "2024-01-31");
+    const row = db.prepare("SELECT * FROM team_summary_cache WHERE team_slug = 'case-team'").get() as any;
+
+    expect(row.total_members).toBe(1);
     expect(row.active_members).toBe(1);
     expect(row.total_loc_added).toBe(15);
   });
@@ -239,6 +272,23 @@ describe("completion classification consistency", () => {
     const row = db.prepare("SELECT * FROM user_period_summary WHERE user_login = 'octocat'").get() as any;
     // compGenCount = 50 + 6 + 3 = 59; compAcceptCount = 40 + 4 + 2 = 46
     // rate = 46/59*100 = 77.9661... -> rounded to 1 decimal = 78 (matches DB ROUND(..., 1))
+    expect(row.acceptance_rate).toBe(78);
+  });
+
+  it("updates the canonical user summary when feature rows use different login casing", () => {
+    insertMetric({
+      day: "2024-02-01",
+      user_id: 42,
+      user_login: "zebra",
+      totals_by_feature: "[]",
+      code_generation_activity_count: 10,
+      code_acceptance_activity_count: 0,
+    });
+    insertMetricWithFeatures({ day: "2024-02-02", user_id: 42, user_login: "Alpha" });
+
+    refreshUserSummary("2024-02-01", "2024-02-02");
+    const row = db.prepare("SELECT * FROM user_period_summary WHERE user_login = 'zebra'").get() as any;
+
     expect(row.acceptance_rate).toBe(78);
   });
 
