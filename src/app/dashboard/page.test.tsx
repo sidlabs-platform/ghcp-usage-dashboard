@@ -129,6 +129,48 @@ describe("DashboardOverview", { timeout: 20000 }, () => {
     });
   });
 
+  it("does not render license utilization in program health", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL) => {
+        if (String(input) === "/api/config") {
+          return Promise.resolve({
+            json: async () => ({ metrics: {} }),
+          } as Response);
+        }
+        if (String(input).startsWith("/api/metrics/overview?")) {
+          return Promise.resolve({
+            json: async () => ({
+              daysLoaded: 31,
+              dataAsOf: "2026-07-31",
+              filtered: false,
+              kpis: {},
+              activeUsersTrend: [],
+              acceptanceRateTrend: [],
+              chatModes: {
+                ask: 0,
+                edit: 0,
+                plan: 0,
+                agent: 0,
+                custom: 0,
+                unknown: 0,
+              },
+              featureUsage: [],
+              cliVsIde: [],
+            }),
+          } as Response);
+        }
+        throw new Error(`Unexpected fetch: ${String(input)}`);
+      }),
+    );
+
+    const Page = (await import("./page")).default;
+    render(<Page />);
+
+    expect(await screen.findByText("Active Users")).toBeInTheDocument();
+    expect(screen.queryByText("License Utilization")).not.toBeInTheDocument();
+  });
+
   it("renders the error state with the server error message", async () => {
     vi.stubGlobal(
       "fetch",
