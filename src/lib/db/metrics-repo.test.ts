@@ -81,6 +81,34 @@ describe("stable user identity aggregation", () => {
     ]);
   });
 
+  it("uses a deterministic enterprise tie-break for same-day adoption phases", () => {
+    const insert = db.prepare(`
+      INSERT INTO user_daily_metrics (
+        day, enterprise_id, enterprise_slug, user_id, user_login, ai_adoption_phase
+      ) VALUES (?, ?, ?, ?, ?, ?)
+    `);
+    insert.run(
+      "2033-02-01",
+      "ent-b",
+      "ent-b",
+      85,
+      "hubot-phase",
+      JSON.stringify({ phase: 3, label: "Multi-agent", version: "v1" }),
+    );
+    insert.run(
+      "2033-02-01",
+      "ent-a",
+      "ent-a",
+      85,
+      "Hubot-Phase",
+      JSON.stringify({ phase: 1, label: "Code first", version: "v1" }),
+    );
+
+    expect(getPhaseDeveloperCounts("2033-02-01", "2033-02-01")).toEqual([
+      { phase: 1, developers: 1 },
+    ]);
+  });
+
   it("returns one distinct user when the same ID has casing variants", () => {
     const insert = db.prepare(`
       INSERT INTO user_daily_metrics (
@@ -417,6 +445,29 @@ describe("getUserMetricsByLogin", () => {
     const results = getUserMetricsByLogin("specific-user", "2024-01-01", "2024-01-31");
     expect(results).toHaveLength(1);
     expect(results[0].code_generation_activity_count).toBe(5);
+  });
+
+  it("resolves one stable user ID when a login has been reused", () => {
+    const insert = db.prepare(`
+      INSERT INTO user_daily_metrics (
+        day, enterprise_id, enterprise_slug, user_id, user_login,
+        code_generation_activity_count
+      ) VALUES (?, ?, ?, ?, ?, ?)
+    `);
+    insert.run("2035-01-01", "ent-login", "ent-login", 501, "reused-login", 10);
+    insert.run("2035-01-02", "ent-login", "ent-login", 502, "Reused-Login", 20);
+    insert.run("2035-01-02", "ent-other", "ent-other", 502, "renamed-elsewhere", 30);
+    insert.run("2035-01-03", "ent-other", "ent-other", 999, "reused-login", 40);
+
+    const results = getUserMetricsByLogin(
+      "reused-login",
+      "2035-01-01",
+      "2035-01-03",
+      ["ent-login"],
+    );
+
+    expect(results.map((row) => row.user_id)).toEqual([502]);
+    expect(results[0].code_generation_activity_count).toBe(20);
   });
 
   it("upsertUserDayMetrics stores true code-review/agent flags and optional fields", () => {

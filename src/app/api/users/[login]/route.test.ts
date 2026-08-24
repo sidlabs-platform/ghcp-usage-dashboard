@@ -65,7 +65,7 @@ beforeEach(() => {
         ]),
       };
     }
-    if (sql.includes("SELECT day,")) {
+    if (sql.includes("FROM per_user_day") && sql.includes("ORDER BY day ASC")) {
       return {
         all: vi.fn(() => [
           {
@@ -109,6 +109,8 @@ beforeEach(() => {
           totalAiCreditsUsed: 1.5,
           totalCodeGen: 20,
           totalCodeAccept: 8,
+          agentLocAdded: 40,
+          agentLocDeleted: 5,
           usedAgent: 1,
           usedChat: 1,
           usedCli: 1,

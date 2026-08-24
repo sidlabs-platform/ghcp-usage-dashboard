@@ -89,6 +89,34 @@ beforeEach(() => {
   db.exec("DELETE FROM billing_sync_state");
 });
 
+describe("billing premium query indexes", () => {
+  it("uses expression indexes for case-insensitive user lookups", () => {
+    const globalPlan = db
+      .prepare(
+        `EXPLAIN QUERY PLAN
+         SELECT aic_quantity
+         FROM billing_premium_requests
+         WHERE LOWER(username) = ? AND date >= ? AND date <= ?`
+      )
+      .all("dev1", "2026-06-01", "2026-06-30") as { detail: string }[];
+    const enterprisePlan = db
+      .prepare(
+        `EXPLAIN QUERY PLAN
+         SELECT aic_quantity
+         FROM billing_premium_requests
+         WHERE enterprise_slug = ? AND LOWER(username) = ? AND date >= ? AND date <= ?`
+      )
+      .all("ent1", "dev1", "2026-06-01", "2026-06-30") as { detail: string }[];
+
+    expect(globalPlan.some(({ detail }) =>
+      detail.includes("idx_billing_premium_lower_user_date")
+    )).toBe(true);
+    expect(enterprisePlan.some(({ detail }) =>
+      detail.includes("idx_billing_premium_slug_lower_user_date")
+    )).toBe(true);
+  });
+});
+
 describe("upsertUsageRecords", () => {
   it("inserts records and allows retrieval", () => {
     upsertUsageRecords("ent1", [

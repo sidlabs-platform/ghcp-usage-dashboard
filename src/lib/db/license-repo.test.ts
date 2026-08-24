@@ -80,11 +80,16 @@ import {
 } from "./license-repo";
 
 function insertSeat(overrides: Record<string, unknown> = {}) {
+  const userLogin = String(overrides.user_login ?? "dev1");
+  const userId = [...userLogin.toLowerCase()].reduce(
+    (hash, character) => (hash * 31 + character.charCodeAt(0)) >>> 0,
+    0,
+  );
   const seat = {
     enterprise_slug: "ent1",
     org_slug: "org1",
-    user_login: "dev1",
-    user_id: 1,
+    user_login: userLogin,
+    user_id: userId,
     plan_type: "business",
     last_activity_at: new Date().toISOString(),
     last_activity_editor: "vscode",
@@ -197,6 +202,23 @@ describe("getLicenseReconciliationRows", () => {
     expect(r.license_cost).toBe(58); // 19 + 39
     expect(r.org_license_costs).toEqual({ org1: 19, org2: 39 });
     expect(r.org_seat_counts).toEqual({ org1: 1, org2: 1 });
+  });
+
+  it("merges casing variants for the same user before applying the login allowlist", () => {
+    insertSeat({ user_login: "CaseUser", user_id: 42, org_slug: "org1" });
+    insertSeat({ user_login: "caseuser", user_id: 42, org_slug: "org2" });
+    insertConsumption("caseuser", 100, 1);
+
+    const rows = getLicenseReconciliationRows({
+      ...WINDOW,
+      filters: { allowedLogins: new Set(["CASEUSER"]) },
+    });
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0].user_login).toBe("CaseUser");
+    expect(rows[0].seat_count).toBe(2);
+    expect(rows[0].aic_consumed_credits).toBe(100);
+    expect(computeLicenseKPIs(rows).totalConsumedCredits).toBe(100);
   });
 
   it("marks pending cancellation seats inactive with a revoked date", () => {

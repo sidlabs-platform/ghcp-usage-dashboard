@@ -55,6 +55,7 @@ function planRank(plan: LicensePlanKey): number {
 interface SeatRow {
   org_slug: string;
   user_login: string;
+  user_id: number | null;
   plan_type: string | null;
   last_activity_at: string | null;
   assigning_team_slug: string | null;
@@ -178,7 +179,7 @@ export function getLicenseReconciliationDataset(
   const ent = buildEnterpriseFilter(filters?.enterpriseSlugs, "WHERE");
   const seats = db
     .prepare(
-      `SELECT org_slug, user_login, plan_type, last_activity_at,
+      `SELECT org_slug, user_login, user_id, plan_type, last_activity_at,
               assigning_team_slug, pending_cancellation_date, created_at
        FROM copilot_seats${ent.clause}`,
     )
@@ -193,7 +194,7 @@ export function getLicenseReconciliationDataset(
   const windowEnd = Date.parse(`${end}T23:59:59.999Z`);
   const now = Number.isNaN(windowEnd) ? new Date() : new Date(Math.min(windowEnd, Date.now()));
 
-  // Group seats by user_login.
+  // Group by GitHub's stable identity, falling back to a normalized login for legacy rows.
   interface Acc {
     login: string;
     orgs: Set<string>;
@@ -215,7 +216,7 @@ export function getLicenseReconciliationDataset(
 
   for (const s of seats) {
     if (!s.user_login) continue;
-    const key = s.user_login;
+    const key = s.user_id != null ? `id:${s.user_id}` : `login:${s.user_login.toLowerCase()}`;
     let acc = byUser.get(key);
     if (!acc) {
       acc = {

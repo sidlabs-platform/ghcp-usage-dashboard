@@ -59,6 +59,50 @@ async function getHandler() {
 }
 
 describe("user detail route — topLanguages consistency with getLanguageBreakdown", { timeout: 10000 }, () => {
+  it("deduplicates repeated user-day totals across enterprises", async () => {
+    const insert = db.prepare(`
+      INSERT INTO user_daily_metrics (
+        day, enterprise_id, enterprise_slug, user_id, user_login,
+        code_generation_activity_count, code_acceptance_activity_count,
+        user_initiated_interaction_count, ai_credits_used,
+        loc_suggested_to_add_sum, loc_suggested_to_delete_sum, loc_added_sum, loc_deleted_sum,
+        agent_edit, totals_by_feature
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    const values = [
+      "2024-03-02", 2, "octocat",
+      10, 4, 8, 1.5,
+      60, 2, 70, 4,
+      JSON.stringify({ loc_added_sum: 20, loc_deleted_sum: 2 }),
+      "[]",
+    ] as const;
+    insert.run(values[0], "ent-a", "ent-a", ...values.slice(1));
+    insert.run(values[0], "ent-b", "ent-b", ...values.slice(1));
+
+    const GET = await getHandler();
+    const res = await GET(new NextRequest(
+      "http://localhost/api/users/octocat?startDate=2024-03-02&endDate=2024-03-02",
+    ));
+    expect(res.status).toBe(200);
+    const json = await res.json();
+
+    expect(json.dailyActivity).toEqual([
+      expect.objectContaining({
+        day: "2024-03-02",
+        codeGen: 10,
+        locSuggested: 60,
+        locAccepted: 70,
+        agentLocAdded: 20,
+      }),
+    ]);
+    expect(json.summary).toEqual(expect.objectContaining({
+      totalCodeGen: 10,
+      totalLocAdded: 60,
+      totalLocAccepted: 70,
+      agentLocAdded: 20,
+    }));
+  });
+
   it("preserves legacy featureless rows, includes chat_inline/unknown, and excludes agent_edit/copilot_app — matching getLanguageBreakdown", async () => {
     const totalsByLanguageFeature = JSON.stringify([
       // Legacy row synced before the `feature` key existed on language rows.

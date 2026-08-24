@@ -630,11 +630,22 @@ export function getUserMetricsByLogin(userLogin: string, startDay: string, endDa
   const db = getDb();
   const ef = buildEnterpriseFilter(enterpriseSlugs);
   const rows = db.prepare(`
+    WITH authoritative_user AS (
+      SELECT user_id
+      FROM user_daily_metrics
+      WHERE LOWER(user_login) = LOWER(?) AND day >= ? AND day <= ?${ef.clause}
+      ORDER BY day DESC, user_id DESC
+      LIMIT 1
+    )
     SELECT ${USER_COLUMNS}
     FROM user_daily_metrics
-    WHERE LOWER(user_login) = LOWER(?) AND day >= ? AND day <= ?${ef.clause}
-    ORDER BY day ASC
-  `).all(userLogin, startDay, endDay, ...ef.params) as Record<string, unknown>[];
+    WHERE user_id = (SELECT user_id FROM authoritative_user)
+      AND day >= ? AND day <= ?${ef.clause}
+    ORDER BY day ASC, enterprise_id ASC
+  `).all(
+    userLogin, startDay, endDay, ...ef.params,
+    startDay, endDay, ...ef.params,
+  ) as Record<string, unknown>[];
 
   return rows.map(mapUserRow);
 }
@@ -1120,12 +1131,14 @@ function buildPhaseAssignmentWhere(
 }
 
 /**
- * SQL CTE assigning exactly one adoption phase per distinct `user_login`.
+ * SQL CTE assigning exactly one adoption phase per stable `user_id`.
  *
  * A login can appear on many days, and in multi-enterprise setups under several
- * `enterprise_slug` values. `ROW_NUMBER()` partitioned by login and ordered by
- * day descending picks the most recent phase so each developer is counted once —
- * the same dedupe strategy used by the adoption-cohorts route.
+ * `enterprise_slug` values. `ROW_NUMBER()` partitions by stable user ID and
+ * orders by day descending so each developer is counted once. When enterprises
+ * report conflicting phases on the same latest day, the lexicographically first
+ * `enterprise_id` wins; it is part of the table primary key, so the choice is
+ * deterministic.
  *
  * The phase is resolved to an INTEGER via the shared expression in
  * `@/lib/metrics/adoption-phase`, because `ai_adoption_phase.phase` is a display
@@ -1140,7 +1153,10 @@ const PHASE_ASSIGNMENT_CTE = `
         u.user_id,
         u.user_login,
         ${phaseNumberSql("u.ai_adoption_phase")} AS phase,
-        ROW_NUMBER() OVER (PARTITION BY u.user_id ORDER BY u.day DESC) AS rn
+        ROW_NUMBER() OVER (
+          PARTITION BY u.user_id
+          ORDER BY u.day DESC, u.enterprise_id ASC
+        ) AS rn
       FROM user_daily_metrics u
       WHERE {{WHERE}}
     ) WHERE rn = 1

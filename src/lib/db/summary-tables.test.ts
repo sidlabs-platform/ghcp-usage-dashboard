@@ -185,7 +185,11 @@ describe("refreshTeamSummary", () => {
     `).run();
 
     refreshTeamSummary("2024-01-01", "2024-01-31");
-    const row = db.prepare("SELECT * FROM team_summary_cache WHERE team_slug = 'case-team'").get() as any;
+    const row = db.prepare("SELECT * FROM team_summary_cache WHERE team_slug = 'case-team'").get() as {
+      total_members: number;
+      active_members: number;
+      total_loc_added: number;
+    };
 
     expect(row.total_members).toBe(1);
     expect(row.active_members).toBe(1);
@@ -287,7 +291,9 @@ describe("completion classification consistency", () => {
     insertMetricWithFeatures({ day: "2024-02-02", user_id: 42, user_login: "Alpha" });
 
     refreshUserSummary("2024-02-01", "2024-02-02");
-    const row = db.prepare("SELECT * FROM user_period_summary WHERE user_login = 'zebra'").get() as any;
+    const row = db.prepare("SELECT * FROM user_period_summary WHERE user_login = 'zebra'").get() as {
+      acceptance_rate: number;
+    };
 
     expect(row.acceptance_rate).toBe(78);
   });

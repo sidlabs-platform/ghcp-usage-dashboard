@@ -204,19 +204,34 @@ async function handler(request: NextRequest) {
     // Use CASE WHEN json_valid() to guard against empty/malformed agent_edit values
     type DailyActivityRow = Omit<DailyActivity, "completionLocSuggested" | "completionLocAccepted" | "completionLocDeleted" | "completionLocSuggestedDelete" | "appLocAdded" | "appLocDeleted">;
     const dailyActivityRows = db.prepare(`
+      WITH per_user_day AS (
+        SELECT day, user_id,
+          MAX(COALESCE(code_generation_activity_count, 0)) AS codeGen,
+          MAX(COALESCE(code_acceptance_activity_count, 0)) AS codeAccept,
+          MAX(COALESCE(loc_suggested_to_add_sum, 0)) AS locSuggested,
+          MAX(COALESCE(loc_added_sum, 0)) AS locAccepted,
+          MAX(COALESCE(loc_suggested_to_delete_sum, 0)) AS locSuggestedDelete,
+          MAX(COALESCE(loc_deleted_sum, 0)) AS locDeleted,
+          MAX(COALESCE(user_initiated_interaction_count, 0)) AS interactions,
+          MAX(COALESCE(ai_credits_used, 0)) AS aiCreditsUsed,
+          MAX(CASE WHEN json_valid(agent_edit) THEN COALESCE(json_extract(agent_edit, '$.loc_added_sum'), 0) ELSE 0 END) AS agentLocAdded,
+          MAX(CASE WHEN json_valid(agent_edit) THEN COALESCE(json_extract(agent_edit, '$.loc_deleted_sum'), 0) ELSE 0 END) AS agentLocDeleted
+        FROM user_daily_metrics
+        WHERE LOWER(user_login) = ? AND day BETWEEN ? AND ?${efClause}
+        GROUP BY day, user_id
+      )
       SELECT day,
-        COALESCE(SUM(code_generation_activity_count), 0) AS codeGen,
-        COALESCE(SUM(code_acceptance_activity_count), 0) AS codeAccept,
-        COALESCE(SUM(loc_suggested_to_add_sum), 0) AS locSuggested,
-        COALESCE(SUM(loc_added_sum), 0) AS locAccepted,
-        COALESCE(SUM(loc_suggested_to_delete_sum), 0) AS locSuggestedDelete,
-        COALESCE(SUM(loc_deleted_sum), 0) AS locDeleted,
-        COALESCE(SUM(user_initiated_interaction_count), 0) AS interactions,
-        COALESCE(SUM(ai_credits_used), 0) AS aiCreditsUsed,
-        COALESCE(SUM(CASE WHEN json_valid(agent_edit) THEN json_extract(agent_edit, '$.loc_added_sum') ELSE 0 END), 0) AS agentLocAdded,
-        COALESCE(SUM(CASE WHEN json_valid(agent_edit) THEN json_extract(agent_edit, '$.loc_deleted_sum') ELSE 0 END), 0) AS agentLocDeleted
-      FROM user_daily_metrics
-      WHERE LOWER(user_login) = ? AND day BETWEEN ? AND ?${efClause}
+        COALESCE(SUM(codeGen), 0) AS codeGen,
+        COALESCE(SUM(codeAccept), 0) AS codeAccept,
+        COALESCE(SUM(locSuggested), 0) AS locSuggested,
+        COALESCE(SUM(locAccepted), 0) AS locAccepted,
+        COALESCE(SUM(locSuggestedDelete), 0) AS locSuggestedDelete,
+        COALESCE(SUM(locDeleted), 0) AS locDeleted,
+        COALESCE(SUM(interactions), 0) AS interactions,
+        COALESCE(SUM(aiCreditsUsed), 0) AS aiCreditsUsed,
+        COALESCE(SUM(agentLocAdded), 0) AS agentLocAdded,
+        COALESCE(SUM(agentLocDeleted), 0) AS agentLocDeleted
+      FROM per_user_day
       GROUP BY day
       ORDER BY day ASC
     `).all(normalizedLogin, start, end, ...efParams) as DailyActivityRow[];
@@ -249,24 +264,47 @@ async function handler(request: NextRequest) {
 
     // Summary — top-level aggregation (includes all features)
     const summaryRow = db.prepare(`
+      WITH per_user_day AS (
+        SELECT day, user_id,
+          MAX(COALESCE(loc_suggested_to_add_sum, 0)) AS locSuggested,
+          MAX(COALESCE(loc_added_sum, 0)) AS locAccepted,
+          MAX(COALESCE(loc_suggested_to_delete_sum, 0)) AS locSuggestedDelete,
+          MAX(COALESCE(loc_deleted_sum, 0)) AS locDeleted,
+          MAX(COALESCE(user_initiated_interaction_count, 0)) AS interactions,
+          MAX(COALESCE(ai_credits_used, 0)) AS aiCreditsUsed,
+          MAX(COALESCE(code_generation_activity_count, 0)) AS codeGen,
+          MAX(COALESCE(code_acceptance_activity_count, 0)) AS codeAccept,
+          MAX(CASE WHEN json_valid(agent_edit) THEN COALESCE(json_extract(agent_edit, '$.loc_added_sum'), 0) ELSE 0 END) AS agentLocAdded,
+          MAX(CASE WHEN json_valid(agent_edit) THEN COALESCE(json_extract(agent_edit, '$.loc_deleted_sum'), 0) ELSE 0 END) AS agentLocDeleted,
+          MAX(CASE WHEN used_agent = 1 THEN 1 ELSE 0 END) AS usedAgent,
+          MAX(CASE WHEN used_chat = 1 THEN 1 ELSE 0 END) AS usedChat,
+          MAX(CASE WHEN used_cli = 1 THEN 1 ELSE 0 END) AS usedCli,
+          MAX(CASE WHEN used_copilot_code_review_active = 1 THEN 1 ELSE 0 END) AS usedCodeReview,
+          MAX(CASE WHEN used_copilot_coding_agent = 1 THEN 1 ELSE 0 END) AS usedCodingAgent,
+          MAX(CASE WHEN used_copilot_code_review_passive = 1 THEN 1 ELSE 0 END) AS usedCodeReviewPassive
+        FROM user_daily_metrics
+        WHERE LOWER(user_login) = ? AND day BETWEEN ? AND ?${efClause}
+        GROUP BY day, user_id
+      )
       SELECT
         COUNT(DISTINCT day) AS totalActiveDays,
-        COALESCE(SUM(loc_suggested_to_add_sum), 0) AS totalLocSuggested,
-        COALESCE(SUM(loc_added_sum), 0) AS totalLocAccepted,
-        COALESCE(SUM(loc_suggested_to_delete_sum), 0) AS totalLocSuggestedDelete,
-        COALESCE(SUM(loc_deleted_sum), 0) AS totalLocDeleted,
-        COALESCE(SUM(user_initiated_interaction_count), 0) AS totalInteractions,
-        COALESCE(SUM(ai_credits_used), 0) AS totalAiCreditsUsed,
-        COALESCE(SUM(code_generation_activity_count), 0) AS totalCodeGen,
-        COALESCE(SUM(code_acceptance_activity_count), 0) AS totalCodeAccept,
-        MAX(CASE WHEN used_agent = 1 THEN 1 ELSE 0 END) AS usedAgent,
-        MAX(CASE WHEN used_chat = 1 THEN 1 ELSE 0 END) AS usedChat,
-        MAX(CASE WHEN used_cli = 1 THEN 1 ELSE 0 END) AS usedCli,
-        MAX(CASE WHEN used_copilot_code_review_active = 1 THEN 1 ELSE 0 END) AS usedCodeReview,
-        MAX(CASE WHEN used_copilot_coding_agent = 1 THEN 1 ELSE 0 END) AS usedCodingAgent,
-        MAX(CASE WHEN used_copilot_code_review_passive = 1 THEN 1 ELSE 0 END) AS usedCodeReviewPassive
-      FROM user_daily_metrics
-      WHERE LOWER(user_login) = ? AND day BETWEEN ? AND ?${efClause}
+        COALESCE(SUM(locSuggested), 0) AS totalLocSuggested,
+        COALESCE(SUM(locAccepted), 0) AS totalLocAccepted,
+        COALESCE(SUM(locSuggestedDelete), 0) AS totalLocSuggestedDelete,
+        COALESCE(SUM(locDeleted), 0) AS totalLocDeleted,
+        COALESCE(SUM(interactions), 0) AS totalInteractions,
+        COALESCE(SUM(aiCreditsUsed), 0) AS totalAiCreditsUsed,
+        COALESCE(SUM(codeGen), 0) AS totalCodeGen,
+        COALESCE(SUM(codeAccept), 0) AS totalCodeAccept,
+        COALESCE(SUM(agentLocAdded), 0) AS agentLocAdded,
+        COALESCE(SUM(agentLocDeleted), 0) AS agentLocDeleted,
+        MAX(usedAgent) AS usedAgent,
+        MAX(usedChat) AS usedChat,
+        MAX(usedCli) AS usedCli,
+        MAX(usedCodeReview) AS usedCodeReview,
+        MAX(usedCodingAgent) AS usedCodingAgent,
+        MAX(usedCodeReviewPassive) AS usedCodeReviewPassive
+      FROM per_user_day
     `).get(normalizedLogin, start, end, ...efParams) as {
       totalActiveDays: number;
       totalLocSuggested: number;
@@ -277,6 +315,8 @@ async function handler(request: NextRequest) {
       totalAiCreditsUsed: number;
       totalCodeGen: number;
       totalCodeAccept: number;
+      agentLocAdded: number;
+      agentLocDeleted: number;
       usedAgent: number;
       usedChat: number;
       usedCli: number;
@@ -284,17 +324,6 @@ async function handler(request: NextRequest) {
       usedCodingAgent: number;
       usedCodeReviewPassive: number;
     } | undefined;
-
-    // Agent LoC from agent_edit JSON
-    // Agent LoC from agent_edit JSON (guarded with json_valid for malformed data)
-    const agentLocRow = db.prepare(`
-      SELECT
-        COALESCE(SUM(CASE WHEN json_valid(agent_edit) THEN json_extract(agent_edit, '$.loc_added_sum') ELSE 0 END), 0) AS agentLocAdded,
-        COALESCE(SUM(CASE WHEN json_valid(agent_edit) THEN json_extract(agent_edit, '$.loc_deleted_sum') ELSE 0 END), 0) AS agentLocDeleted
-      FROM user_daily_metrics
-      WHERE LOWER(user_login) = ? AND day BETWEEN ? AND ?
-        AND agent_edit IS NOT NULL AND agent_edit != ''${efClause}
-    `).get(normalizedLogin, start, end, ...efParams) as { agentLocAdded: number; agentLocDeleted: number } | undefined;
 
     // Completion-only LOC and acceptance from totals_by_feature.
     // Uses the explicit completion allowlist (code_completion, inline_chat,
@@ -357,8 +386,8 @@ async function handler(request: NextRequest) {
 
     let summary: UserSummary | null = null;
     if (summaryRow && summaryRow.totalActiveDays > 0) {
-      const agentAdded = agentLocRow?.agentLocAdded ?? 0;
-      const agentDeleted = agentLocRow?.agentLocDeleted ?? 0;
+      const agentAdded = summaryRow.agentLocAdded ?? 0;
+      const agentDeleted = summaryRow.agentLocDeleted ?? 0;
 
       // Prefer feature-level completion metrics; fall back to subtraction if unavailable
       const compSuggested = completionLocRow?.compLocSuggested ?? summaryRow.totalLocSuggested;
