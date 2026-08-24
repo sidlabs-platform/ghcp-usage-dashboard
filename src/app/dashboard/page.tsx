@@ -36,7 +36,6 @@ const CLIvsIDEChart = dynamic(
 import {
   Users,
   CheckSquare,
-  KeyRound,
   Activity,
   ShieldAlert,
   TrendingDown,
@@ -131,8 +130,8 @@ export default function DashboardOverview() {
     return (
       <div>
         <PageHeader title="Overview" description="Loading metrics..." />
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 mb-8">
-          {Array.from({ length: 6 }).map((_, i) => <KPISkeleton key={i} />)}
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 mb-8">
+          {Array.from({ length: 5 }).map((_, i) => <KPISkeleton key={i} />)}
         </div>
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
           {Array.from({ length: 4 }).map((_, i) => <ChartSkeleton key={i} />)}
@@ -209,8 +208,6 @@ export default function DashboardOverview() {
   const totalSeats     = isFiltered ? null : (kpis.totalSeats ?? 0);
   const inactivePct    = totalSeats && totalSeats > 0 ? Math.round(((inactiveSeats ?? 0) / totalSeats) * 100) : null;
 
-  const licenseUtil    = isFiltered ? null : kpis.licenseUtilization;
-
   // Seat counts come from a live snapshot of `copilot_seats`, which stores only
   // each seat's latest-ever activity. For a historical window the active/inactive
   // split is instead derived from usage recorded inside that window; say which,
@@ -272,17 +269,16 @@ export default function DashboardOverview() {
         </div>
       )}
 
-      {/* ── KPI Row: ≤6 cards, answering the 4 program-owner questions ── */}
+      {/* ── KPI Row: ≤5 cards, answering the 4 program-owner questions ── */}
       {/* Call sites where accent should become value-derived (TODO for MetricCard wiring):
           1. Completion Acceptance — threshold already wired below (good ≥70, bad <40)
-          2. License Utilization  — threshold already wired below (good ≥80, bad <60)
-          3. Inactive Seats       — intentionally neutral (absolute count, no universal threshold)
-          4. Active Users         — neutral (count metric, no good/bad direction)
+          2. Inactive Seats       — intentionally neutral (absolute count, no universal threshold)
+          3. Active Users         — neutral (count metric, no good/bad direction)
       */}
       <Section title="Program Health">
         <div
           ref={kpiRef}
-          className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6"
+          className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5"
         >
           {/* 1. Active Users — answers "Are we getting value?" */}
           <MetricCard
@@ -310,22 +306,7 @@ export default function DashboardOverview() {
             stagger={2}
           />
 
-          {/* 3. License Utilization — answers "Who isn't using it?" */}
-          <MetricCard
-            title="License Utilization"
-            value={licenseUtil ?? 0}
-            format="percent"
-            icon={<KeyRound className="h-4 w-4" />}
-            subtitle={
-              licenseUtil === null
-                ? "N/A when filtered"
-                : `${totalSeats ?? 0} seats (current snapshot)`
-            }
-            thresholds={{ good: 80, bad: 60, higherIsBetter: true }}
-            stagger={3}
-          />
-
-          {/* 4. Inactive Seats — answers "Who isn't using it?" */}
+          {/* 3. Inactive Seats — answers "Who isn't using it?" */}
           <MetricCard
             title="Inactive Seats"
             value={inactiveSeats ?? 0}
@@ -338,10 +319,10 @@ export default function DashboardOverview() {
                 : "No seat data"
             }
             accent="amber"
-            stagger={4}
+            stagger={3}
           />
 
-          {/* 5. Monthly Net Cost — answers "What is it costing us?" */}
+          {/* 4. Monthly Net Cost — answers "What is it costing us?" */}
           <MetricCard
             title="Monthly Net Cost"
             value={formatCost(kpis.monthlyNetCost ?? null)}
@@ -353,10 +334,10 @@ export default function DashboardOverview() {
                 : "Sync billing data to see cost"
             }
             accent="teal"
-            stagger={5}
+            stagger={4}
           />
 
-          {/* 6. AI Credits Used — answers "What is it costing us?" */}
+          {/* 5. AI Credits Used — answers "What is it costing us?" */}
           <MetricCard
             title="AI Credits Used"
             value={kpis.aiCreditsConsumed !== null && kpis.aiCreditsConsumed !== undefined
@@ -369,7 +350,7 @@ export default function DashboardOverview() {
                 : "No usage data yet"
             }
             accent="violet"
-            stagger={6}
+            stagger={5}
           />
         </div>
       </Section>

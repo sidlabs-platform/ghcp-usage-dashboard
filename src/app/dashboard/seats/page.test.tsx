@@ -217,4 +217,11 @@ describe("Seat Management page", () => {
     expect(screen.getByText("Used during June 2024")).toBeTruthy();
     expect(screen.queryByText(/june 2024/)).toBeNull();
   });
+
+  it("labels the utilization metric as license utilization", async () => {
+    await renderPage();
+
+    expect(screen.getByText("License Utilization")).toBeTruthy();
+    expect(screen.queryByText("Utilization")).toBeNull();
+  });
 });
