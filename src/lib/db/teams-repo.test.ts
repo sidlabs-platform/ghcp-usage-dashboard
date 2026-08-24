@@ -57,6 +57,20 @@ describe("teams-repo", () => {
       const empty = getAllTeams(["nonexistent"]);
       expect(empty.length).toBe(0);
     });
+
+    it("counts login casing variants as one member", () => {
+      try {
+        upsertAllTeams("acme", [
+          { slug: "case-team", name: "Case Team", source: "org", orgSlug: "org-a", members: ["Alice", "alice"], description: null },
+        ]);
+
+        const team = getAllTeams(["acme"]).find((row) => row.team_slug === "case-team");
+        expect(team?.member_count).toBe(1);
+        expect(getTeamMembers("case-team", ["acme"])).toHaveLength(1);
+      } finally {
+        db.prepare("DELETE FROM team_memberships WHERE team_slug = ?").run("case-team");
+      }
+    });
   });
 
   describe("getTeamMembers", () => {
@@ -193,6 +207,21 @@ describe("teams-repo", () => {
           ]);
         } finally {
           db.prepare("DELETE FROM team_memberships WHERE enterprise_slug = ?").run("globex");
+        }
+      });
+
+      it("intersects membership login casing variants", () => {
+        try {
+          upsertAllTeams("acme", [
+            { slug: "case-scope-team", name: "Case Scope", source: "org", orgSlug: "org-team", members: ["OctoCat"], description: null },
+            { slug: "case-scope-org", name: "Case Org", source: "org", orgSlug: "org-case", members: ["octocat"], description: null },
+          ]);
+
+          expect(resolveFilteredUserScopes(["case-scope-team"], ["org-case"], ["acme"])).toEqual([
+            { enterpriseSlug: "acme", userLogin: "OctoCat" },
+          ]);
+        } finally {
+          db.prepare("DELETE FROM team_memberships WHERE team_slug IN (?, ?)").run("case-scope-team", "case-scope-org");
         }
       });
     });

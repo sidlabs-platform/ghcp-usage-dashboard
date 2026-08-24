@@ -57,6 +57,11 @@ beforeEach(() => {
   mockState.copilotAppDedicated = { sessions: 3, requests: 6, prompts: 9, promptTokens: 240, outputTokens: 120 };
   mockState.copilotAppFeature = { codeGenerations: 5, codeAcceptances: 4, locAdded: 30, locDeleted: 6 };
   mockState.prepare.mockImplementation((sql: string) => {
+    if (sql.includes("ORDER BY day DESC, user_id DESC")) {
+      return {
+        get: vi.fn(() => ({ userId: 123 })),
+      };
+    }
     if (sql.includes("as completionAccepted")) {
       return {
         all: vi.fn(() => [
@@ -65,7 +70,7 @@ beforeEach(() => {
         ]),
       };
     }
-    if (sql.includes("SELECT day,")) {
+    if (sql.includes("FROM per_user_day") && sql.includes("ORDER BY day ASC")) {
       return {
         all: vi.fn(() => [
           {
@@ -109,6 +114,8 @@ beforeEach(() => {
           totalAiCreditsUsed: 1.5,
           totalCodeGen: 20,
           totalCodeAccept: 8,
+          agentLocAdded: 40,
+          agentLocDeleted: 5,
           usedAgent: 1,
           usedChat: 1,
           usedCli: 1,
@@ -221,6 +228,20 @@ afterEach(() => {
 });
 
 describe("user detail route", { timeout: 10000 }, () => {
+  it("authorizes scoped login casing variants", async () => {
+    mockState.scopeFilter = {
+      allowedLogins: new Set(["OctoCat"]),
+      enterpriseSlugs: ["ent-a"],
+    };
+
+    const { GET } = await routePromise;
+    const response = await GET(new NextRequest("http://localhost/api/users/octocat?days=7"));
+
+    expect(response.status).toBe(200);
+    const sql = mockState.prepare.mock.calls.map(([statement]) => String(statement));
+    expect(sql.some((statement) => /\buser_login\s*=\s*\?/i.test(statement))).toBe(false);
+  });
+
   it("returns user-level activity, completion metrics, and breakdowns", async () => {
     const { GET } = await routePromise;
     const response = await GET(new NextRequest("http://localhost/api/users/octocat?days=7"));

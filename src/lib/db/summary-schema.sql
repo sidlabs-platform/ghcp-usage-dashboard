@@ -4,6 +4,7 @@
 -- Per-user rollup for a given date range
 CREATE TABLE IF NOT EXISTS user_period_summary (
   enterprise_slug TEXT NOT NULL DEFAULT '',
+  user_id INTEGER NOT NULL,
   user_login TEXT NOT NULL,
   period_start TEXT NOT NULL,
   period_end TEXT NOT NULL,
@@ -21,7 +22,7 @@ CREATE TABLE IF NOT EXISTS user_period_summary (
   used_code_review_passive INTEGER DEFAULT 0,
   used_coding_agent INTEGER DEFAULT 0,
   computed_at TEXT NOT NULL,
-  PRIMARY KEY (enterprise_slug, user_login, period_start, period_end)
+  PRIMARY KEY (enterprise_slug, user_id, period_start, period_end)
 );
 
 CREATE INDEX IF NOT EXISTS idx_user_summary_period ON user_period_summary(period_start, period_end);

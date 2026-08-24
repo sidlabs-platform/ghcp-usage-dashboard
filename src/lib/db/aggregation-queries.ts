@@ -231,7 +231,10 @@ export function buildLoginFilter(
     return emptyMeansNoRows ? { clause: "AND 1 = 0", params: [] } : { clause: "", params: [] };
   }
   const placeholders = allowedLogins.map(() => "?").join(",");
-  return { clause: `AND ${column} IN (${placeholders})`, params: allowedLogins };
+  return {
+    clause: `AND LOWER(${column}) IN (${placeholders})`,
+    params: allowedLogins.map((login) => login.toLowerCase()),
+  };
 }
 
 export interface EnterpriseUserScope {
@@ -251,8 +254,8 @@ export function buildUserScopeFilter(
   if (scopes.length === 0) return { clause: "AND 1 = 0", params: [] };
   const tuples = scopes.map(() => "(?, ?)").join(", ");
   return {
-    clause: `AND (${enterpriseColumn}, ${loginColumn}) IN (${tuples})`,
-    params: scopes.flatMap((scope) => [scope.enterpriseSlug, scope.userLogin]),
+    clause: `AND (${enterpriseColumn}, LOWER(${loginColumn})) IN (${tuples})`,
+    params: scopes.flatMap((scope) => [scope.enterpriseSlug, scope.userLogin.toLowerCase()]),
   };
 }
 
@@ -315,6 +318,10 @@ export function getChatModeSums(
 
 /**
  * Aggregate distinct-user adoption statistics for a date range.
+ *
+ * GitHub user IDs are the canonical identity key. Logins are case-insensitive
+ * and can be renamed, so counting login strings can count one person more than
+ * once and make usage totals disagree with the seat population.
  * @param emptyMeansNoRows When true, an empty `allowedLogins` list matches zero rows; otherwise it omits the login filter.
  * @param allowedUserScopes Enterprise-qualified users that take precedence over `allowedLogins`.
  */
@@ -331,13 +338,13 @@ export function getAdoptionStats(
   const ef = buildEnterpriseFilter(enterpriseSlugs);
   const sql = `
     SELECT
-      COUNT(DISTINCT user_login) as totalUsers,
-      COUNT(DISTINCT CASE WHEN used_agent = 1 THEN user_login END) as agentUsers,
-      COUNT(DISTINCT CASE WHEN used_copilot_coding_agent = 1 THEN user_login END) as codingAgentUsers,
-      COUNT(DISTINCT CASE WHEN used_copilot_code_review_active = 1 THEN user_login END) as codeReviewUsers,
-      COUNT(DISTINCT CASE WHEN used_cli = 1 THEN user_login END) as cliUsers,
-      COUNT(DISTINCT CASE WHEN used_chat = 1 THEN user_login END) as chatUsers,
-      COUNT(DISTINCT CASE WHEN used_copilot_app = 1 THEN user_login END) as appUsers
+      COUNT(DISTINCT user_id) as totalUsers,
+      COUNT(DISTINCT CASE WHEN used_agent = 1 THEN user_id END) as agentUsers,
+      COUNT(DISTINCT CASE WHEN used_copilot_coding_agent = 1 THEN user_id END) as codingAgentUsers,
+      COUNT(DISTINCT CASE WHEN used_copilot_code_review_active = 1 THEN user_id END) as codeReviewUsers,
+      COUNT(DISTINCT CASE WHEN used_cli = 1 THEN user_id END) as cliUsers,
+      COUNT(DISTINCT CASE WHEN used_chat = 1 THEN user_id END) as chatUsers,
+      COUNT(DISTINCT CASE WHEN used_copilot_app = 1 THEN user_id END) as appUsers
     FROM user_daily_metrics
     WHERE day >= ? AND day <= ? ${filter.clause}${ef.clause}
   `;
@@ -356,7 +363,7 @@ export function getUserSummaries(
   const ef = buildEnterpriseFilter(enterpriseSlugs);
   const sql = `
     SELECT
-      user_login as login,
+      MAX(user_login) as login,
       COUNT(DISTINCT day) as activeDays,
       COALESCE(SUM(loc_added_sum), 0) as locAdded,
       COALESCE(SUM(loc_deleted_sum), 0) as locDeleted,
@@ -372,7 +379,7 @@ export function getUserSummaries(
       MAX(used_copilot_coding_agent) as usedCodingAgent
     FROM user_daily_metrics
     WHERE day >= ? AND day <= ? ${filter.clause}${ef.clause}
-    GROUP BY user_login
+    GROUP BY user_id
   `;
   const rows = db.prepare(sql).all(startDay, endDay, ...filter.params, ...ef.params) as Array<{
     login: string;
@@ -499,7 +506,8 @@ export function iterateUserSummaries(
     const cteSql = `
       WITH active_users AS (
         SELECT
-          user_login AS login,
+          user_id AS userId,
+          MAX(user_login) AS login,
           COUNT(DISTINCT day) AS activeDays,
           COALESCE(SUM(loc_added_sum), 0) AS locAdded,
           COALESCE(SUM(loc_deleted_sum), 0) AS locDeleted,
@@ -515,11 +523,12 @@ export function iterateUserSummaries(
           MAX(used_copilot_coding_agent) AS usedCodingAgent
         FROM user_daily_metrics
         WHERE day >= ? AND day <= ? ${filter.clause} ${searchClause}${ef.clause}
-        GROUP BY user_login
+        GROUP BY user_id
       ),
       inactive_users AS (
-        SELECT DISTINCT
-          user_login AS login,
+        SELECT
+          user_id AS userId,
+          MAX(user_login) AS login,
           0 AS activeDays,
           0 AS locAdded,
           0 AS locDeleted,
@@ -535,11 +544,12 @@ export function iterateUserSummaries(
           0 AS usedCodingAgent
         FROM copilot_seats
         WHERE 1=1 ${seatsFilter.clause} ${seatsSearchClause}${seatsEf.clause}
-          AND user_login NOT IN (
-            SELECT DISTINCT user_login
+          AND user_id NOT IN (
+            SELECT DISTINCT user_id
             FROM user_daily_metrics
             WHERE day >= ? AND day <= ? ${filter.clause}${ef.clause}
           )
+        GROUP BY user_id
       ),
       all_users AS (
         SELECT * FROM active_users
@@ -564,7 +574,7 @@ export function iterateUserSummaries(
   const baseParams = [startDay, endDay, ...filter.params, ...searchParam, ...ef.params];
   const dataSql = `
     SELECT
-      user_login as login,
+      MAX(user_login) as login,
       COUNT(DISTINCT day) as activeDays,
       COALESCE(SUM(loc_added_sum), 0) as locAdded,
       COALESCE(SUM(loc_deleted_sum), 0) as locDeleted,
@@ -579,7 +589,7 @@ export function iterateUserSummaries(
       MAX(used_copilot_code_review_passive) as usedCodeReviewPassive,
       MAX(used_copilot_coding_agent) as usedCodingAgent
     ${baseSql}
-    GROUP BY user_login
+    GROUP BY user_id
     ORDER BY ${sqlSort} ${sqlDir}
   `;
   const rows = db.prepare(dataSql).iterate(...baseParams) as Iterable<RawUserRow>;
@@ -625,7 +635,8 @@ export function getUserSummariesPaginated(
     const cteSql = `
       WITH active_users AS (
         SELECT
-          user_login AS login,
+          user_id AS userId,
+          MAX(user_login) AS login,
           COUNT(DISTINCT day) AS activeDays,
           COALESCE(SUM(loc_added_sum), 0) AS locAdded,
           COALESCE(SUM(loc_deleted_sum), 0) AS locDeleted,
@@ -641,11 +652,12 @@ export function getUserSummariesPaginated(
           MAX(used_copilot_coding_agent) AS usedCodingAgent
         FROM user_daily_metrics
         WHERE day >= ? AND day <= ? ${filter.clause} ${searchClause}${ef.clause}
-        GROUP BY user_login
+        GROUP BY user_id
       ),
       inactive_users AS (
-        SELECT DISTINCT
-          user_login AS login,
+        SELECT
+          user_id AS userId,
+          MAX(user_login) AS login,
           0 AS activeDays,
           0 AS locAdded,
           0 AS locDeleted,
@@ -661,10 +673,11 @@ export function getUserSummariesPaginated(
           0 AS usedCodingAgent
         FROM copilot_seats
         WHERE 1=1 ${seatsFilter.clause} ${seatsSearchClause}${seatsEf.clause}
-          AND user_login NOT IN (
-            SELECT DISTINCT user_login FROM user_daily_metrics
+          AND user_id NOT IN (
+            SELECT DISTINCT user_id FROM user_daily_metrics
             WHERE day >= ? AND day <= ? ${filter.clause}${ef.clause}
           )
+        GROUP BY user_id
       ),
       all_users AS (
         SELECT * FROM active_users
@@ -697,7 +710,7 @@ export function getUserSummariesPaginated(
   // Count total distinct users (subquery ensures count matches GROUP BY result set)
   const countSql = `
     SELECT COUNT(*) as total FROM (
-      SELECT user_login ${baseSql} GROUP BY user_login
+      SELECT user_id ${baseSql} GROUP BY user_id
     )
   `;
   const countRow = db.prepare(countSql).get(...baseParams) as { total: number };
@@ -705,7 +718,7 @@ export function getUserSummariesPaginated(
   // Paginated data
   const dataSql = `
     SELECT
-      user_login as login,
+      MAX(user_login) as login,
       COUNT(DISTINCT day) as activeDays,
       COALESCE(SUM(loc_added_sum), 0) as locAdded,
       COALESCE(SUM(loc_deleted_sum), 0) as locDeleted,
@@ -720,7 +733,7 @@ export function getUserSummariesPaginated(
       MAX(used_copilot_code_review_passive) as usedCodeReviewPassive,
       MAX(used_copilot_coding_agent) as usedCodingAgent
     ${baseSql}
-    GROUP BY user_login
+    GROUP BY user_id
     ORDER BY ${sqlSort} ${sqlDir}
     LIMIT ? OFFSET ?
   `;
@@ -985,6 +998,7 @@ export function getFeatureDailyTrend(
  * Daily completion vs agent vs copilot_app LOC metrics aggregated via json_each.
  * @param emptyMeansNoRows When true, an empty `allowedLogins` list matches zero rows; otherwise it omits the login filter.
  * @param allowedUserScopes Enterprise-qualified users that take precedence over `allowedLogins`.
+ * @param userId Stable user ID that takes precedence over login-based filters.
  */
 export function getCompletionDailyTrend(
   startDay: string,
@@ -993,15 +1007,18 @@ export function getCompletionDailyTrend(
   enterpriseSlugs?: string[],
   emptyMeansNoRows = false,
   allowedUserScopes?: EnterpriseUserScope[],
+  userId?: number,
 ): CompletionDailyRow[] {
   const db = getDb();
-  const filter = buildAllowedUserFilter(
-    allowedLogins,
-    allowedUserScopes,
-    emptyMeansNoRows,
-    "u.enterprise_slug",
-    "u.user_login",
-  );
+  const filter = userId === undefined
+    ? buildAllowedUserFilter(
+        allowedLogins,
+        allowedUserScopes,
+        emptyMeansNoRows,
+        "u.enterprise_slug",
+        "u.user_login",
+      )
+    : { clause: " AND u.user_id = ?", params: [userId] };
   const ef = buildEnterpriseFilter(enterpriseSlugs);
   const sql = `
     SELECT
@@ -1218,7 +1235,7 @@ export function getIdeVersionBreakdown(
   const sql = `
     WITH samples AS (
       SELECT
-        u.user_login AS login,
+        u.user_id AS userId,
         json_extract(j.value, '$.last_known_ide_version.ide_version') AS version,
         json_extract(j.value, '$.last_known_ide_version.sampled_at') AS sampled_at
       FROM user_daily_metrics u, json_each(u.totals_by_ide) j
@@ -1227,9 +1244,9 @@ export function getIdeVersionBreakdown(
         ${filter.clause}${ef.clause}
     ),
     ranked AS (
-      SELECT login, version,
+      SELECT userId, version,
         ROW_NUMBER() OVER (
-          PARTITION BY login
+          PARTITION BY userId
           ORDER BY (CASE WHEN version IS NOT NULL THEN 1 ELSE 0 END) DESC, sampled_at DESC
         ) AS rn
       FROM samples
@@ -1259,7 +1276,7 @@ export function getPluginVersionBreakdown(
   const sql = `
     WITH samples AS (
       SELECT
-        u.user_login AS login,
+        u.user_id AS userId,
         json_extract(j.value, '$.last_known_plugin_version.plugin') AS plugin,
         json_extract(j.value, '$.last_known_plugin_version.plugin_version') AS version,
         json_extract(j.value, '$.last_known_plugin_version.sampled_at') AS sampled_at
@@ -1269,9 +1286,9 @@ export function getPluginVersionBreakdown(
         ${filter.clause}${ef.clause}
     ),
     ranked AS (
-      SELECT plugin, version, login,
+      SELECT plugin, version, userId,
         ROW_NUMBER() OVER (
-          PARTITION BY login
+          PARTITION BY userId
           ORDER BY (CASE WHEN version IS NOT NULL THEN 1 ELSE 0 END) DESC, sampled_at DESC
         ) AS rn
       FROM samples
@@ -1332,7 +1349,7 @@ export function getCliUserBreakdown(
   const ef = buildEnterpriseFilter(enterpriseSlugs);
   const sql = `
     SELECT
-      user_login as login,
+      MAX(user_login) as login,
       COALESCE(SUM(json_extract(totals_by_cli, '$.session_count')), 0) as sessions,
       COALESCE(SUM(json_extract(totals_by_cli, '$.request_count')), 0) as requests,
       COALESCE(SUM(json_extract(totals_by_cli, '$.prompt_count')), 0) as prompts,
@@ -1344,7 +1361,7 @@ export function getCliUserBreakdown(
       AND used_cli = 1
       AND totals_by_cli IS NOT NULL
       ${filter.clause}${ef.clause}
-    GROUP BY user_login
+    GROUP BY user_id
     ORDER BY sessions DESC
     LIMIT ?
   `;
@@ -1367,7 +1384,7 @@ export function getCliVersionBreakdown(
   const sql = `
     WITH samples AS (
       SELECT
-        user_login AS login,
+        user_id AS userId,
         json_extract(totals_by_cli, '$.last_known_cli_version.cli_version') AS version,
         json_extract(totals_by_cli, '$.last_known_cli_version.sampled_at') AS sampled_at
       FROM user_daily_metrics
@@ -1377,9 +1394,9 @@ export function getCliVersionBreakdown(
         ${filter.clause}${ef.clause}
     ),
     ranked AS (
-      SELECT login, version,
+      SELECT userId, version,
         ROW_NUMBER() OVER (
-          PARTITION BY login
+          PARTITION BY userId
           ORDER BY (CASE WHEN version IS NOT NULL THEN 1 ELSE 0 END) DESC, sampled_at DESC
         ) AS rn
       FROM samples
@@ -1493,10 +1510,10 @@ export function getAdoptionDailyTrend(
   const sql = `
     SELECT
       day,
-      COUNT(DISTINCT user_login) as totalUsers,
-      COUNT(DISTINCT CASE WHEN used_agent = 1 THEN user_login END) as agentUsers,
-      COUNT(DISTINCT CASE WHEN used_chat = 1 THEN user_login END) as chatUsers,
-      COUNT(DISTINCT CASE WHEN used_cli = 1 THEN user_login END) as cliUsers
+      COUNT(DISTINCT user_id) as totalUsers,
+      COUNT(DISTINCT CASE WHEN used_agent = 1 THEN user_id END) as agentUsers,
+      COUNT(DISTINCT CASE WHEN used_chat = 1 THEN user_id END) as chatUsers,
+      COUNT(DISTINCT CASE WHEN used_cli = 1 THEN user_id END) as cliUsers
     FROM user_daily_metrics
     WHERE day >= ? AND day <= ? ${filter.clause}${ef.clause}
     GROUP BY day
@@ -1532,8 +1549,8 @@ export function getActiveUsersDailyTrend(
   const sql = `
     SELECT
       day,
-      COUNT(DISTINCT user_login) as daily,
-      COUNT(DISTINCT CASE WHEN used_cli = 1 THEN user_login END) as cliUsers
+      COUNT(DISTINCT user_id) as daily,
+      COUNT(DISTINCT CASE WHEN used_cli = 1 THEN user_id END) as cliUsers
     FROM user_daily_metrics
     WHERE day >= ? AND day <= ? ${filter.clause}${ef.clause}
     GROUP BY day
@@ -1609,20 +1626,20 @@ export function getActiveUsersRollingTrend(
   const sql = `
     SELECT
       m.day,
-      COUNT(DISTINCT m.user_login) as daily,
+      COUNT(DISTINCT m.user_id) as daily,
       -- Rolling 7-day distinct user count (WAU)
-      (SELECT COUNT(DISTINCT w.user_login)
+      (SELECT COUNT(DISTINCT w.user_id)
        FROM user_daily_metrics w
        WHERE w.day BETWEEN date(m.day, '-6 days') AND m.day${ef.clause}
        ${weeklyFilter.clause}
       ) as weekly,
       -- Rolling 30-day distinct user count (MAU)
-      (SELECT COUNT(DISTINCT mo.user_login)
+      (SELECT COUNT(DISTINCT mo.user_id)
        FROM user_daily_metrics mo
        WHERE mo.day BETWEEN date(m.day, '-29 days') AND m.day${ef.clause}
        ${monthlyFilter.clause}
       ) as monthly,
-      COUNT(DISTINCT CASE WHEN m.used_cli = 1 THEN m.user_login END) as cliUsers
+      COUNT(DISTINCT CASE WHEN m.used_cli = 1 THEN m.user_id END) as cliUsers
     FROM user_daily_metrics m
     WHERE m.day >= ? AND m.day <= ?${ef.clause}${outerFilter.clause}
     GROUP BY m.day
@@ -1642,7 +1659,7 @@ export interface FeatureUsageDailyRow {
   day: string;
   // Sum of `code_generation_activity_count` — an activity/event volume count,
   // NOT a distinct-user count. This is intentionally a different unit than
-  // the four `*Users` fields below (each `COUNT(DISTINCT user_login ...)`);
+  // the four `*Users` fields below (each `COUNT(DISTINCT user_id ...)`);
   // do not "align" it to a user count — see chart/consumer usage for the
   // rationale (completions volume vs. feature adoption headcount).
   completions: number;
@@ -1674,10 +1691,10 @@ export function getFeatureUsageDaily(
     SELECT
       day,
       COALESCE(SUM(code_generation_activity_count), 0) as completions,
-      COUNT(DISTINCT CASE WHEN used_chat = 1 THEN user_login END) as chatUsers,
-      COUNT(DISTINCT CASE WHEN used_agent = 1 THEN user_login END) as agentUsers,
-      COUNT(DISTINCT CASE WHEN used_cli = 1 THEN user_login END) as cliUsers,
-      COUNT(DISTINCT CASE WHEN used_copilot_app = 1 THEN user_login END) as appUsers
+      COUNT(DISTINCT CASE WHEN used_chat = 1 THEN user_id END) as chatUsers,
+      COUNT(DISTINCT CASE WHEN used_agent = 1 THEN user_id END) as agentUsers,
+      COUNT(DISTINCT CASE WHEN used_cli = 1 THEN user_id END) as cliUsers,
+      COUNT(DISTINCT CASE WHEN used_copilot_app = 1 THEN user_id END) as appUsers
     FROM user_daily_metrics
     WHERE day >= ? AND day <= ? ${filter.clause}${ef.clause}
     GROUP BY day

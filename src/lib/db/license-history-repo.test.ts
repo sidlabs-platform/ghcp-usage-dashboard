@@ -658,7 +658,7 @@ describe("replaceMaterializedPeriod + queryLicensePeriodRows", () => {
     });
 
     it("restricts the detail view to a single allowed login", () => {
-      const result = queryLicensePeriodRows({ enterpriseSlug: "ent1", periods: ["2026-40"], allowedLogins: ["alice"] });
+      const result = queryLicensePeriodRows({ enterpriseSlug: "ent1", periods: ["2026-40"], allowedLogins: ["ALICE"] });
       expect(result.rows.map((r) => r.holderKey)).toEqual(["alice"]);
     });
 

@@ -36,6 +36,7 @@ import {
   getUserAiCreditsSummary,
   getUserAiCreditsUsersPaginated,
   getUserAiCreditsTotals,
+  getPhaseDeveloperCounts,
   getAggregatedDailySummary,
   getFilteredOrgMetrics,
   getAllOrgMetrics,
@@ -46,6 +47,80 @@ import {
   hasOrgDataForRange,
   clearEmptySyncEntries,
 } from "./metrics-repo";
+
+describe("stable user identity aggregation", () => {
+  it("deduplicates casing variants in AI-credit user totals", () => {
+    const insert = db.prepare(`
+      INSERT INTO user_daily_metrics (
+        day, enterprise_id, enterprise_slug, user_id, user_login, ai_credits_used
+      ) VALUES (?, ?, ?, ?, ?, ?)
+    `);
+    insert.run("2032-01-01", "ent-a", "ent-a", 42, "OctoCat", 1);
+    insert.run("2032-01-02", "ent-b", "ent-b", 42, "octocat", 2);
+
+    const users = getUserAiCreditsSummary("2032-01-01", "2032-01-02");
+    const totals = getUserAiCreditsTotals("2032-01-01", "2032-01-02");
+
+    expect(users).toHaveLength(1);
+    expect(users[0].total_ai_credits_used).toBe(3);
+    expect(totals.tracked_users).toBe(1);
+  });
+
+  it("deduplicates casing variants in adoption-phase developer counts", () => {
+    const phase = JSON.stringify({ phase: 2, label: "Agent first", version: "v1" });
+    const insert = db.prepare(`
+      INSERT INTO user_daily_metrics (
+        day, enterprise_id, enterprise_slug, user_id, user_login, ai_adoption_phase
+      ) VALUES (?, ?, ?, ?, ?, ?)
+    `);
+    insert.run("2033-01-01", "ent-a", "ent-a", 84, "Hubot", phase);
+    insert.run("2033-01-02", "ent-b", "ent-b", 84, "hubot", phase);
+
+    expect(getPhaseDeveloperCounts("2033-01-01", "2033-01-02")).toEqual([
+      { phase: 2, developers: 1 },
+    ]);
+  });
+
+  it("uses a deterministic enterprise tie-break for same-day adoption phases", () => {
+    const insert = db.prepare(`
+      INSERT INTO user_daily_metrics (
+        day, enterprise_id, enterprise_slug, user_id, user_login, ai_adoption_phase
+      ) VALUES (?, ?, ?, ?, ?, ?)
+    `);
+    insert.run(
+      "2033-02-01",
+      "ent-b",
+      "ent-b",
+      85,
+      "hubot-phase",
+      JSON.stringify({ phase: 3, label: "Multi-agent", version: "v1" }),
+    );
+    insert.run(
+      "2033-02-01",
+      "ent-a",
+      "ent-a",
+      85,
+      "Hubot-Phase",
+      JSON.stringify({ phase: 1, label: "Code first", version: "v1" }),
+    );
+
+    expect(getPhaseDeveloperCounts("2033-02-01", "2033-02-01")).toEqual([
+      { phase: 1, developers: 1 },
+    ]);
+  });
+
+  it("returns one distinct user when the same ID has casing variants", () => {
+    const insert = db.prepare(`
+      INSERT INTO user_daily_metrics (
+        day, enterprise_id, enterprise_slug, user_id, user_login
+      ) VALUES (?, ?, ?, ?, ?)
+    `);
+    insert.run("2034-01-01", "ent-case", "ent-case", 126, "MonaLisa");
+    insert.run("2034-01-02", "ent-case", "ent-case", 126, "monalisa");
+
+    expect(getDistinctUsers("ent-case", "2034-01-01", "2034-01-02")).toHaveLength(1);
+  });
+});
 
 beforeAll(() => {
   db = new Database(":memory:");
@@ -370,6 +445,29 @@ describe("getUserMetricsByLogin", () => {
     const results = getUserMetricsByLogin("specific-user", "2024-01-01", "2024-01-31");
     expect(results).toHaveLength(1);
     expect(results[0].code_generation_activity_count).toBe(5);
+  });
+
+  it("resolves one stable user ID when a login has been reused", () => {
+    const insert = db.prepare(`
+      INSERT INTO user_daily_metrics (
+        day, enterprise_id, enterprise_slug, user_id, user_login,
+        code_generation_activity_count
+      ) VALUES (?, ?, ?, ?, ?, ?)
+    `);
+    insert.run("2035-01-01", "ent-login", "ent-login", 501, "reused-login", 10);
+    insert.run("2035-01-02", "ent-login", "ent-login", 502, "Reused-Login", 20);
+    insert.run("2035-01-02", "ent-other", "ent-other", 502, "renamed-elsewhere", 30);
+    insert.run("2035-01-03", "ent-other", "ent-other", 999, "reused-login", 40);
+
+    const results = getUserMetricsByLogin(
+      "reused-login",
+      "2035-01-01",
+      "2035-01-03",
+      ["ent-login"],
+    );
+
+    expect(results.map((row) => row.user_id)).toEqual([502]);
+    expect(results[0].code_generation_activity_count).toBe(20);
   });
 
   it("upsertUserDayMetrics stores true code-review/agent flags and optional fields", () => {

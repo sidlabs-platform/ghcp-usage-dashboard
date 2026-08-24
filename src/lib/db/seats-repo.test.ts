@@ -78,10 +78,17 @@ describe("seats-repo", () => {
     });
 
     it("respects allowedLogins filter", () => {
-      const allowed = new Set(["alice", "bob"]);
+      const allowed = new Set(["ALICE", "Bob"]);
       const result = getSeatsPaginated(1, 50, "user_login", "asc", allowed, ["acme"]);
       expect(result.total).toBe(2);
       expect(result.seats.map((s) => s.user_login).sort()).toEqual(["alice", "bob"]);
+    });
+
+    it("returns no seats when an active scope resolves to no logins", () => {
+      expect(getSeatsPaginated(1, 50, "user_login", "asc", new Set(), ["acme"])).toEqual({
+        seats: [],
+        total: 0,
+      });
     });
 
     it("handles page offset", () => {

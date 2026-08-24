@@ -142,16 +142,17 @@ beforeAll(() => {
     aliceTotalsAppDay1,
   );
   // alice / day 1 / enterprise beta — duplicate of the same user/day across
-  // enterprises, with identical App metrics (must be deduplicated by MAX).
+  // enterprises with different login casing and identical App metrics. Stable
+  // user-ID deduplication must still collapse it with the acme row.
   insertUser.run(
-    "2025-04-01", "ent2", "beta", 1, "alice",
+    "2025-04-01", "ent2", "beta", 1, "Alice",
     8, 5, 9, 0, 0, 40, 10, 0, 0, 0, 1,
     "[]", aliceFeatureDay1, aliceLanguageDay1, aliceModelDay1, "[]",
     aliceTotalsAppDay1,
   );
-  // alice / day 2 / enterprise acme only
+  // alice / day 2 / enterprise acme only, with another casing variant.
   insertUser.run(
-    "2025-04-02", "ent1", "acme", 1, "alice",
+    "2025-04-02", "ent1", "acme", 1, "ALICE",
     6, 4, 7, 0, 0, 30, 5, 0, 0, 0, 1,
     "[]", aliceFeatureDay2, aliceLanguageDay2, aliceModelDay2, "[]",
     aliceTotalsAppDay2,

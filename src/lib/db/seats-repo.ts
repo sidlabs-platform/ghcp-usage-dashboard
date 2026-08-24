@@ -154,18 +154,20 @@ export function getSeatsPaginated(
   const sqlDir = sortDir === "asc" ? "ASC" : "DESC";
   const offset = (page - 1) * pageSize;
 
-  if (allowedLogins && allowedLogins.size > 0) {
-    const loginsArray = Array.from(allowedLogins);
+  if (allowedLogins !== undefined) {
+    if (allowedLogins.size === 0) return { seats: [], total: 0 };
+
+    const loginsArray = Array.from(allowedLogins, (login) => login.toLowerCase());
     const placeholders = loginsArray.map(() => "?").join(",");
     const ef = buildEnterpriseFilter(enterpriseSlugs, "AND");
 
     const countRow = db.prepare(
-      `SELECT COUNT(*) as total FROM copilot_seats WHERE user_login IN (${placeholders})${ef.clause}`
+      `SELECT COUNT(*) as total FROM copilot_seats WHERE LOWER(user_login) IN (${placeholders})${ef.clause}`
     ).get(...loginsArray, ...ef.params) as { total: number };
 
     const seats = db.prepare(`
       SELECT * FROM copilot_seats
-      WHERE user_login IN (${placeholders})${ef.clause}
+      WHERE LOWER(user_login) IN (${placeholders})${ef.clause}
       ORDER BY ${sqlSort} ${sqlDir}
       LIMIT ? OFFSET ?
     `).all(...loginsArray, ...ef.params, pageSize, offset) as SeatRow[];
@@ -188,12 +190,12 @@ export interface SeatStats {
   /**
    * Distinct people holding a Copilot seat right now.
    *
-   * Counted as `COUNT(DISTINCT LOWER(user_login))`, not `COUNT(*)`: the
+   * Counted as `COUNT(DISTINCT user_id)`, not `COUNT(*)`: the
    * `copilot_seats` primary key includes `org_slug`, so a user who belongs to
    * several orgs in the same enterprise produces several rows. Counting rows
    * over-stated this fleet by 31% (1,595 rows for 1,219 people) and inflated
    * every derived figure — seat totals, the utilization denominator and the
-   * inactive count.
+   * inactive count. IDs also remain stable across login casing and renames.
    */
   total: number;
   /** Seats with activity at or after the cutoff. Named for the default 30-day window. */
@@ -257,9 +259,9 @@ export function getSeatStats(
     ? [cutoff, upperBound, ...efA.params]
     : [cutoff, ...efA.params];
 
-  const total = (db.prepare(`SELECT COUNT(DISTINCT LOWER(user_login)) as c FROM copilot_seats${efW.clause}`).get(...efW.params) as { c: number }).c;
-  const active30d = (db.prepare(`SELECT COUNT(DISTINCT LOWER(user_login)) as c FROM copilot_seats WHERE last_activity_at >= ?${activityUpperClause}${efA.clause}`).get(...activeParams) as { c: number }).c;
-  const pendingCancellation = (db.prepare(`SELECT COUNT(DISTINCT LOWER(user_login)) as c FROM copilot_seats WHERE pending_cancellation_date IS NOT NULL${efA.clause}`).get(...efA.params) as { c: number }).c;
+  const total = (db.prepare(`SELECT COUNT(DISTINCT user_id) as c FROM copilot_seats${efW.clause}`).get(...efW.params) as { c: number }).c;
+  const active30d = (db.prepare(`SELECT COUNT(DISTINCT user_id) as c FROM copilot_seats WHERE last_activity_at >= ?${activityUpperClause}${efA.clause}`).get(...activeParams) as { c: number }).c;
+  const pendingCancellation = (db.prepare(`SELECT COUNT(DISTINCT user_id) as c FROM copilot_seats WHERE pending_cancellation_date IS NOT NULL${efA.clause}`).get(...efA.params) as { c: number }).c;
 
   return {
     total,
@@ -311,11 +313,11 @@ export function getSeatStatsForWindow(
   const efA = buildEnterpriseFilter(enterpriseSlugs, "AND");
 
   const total = (db.prepare(
-    `SELECT COUNT(DISTINCT LOWER(user_login)) as c FROM copilot_seats${efW.clause}`,
+    `SELECT COUNT(DISTINCT user_id) as c FROM copilot_seats${efW.clause}`,
   ).get(...efW.params) as { c: number }).c;
 
   const pendingCancellation = (db.prepare(
-    `SELECT COUNT(DISTINCT LOWER(user_login)) as c FROM copilot_seats WHERE pending_cancellation_date IS NOT NULL${efA.clause}`,
+    `SELECT COUNT(DISTINCT user_id) as c FROM copilot_seats WHERE pending_cancellation_date IS NOT NULL${efA.clause}`,
   ).get(...efA.params) as { c: number }).c;
 
   // Enterprise scoping is applied to the seat side only. A seat holder counts
@@ -325,10 +327,10 @@ export function getSeatStatsForWindow(
   // another.
   const active30d = (db.prepare(
     `SELECT COUNT(*) as c FROM (
-       SELECT DISTINCT LOWER(user_login) AS login FROM copilot_seats${efW.clause}
+       SELECT DISTINCT user_id FROM copilot_seats${efW.clause}
      ) s
-     WHERE s.login IN (
-       SELECT DISTINCT LOWER(user_login) FROM user_daily_metrics WHERE day >= ? AND day <= ?
+     WHERE s.user_id IN (
+       SELECT DISTINCT user_id FROM user_daily_metrics WHERE day >= ? AND day <= ?
      )`,
   ).get(...efW.params, startDay, endDay) as { c: number }).c;
 
@@ -364,12 +366,12 @@ export function countActiveUsersWithoutSeat(
 
   const row = db.prepare(
     `SELECT COUNT(*) as c FROM (
-       SELECT DISTINCT LOWER(user_login) AS login
+       SELECT DISTINCT user_id
        FROM user_daily_metrics
        WHERE day >= ? AND day <= ?${efU.clause}
      ) u
-     WHERE u.login NOT IN (
-       SELECT DISTINCT LOWER(user_login) FROM copilot_seats${efW.clause}
+     WHERE u.user_id NOT IN (
+       SELECT DISTINCT user_id FROM copilot_seats${efW.clause}
      )`,
   ).get(startDay, endDay, ...efU.params, ...efW.params) as { c: number } | undefined;
 

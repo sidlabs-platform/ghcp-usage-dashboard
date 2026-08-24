@@ -51,14 +51,14 @@ describe("aggregation SQL filters", () => {
       { enterpriseSlug: "ent-a", userLogin: "alice" },
       { enterpriseSlug: "ent-b", userLogin: "bob" },
     ], "u.enterprise_slug", "u.user_login")).toEqual({
-      clause: "AND (u.enterprise_slug, u.user_login) IN ((?, ?), (?, ?))",
+      clause: "AND (u.enterprise_slug, LOWER(u.user_login)) IN ((?, ?), (?, ?))",
       params: ["ent-a", "alice", "ent-b", "bob"],
     });
   });
 
   it("preserves whitelisted aliases in login-only filters", () => {
     expect(buildLoginFilter(["alice"], "m.user_login")).toEqual({
-      clause: "AND m.user_login IN (?)",
+      clause: "AND LOWER(m.user_login) IN (?)",
       params: ["alice"],
     });
   });
@@ -171,6 +171,33 @@ describe("getAdoptionStats", () => {
     expect(stats.cliUsers).toBe(1);
   });
 
+  it("uses stable user IDs when a login changes casing", () => {
+    insertMetric({
+      day: "2024-01-10",
+      enterprise_id: "ent-a",
+      enterprise_slug: "ent-a",
+      user_id: 42,
+      user_login: "OctoCat",
+      used_agent: 1,
+      used_chat: 0,
+    });
+    insertMetric({
+      day: "2024-01-11",
+      enterprise_id: "ent-b",
+      enterprise_slug: "ent-b",
+      user_id: 42,
+      user_login: "octocat",
+      used_agent: 0,
+      used_chat: 1,
+    });
+
+    const stats = getAdoptionStats("2024-01-01", "2024-01-31");
+
+    expect(stats.totalUsers).toBe(1);
+    expect(stats.agentUsers).toBe(1);
+    expect(stats.chatUsers).toBe(1);
+  });
+
   it("counts distinct appUsers from used_copilot_app=1, treating NULL as unsupported/zero", () => {
     insertMetric({ user_login: "user1", used_copilot_app: 1 });
     insertMetric({ day: "2024-01-11", user_login: "user2", user_id: 2, used_copilot_app: 0 });
@@ -208,6 +235,16 @@ describe("getUserSummaries", () => {
     expect(summaries[0].locAdded).toBe(30);
     expect(summaries[0].activeDays).toBe(2);
     expect(summaries[0].usedAgent).toBe(true);
+  });
+
+  it("returns one user summary when a login changes casing", () => {
+    insertMetric({ day: "2024-01-10", enterprise_id: "ent-a", user_id: 42, user_login: "OctoCat" });
+    insertMetric({ day: "2024-01-11", enterprise_id: "ent-b", user_id: 42, user_login: "octocat" });
+
+    const summaries = getUserSummaries("2024-01-01", "2024-01-31");
+
+    expect(summaries).toHaveLength(1);
+    expect(summaries[0].activeDays).toBe(2);
   });
 
   it("aggregates AI credits used per user", () => {

@@ -14,7 +14,7 @@
 //      may contain an entry with `feature = 'copilot_app'` carrying
 //      generation/acceptance/LOC activity.
 // The same user/day can appear once per enterprise (multi-enterprise
-// membership); every query here deduplicates by (day, user_login) using
+// membership); every query here deduplicates by (day, user_id) using
 // MAX(...) before summing, since duplicate enterprise rows for the same
 // user/day carry identical values.
 
@@ -120,29 +120,37 @@ export interface CopilotAppUserSummaryResult extends CopilotAppKpis {
  * All aggregation happens in SQL via three independent queries (scalar
  * counts, dedicated-totals sums, App-feature sums) to avoid a JSON
  * cross-product between `totals_by_copilot_app` (a single object) and
- * `totals_by_feature` (an array). Same-login/same-day rows across multiple
+ * `totals_by_feature` (an array). Same-user/same-day rows across multiple
  * enterprises are deduplicated with MAX before the final SUM.
+ * @param userId Stable user ID that takes precedence over login-based filters.
  */
 export function getCopilotAppUserSummary(
   startDay: string,
   endDay: string,
   allowedLogins?: string[],
   enterpriseSlugs?: string[],
+  userId?: number,
 ): CopilotAppUserSummaryResult {
   const db = getDb();
-  const { login, enterprise } = resolveFilters(allowedLogins, enterpriseSlugs);
+  const { login, enterprise } = resolveFilters(
+    userId === undefined ? allowedLogins : undefined,
+    enterpriseSlugs,
+  );
+  const user = userId === undefined
+    ? { clause: "", params: [] as number[] }
+    : { clause: " AND user_id = ?", params: [userId] };
 
   const scalarSql = `
     SELECT
-      COUNT(DISTINCT user_login) as periodActiveUsers,
-      COUNT(DISTINCT CASE WHEN ${HAS_APP_ACTIVITY} THEN user_login END) as appActiveUsers,
+      COUNT(DISTINCT user_id) as periodActiveUsers,
+      COUNT(DISTINCT CASE WHEN ${HAS_APP_ACTIVITY} THEN user_id END) as appActiveUsers,
       COUNT(CASE WHEN ${HAS_APP_EVIDENCE_ANY} THEN 1 END) as supportedRows
     FROM user_daily_metrics
-    WHERE day >= ? AND day <= ? ${login.clause}${enterprise.clause}
+    WHERE day >= ? AND day <= ? ${login.clause}${user.clause}${enterprise.clause}
   `;
   const scalarRow = db
     .prepare(scalarSql)
-    .get(startDay, endDay, ...login.params, ...enterprise.params) as {
+    .get(startDay, endDay, ...login.params, ...user.params, ...enterprise.params) as {
     periodActiveUsers: number;
     appActiveUsers: number;
     supportedRows: number;
@@ -152,15 +160,15 @@ export function getCopilotAppUserSummary(
     WITH per_user_day AS (
       SELECT
         day,
-        user_login,
+        user_id,
         MAX(COALESCE(json_extract(totals_by_copilot_app, '$.session_count'), 0)) as sessions,
         MAX(COALESCE(json_extract(totals_by_copilot_app, '$.request_count'), 0)) as requests,
         MAX(COALESCE(json_extract(totals_by_copilot_app, '$.prompt_count'), 0)) as prompts,
         MAX(COALESCE(json_extract(totals_by_copilot_app, '$.token_usage.prompt_tokens_sum'), 0)) as promptTokens,
         MAX(COALESCE(json_extract(totals_by_copilot_app, '$.token_usage.output_tokens_sum'), 0)) as outputTokens
       FROM user_daily_metrics
-      WHERE day >= ? AND day <= ? ${login.clause}${enterprise.clause}
-      GROUP BY day, user_login
+      WHERE day >= ? AND day <= ? ${login.clause}${user.clause}${enterprise.clause}
+      GROUP BY day, user_id
     )
     SELECT
       COALESCE(SUM(sessions), 0) as sessions,
@@ -172,7 +180,7 @@ export function getCopilotAppUserSummary(
   `;
   const dedicatedRow = db
     .prepare(dedicatedSql)
-    .get(startDay, endDay, ...login.params, ...enterprise.params) as {
+    .get(startDay, endDay, ...login.params, ...user.params, ...enterprise.params) as {
     sessions: number;
     requests: number;
     prompts: number;
@@ -181,35 +189,38 @@ export function getCopilotAppUserSummary(
   };
 
   const { login: featureLogin, enterprise: featureEnterprise } = resolveFilters(
-    allowedLogins,
+    userId === undefined ? allowedLogins : undefined,
     enterpriseSlugs,
     "u.user_login",
     "u.enterprise_slug",
   );
+  const featureUser = userId === undefined
+    ? { clause: "", params: [] as number[] }
+    : { clause: " AND u.user_id = ?", params: [userId] };
   const featureSql = `
     WITH app_feature AS (
       SELECT
         u.day,
-        u.user_login,
+        u.user_id,
         json_extract(j.value, '$.code_generation_activity_count') as generations,
         json_extract(j.value, '$.code_acceptance_activity_count') as acceptances,
         json_extract(j.value, '$.loc_added_sum') as locAdded,
         json_extract(j.value, '$.loc_deleted_sum') as locDeleted
       FROM user_daily_metrics u, json_each(u.totals_by_feature) j
-      WHERE u.day >= ? AND u.day <= ? ${featureLogin.clause}${featureEnterprise.clause}
+      WHERE u.day >= ? AND u.day <= ? ${featureLogin.clause}${featureUser.clause}${featureEnterprise.clause}
         AND json_valid(u.totals_by_feature)
         AND json_extract(j.value, '$.feature') = 'copilot_app'
     ),
     per_user_day AS (
       SELECT
         day,
-        user_login,
+        user_id,
         MAX(COALESCE(generations, 0)) as generations,
         MAX(COALESCE(acceptances, 0)) as acceptances,
         MAX(COALESCE(locAdded, 0)) as locAdded,
         MAX(COALESCE(locDeleted, 0)) as locDeleted
       FROM app_feature
-      GROUP BY day, user_login
+      GROUP BY day, user_id
     )
     SELECT
       COALESCE(SUM(generations), 0) as codeGenerations,
@@ -220,7 +231,7 @@ export function getCopilotAppUserSummary(
   `;
   const featureRow = db
     .prepare(featureSql)
-    .get(startDay, endDay, ...featureLogin.params, ...featureEnterprise.params) as {
+    .get(startDay, endDay, ...featureLogin.params, ...featureUser.params, ...featureEnterprise.params) as {
     codeGenerations: number;
     codeAcceptances: number;
     locAdded: number;
@@ -257,7 +268,7 @@ export function getCopilotAppUserSummary(
 
 /**
  * Daily Copilot App adoption/usage trend (active users, sessions, requests,
- * prompts), deduplicated per (day, user_login) across enterprises and
+ * prompts), deduplicated per (day, user_id) across enterprises and
  * sorted by day ascending.
  */
 export function getCopilotAppDailyUsage(
@@ -273,18 +284,18 @@ export function getCopilotAppDailyUsage(
     WITH per_user_day AS (
       SELECT
         day,
-        user_login,
+        user_id,
         MAX(COALESCE(json_extract(totals_by_copilot_app, '$.session_count'), 0)) as sessions,
         MAX(COALESCE(json_extract(totals_by_copilot_app, '$.request_count'), 0)) as requests,
         MAX(COALESCE(json_extract(totals_by_copilot_app, '$.prompt_count'), 0)) as prompts,
         MAX(CASE WHEN ${HAS_APP_ACTIVITY} THEN 1 ELSE 0 END) as isActive
       FROM user_daily_metrics
       WHERE day >= ? AND day <= ? ${login.clause}${enterprise.clause}
-      GROUP BY day, user_login
+      GROUP BY day, user_id
     )
     SELECT
       day,
-      COUNT(DISTINCT CASE WHEN isActive = 1 THEN user_login END) as activeUsers,
+      COUNT(DISTINCT CASE WHEN isActive = 1 THEN user_id END) as activeUsers,
       COALESCE(SUM(sessions), 0) as sessions,
       COALESCE(SUM(requests), 0) as requests,
       COALESCE(SUM(prompts), 0) as prompts
@@ -298,7 +309,7 @@ export function getCopilotAppDailyUsage(
 /**
  * Daily Copilot App code-impact trend (generations, acceptances, LOC added
  * and deleted) sourced exclusively from `totals_by_feature` rows where
- * `feature = 'copilot_app'`, deduplicated per (day, user_login) and sorted
+ * `feature = 'copilot_app'`, deduplicated per (day, user_id) and sorted
  * by day ascending.
  */
 export function getCopilotAppDailyCodeImpact(
@@ -314,7 +325,7 @@ export function getCopilotAppDailyCodeImpact(
     WITH app_feature AS (
       SELECT
         u.day,
-        u.user_login,
+        u.user_id,
         json_extract(j.value, '$.code_generation_activity_count') as generations,
         json_extract(j.value, '$.code_acceptance_activity_count') as acceptances,
         json_extract(j.value, '$.loc_added_sum') as locAdded,
@@ -327,13 +338,13 @@ export function getCopilotAppDailyCodeImpact(
     per_user_day AS (
       SELECT
         day,
-        user_login,
+        user_id,
         MAX(COALESCE(generations, 0)) as generations,
         MAX(COALESCE(acceptances, 0)) as acceptances,
         MAX(COALESCE(locAdded, 0)) as locAdded,
         MAX(COALESCE(locDeleted, 0)) as locDeleted
       FROM app_feature
-      GROUP BY day, user_login
+      GROUP BY day, user_id
     )
     SELECT
       day,
@@ -352,7 +363,7 @@ export function getCopilotAppDailyCodeImpact(
 
 /**
  * Copilot App model usage breakdown from `totals_by_model_feature`, filtered
- * to `feature = 'copilot_app'`, deduplicated per (day, user_login, model)
+ * to `feature = 'copilot_app'`, deduplicated per (day, user_id, model)
  * across enterprises, and sorted by interactions descending.
  */
 export function getCopilotAppModelBreakdown(
@@ -368,7 +379,7 @@ export function getCopilotAppModelBreakdown(
     WITH raw AS (
       SELECT
         u.day,
-        u.user_login,
+        u.user_id,
         json_extract(j.value, '$.model') as model,
         json_extract(j.value, '$.user_initiated_interaction_count') as interactions
       FROM user_daily_metrics u, json_each(u.totals_by_model_feature) j
@@ -378,9 +389,9 @@ export function getCopilotAppModelBreakdown(
         AND json_extract(j.value, '$.model') IS NOT NULL
     ),
     deduped AS (
-      SELECT day, user_login, model, MAX(COALESCE(interactions, 0)) as interactions
+      SELECT day, user_id, model, MAX(COALESCE(interactions, 0)) as interactions
       FROM raw
-      GROUP BY day, user_login, model
+      GROUP BY day, user_id, model
     )
     SELECT model as name, COALESCE(SUM(interactions), 0) as interactions
     FROM deduped
@@ -393,7 +404,7 @@ export function getCopilotAppModelBreakdown(
 /**
  * Copilot App language usage breakdown from `totals_by_language_feature`,
  * filtered to `feature = 'copilot_app'`, deduplicated per
- * (day, user_login, language) across enterprises, and sorted by LOC added
+ * (day, user_id, language) across enterprises, and sorted by LOC added
  * descending. `totals_by_language_feature` has no interaction-count field,
  * so `interactions` here is the summed `code_generation_activity_count`.
  */
@@ -410,7 +421,7 @@ export function getCopilotAppLanguageBreakdown(
     WITH raw AS (
       SELECT
         u.day,
-        u.user_login,
+        u.user_id,
         json_extract(j.value, '$.language') as language,
         json_extract(j.value, '$.code_generation_activity_count') as generations,
         json_extract(j.value, '$.loc_added_sum') as locAdded,
@@ -423,12 +434,12 @@ export function getCopilotAppLanguageBreakdown(
     ),
     deduped AS (
       SELECT
-        day, user_login, language,
+        day, user_id, language,
         MAX(COALESCE(generations, 0)) as generations,
         MAX(COALESCE(locAdded, 0)) as locAdded,
         MAX(COALESCE(locDeleted, 0)) as locDeleted
       FROM raw
-      GROUP BY day, user_login, language
+      GROUP BY day, user_id, language
     )
     SELECT
       language as name,
@@ -813,7 +824,7 @@ function escapeLikePattern(input: string): string {
  * schema-supported (a supported-but-zero row, e.g. an explicit `false` flag
  * paired with all-zero dedicated totals, is excluded). `activeDays` counts
  * only days meeting that same activity predicate. Rows are deduplicated per
- * (day, user_login) across enterprises before summing period totals.
+ * (day, user_id) across enterprises before summing period totals.
  * Sorting is restricted to a fixed column allowlist via
  * {@link resolveAdopterSortColumn}; an unrecognized or prototype-property
  * `sortField` (e.g. `"constructor"`, `"toString"`, `"__proto__"`) falls
@@ -846,7 +857,7 @@ export function getCopilotAppAdopters(
 
   const cteSql = `
     WITH app_rows AS (
-      SELECT day, user_login, totals_by_copilot_app, totals_by_feature
+      SELECT day, user_id, user_login, totals_by_copilot_app, totals_by_feature
       FROM user_daily_metrics
       WHERE day >= ? AND day <= ? ${login.clause}${enterprise.clause} ${searchClause}
         AND ${HAS_APP_ACTIVITY}
@@ -854,29 +865,31 @@ export function getCopilotAppAdopters(
     dedicated_per_day AS (
       SELECT
         day,
-        user_login,
+        user_id,
+        MAX(user_login) as user_login,
         MAX(COALESCE(json_extract(totals_by_copilot_app, '$.session_count'), 0)) as sessions,
         MAX(COALESCE(json_extract(totals_by_copilot_app, '$.request_count'), 0)) as requests,
         MAX(COALESCE(json_extract(totals_by_copilot_app, '$.prompt_count'), 0)) as prompts,
         MAX(COALESCE(json_extract(totals_by_copilot_app, '$.token_usage.prompt_tokens_sum'), 0)) as promptTokens,
         MAX(COALESCE(json_extract(totals_by_copilot_app, '$.token_usage.output_tokens_sum'), 0)) as outputTokens
       FROM app_rows
-      GROUP BY day, user_login
+      GROUP BY day, user_id
     ),
     feature_per_day AS (
       SELECT
         ar.day,
-        ar.user_login,
+        ar.user_id,
         MAX(COALESCE(json_extract(j.value, '$.loc_added_sum'), 0)) as locAdded,
         MAX(COALESCE(json_extract(j.value, '$.loc_deleted_sum'), 0)) as locDeleted
       FROM app_rows ar, json_each(ar.totals_by_feature) j
       WHERE json_valid(ar.totals_by_feature)
         AND json_extract(j.value, '$.feature') = 'copilot_app'
-      GROUP BY ar.day, ar.user_login
+      GROUP BY ar.day, ar.user_id
     ),
     per_day AS (
       SELECT
         d.day as day,
+        d.user_id as user_id,
         d.user_login as user_login,
         d.sessions as sessions,
         d.requests as requests,
@@ -886,11 +899,11 @@ export function getCopilotAppAdopters(
         COALESCE(f.locAdded, 0) as locAdded,
         COALESCE(f.locDeleted, 0) as locDeleted
       FROM dedicated_per_day d
-      LEFT JOIN feature_per_day f ON f.day = d.day AND f.user_login = d.user_login
+      LEFT JOIN feature_per_day f ON f.day = d.day AND f.user_id = d.user_id
     ),
     totals AS (
       SELECT
-        user_login as login,
+        MAX(user_login) as login,
         COUNT(DISTINCT day) as activeDays,
         COALESCE(SUM(sessions), 0) as sessions,
         COALESCE(SUM(requests), 0) as requests,
@@ -900,7 +913,7 @@ export function getCopilotAppAdopters(
         COALESCE(SUM(locAdded), 0) as locAdded,
         COALESCE(SUM(locDeleted), 0) as locDeleted
       FROM per_day
-      GROUP BY user_login
+      GROUP BY user_id
     )
   `;
   const cteParams = [startDay, endDay, ...login.params, ...enterprise.params, ...searchParams];

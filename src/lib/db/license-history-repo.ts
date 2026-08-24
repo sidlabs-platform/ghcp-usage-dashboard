@@ -407,9 +407,12 @@ function appendPeriodFilters(clauses: string[], params: unknown[], query: Licens
     params.push(...query.orgLogins);
   }
   if (query.logins?.length) {
-    const parts = query.logins.map(() => `(user_login = ? OR resolved_user_login = ? OR holder_key = ?)`);
+    const parts = query.logins.map(() => `(LOWER(user_login) = ? OR LOWER(resolved_user_login) = ? OR LOWER(holder_key) = ?)`);
     clauses.push(`(${parts.join(" OR ")})`);
-    for (const login of query.logins) params.push(login, login, login);
+    for (const login of query.logins) {
+      const normalizedLogin = login.toLowerCase();
+      params.push(normalizedLogin, normalizedLogin, normalizedLogin);
+    }
   }
   // Team/org-resolved login allowlist (see LicensePeriodFilterQuery.allowedLogins
   // doc). Distinguished from `logins` above: `undefined` means unrestricted,
@@ -423,9 +426,12 @@ function appendPeriodFilters(clauses: string[], params: unknown[], query: Licens
     if (query.allowedLogins.length === 0) {
       clauses.push("1 = 0");
     } else {
-      const parts = query.allowedLogins.map(() => `(user_login = ? OR resolved_user_login = ? OR holder_key = ?)`);
+      const parts = query.allowedLogins.map(() => `(LOWER(user_login) = ? OR LOWER(resolved_user_login) = ? OR LOWER(holder_key) = ?)`);
       clauses.push(`(${parts.join(" OR ")})`);
-      for (const login of query.allowedLogins) params.push(login, login, login);
+      for (const login of query.allowedLogins) {
+        const normalizedLogin = login.toLowerCase();
+        params.push(normalizedLogin, normalizedLogin, normalizedLogin);
+      }
     }
   }
   if (query.planTypes?.length) {

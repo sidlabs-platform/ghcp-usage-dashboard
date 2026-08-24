@@ -74,4 +74,19 @@ describe("user-teams-repo", () => {
       { team_slug: "frontend", enterprise_slug: "globex", org_slug: "org-g", member_count: 1 },
     ]);
   });
+
+  it("deduplicates login casing variants by stable user ID", () => {
+    batchUpsertUserTeams("acme", "2025-02-01", [
+      { day: "2025-02-01", organization_id: "org-a", team_slug: "case-team", user_id: 42, user_login: "OctoCat" },
+    ]);
+    batchUpsertUserTeams("acme", "2025-02-02", [
+      { day: "2025-02-02", organization_id: "org-a", team_slug: "case-team", user_id: 42, user_login: "octocat" },
+    ]);
+
+    const teams = getCopilotTeams("2025-02-01", "2025-02-02", ["acme"]);
+    const members = getCopilotTeamMembers("case-team", "2025-02-01", "2025-02-02", ["acme"]);
+
+    expect(teams[0].member_count).toBe(1);
+    expect(members).toHaveLength(1);
+  });
 });

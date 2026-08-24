@@ -93,6 +93,10 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_billing_premium_dedup_v2
 -- Query indexes
 CREATE INDEX IF NOT EXISTS idx_billing_premium_date ON billing_premium_requests(date);
 CREATE INDEX IF NOT EXISTS idx_billing_premium_user ON billing_premium_requests(username);
+CREATE INDEX IF NOT EXISTS idx_billing_premium_lower_user_date
+  ON billing_premium_requests(LOWER(username), date);
+CREATE INDEX IF NOT EXISTS idx_billing_premium_slug_lower_user_date
+  ON billing_premium_requests(enterprise_slug, LOWER(username), date);
 CREATE INDEX IF NOT EXISTS idx_billing_premium_model ON billing_premium_requests(model);
 CREATE INDEX IF NOT EXISTS idx_billing_premium_quota ON billing_premium_requests(exceeds_quota);
 CREATE INDEX IF NOT EXISTS idx_billing_premium_org ON billing_premium_requests(organization);
