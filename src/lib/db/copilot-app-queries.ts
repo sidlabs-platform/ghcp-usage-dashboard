@@ -122,15 +122,23 @@ export interface CopilotAppUserSummaryResult extends CopilotAppKpis {
  * cross-product between `totals_by_copilot_app` (a single object) and
  * `totals_by_feature` (an array). Same-user/same-day rows across multiple
  * enterprises are deduplicated with MAX before the final SUM.
+ * @param userId Stable user ID that takes precedence over login-based filters.
  */
 export function getCopilotAppUserSummary(
   startDay: string,
   endDay: string,
   allowedLogins?: string[],
   enterpriseSlugs?: string[],
+  userId?: number,
 ): CopilotAppUserSummaryResult {
   const db = getDb();
-  const { login, enterprise } = resolveFilters(allowedLogins, enterpriseSlugs);
+  const { login, enterprise } = resolveFilters(
+    userId === undefined ? allowedLogins : undefined,
+    enterpriseSlugs,
+  );
+  const user = userId === undefined
+    ? { clause: "", params: [] as number[] }
+    : { clause: " AND user_id = ?", params: [userId] };
 
   const scalarSql = `
     SELECT
@@ -138,11 +146,11 @@ export function getCopilotAppUserSummary(
       COUNT(DISTINCT CASE WHEN ${HAS_APP_ACTIVITY} THEN user_id END) as appActiveUsers,
       COUNT(CASE WHEN ${HAS_APP_EVIDENCE_ANY} THEN 1 END) as supportedRows
     FROM user_daily_metrics
-    WHERE day >= ? AND day <= ? ${login.clause}${enterprise.clause}
+    WHERE day >= ? AND day <= ? ${login.clause}${user.clause}${enterprise.clause}
   `;
   const scalarRow = db
     .prepare(scalarSql)
-    .get(startDay, endDay, ...login.params, ...enterprise.params) as {
+    .get(startDay, endDay, ...login.params, ...user.params, ...enterprise.params) as {
     periodActiveUsers: number;
     appActiveUsers: number;
     supportedRows: number;
@@ -159,7 +167,7 @@ export function getCopilotAppUserSummary(
         MAX(COALESCE(json_extract(totals_by_copilot_app, '$.token_usage.prompt_tokens_sum'), 0)) as promptTokens,
         MAX(COALESCE(json_extract(totals_by_copilot_app, '$.token_usage.output_tokens_sum'), 0)) as outputTokens
       FROM user_daily_metrics
-      WHERE day >= ? AND day <= ? ${login.clause}${enterprise.clause}
+      WHERE day >= ? AND day <= ? ${login.clause}${user.clause}${enterprise.clause}
       GROUP BY day, user_id
     )
     SELECT
@@ -172,7 +180,7 @@ export function getCopilotAppUserSummary(
   `;
   const dedicatedRow = db
     .prepare(dedicatedSql)
-    .get(startDay, endDay, ...login.params, ...enterprise.params) as {
+    .get(startDay, endDay, ...login.params, ...user.params, ...enterprise.params) as {
     sessions: number;
     requests: number;
     prompts: number;
@@ -181,11 +189,14 @@ export function getCopilotAppUserSummary(
   };
 
   const { login: featureLogin, enterprise: featureEnterprise } = resolveFilters(
-    allowedLogins,
+    userId === undefined ? allowedLogins : undefined,
     enterpriseSlugs,
     "u.user_login",
     "u.enterprise_slug",
   );
+  const featureUser = userId === undefined
+    ? { clause: "", params: [] as number[] }
+    : { clause: " AND u.user_id = ?", params: [userId] };
   const featureSql = `
     WITH app_feature AS (
       SELECT
@@ -196,7 +207,7 @@ export function getCopilotAppUserSummary(
         json_extract(j.value, '$.loc_added_sum') as locAdded,
         json_extract(j.value, '$.loc_deleted_sum') as locDeleted
       FROM user_daily_metrics u, json_each(u.totals_by_feature) j
-      WHERE u.day >= ? AND u.day <= ? ${featureLogin.clause}${featureEnterprise.clause}
+      WHERE u.day >= ? AND u.day <= ? ${featureLogin.clause}${featureUser.clause}${featureEnterprise.clause}
         AND json_valid(u.totals_by_feature)
         AND json_extract(j.value, '$.feature') = 'copilot_app'
     ),
@@ -220,7 +231,7 @@ export function getCopilotAppUserSummary(
   `;
   const featureRow = db
     .prepare(featureSql)
-    .get(startDay, endDay, ...featureLogin.params, ...featureEnterprise.params) as {
+    .get(startDay, endDay, ...featureLogin.params, ...featureUser.params, ...featureEnterprise.params) as {
     codeGenerations: number;
     codeAcceptances: number;
     locAdded: number;

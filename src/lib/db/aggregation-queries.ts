@@ -998,6 +998,7 @@ export function getFeatureDailyTrend(
  * Daily completion vs agent vs copilot_app LOC metrics aggregated via json_each.
  * @param emptyMeansNoRows When true, an empty `allowedLogins` list matches zero rows; otherwise it omits the login filter.
  * @param allowedUserScopes Enterprise-qualified users that take precedence over `allowedLogins`.
+ * @param userId Stable user ID that takes precedence over login-based filters.
  */
 export function getCompletionDailyTrend(
   startDay: string,
@@ -1006,15 +1007,18 @@ export function getCompletionDailyTrend(
   enterpriseSlugs?: string[],
   emptyMeansNoRows = false,
   allowedUserScopes?: EnterpriseUserScope[],
+  userId?: number,
 ): CompletionDailyRow[] {
   const db = getDb();
-  const filter = buildAllowedUserFilter(
-    allowedLogins,
-    allowedUserScopes,
-    emptyMeansNoRows,
-    "u.enterprise_slug",
-    "u.user_login",
-  );
+  const filter = userId === undefined
+    ? buildAllowedUserFilter(
+        allowedLogins,
+        allowedUserScopes,
+        emptyMeansNoRows,
+        "u.enterprise_slug",
+        "u.user_login",
+      )
+    : { clause: " AND u.user_id = ?", params: [userId] };
   const ef = buildEnterpriseFilter(enterpriseSlugs);
   const sql = `
     SELECT

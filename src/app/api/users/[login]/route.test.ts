@@ -57,6 +57,11 @@ beforeEach(() => {
   mockState.copilotAppDedicated = { sessions: 3, requests: 6, prompts: 9, promptTokens: 240, outputTokens: 120 };
   mockState.copilotAppFeature = { codeGenerations: 5, codeAcceptances: 4, locAdded: 30, locDeleted: 6 };
   mockState.prepare.mockImplementation((sql: string) => {
+    if (sql.includes("ORDER BY day DESC, user_id DESC")) {
+      return {
+        get: vi.fn(() => ({ userId: 123 })),
+      };
+    }
     if (sql.includes("as completionAccepted")) {
       return {
         all: vi.fn(() => [

@@ -103,6 +103,116 @@ describe("user detail route — topLanguages consistency with getLanguageBreakdo
     }));
   });
 
+  it("uses the latest scoped login match as one stable user ID across every detail query", async () => {
+    const insert = db.prepare(`
+      INSERT INTO user_daily_metrics (
+        day, enterprise_id, enterprise_slug, user_id, user_login,
+        code_generation_activity_count, code_acceptance_activity_count,
+        user_initiated_interaction_count, loc_suggested_to_add_sum, loc_added_sum,
+        chat_panel_ask_mode, used_copilot_app, totals_by_ide, totals_by_feature,
+        totals_by_language_feature, totals_by_model_feature, totals_by_cli,
+        totals_by_copilot_app, agent_edit
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    const addRow = (
+      day: string,
+      enterprise: string,
+      userId: number,
+      login: string,
+      count: number,
+      label: string,
+    ) => insert.run(
+      day, enterprise, enterprise, userId, login,
+      count, count, count, count * 10, count * 10,
+      count, 1,
+      JSON.stringify([{ ide: label, user_initiated_interaction_count: count }]),
+      JSON.stringify([
+        {
+          feature: "code_completion",
+          user_initiated_interaction_count: count,
+          code_generation_activity_count: count,
+          code_acceptance_activity_count: count,
+          loc_suggested_to_add_sum: count * 10,
+          loc_added_sum: count * 10,
+          loc_suggested_to_delete_sum: 0,
+          loc_deleted_sum: 0,
+        },
+        {
+          feature: "copilot_app",
+          user_initiated_interaction_count: count,
+          code_generation_activity_count: count,
+          code_acceptance_activity_count: count,
+          loc_added_sum: count,
+          loc_deleted_sum: 0,
+        },
+      ]),
+      JSON.stringify([{
+        language: label,
+        feature: "code_completion",
+        code_generation_activity_count: count,
+        code_acceptance_activity_count: count,
+      }]),
+      JSON.stringify([{
+        model: label,
+        user_initiated_interaction_count: count,
+      }]),
+      JSON.stringify({
+        session_count: count,
+        request_count: count,
+        prompt_count: count,
+        token_usage: { prompt_tokens_sum: count, output_tokens_sum: count },
+      }),
+      JSON.stringify({
+        session_count: count,
+        request_count: count,
+        prompt_count: count,
+        token_usage: { prompt_tokens_sum: count, output_tokens_sum: count },
+      }),
+      JSON.stringify({ loc_added_sum: count, loc_deleted_sum: 0 }),
+    );
+
+    addRow("2025-01-01", "ent-a", 101, "reused-login", 100, "old-user");
+    addRow("2025-01-01", "ent-a", 202, "renamed-login", 3, "stable-user");
+    addRow("2025-01-02", "ent-a", 202, "ReUsEd-LoGiN", 5, "stable-user");
+    addRow("2025-01-03", "ent-b", 303, "reused-login", 200, "wrong-scope");
+
+    const GET = await getHandler();
+    const res = await GET(new NextRequest(
+      "http://localhost/api/users/reused-login?startDate=2025-01-01&endDate=2025-01-03&enterprises=ent-a",
+    ));
+    expect(res.status).toBe(200);
+    const json = await res.json();
+
+    expect(json.dailyActivity.map((row: { day: string; codeGen: number }) => ({
+      day: row.day,
+      codeGen: row.codeGen,
+    }))).toEqual([
+      { day: "2025-01-01", codeGen: 3 },
+      { day: "2025-01-02", codeGen: 5 },
+    ]);
+    expect(json.summary).toEqual(expect.objectContaining({
+      totalCodeGen: 8,
+      totalLocSuggested: 80,
+      completionLocAccepted: 80,
+      agentLocAdded: 8,
+    }));
+    expect(json.topLanguages).toEqual([
+      { language: "stable-user", suggestions: 8, acceptances: 8 },
+    ]);
+    expect(json.topModels).toEqual([{ model: "stable-user", interactions: 8 }]);
+    expect(json.ideUsage).toEqual([{ ide: "stable-user", interactions: 8 }]);
+    expect(json.featureUsage).toContainEqual(expect.objectContaining({
+      feature: "code_completion",
+      codeGen: 8,
+    }));
+    expect(json.chatModes.ask).toBe(8);
+    expect(json.cliStats.sessions).toBe(8);
+    expect(json.copilotAppStats).toEqual(expect.objectContaining({
+      sessions: 8,
+      codeGenerations: 8,
+    }));
+  });
+
   it("preserves legacy featureless rows, includes chat_inline/unknown, and excludes agent_edit/copilot_app — matching getLanguageBreakdown", async () => {
     const totalsByLanguageFeature = JSON.stringify([
       // Legacy row synced before the `feature` key existed on language rows.

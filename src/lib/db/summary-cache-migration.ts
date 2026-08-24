@@ -25,16 +25,23 @@ import type { SqliteDatabase } from "./sqlite-database";
  * Ledger name recorded once this migration has successfully applied.
  *
  * Bumped to v2 when `copilot_cli` was given its own classification. A database
- * that already ran v1 still holds acceptance rates computed without the CLI —
+ * that already ran v1 still holds acceptance rates computed without the CLI -
  * on a CLI-heavy fleet that under-reported the rate by roughly 6x — so the
- * ledger name must change or those rows would never be recomputed. The
+ * ledger name must change or those rows would never be recomputed. Bumped to
+ * v3 when user summaries moved to stable user IDs so databases that recorded
+ * v2 rerun the computation without merging reused logins. The
  * migration only ever recomputes derived columns from `user_daily_metrics`, so
  * re-running it is safe and needs no re-sync.
  */
-const MIGRATION_NAME = "summary-cache-completion-classification-v2";
+const MIGRATION_NAME = "summary-cache-completion-classification-v3";
 
 function tableExists(db: SqliteDatabase, table: string): boolean {
   const row = db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`).get(table);
+  return !!row;
+}
+
+function columnExists(db: SqliteDatabase, table: string, column: string): boolean {
+  const row = db.prepare(`SELECT name FROM pragma_table_info(?) WHERE name = ?`).get(table, column);
   return !!row;
 }
 
@@ -55,8 +62,9 @@ function markApplied(db: SqliteDatabase): void {
 
 /**
  * Recompute user_period_summary.acceptance_rate in place for every already
- * cached (enterprise_slug, user_login, period_start, period_end) row, using
- * the row's own period bounds to re-join user_daily_metrics. Rows whose
+ * cached row, using user_id for the current summary schema and user_login for
+ * legacy schemas that predate that identity column. The row's own period
+ * bounds are used to re-join user_daily_metrics. Rows whose
  * period has no matching totals_by_feature data are left untouched (mirrors
  * refreshUserSummary's existing COALESCE(..., 0) behavior, which only ever
  * overrides rows for which a group actually exists). Source rows with
@@ -66,10 +74,16 @@ function markApplied(db: SqliteDatabase): void {
 function migrateUserPeriodSummary(db: SqliteDatabase): void {
   if (!tableExists(db, "user_period_summary") || !tableExists(db, "user_daily_metrics")) return;
 
+  const identityColumn =
+    columnExists(db, "user_period_summary", "user_id") &&
+    columnExists(db, "user_daily_metrics", "user_id")
+      ? "user_id"
+      : "user_login";
+
   db.exec(`
     UPDATE user_period_summary SET acceptance_rate = COALESCE(f.rate, 0)
     FROM (
-      SELECT u.enterprise_slug, u.user_login, s.period_start, s.period_end,
+      SELECT u.enterprise_slug, u.${identityColumn} AS user_identity, s.period_start, s.period_end,
         CASE WHEN SUM(CASE WHEN ${IS_ACCEPTANCE_ELIGIBLE_SQL}
             THEN json_extract(j.value, '$.code_generation_activity_count') ELSE 0 END) > 0
           THEN ROUND(
@@ -81,16 +95,16 @@ function migrateUserPeriodSummary(db: SqliteDatabase): void {
       FROM user_period_summary s
       INNER JOIN user_daily_metrics u
         ON u.enterprise_slug = s.enterprise_slug
-        AND u.user_login = s.user_login
+        AND u.${identityColumn} = s.${identityColumn}
         AND u.day >= s.period_start
         AND u.day <= s.period_end,
         json_each(u.totals_by_feature) j
       WHERE u.totals_by_feature IS NOT NULL AND u.totals_by_feature != '[]'
         AND json_valid(u.totals_by_feature)
-      GROUP BY u.enterprise_slug, u.user_login, s.period_start, s.period_end
+      GROUP BY u.enterprise_slug, u.${identityColumn}, s.period_start, s.period_end
     ) f
     WHERE user_period_summary.enterprise_slug = f.enterprise_slug
-      AND user_period_summary.user_login = f.user_login
+      AND user_period_summary.${identityColumn} = f.user_identity
       AND user_period_summary.period_start = f.period_start
       AND user_period_summary.period_end = f.period_end
   `);

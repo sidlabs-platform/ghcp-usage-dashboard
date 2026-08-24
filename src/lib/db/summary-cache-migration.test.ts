@@ -91,6 +91,16 @@ function legacyFeatureSet(): string {
   ]);
 }
 
+function acceptanceFeatureSet(generated: number, accepted: number): string {
+  return JSON.stringify([
+    {
+      feature: "code_completion",
+      code_generation_activity_count: generated,
+      code_acceptance_activity_count: accepted,
+    },
+  ]);
+}
+
 describe("migrateSummaryCacheClassification — user_period_summary", () => {
   beforeEach(() => {
     db = new Database(":memory:");
@@ -146,6 +156,66 @@ describe("migrateSummaryCacheClassification — user_period_summary", () => {
       `SELECT acceptance_rate FROM user_period_summary WHERE user_login = 'dev-no-data'`
     ).get() as { acceptance_rate: number };
     expect(row.acceptance_rate).toBe(42);
+  });
+});
+
+describe("migrateSummaryCacheClassification — user_id summary identity", () => {
+  beforeEach(() => {
+    db = new Database(":memory:");
+    db.exec(`
+      CREATE TABLE user_daily_metrics (
+        day TEXT NOT NULL,
+        enterprise_slug TEXT NOT NULL DEFAULT '',
+        user_id INTEGER NOT NULL,
+        user_login TEXT NOT NULL,
+        totals_by_feature TEXT,
+        PRIMARY KEY (day, enterprise_slug, user_id)
+      );
+
+      CREATE TABLE user_period_summary (
+        enterprise_slug TEXT NOT NULL DEFAULT '',
+        user_id INTEGER NOT NULL,
+        user_login TEXT NOT NULL,
+        period_start TEXT NOT NULL,
+        period_end TEXT NOT NULL,
+        acceptance_rate REAL DEFAULT 0,
+        computed_at TEXT NOT NULL,
+        PRIMARY KEY (enterprise_slug, user_id, period_start, period_end)
+      );
+
+      CREATE TABLE summary_cache_migrations (
+        name TEXT PRIMARY KEY,
+        applied_at TEXT NOT NULL
+      );
+    `);
+  });
+
+  it("recomputes separate rates for distinct user_ids that share a login", () => {
+    const insertDaily = db.prepare(
+      `INSERT INTO user_daily_metrics
+        (day, enterprise_slug, user_id, user_login, totals_by_feature)
+       VALUES (?, ?, ?, ?, ?)`
+    );
+    insertDaily.run("2024-01-01", "ent1", 101, "reused-login", acceptanceFeatureSet(20, 15));
+    insertDaily.run("2024-01-01", "ent1", 202, "reused-login", acceptanceFeatureSet(20, 5));
+
+    const insertSummary = db.prepare(
+      `INSERT INTO user_period_summary
+        (enterprise_slug, user_id, user_login, period_start, period_end, acceptance_rate, computed_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
+    );
+    insertSummary.run("ent1", 101, "reused-login", "2024-01-01", "2024-01-01", 0, "2024-01-01T00:00:00.000Z");
+    insertSummary.run("ent1", 202, "reused-login", "2024-01-01", "2024-01-01", 0, "2024-01-01T00:00:00.000Z");
+
+    migrateSummaryCacheClassification(db);
+
+    const rows = db.prepare(
+      `SELECT user_id, acceptance_rate FROM user_period_summary ORDER BY user_id`
+    ).all();
+    expect(rows).toEqual([
+      { user_id: 101, acceptance_rate: 75 },
+      { user_id: 202, acceptance_rate: 25 },
+    ]);
   });
 });
 
@@ -217,7 +287,7 @@ describe("migrateSummaryCacheClassification — idempotency and ledger", () => {
   it("records the migration marker only after a successful run", () => {
     migrateSummaryCacheClassification(db);
     const row = db.prepare(
-      `SELECT name FROM summary_cache_migrations WHERE name = 'summary-cache-completion-classification-v2'`
+      `SELECT name FROM summary_cache_migrations WHERE name = 'summary-cache-completion-classification-v3'`
     ).get();
     expect(row).toBeTruthy();
   });
@@ -251,7 +321,7 @@ describe("migrateSummaryCacheClassification — idempotency and ledger", () => {
     expect(afterSecondRun.acceptance_rate).toBe(33.3);
 
     const markerCount = db.prepare(
-      `SELECT COUNT(*) as cnt FROM summary_cache_migrations WHERE name = 'summary-cache-completion-classification-v2'`
+      `SELECT COUNT(*) as cnt FROM summary_cache_migrations WHERE name = 'summary-cache-completion-classification-v3'`
     ).get() as { cnt: number };
     expect(markerCount.cnt).toBe(1);
   });
@@ -267,7 +337,7 @@ describe("migrateSummaryCacheClassification — idempotency and ledger", () => {
     bareDb.exec(`CREATE TABLE summary_cache_migrations (name TEXT PRIMARY KEY, applied_at TEXT NOT NULL)`);
     expect(() => migrateSummaryCacheClassification(bareDb)).not.toThrow();
     const row = bareDb.prepare(
-      `SELECT name FROM summary_cache_migrations WHERE name = 'summary-cache-completion-classification-v2'`
+      `SELECT name FROM summary_cache_migrations WHERE name = 'summary-cache-completion-classification-v3'`
     ).get();
     expect(row).toBeTruthy();
     bareDb.close();
@@ -277,7 +347,7 @@ describe("migrateSummaryCacheClassification — idempotency and ledger", () => {
     // Schema exists but no rows at all — must safely mark complete.
     expect(() => migrateSummaryCacheClassification(db)).not.toThrow();
     const row = db.prepare(
-      `SELECT name FROM summary_cache_migrations WHERE name = 'summary-cache-completion-classification-v2'`
+      `SELECT name FROM summary_cache_migrations WHERE name = 'summary-cache-completion-classification-v3'`
     ).get();
     expect(row).toBeTruthy();
   });
@@ -322,7 +392,7 @@ describe("migrateSummaryCacheClassification — malformed totals_by_feature JSON
     expect(goodRow.acceptance_rate).toBe(75);
 
     const marker = db.prepare(
-      `SELECT name FROM summary_cache_migrations WHERE name = 'summary-cache-completion-classification-v2'`
+      `SELECT name FROM summary_cache_migrations WHERE name = 'summary-cache-completion-classification-v3'`
     ).get();
     expect(marker).toBeTruthy();
   });
@@ -348,7 +418,7 @@ describe("migrateSummaryCacheClassification — malformed totals_by_feature JSON
     expect(row.completion_loc_accepted).toBe(80);
 
     const marker = db.prepare(
-      `SELECT name FROM summary_cache_migrations WHERE name = 'summary-cache-completion-classification-v2'`
+      `SELECT name FROM summary_cache_migrations WHERE name = 'summary-cache-completion-classification-v3'`
     ).get();
     expect(marker).toBeTruthy();
   });
@@ -379,7 +449,7 @@ describe("migrateSummaryCacheClassification — malformed totals_by_feature JSON
     expect(row.overall_acceptance_rate).toBe(75);
 
     const marker = db.prepare(
-      `SELECT name FROM summary_cache_migrations WHERE name = 'summary-cache-completion-classification-v2'`
+      `SELECT name FROM summary_cache_migrations WHERE name = 'summary-cache-completion-classification-v3'`
     ).get();
     expect(marker).toBeTruthy();
   });

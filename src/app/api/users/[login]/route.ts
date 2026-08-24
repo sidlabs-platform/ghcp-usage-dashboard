@@ -199,6 +199,16 @@ async function handler(request: NextRequest) {
       ? ` AND enterprise_slug IN (${scope.enterpriseSlugs.map(() => "?").join(",")})`
       : "";
     const efParams = scope.enterpriseSlugs ?? [];
+    const authoritativeUserRow = db.prepare(`
+      SELECT user_id AS userId
+      FROM user_daily_metrics
+      WHERE LOWER(user_login) = ? AND day BETWEEN ? AND ?${efClause}
+      ORDER BY day DESC, user_id DESC
+      LIMIT 1
+    `).get(normalizedLogin, start, end, ...efParams) as { userId: number } | undefined;
+    // GitHub user IDs are positive. Keeping a non-matching sentinel preserves the
+    // route's existing empty-response behavior when no metrics row resolves.
+    const authoritativeUserId = authoritativeUserRow?.userId ?? -1;
 
     // Daily activity (with per-day agent LOC extracted from agent_edit JSON)
     // Use CASE WHEN json_valid() to guard against empty/malformed agent_edit values
@@ -217,7 +227,7 @@ async function handler(request: NextRequest) {
           MAX(CASE WHEN json_valid(agent_edit) THEN COALESCE(json_extract(agent_edit, '$.loc_added_sum'), 0) ELSE 0 END) AS agentLocAdded,
           MAX(CASE WHEN json_valid(agent_edit) THEN COALESCE(json_extract(agent_edit, '$.loc_deleted_sum'), 0) ELSE 0 END) AS agentLocDeleted
         FROM user_daily_metrics
-        WHERE LOWER(user_login) = ? AND day BETWEEN ? AND ?${efClause}
+        WHERE user_id = ? AND day BETWEEN ? AND ?${efClause}
         GROUP BY day, user_id
       )
       SELECT day,
@@ -234,7 +244,7 @@ async function handler(request: NextRequest) {
       FROM per_user_day
       GROUP BY day
       ORDER BY day ASC
-    `).all(normalizedLogin, start, end, ...efParams) as DailyActivityRow[];
+    `).all(authoritativeUserId, start, end, ...efParams) as DailyActivityRow[];
 
     // Per-day strict completion/app LoC — via json_each(totals_by_feature)
     // GROUP BY day, reusing the same shared aggregation query the org-level
@@ -246,7 +256,15 @@ async function handler(request: NextRequest) {
     // IS_COMPLETION_SQL / IS_COPILOT_APP_SQL allowlists, so no extra per-day
     // query is needed to fill in any of these fields.
     const completionTrendByDay = new Map(
-      getCompletionDailyTrend(start, end, [decodedLogin], scope.enterpriseSlugs).map((r) => [r.day, r]),
+      getCompletionDailyTrend(
+        start,
+        end,
+        undefined,
+        scope.enterpriseSlugs,
+        false,
+        undefined,
+        authoritativeUserId,
+      ).map((r) => [r.day, r]),
     );
 
     const dailyActivity: DailyActivity[] = dailyActivityRows.map((row) => {
@@ -283,7 +301,7 @@ async function handler(request: NextRequest) {
           MAX(CASE WHEN used_copilot_coding_agent = 1 THEN 1 ELSE 0 END) AS usedCodingAgent,
           MAX(CASE WHEN used_copilot_code_review_passive = 1 THEN 1 ELSE 0 END) AS usedCodeReviewPassive
         FROM user_daily_metrics
-        WHERE LOWER(user_login) = ? AND day BETWEEN ? AND ?${efClause}
+        WHERE user_id = ? AND day BETWEEN ? AND ?${efClause}
         GROUP BY day, user_id
       )
       SELECT
@@ -305,7 +323,7 @@ async function handler(request: NextRequest) {
         MAX(usedCodingAgent) AS usedCodingAgent,
         MAX(usedCodeReviewPassive) AS usedCodeReviewPassive
       FROM per_user_day
-    `).get(normalizedLogin, start, end, ...efParams) as {
+    `).get(authoritativeUserId, start, end, ...efParams) as {
       totalActiveDays: number;
       totalLocSuggested: number;
       totalLocAccepted: number;
@@ -343,11 +361,11 @@ async function handler(request: NextRequest) {
         COALESCE(SUM(CASE WHEN ${IS_CLI_SQL} THEN json_extract(j.value, '$.code_generation_activity_count') ELSE 0 END), 0) AS cliCodeGen,
         COALESCE(SUM(CASE WHEN ${IS_CLI_SQL} THEN json_extract(j.value, '$.code_acceptance_activity_count') ELSE 0 END), 0) AS cliCodeAccept
       FROM user_daily_metrics u, json_each(u.totals_by_feature) j
-      WHERE LOWER(u.user_login) = ? AND u.day BETWEEN ? AND ?
+      WHERE u.user_id = ? AND u.day BETWEEN ? AND ?
         AND u.totals_by_feature IS NOT NULL AND u.totals_by_feature != '[]'
         AND json_valid(u.totals_by_feature)
         AND ${IS_ACCEPTANCE_ELIGIBLE_SQL}${efClause}
-    `).get(normalizedLogin, start, end, ...efParams) as {
+    `).get(authoritativeUserId, start, end, ...efParams) as {
       compLocSuggested: number;
       compLocAccepted: number;
       compLocDeleted: number;
@@ -366,7 +384,13 @@ async function handler(request: NextRequest) {
     // internally. `supportedRows` distinguishes "no App evidence at all"
     // (usedCopilotApp: null) from "supported but inactive" (usedCopilotApp:
     // false, zero-value stats) and "actual activity" (usedCopilotApp: true).
-    const appSummary = getCopilotAppUserSummary(start, end, [decodedLogin], scope.enterpriseSlugs);
+    const appSummary = getCopilotAppUserSummary(
+      start,
+      end,
+      undefined,
+      scope.enterpriseSlugs,
+      authoritativeUserId,
+    );
     const hasCopilotAppEvidence = appSummary.supportedRows > 0;
     const usedCopilotApp: boolean | null = hasCopilotAppEvidence ? appSummary.appActiveUsers > 0 : null;
     const copilotAppStats: CopilotAppStats | null = hasCopilotAppEvidence
@@ -465,14 +489,14 @@ async function handler(request: NextRequest) {
         SUM(CAST(COALESCE(j.value->>'code_generation_activity_count', '0') AS INTEGER)) AS suggestions,
         SUM(CAST(COALESCE(j.value->>'code_acceptance_activity_count', '0') AS INTEGER)) AS acceptances
       FROM user_daily_metrics u, json_each(u.totals_by_language_feature) j
-      WHERE LOWER(u.user_login) = ? AND u.day BETWEEN ? AND ?
+      WHERE u.user_id = ? AND u.day BETWEEN ? AND ?
         AND u.totals_by_language_feature IS NOT NULL AND u.totals_by_language_feature != '[]'
         AND json_valid(u.totals_by_language_feature)
         AND ${NOT_AGENT_OR_APP_SQL}${efClause}
       GROUP BY language
       ORDER BY suggestions DESC
       LIMIT 10
-    `).all(normalizedLogin, start, end, ...efParams) as TopLanguage[];
+    `).all(authoritativeUserId, start, end, ...efParams) as TopLanguage[];
 
     // Top models
     const topModels = db.prepare(`
@@ -480,11 +504,11 @@ async function handler(request: NextRequest) {
         j.value->>'model' AS model,
         SUM(CAST(COALESCE(j.value->>'user_initiated_interaction_count', '0') AS INTEGER)) AS interactions
       FROM user_daily_metrics u, json_each(u.totals_by_model_feature) j
-      WHERE LOWER(u.user_login) = ? AND u.day BETWEEN ? AND ?${efClause}
+      WHERE u.user_id = ? AND u.day BETWEEN ? AND ?${efClause}
       GROUP BY model
       ORDER BY interactions DESC
       LIMIT 10
-    `).all(normalizedLogin, start, end, ...efParams) as TopModel[];
+    `).all(authoritativeUserId, start, end, ...efParams) as TopModel[];
 
     // IDE usage
     const ideUsage = db.prepare(`
@@ -492,10 +516,10 @@ async function handler(request: NextRequest) {
         j.value->>'ide' AS ide,
         SUM(CAST(COALESCE(j.value->>'user_initiated_interaction_count', '0') AS INTEGER)) AS interactions
       FROM user_daily_metrics u, json_each(u.totals_by_ide) j
-      WHERE LOWER(u.user_login) = ? AND u.day BETWEEN ? AND ?${efClause}
+      WHERE u.user_id = ? AND u.day BETWEEN ? AND ?${efClause}
       GROUP BY ide
       ORDER BY interactions DESC
-    `).all(normalizedLogin, start, end, ...efParams) as IdeUsage[];
+    `).all(authoritativeUserId, start, end, ...efParams) as IdeUsage[];
 
     // Feature usage from totals_by_feature JSON
     const featureUsage = db.prepare(`
@@ -506,12 +530,12 @@ async function handler(request: NextRequest) {
         COALESCE(SUM(json_extract(j.value, '$.code_acceptance_activity_count')), 0) AS codeAccept,
         COALESCE(SUM(json_extract(j.value, '$.loc_added_sum')), 0) AS locAdded
       FROM user_daily_metrics u, json_each(u.totals_by_feature) j
-      WHERE LOWER(u.user_login) = ? AND u.day BETWEEN ? AND ?
+      WHERE u.user_id = ? AND u.day BETWEEN ? AND ?
         AND u.totals_by_feature IS NOT NULL AND u.totals_by_feature != '[]'
         AND json_valid(u.totals_by_feature)${efClause}
       GROUP BY feature
       ORDER BY interactions DESC
-    `).all(normalizedLogin, start, end, ...efParams) as FeatureUsageRow[];
+    `).all(authoritativeUserId, start, end, ...efParams) as FeatureUsageRow[];
 
     // Chat mode breakdown
     const chatModesRow = db.prepare(`
@@ -523,8 +547,8 @@ async function handler(request: NextRequest) {
         COALESCE(SUM(chat_panel_custom_mode), 0) AS custom,
         COALESCE(SUM(chat_panel_unknown_mode), 0) AS unknown
       FROM user_daily_metrics
-      WHERE LOWER(user_login) = ? AND day BETWEEN ? AND ?${efClause}
-    `).get(normalizedLogin, start, end, ...efParams) as ChatModes | undefined;
+      WHERE user_id = ? AND day BETWEEN ? AND ?${efClause}
+    `).get(authoritativeUserId, start, end, ...efParams) as ChatModes | undefined;
 
     const chatModes: ChatModes = chatModesRow ?? { agent: 0, ask: 0, edit: 0, plan: 0, custom: 0, unknown: 0 };
 
@@ -537,9 +561,9 @@ async function handler(request: NextRequest) {
         COALESCE(SUM(json_extract(totals_by_cli, '$.token_usage.prompt_tokens_sum')), 0) AS promptTokens,
         COALESCE(SUM(json_extract(totals_by_cli, '$.token_usage.output_tokens_sum')), 0) AS outputTokens
       FROM user_daily_metrics
-      WHERE LOWER(user_login) = ? AND day BETWEEN ? AND ?
+      WHERE user_id = ? AND day BETWEEN ? AND ?
         AND totals_by_cli IS NOT NULL AND totals_by_cli != ''${efClause}
-    `).get(normalizedLogin, start, end, ...efParams) as CliStats | undefined;
+    `).get(authoritativeUserId, start, end, ...efParams) as CliStats | undefined;
 
     const cliStats: CliStats | null =
       cliStatsRow && (cliStatsRow.sessions > 0 || cliStatsRow.requests > 0 || cliStatsRow.promptTokens > 0)
