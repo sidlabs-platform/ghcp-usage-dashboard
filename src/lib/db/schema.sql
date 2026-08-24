@@ -216,7 +216,12 @@ CREATE TABLE IF NOT EXISTS copilot_seat_audit_sync_state (
   last_event_at TEXT,             -- newest audit event observed
   last_synced_at TEXT NOT NULL,
   events_written INTEGER NOT NULL DEFAULT 0,
-  truncated INTEGER NOT NULL DEFAULT 0
+  truncated INTEGER NOT NULL DEFAULT 0,
+  -- Bumped only by resetSeatAuditCoverage(). A sync that read its state (and
+  -- therefore its cutoff) before a reset bumped this must not restore
+  -- covered_from/covered_through when it finishes after the reset — see
+  -- upsertSeatAuditSyncState()'s staleness check in seat-lifecycle-repo.ts.
+  reset_generation INTEGER NOT NULL DEFAULT 0
 );
 
 -- Team membership cache

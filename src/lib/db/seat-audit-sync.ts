@@ -283,6 +283,12 @@ export async function syncSeatAuditEventsForEnterprise(
     existing?.truncated ?? false,
   );
   const coveredFrom = new Date(cutoffMs).toISOString();
+  // Captured now, alongside the cutoff this run derives from `existing` — the
+  // generation this run observed before its (possibly long-running) fetch
+  // began. Passed through to `recordSeatAuditSyncState` so a concurrent
+  // `resetSeatAuditCoverage()` mid-flight is detected as making this run's
+  // result stale rather than silently restoring the coverage it just cleared.
+  const observedResetGeneration = existing?.resetGeneration ?? 0;
 
   const warnings: string[] = [];
   let result: AuditFetchResult | null = null;
@@ -471,6 +477,7 @@ export async function syncSeatAuditEventsForEnterprise(
     // transaction as the run — a crash between the two would otherwise leave a
     // stale window suppressing real snapshot-derived offboards.
     clearCoverage: incompleteCoverage,
+    observedResetGeneration,
   });
 
   return {

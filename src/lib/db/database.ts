@@ -95,6 +95,10 @@ export function getDb(): SqliteDatabase {
     "ALTER TABLE user_daily_metrics ADD COLUMN ai_adoption_phase TEXT",
     // Usage Metrics API user-level AI Credits
     "ALTER TABLE user_daily_metrics ADD COLUMN ai_credits_used REAL DEFAULT 0",
+    // Anti-race guard for resetSeatAuditCoverage(): bumped only by an
+    // explicit reset, so a sync that read its cutoff before a reset can be
+    // told (via a stale generation) not to restore covered_from/covered_through.
+    "ALTER TABLE copilot_seat_audit_sync_state ADD COLUMN reset_generation INTEGER NOT NULL DEFAULT 0",
   ];
   for (const sql of migrations) {
     try { _db.exec(sql); } catch { /* column already exists or table not yet created */ }

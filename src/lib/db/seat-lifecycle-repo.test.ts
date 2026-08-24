@@ -552,7 +552,7 @@ function auditState(overrides: Partial<Parameters<typeof recordSeatAuditSyncStat
 describe("recordSeatAuditSyncState", () => {
   it("stores and reads back a run", () => {
     recordSeatAuditSyncState(auditState());
-    expect(getSeatAuditSyncStates(["ent1"])).toEqual([auditState()]);
+    expect(getSeatAuditSyncStates(["ent1"])).toEqual([{ ...auditState(), resetGeneration: 0 }]);
   });
 
   it("widens coverage in both directions across runs", () => {
@@ -687,15 +687,18 @@ describe("recordSeatAuditSyncState", () => {
         clearCoverage: true,
       }))).toThrow("forced coverage clear failure");
 
-      expect(getSeatAuditSyncStates(["ent1"])).toEqual([auditState({
-        status: "ok",
-        reason: null,
-        target: "enterprise",
-        coveredFrom: "2026-05-01T00:00:00.000Z",
-        coveredThrough: "2026-06-30T00:00:00.000Z",
-        eventsWritten: 5,
-        truncated: true,
-      })]);
+      expect(getSeatAuditSyncStates(["ent1"])).toEqual([{
+        ...auditState({
+          status: "ok",
+          reason: null,
+          target: "enterprise",
+          coveredFrom: "2026-05-01T00:00:00.000Z",
+          coveredThrough: "2026-06-30T00:00:00.000Z",
+          eventsWritten: 5,
+          truncated: true,
+        }),
+        resetGeneration: 0,
+      }]);
       expect(() => recordSeatAuditSyncState(auditState({ enterpriseSlug: "ent2" }))).not.toThrow();
     } finally {
       db.exec("DROP TRIGGER IF EXISTS fail_clear_audit_coverage");
@@ -756,6 +759,67 @@ describe("resetSeatAuditCoverage", () => {
   it("returns 0 without throwing when no audit sync state exists yet", () => {
     expect(resetSeatAuditCoverage("ent1")).toBe(0);
     expect(resetSeatAuditCoverage()).toBe(0);
+  });
+
+  it("bumps reset_generation so a write from a run that started before the reset cannot restore coverage", () => {
+    // Regression: an audit sync can read its watermark, spend minutes
+    // fetching, and only THEN call recordSeatAuditSyncState() — if
+    // resetSeatAuditCoverage() ran in that window, the in-flight run's own
+    // coveredFrom/coveredThrough describe only its (pre-reset, incremental)
+    // slice. Writing them back would silently "prove" the reset's target
+    // window was covered when it was never actually re-read.
+    recordSeatAuditSyncState(auditState({ enterpriseSlug: "ent1" }));
+    const [beforeReset] = getSeatAuditSyncStates(["ent1"]);
+    expect(beforeReset.resetGeneration).toBe(0);
+
+    resetSeatAuditCoverage("ent1");
+    const [afterReset] = getSeatAuditSyncStates(["ent1"]);
+    expect(afterReset.resetGeneration).toBe(1);
+    expect(afterReset.coveredFrom).toBeNull();
+    expect(afterReset.coveredThrough).toBeNull();
+
+    // A run that started before the reset observed generation 0 and, having
+    // no idea a reset happened, reports its own (narrow) coverage window.
+    recordSeatAuditSyncState(auditState({
+      enterpriseSlug: "ent1",
+      coveredFrom: "2026-06-24T00:00:00.000Z",
+      coveredThrough: "2026-06-25T00:00:00.000Z",
+      observedResetGeneration: beforeReset.resetGeneration,
+    }));
+
+    const [afterStaleWrite] = getSeatAuditSyncStates(["ent1"]);
+    expect(afterStaleWrite.coveredFrom).toBeNull();
+    expect(afterStaleWrite.coveredThrough).toBeNull();
+    // The reset stays in effect until a run that observed the NEW generation
+    // writes — the generation itself is untouched by ordinary writes.
+    expect(afterStaleWrite.resetGeneration).toBe(1);
+  });
+
+  it("accepts a write whose observed generation matches the current one", () => {
+    recordSeatAuditSyncState(auditState({ enterpriseSlug: "ent1" }));
+    resetSeatAuditCoverage("ent1");
+    const [afterReset] = getSeatAuditSyncStates(["ent1"]);
+
+    // A run that started AFTER the reset (or re-read state before writing)
+    // observes the new generation and its coverage claim is trusted.
+    recordSeatAuditSyncState(auditState({
+      enterpriseSlug: "ent1",
+      coveredFrom: "2026-05-26T00:00:00.000Z",
+      coveredThrough: "2026-06-30T00:00:00.000Z",
+      observedResetGeneration: afterReset.resetGeneration,
+    }));
+
+    const [afterFreshWrite] = getSeatAuditSyncStates(["ent1"]);
+    expect(afterFreshWrite.coveredFrom).toBe("2026-05-26T00:00:00.000Z");
+    expect(afterFreshWrite.coveredThrough).toBe("2026-06-30T00:00:00.000Z");
+  });
+
+  it("treats an omitted observed generation as 0, so a row that has never been reset accepts the write normally", () => {
+    // Existing callers (and rows written before this field existed) don't
+    // supply observedResetGeneration. Without a reset ever having run, the
+    // stored generation is 0 too, so this must behave exactly as before.
+    recordSeatAuditSyncState(auditState({ enterpriseSlug: "ent1" }));
+    expect(getSeatAuditSyncStates(["ent1"])[0].coveredThrough).toBe("2026-06-25T00:00:00.000Z");
   });
 });
 
