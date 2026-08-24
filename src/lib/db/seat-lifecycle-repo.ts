@@ -823,6 +823,39 @@ export function clearSeatAuditCoverageWindow(enterpriseSlug: string): void {
 }
 
 /**
+ * Clear the stored audit-log coverage watermark so the next audit sync
+ * re-reads the full lookback window from scratch, for one enterprise or all
+ * of them.
+ *
+ * `resolveAuditCutoff()` (in `seat-audit-sync.ts`) resumes from
+ * `covered_through` on every incremental run — by design, so a healthy sync
+ * never re-reads history it already has. That means a run that read the audit
+ * log successfully but misclassified/dropped the events it saw (as happened
+ * when GitHub's `copilot.`-prefixed action names were not recognized) leaves
+ * `covered_through` advanced past the gap forever: later syncs would resume
+ * just past it and never revisit the window where real events were lost.
+ * This is the opt-in recovery path — mirrors `resetBillingSyncState`'s token
+ * backfill. It only clears the coverage watermark; no lifecycle event rows
+ * are touched or deleted, and a normal sync afterwards re-derives them.
+ */
+export function resetSeatAuditCoverage(enterpriseSlug?: string): number {
+  const db = getDb();
+  if (!tableExists(db, "copilot_seat_audit_sync_state")) return 0;
+  const stmt = enterpriseSlug
+    ? db.prepare(`
+        UPDATE copilot_seat_audit_sync_state
+        SET covered_from = NULL, covered_through = NULL
+        WHERE enterprise_slug = ?
+      `)
+    : db.prepare(`
+        UPDATE copilot_seat_audit_sync_state
+        SET covered_from = NULL, covered_through = NULL
+      `);
+  const result = enterpriseSlug ? stmt.run(enterpriseSlug) : stmt.run();
+  return Number(result.changes ?? 0);
+}
+
+/**
  * Read stored audit sync state. Returns an empty array when the audit sync has
  * never run or the table does not exist yet (older database).
  */

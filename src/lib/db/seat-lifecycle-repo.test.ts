@@ -61,6 +61,7 @@ import {
   recordSeatAuditSyncState,
   getSeatAuditSyncStates,
   getSeatAuditWatermark,
+  resetSeatAuditCoverage,
   diffSeatSnapshot,
   getSeatSnapshotForDiff,
   markSeatLifecycleTrackingStarted,
@@ -717,6 +718,44 @@ describe("getSeatAuditWatermark", () => {
   it("returns the covered-through instant once recorded", () => {
     recordSeatAuditSyncState(auditState());
     expect(getSeatAuditWatermark("ent1")).toBe("2026-06-25T00:00:00.000Z");
+  });
+});
+
+describe("resetSeatAuditCoverage", () => {
+  it("clears the coverage watermark for one enterprise, leaving other enterprises and the rest of the row intact", () => {
+    recordSeatAuditSyncState(auditState({ enterpriseSlug: "ent1", eventsWritten: 5 }));
+    recordSeatAuditSyncState(auditState({ enterpriseSlug: "ent2", eventsWritten: 7 }));
+
+    const cleared = resetSeatAuditCoverage("ent1");
+
+    expect(cleared).toBe(1);
+    expect(getSeatAuditWatermark("ent1")).toBeNull();
+    const [ent1] = getSeatAuditSyncStates(["ent1"]);
+    expect(ent1.coveredFrom).toBeNull();
+    expect(ent1.coveredThrough).toBeNull();
+    // Status/reason/eventsWritten are left as recorded — only the coverage
+    // window is cleared, so the next sync's watermark comparison sees "never
+    // covered" without discarding the rest of the audit trail for that run.
+    expect(ent1.status).toBe("ok");
+    expect(ent1.eventsWritten).toBe(5);
+    // A different enterprise's coverage must be untouched.
+    expect(getSeatAuditWatermark("ent2")).toBe("2026-06-25T00:00:00.000Z");
+  });
+
+  it("clears every enterprise's coverage when none is specified", () => {
+    recordSeatAuditSyncState(auditState({ enterpriseSlug: "ent1" }));
+    recordSeatAuditSyncState(auditState({ enterpriseSlug: "ent2" }));
+
+    const cleared = resetSeatAuditCoverage();
+
+    expect(cleared).toBe(2);
+    expect(getSeatAuditWatermark("ent1")).toBeNull();
+    expect(getSeatAuditWatermark("ent2")).toBeNull();
+  });
+
+  it("returns 0 without throwing when no audit sync state exists yet", () => {
+    expect(resetSeatAuditCoverage("ent1")).toBe(0);
+    expect(resetSeatAuditCoverage()).toBe(0);
   });
 });
 

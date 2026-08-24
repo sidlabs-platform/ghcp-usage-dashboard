@@ -75,10 +75,33 @@ const CANCEL_ACTIONS: ReadonlySet<string> = new Set([
   "seat_cancelled",
 ]);
 
+/**
+ * Strip GitHub's audit-log category prefix (e.g. the `copilot.` in
+ * `copilot.cfb_seat_cancelled`) so the action can be matched against the
+ * base action name below.
+ *
+ * GitHub's actual audit log entries — both at the enterprise and the org
+ * endpoint — always qualify Copilot seat actions with a `copilot.` prefix
+ * (confirmed directly against the live API: `copilot.cfb_seat_added`,
+ * `copilot.cfb_seat_assignment_created`, `copilot.cfb_seat_cancelled`,
+ * `copilot.cfb_seat_assignment_unassigned`). Matching the unprefixed name
+ * only, as this allowlist originally did, silently classified every real
+ * seat assign/cancel event as `unrecognized_action` and dropped it — the
+ * audit sync would report `status: "ok"` with zero events written even
+ * while seats were actively being cancelled. Only the segment after the
+ * last `.` is used so this also still matches a bare, unprefixed action
+ * name (kept for any source that emits one without a category).
+ */
+function baseActionName(action: string): string {
+  const dotIndex = action.lastIndexOf(".");
+  return dotIndex >= 0 ? action.slice(dotIndex + 1) : action;
+}
+
 function classifyAction(action: string | undefined): CopilotAuditAction | null {
   if (!action) return null;
-  if (ASSIGN_ACTIONS.has(action)) return "assign";
-  if (CANCEL_ACTIONS.has(action)) return "cancel";
+  const base = baseActionName(action);
+  if (ASSIGN_ACTIONS.has(base)) return "assign";
+  if (CANCEL_ACTIONS.has(base)) return "cancel";
   return null;
 }
 
