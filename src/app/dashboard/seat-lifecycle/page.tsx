@@ -227,7 +227,13 @@ function SourceCoverageNotice({ coverage }: SourceCoverageNoticeProps) {
     );
   }
 
-  if (trackingStartedAt && (hasDiffRows || audit.status !== "ok")) {
+  // A clean, fully successful audit run that simply found zero events (no
+  // reason/warning, no rows) previously fell through every branch above and
+  // left the whole notice empty — silently implying "nothing to report" when
+  // what's actually true is "tracked since X, nothing removed yet". Whenever
+  // the audit log isn't the one supplying rows, the seat-sync coverage line
+  // must still say so, regardless of whether the diff has produced any rows.
+  if (trackingStartedAt && (hasDiffRows || !hasAuditRows)) {
     lines.push(
       <span key="diff">
         {hasAuditRows ? "Outside that window, offboarding" : "Offboarding"} is derived from seat-sync snapshots and

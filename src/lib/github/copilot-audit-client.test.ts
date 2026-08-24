@@ -82,6 +82,27 @@ describe("CopilotAuditClient", () => {
       expect(result.events.map((e) => e.action)).toEqual(["assign", "assign", "assign", "cancel", "cancel", "cancel"]);
     });
 
+    it("normalizes GitHub's real category-prefixed action names (copilot.*)", async () => {
+      // Regression: GitHub's actual audit log entries qualify every Copilot
+      // seat action with a `copilot.` category prefix (confirmed against the
+      // live enterprise and org audit-log endpoints), not the bare action
+      // name. Failing to strip it silently classified every real seat
+      // assign/cancel event as unrecognized and dropped it.
+      mockFetchWithMeta.mockResolvedValueOnce(
+        page([
+          { action: "copilot.cfb_seat_added", user: "octocat", user_id: 1, org: "acme", "@timestamp": 1_700_000_000_000, _document_id: "doc-1" },
+          { action: "copilot.cfb_seat_assignment_created", user: "hubot", user_id: 2, org: "acme", "@timestamp": 1_700_000_001_000, _document_id: "doc-2" },
+          { action: "copilot.cfb_seat_cancelled", user: "tomtom", user_id: 3, org: "acme", "@timestamp": 1_700_000_002_000, _document_id: "doc-3" },
+          { action: "copilot.cfb_seat_assignment_unassigned", user: "monalisa", user_id: 4, org: "acme", "@timestamp": 1_700_000_003_000, _document_id: "doc-4" },
+        ]),
+      );
+      const result = await client.getOrgAuditEvents("acme");
+      expectOk(result);
+      expect(result.events.map((e) => e.action)).toEqual(["assign", "assign", "cancel", "cancel"]);
+      expect(result.droppedEventCount).toBe(0);
+      expect(result.warnings).toEqual([]);
+    });
+
     it("drops unrecognized actions", async () => {
       mockFetchWithMeta.mockResolvedValueOnce(
         page([

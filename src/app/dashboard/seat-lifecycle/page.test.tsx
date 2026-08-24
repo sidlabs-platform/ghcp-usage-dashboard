@@ -462,6 +462,40 @@ describe("Seat onboarding & offboarding page", () => {
     expect(screen.queryByText(/more pages than a single sync reads/i)).not.toBeInTheDocument();
   });
 
+  it("still names the seat-sync coverage window when both sources have found zero events so far", async () => {
+    // Regression: a clean, fully successful audit run (no reason, no rows)
+    // combined with zero snapshot-diff rows previously fell through every
+    // branch and rendered nothing at all — leaving readers unable to tell
+    // "nothing has been removed yet" apart from "this is broken".
+    await renderPage(
+      emptyPayload({
+        coverage: {
+          source: "sync_diff",
+          trackingStartedAt: "2025-05-01T00:00:00Z",
+          onboardingOnly: false,
+          sourceBreakdown: { audit_log: 0, sync_diff: 0, seat_created_at: 40 },
+          audit: {
+            status: "ok",
+            reason: null,
+            coveredFrom: "2025-03-01T00:00:00.000Z",
+            coveredThrough: "2025-06-08T00:00:00.000Z",
+            lastSyncedAt: "2025-06-08T06:00:00.000Z",
+            truncated: false,
+          },
+        },
+      }),
+    );
+
+    await waitFor(() =>
+      expect(screen.getByText(/has been tracked since/i)).toBeInTheDocument(),
+    );
+    expect(screen.getByText("2025-05-01")).toBeInTheDocument();
+    expect(screen.queryByText(/did not produce usable audit-log events/i)).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("heading", { name: /Offboarding tracking has not started yet/i }),
+    ).not.toBeInTheDocument();
+  });
+
   it("does not duplicate an audit warning when usable audit rows exist", async () => {
     await renderPage(
       emptyPayload({

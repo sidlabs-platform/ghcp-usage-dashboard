@@ -4,19 +4,19 @@ import {
   type AuditFetchResult,
   type NormalizedCopilotAuditEvent,
 } from "@/lib/github/copilot-audit-client";
-import type { SeatAuditSyncState, SeatLifecycleEventInput } from "./seat-lifecycle-repo";
+import type { SeatAuditSyncState, SeatAuditSyncStateInput, SeatLifecycleEventInput } from "./seat-lifecycle-repo";
 
 const recordSeatLifecycleEvents = vi.fn<(slug: string, events: SeatLifecycleEventInput[]) => number>(
   (_slug, events) => events.length,
 );
-const recordSeatAuditSyncState = vi.fn<(state: SeatAuditSyncState) => void>();
+const recordSeatAuditSyncState = vi.fn<(state: SeatAuditSyncStateInput) => void>();
 const getSeatAuditSyncStates = vi.fn<(slugs?: string[]) => SeatAuditSyncState[]>(() => []);
 const enrichAuditLifecycleFromSeats = vi.fn<() => number>(() => 0);
 const clearSeatAuditCoverageWindow = vi.fn<(enterpriseSlug: string) => void>();
 
 vi.mock("./seat-lifecycle-repo", () => ({
   recordSeatLifecycleEvents: (...args: [string, SeatLifecycleEventInput[]]) => recordSeatLifecycleEvents(...args),
-  recordSeatAuditSyncState: (...args: [SeatAuditSyncState]) => recordSeatAuditSyncState(...args),
+  recordSeatAuditSyncState: (...args: [SeatAuditSyncStateInput]) => recordSeatAuditSyncState(...args),
   getSeatAuditSyncStates: (...args: [string[]?]) => getSeatAuditSyncStates(...args),
   clearSeatAuditCoverageWindow: (...args: [string]) => clearSeatAuditCoverageWindow(...args),
   enrichAuditLifecycleFromSeats: () => enrichAuditLifecycleFromSeats(),
@@ -207,6 +207,45 @@ describe("syncSeatAuditEventsForEnterprise", () => {
     expect(enrichAuditLifecycleFromSeats).toHaveBeenCalled();
   });
 
+  it("passes the reset generation it observed at start, so a concurrent reset can be detected as making its write stale", async () => {
+    // Regression for the watermark-restoration race: this run must report
+    // the generation it saw BEFORE its (possibly long) fetch, not whatever
+    // is current when it finally writes — upsertSeatAuditSyncState() is what
+    // compares the two, not this layer, so this only needs to prove the
+    // right value is threaded through.
+    getSeatAuditSyncStates.mockReturnValue([{
+      enterpriseSlug: "acme",
+      status: "ok",
+      reason: null,
+      target: "enterprise",
+      coveredFrom: "2026-05-01T00:00:00.000Z",
+      coveredThrough: "2026-06-29T00:00:00.000Z",
+      lastEventAt: null,
+      lastSyncedAt: "2026-06-29T00:00:00.000Z",
+      eventsWritten: 3,
+      truncated: false,
+      resetGeneration: 4,
+    }]);
+    const deps = makeDeps({ getEnterpriseAuditEvents: vi.fn(async () => ok([auditEvent()])) });
+
+    await syncSeatAuditEventsForEnterprise("acme", deps);
+
+    expect(recordSeatAuditSyncState).toHaveBeenCalledWith(
+      expect.objectContaining({ observedResetGeneration: 4 }),
+    );
+  });
+
+  it("defaults the observed reset generation to 0 when the audit sync has never run before", async () => {
+    getSeatAuditSyncStates.mockReturnValue([]);
+    const deps = makeDeps({ getEnterpriseAuditEvents: vi.fn(async () => ok([auditEvent()])) });
+
+    await syncSeatAuditEventsForEnterprise("acme", deps);
+
+    expect(recordSeatAuditSyncState).toHaveBeenCalledWith(
+      expect.objectContaining({ observedResetGeneration: 0 }),
+    );
+  });
+
   it("falls back to org audit logs when the enterprise endpoint is unavailable", async () => {
     const deps = makeDeps({
       getEnterpriseAuditEvents: vi.fn(async (): Promise<AuditFetchResult> => ({
@@ -379,6 +418,7 @@ describe("syncSeatAuditEventsForEnterprise", () => {
       lastSyncedAt: "2026-06-29T00:00:00.000Z",
       eventsWritten: 3,
       truncated: false,
+      resetGeneration: 0,
     }]);
     const getEnterpriseAuditEvents = vi.fn(async () => ok([]));
 

@@ -164,12 +164,35 @@ export interface SeatAuditSyncState {
   lastSyncedAt: string;
   eventsWritten: number;
   truncated: boolean;
+  /**
+   * Counter bumped only by `resetSeatAuditCoverage()`. Lets a write detect
+   * when a reset happened after it captured its cutoff — see
+   * `upsertSeatAuditSyncState()`.
+   */
+  resetGeneration: number;
 }
 
 /** Input for recording one audit-log seat lifecycle sync run. */
-export interface SeatAuditSyncStateInput extends SeatAuditSyncState {
+export interface SeatAuditSyncStateInput extends Omit<SeatAuditSyncState, "resetGeneration"> {
   /** Force the stored coverage window empty in the same transaction as the run. */
   clearCoverage?: boolean;
+  /**
+   * The `reset_generation` this run observed when it captured its audit-log
+   * cutoff (i.e. before its fetch began), so a write can tell whether a
+   * `resetSeatAuditCoverage()` call happened while it was in flight.
+   *
+   * `resetSeatAuditCoverage()` clears `covered_from`/`covered_through` so the
+   * next sync re-reads the full lookback window — but a sync that was
+   * already running when the reset happened computed its cutoff from the
+   * PRE-reset watermark, so its own `coveredFrom`/`coveredThrough` describe
+   * only an incremental slice. Writing that back over the freshly cleared
+   * watermark would silently mark the reset's target window "covered" again
+   * without it ever actually being re-read. Omitting this (older callers,
+   * and rows from before this field existed) is treated as generation 0 —
+   * "no reset has ever run for this enterprise" — which never counts as
+   * stale.
+   */
+  observedResetGeneration?: number;
 }
 
 export interface SeatLifecycleQuery {
@@ -732,11 +755,29 @@ function upsertSeatAuditSyncState(
   db: ReturnType<typeof getDb>,
   state: SeatAuditSyncStateInput,
 ): void {
+  // Staleness guard: read the CURRENT generation before writing. A reset can
+  // land between when this run captured its cutoff and when it writes its
+  // result; if the stored generation has moved on since this run observed
+  // it, its coveredFrom/coveredThrough describe an incremental slice, not
+  // the full re-read the reset demanded, and must not be persisted — see the
+  // `observedResetGeneration` doc comment on `SeatAuditSyncStateInput`. This
+  // read and the INSERT below execute synchronously back to back (no
+  // `await` in between), so no other request can interleave a reset between
+  // them within this process.
+  const currentGenerationRow = db.prepare(`
+    SELECT reset_generation FROM copilot_seat_audit_sync_state WHERE enterprise_slug = ?
+  `).get(state.enterpriseSlug) as { reset_generation: number } | undefined;
+  const currentGeneration = Number(currentGenerationRow?.reset_generation ?? 0);
+  const observedGeneration = Number(state.observedResetGeneration ?? 0);
+  const isStale = currentGeneration > observedGeneration;
+  const coveredFrom = isStale ? null : state.coveredFrom;
+  const coveredThrough = isStale ? null : state.coveredThrough;
+
   db.prepare(`
     INSERT INTO copilot_seat_audit_sync_state (
       enterprise_slug, status, reason, target, covered_from, covered_through,
-      last_event_at, last_synced_at, events_written, truncated
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      last_event_at, last_synced_at, events_written, truncated, reset_generation
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(enterprise_slug) DO UPDATE SET
       status = excluded.status,
       reason = excluded.reason,
@@ -760,17 +801,21 @@ function upsertSeatAuditSyncState(
         WHEN excluded.status = 'ok' THEN excluded.truncated
         ELSE copilot_seat_audit_sync_state.truncated
       END
+      -- reset_generation is intentionally absent from this SET list: only
+      -- resetSeatAuditCoverage() may advance it, so ON CONFLICT preserves
+      -- whatever is currently stored.
   `).run(
     state.enterpriseSlug,
     state.status,
     state.reason,
     state.target,
-    state.coveredFrom,
-    state.coveredThrough,
+    coveredFrom,
+    coveredThrough,
     state.lastEventAt,
     state.lastSyncedAt,
     state.eventsWritten,
     state.truncated ? 1 : 0,
+    currentGeneration,
   );
 }
 
@@ -823,6 +868,47 @@ export function clearSeatAuditCoverageWindow(enterpriseSlug: string): void {
 }
 
 /**
+ * Clear the stored audit-log coverage watermark so the next audit sync
+ * re-reads the full lookback window from scratch, for one enterprise or all
+ * of them.
+ *
+ * `resolveAuditCutoff()` (in `seat-audit-sync.ts`) resumes from
+ * `covered_through` on every incremental run — by design, so a healthy sync
+ * never re-reads history it already has. That means a run that read the audit
+ * log successfully but misclassified/dropped the events it saw (as happened
+ * when GitHub's `copilot.`-prefixed action names were not recognized) leaves
+ * `covered_through` advanced past the gap forever: later syncs would resume
+ * just past it and never revisit the window where real events were lost.
+ * This is the opt-in recovery path — mirrors `resetBillingSyncState`'s token
+ * backfill. It only clears the coverage watermark; no lifecycle event rows
+ * are touched or deleted, and a normal sync afterwards re-derives them.
+ *
+ * Also bumps `reset_generation` so an audit sync already in flight when this
+ * runs — one that captured its cutoff from the watermark THIS call is about
+ * to clear — cannot write its own (necessarily incremental, not full-lookback)
+ * `coveredFrom`/`coveredThrough` back over the freshly cleared watermark once
+ * it finishes. See `upsertSeatAuditSyncState()`.
+ */
+export function resetSeatAuditCoverage(enterpriseSlug?: string): number {
+  const db = getDb();
+  if (!tableExists(db, "copilot_seat_audit_sync_state")) return 0;
+  const stmt = enterpriseSlug
+    ? db.prepare(`
+        UPDATE copilot_seat_audit_sync_state
+        SET covered_from = NULL, covered_through = NULL,
+            reset_generation = reset_generation + 1
+        WHERE enterprise_slug = ?
+      `)
+    : db.prepare(`
+        UPDATE copilot_seat_audit_sync_state
+        SET covered_from = NULL, covered_through = NULL,
+            reset_generation = reset_generation + 1
+      `);
+  const result = enterpriseSlug ? stmt.run(enterpriseSlug) : stmt.run();
+  return Number(result.changes ?? 0);
+}
+
+/**
  * Read stored audit sync state. Returns an empty array when the audit sync has
  * never run or the table does not exist yet (older database).
  */
@@ -833,7 +919,7 @@ export function getSeatAuditSyncStates(enterpriseSlugs?: string[]): SeatAuditSyn
   const scope = enterpriseSlugs?.length ? inClause("enterprise_slug", enterpriseSlugs) : { sql: "", params: [] };
   const rows = db.prepare(`
     SELECT enterprise_slug, status, reason, target, covered_from, covered_through,
-           last_event_at, last_synced_at, events_written, truncated
+           last_event_at, last_synced_at, events_written, truncated, reset_generation
     FROM copilot_seat_audit_sync_state
     WHERE 1 = 1${scope.sql}
   `).all(...scope.params) as Record<string, unknown>[];
@@ -849,6 +935,7 @@ export function getSeatAuditSyncStates(enterpriseSlugs?: string[]): SeatAuditSyn
     lastSyncedAt: row.last_synced_at as string,
     eventsWritten: Number(row.events_written ?? 0),
     truncated: Number(row.truncated ?? 0) === 1,
+    resetGeneration: Number(row.reset_generation ?? 0),
   }));
 }
 
