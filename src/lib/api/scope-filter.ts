@@ -37,18 +37,17 @@ export function parseScopeFilter(searchParams: URLSearchParams): ParsedScopeFilt
     }
   }
 
-  const selectedTeams = [...plainTeams, ...compositeTeams.map((c) => c.team)];
+  // Keep composite identifiers intact for callers that need to build an exact
+  // enterprise/team predicate. The resolver below still receives unqualified
+  // team slugs together with their enterprise scope.
+  const selectedTeams = rawTeams;
   const hasFilter = selectedTeams.length > 0 || selectedOrgs.length > 0 || selectedEnterprises.length > 0;
 
-  // Resolve enterprise slugs for SQL filtering (undefined = all). Composite
-  // team identifiers carry their enterprise scope when no explicit filter is set.
+  // Composite team identifiers carry enterprise scope even when the
+  // enterprises parameter is omitted.
   const compositeEnterprises = [...new Set(compositeTeams.map((c) => c.enterprise))];
-  const enterpriseSlugs =
-    selectedEnterprises.length > 0
-      ? selectedEnterprises
-      : compositeEnterprises.length > 0
-        ? compositeEnterprises
-        : undefined;
+  const enterpriseSlugs = [...new Set([...selectedEnterprises, ...compositeEnterprises])];
+  const scopedEnterpriseSlugs = enterpriseSlugs.length > 0 ? enterpriseSlugs : undefined;
 
   let allowedLogins: Set<string> | undefined;
 
@@ -71,23 +70,23 @@ export function parseScopeFilter(searchParams: URLSearchParams): ParsedScopeFilt
 
     // Handle any remaining plain team slugs
     if (plainTeams.length > 0) {
-      for (const login of resolveFilteredUsers(plainTeams, [], enterpriseSlugs)) {
+      for (const login of resolveFilteredUsers(plainTeams, [], scopedEnterpriseSlugs)) {
         allowedLogins.add(login);
       }
     }
 
     // Handle org filtering alongside composite teams
     if (selectedOrgs.length > 0) {
-      for (const login of resolveFilteredUsers([], selectedOrgs, enterpriseSlugs)) {
+      for (const login of resolveFilteredUsers([], selectedOrgs, scopedEnterpriseSlugs)) {
         allowedLogins.add(login);
       }
     }
   } else if (selectedTeams.length > 0 || selectedOrgs.length > 0) {
     // Single-enterprise backward-compatible path
-    allowedLogins = new Set(resolveFilteredUsers(selectedTeams, selectedOrgs, enterpriseSlugs));
+    allowedLogins = new Set(resolveFilteredUsers(selectedTeams, selectedOrgs, scopedEnterpriseSlugs));
   }
 
-  return { selectedTeams, selectedOrgs, selectedEnterprises, hasFilter, allowedLogins, enterpriseSlugs };
+  return { selectedTeams, selectedOrgs, selectedEnterprises, hasFilter, allowedLogins, enterpriseSlugs: scopedEnterpriseSlugs };
 }
 
 /**

@@ -67,16 +67,10 @@ export default function TeamDetailPage() {
     } else {
       qp.set("days", String(days));
     }
-    if (source) {
-      qp.set("source", source);
-    }
-    if (enterprise) {
-      qp.set("enterprise", enterprise);
-    }
     if (selectedOrgs.length > 0) qp.set("orgs", selectedOrgs.join(","));
     if (selectedEnterprises.length > 0) qp.set("enterprises", selectedEnterprises.join(","));
-    if (selectedOrgTeams.length > 0) qp.set("teams", selectedOrgTeams.join(","));
-    if (selectedEntTeams.length > 0) qp.set("ent_teams", selectedEntTeams.join(","));
+    const selectedTeams = [...selectedOrgTeams, ...selectedEntTeams];
+    if (selectedTeams.length > 0) qp.set("teams", selectedTeams.join(","));
 
     fetch(`/api/teams/${encodeURIComponent(slug)}?${qp}`)
       .then((res) => {

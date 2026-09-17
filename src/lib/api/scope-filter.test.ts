@@ -44,7 +44,7 @@ describe("parseScopeFilter", () => {
   it("parses composite teams (enterprise:team)", () => {
     mockResolve.mockReturnValue(["charlie"]);
     const result = parseScopeFilter(new URLSearchParams("teams=ent1:team-x"));
-    expect(result.selectedTeams).toEqual(["team-x"]);
+    expect(result.selectedTeams).toEqual(["ent1:team-x"]);
     expect(result.enterpriseSlugs).toEqual(["ent1"]);
     expect(result.allowedLogins).toEqual(new Set(["charlie"]));
     expect(mockResolve).toHaveBeenCalledWith(["team-x"], [], ["ent1"]);
@@ -61,15 +61,26 @@ describe("parseScopeFilter", () => {
   it("handles composite + plain teams together", () => {
     mockResolve.mockReturnValueOnce(["user1"]).mockReturnValueOnce(["user2"]);
     const result = parseScopeFilter(new URLSearchParams("teams=ent1:team-a,plain-team"));
-    expect(result.selectedTeams).toEqual(["plain-team", "team-a"]);
+    expect(result.selectedTeams).toEqual(["ent1:team-a", "plain-team"]);
     expect(result.allowedLogins).toEqual(new Set(["user1", "user2"]));
   });
 
   it("groups multiple composite teams from same enterprise", () => {
     mockResolve.mockReturnValue(["user1", "user2"]);
     const result = parseScopeFilter(new URLSearchParams("teams=ent1:team-a,ent1:team-b"));
-    expect(result.selectedTeams).toEqual(["team-a", "team-b"]);
+    expect(result.selectedTeams).toEqual(["ent1:team-a", "ent1:team-b"]);
+    expect(result.enterpriseSlugs).toEqual(["ent1"]);
     expect(mockResolve).toHaveBeenCalledWith(["team-a", "team-b"], [], ["ent1"]);
+  });
+
+  it("preserves composite enterprise/team pairs across enterprises", () => {
+    mockResolve.mockReturnValueOnce(["user1"]).mockReturnValueOnce(["user2"]);
+    const result = parseScopeFilter(new URLSearchParams("teams=ent1:team-x,ent2:team-y"));
+
+    expect(result.selectedTeams).toEqual(["ent1:team-x", "ent2:team-y"]);
+    expect(result.enterpriseSlugs).toEqual(["ent1", "ent2"]);
+    expect(mockResolve).toHaveBeenNthCalledWith(1, ["team-x"], [], ["ent1"]);
+    expect(mockResolve).toHaveBeenNthCalledWith(2, ["team-y"], [], ["ent2"]);
   });
 
   it("handles composite teams with org filter", () => {
