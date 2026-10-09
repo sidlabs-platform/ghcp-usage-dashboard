@@ -27,6 +27,14 @@ import { getDashboardConfig, getResolvedOrgs, getLicensingConfig, DashboardConfi
 // Mock the dashboard-config module
 vi.mock("./dashboard-config", () => ({
   getDashboardConfig: vi.fn(() => ({
+    metrics: {
+      copilot: { enabled: true, enterprise: true, userMetrics: true, seats: true, teams: true, pullRequests: true },
+      codeScanning: { enabled: true, autofix: false },
+      dependabot: { enabled: true },
+      secretScanning: { enabled: true },
+      billing: { enabled: false, meteredUsage: true, premiumRequests: true, aiCredits: true },
+    },
+    security: { syncIntervalMinutes: 60, backfillDays: 90 },
     enterprises: [
       {
         slug: "acme-corp",
@@ -1168,7 +1176,9 @@ describe("enterprise-config", () => {
 
     describe("getConfiguredEnterprises — legacy org-only fallback", () => {
       it("synthesizes org-only entry when GITHUB_ORGS is set without GITHUB_ENTERPRISE", () => {
-        mockGetDashboardConfig.mockReturnValue({ enterprises: [] } as ReturnType<typeof getDashboardConfig>);
+        mockGetDashboardConfig.mockReturnValue({
+          ...getDashboardConfig(), enterprises: [],
+        });
         resetEnterpriseConfigCache();
         delete process.env.GITHUB_ENTERPRISE;
         process.env.GITHUB_ORGS = "org-a,org-b";
@@ -1185,7 +1195,9 @@ describe("enterprise-config", () => {
       });
 
       it("returns empty when neither GITHUB_ENTERPRISE nor GITHUB_ORGS is set", () => {
-        mockGetDashboardConfig.mockReturnValue({ enterprises: [] } as ReturnType<typeof getDashboardConfig>);
+        mockGetDashboardConfig.mockReturnValue({
+          ...getDashboardConfig(), enterprises: [],
+        });
         resetEnterpriseConfigCache();
         delete process.env.GITHUB_ENTERPRISE;
         delete process.env.GITHUB_ORGS;
@@ -1208,7 +1220,9 @@ describe("enterprise-config", () => {
       });
 
       it("includes App auth config in org-only entry when env vars are set", () => {
-        mockGetDashboardConfig.mockReturnValue({ enterprises: [] } as ReturnType<typeof getDashboardConfig>);
+        mockGetDashboardConfig.mockReturnValue({
+          ...getDashboardConfig(), enterprises: [],
+        });
         resetEnterpriseConfigCache();
         delete process.env.GITHUB_ENTERPRISE;
         process.env.GITHUB_ORGS = "org-a";
@@ -1330,7 +1344,9 @@ describe("enterprise-config", () => {
 
     describe("resolveDefaultScope — org-only", () => {
       it("returns org scope for org-only legacy config", () => {
-        mockGetDashboardConfig.mockReturnValue({ enterprises: [] } as ReturnType<typeof getDashboardConfig>);
+        mockGetDashboardConfig.mockReturnValue({
+          ...getDashboardConfig(), enterprises: [],
+        });
         vi.mocked(getResolvedOrgs).mockReturnValueOnce(["my-org-1", "my-org-2"]);
         resetEnterpriseConfigCache();
         delete process.env.GITHUB_ENTERPRISE;

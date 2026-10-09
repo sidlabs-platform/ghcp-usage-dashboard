@@ -73,6 +73,7 @@ function legacyRow(overrides: Partial<LicenseReconciliationRow> = {}): LicenseRe
     orgs: ["acme-org"],
     org_count: 1,
     seat_count: 1,
+    active_seat_count: 1,
     plan_type: "enterprise",
     license_assigned_date: "2026-05-01",
     last_activity_at: "2026-05-20",

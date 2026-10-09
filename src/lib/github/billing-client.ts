@@ -163,6 +163,7 @@ async function downloadReportCSV(downloadUrl: string): Promise<string> {
  * - CRLF and LF line endings
  */
 function parseCSV<T>(csvContent: string): T[] {
+  csvContent = csvContent.replace(/^\uFEFF/, "");
   const rows: string[][] = [];
   let currentRow: string[] = [];
   let currentField = "";

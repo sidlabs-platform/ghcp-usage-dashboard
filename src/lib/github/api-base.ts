@@ -506,6 +506,14 @@ function computeRetryDelayMs(attempt: number, retryAfterHeader: string | null, r
   if (Number.isFinite(parsedRetryAfter) && parsedRetryAfter > 0) {
     return Math.min(parsedRetryAfter * 1000, SERVER_HINT_CAP_MS);
   }
+  // Retry-After may also be an HTTP-date (RFC 9110 §10.2.3).
+  if (retryAfterHeader && !Number.isFinite(parsedRetryAfter)) {
+    const retryAt = Date.parse(retryAfterHeader);
+    if (Number.isFinite(retryAt)) {
+      const waitMs = retryAt - Date.now();
+      if (waitMs > 0) return Math.min(waitMs, SERVER_HINT_CAP_MS);
+    }
+  }
 
   const parsedReset = resetHeader ? parseInt(resetHeader, 10) : NaN;
   if (Number.isFinite(parsedReset)) {
@@ -798,6 +806,9 @@ export async function fetchNDJSON<T>(downloadUrl: string): Promise<T[]> {
   return results;
 }
 
+/** Retries per page for 429/5xx in the cutoff paginators before giving up. */
+const PAGINATED_MAX_RETRIES = 3;
+
 export async function githubFetchPaginatedWithCutoff<
   T extends { updated_at: string },
 >(
@@ -812,6 +823,7 @@ export async function githubFetchPaginatedWithCutoff<
   const all: T[] = [];
   let page = 1;
   const MAX_PAGES = 500;
+  let pageRetries = 0;
 
   while (page <= MAX_PAGES) {
     const separator = path.includes("?") ? "&" : "?";
@@ -823,13 +835,10 @@ export async function githubFetchPaginatedWithCutoff<
 
     if (!resp.ok) {
       if (resp.status === 204) break;
-      if (resp.status === 429 || resp.status >= 500) {
-        const retryAfter = resp.headers.get("retry-after");
-        const parsedRetry = retryAfter ? parseInt(retryAfter, 10) : NaN;
-        const waitMs = Number.isFinite(parsedRetry) && parsedRetry > 0
-          ? parsedRetry * 1000
-          : Math.pow(2, page % 3) * 1000;
-        console.warn(`GitHub API ${resp.status}, retrying in ${waitMs}ms`);
+      if ((resp.status === 429 || resp.status >= 500) && pageRetries < PAGINATED_MAX_RETRIES) {
+        const waitMs = computeRetryDelayMsForResponse(pageRetries, resp);
+        pageRetries++;
+        console.warn(`GitHub API ${resp.status}, retrying in ${Math.round(waitMs)}ms (attempt ${pageRetries}/${PAGINATED_MAX_RETRIES})`);
         await sleep(waitMs);
         continue;
       }
@@ -837,6 +846,7 @@ export async function githubFetchPaginatedWithCutoff<
       throw new Error(`GitHub API error ${resp.status}: ${body.replace(/\n|\r/g, "")}`);
     }
 
+    pageRetries = 0;
     const batch: T[] = await resp.json();
     updateRateLimit(resp, ctx.mode, ctx.enterpriseSlug);
     if (!batch || batch.length === 0) break;
@@ -876,6 +886,7 @@ export async function githubFetchCursorPaginatedWithCutoff<
   const all: T[] = [];
   let after: string | null = null;
   const MAX_ITERATIONS = 500;
+  let pageRetries = 0;
 
   for (let i = 0; i < MAX_ITERATIONS; i++) {
     const separator: string = path.includes("?") ? "&" : "?";
@@ -888,13 +899,10 @@ export async function githubFetchCursorPaginatedWithCutoff<
 
     if (!resp.ok) {
       if (resp.status === 204) break;
-      if (resp.status === 429 || resp.status >= 500) {
-        const retryAfter = resp.headers.get("retry-after");
-        const parsedRetry = retryAfter ? parseInt(retryAfter, 10) : NaN;
-        const waitMs = Number.isFinite(parsedRetry) && parsedRetry > 0
-          ? parsedRetry * 1000
-          : Math.pow(2, i % 3) * 1000;
-        console.warn(`GitHub API ${resp.status}, retrying in ${waitMs}ms`);
+      if ((resp.status === 429 || resp.status >= 500) && pageRetries < PAGINATED_MAX_RETRIES) {
+        const waitMs = computeRetryDelayMsForResponse(pageRetries, resp);
+        pageRetries++;
+        console.warn(`GitHub API ${resp.status}, retrying in ${Math.round(waitMs)}ms (attempt ${pageRetries}/${PAGINATED_MAX_RETRIES})`);
         await sleep(waitMs);
         continue;
       }
@@ -902,6 +910,7 @@ export async function githubFetchCursorPaginatedWithCutoff<
       throw new Error(`GitHub API error ${resp.status}: ${body.replace(/\n|\r/g, "")}`);
     }
 
+    pageRetries = 0;
     const batch: T[] = await resp.json();
     updateRateLimit(resp, ctx.mode, ctx.enterpriseSlug);
     if (!batch || batch.length === 0) break;

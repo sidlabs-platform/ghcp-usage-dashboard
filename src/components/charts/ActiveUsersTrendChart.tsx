@@ -21,7 +21,7 @@ interface ActiveUsersTrendChartProps {
 
 function formatDate(dateStr: string) {
   const d = new Date(dateStr);
-  return `${d.getMonth() + 1}/${d.getDate()}`;
+  return `${d.getUTCMonth() + 1}/${d.getUTCDate()}`;
 }
 
 const LINES = [

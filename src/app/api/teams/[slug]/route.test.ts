@@ -60,6 +60,8 @@ beforeEach(() => {
             locAdded: 100,
             interactions: 10,
             acceptanceRate: 50,
+            compGen: 20,
+            compAccept: 10,
             usedAgent: 1,
             usedChat: 1,
             usedCli: 0,
@@ -71,6 +73,8 @@ beforeEach(() => {
             locAdded: 0,
             interactions: 0,
             acceptanceRate: 0,
+            compGen: 0,
+            compAccept: 0,
             usedAgent: 0,
             usedChat: 0,
             usedCli: 1,
@@ -133,6 +137,27 @@ describe("team detail route", { timeout: 10000 }, () => {
         activeMembers: 1,
       },
     });
+  });
+
+  it("weights the team acceptance rate by completion counts, including zero-acceptance members", async () => {
+    const original = mockState.prepare.getMockImplementation()!;
+    mockState.prepare.mockImplementation((sql: string) => {
+      if (sql.includes("WITH team_logins AS")) {
+        const base = { activeDays: 3, locAdded: 0, interactions: 0, usedAgent: 0, usedChat: 0, usedCli: 0, usedCodeReview: 0 };
+        return {
+          all: vi.fn(() => [
+            { ...base, login: "a", acceptanceRate: 100, compGen: 10, compAccept: 10 },
+            { ...base, login: "b", acceptanceRate: 0, compGen: 30, compAccept: 0 },
+          ]),
+        };
+      }
+      return original(sql);
+    });
+    const { GET } = await routePromise;
+    const body = await (await GET(new NextRequest("http://localhost/api/teams/eng?days=7"))).json();
+
+    expect(body.aggregates.avgAcceptanceRate).toBe(25);
+    expect(body.members[0]).not.toHaveProperty("compGen");
   });
 
   it("returns an empty team payload when the slug is unknown", async () => {

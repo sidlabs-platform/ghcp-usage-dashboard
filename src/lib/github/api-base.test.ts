@@ -316,6 +316,28 @@ describe("githubFetchPaginatedWithCutoff", () => {
     warnSpy.mockRestore();
   });
 
+  it("gives up after bounded retries on a persistent 5xx instead of looping forever", async () => {
+    const mockFetch = fetch as unknown as ReturnType<typeof vi.fn>;
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.spyOn(Math, "random").mockReturnValue(0);
+    mockFetch.mockReset();
+    mockFetch.mockResolvedValue({ ok: false, status: 502, headers: new Map(), text: () => Promise.resolve("Bad Gateway") });
+    await expect(githubFetchPaginatedWithCutoff<{ updated_at: string }>("/orgs/o/alerts")).rejects.toThrow("GitHub API error 502");
+    expect(mockFetch).toHaveBeenCalledTimes(4);
+    vi.restoreAllMocks();
+  });
+
+  it("cursor paginator gives up after bounded retries on a persistent 429", async () => {
+    const mockFetch = fetch as unknown as ReturnType<typeof vi.fn>;
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.spyOn(Math, "random").mockReturnValue(0);
+    mockFetch.mockReset();
+    mockFetch.mockResolvedValue({ ok: false, status: 429, headers: new Map(), text: () => Promise.resolve("") });
+    await expect(githubFetchCursorPaginatedWithCutoff<{ updated_at: string }>("/orgs/o/alerts")).rejects.toThrow("GitHub API error 429");
+    expect(mockFetch).toHaveBeenCalledTimes(4);
+    vi.restoreAllMocks();
+  });
+
   it("throws on non-retryable error with body text", async () => {
     const mockFetch = fetch as unknown as ReturnType<typeof vi.fn>;
     mockFetch.mockResolvedValue({ ok: false, status: 403, headers: new Map(), text: () => Promise.resolve("Forbidden") });
@@ -1002,6 +1024,12 @@ describe("_computeRetryDelayMsForTesting (pure backoff formula, direct/fast)", (
   it("honors a Retry-After header directly, capped at 120s", () => {
     expect(_computeRetryDelayMsForTesting(0, "30")).toBe(30_000);
     expect(_computeRetryDelayMsForTesting(0, "500")).toBe(120_000);
+  });
+
+  it("honors a Retry-After HTTP-date, capped at 120s", () => {
+    vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-01-01T00:00:00Z"));
+    expect(_computeRetryDelayMsForTesting(0, "Thu, 01 Jan 2026 00:00:30 GMT")).toBe(30_000);
+    expect(_computeRetryDelayMsForTesting(0, "Thu, 01 Jan 2026 01:00:00 GMT")).toBe(120_000);
   });
 
   it("falls through to jitter when Retry-After is non-numeric or zero", () => {
