@@ -904,6 +904,7 @@ export async function githubFetchCursorPaginatedWithCutoff<
         pageRetries++;
         console.warn(`GitHub API ${resp.status}, retrying in ${Math.round(waitMs)}ms (attempt ${pageRetries}/${PAGINATED_MAX_RETRIES})`);
         await sleep(waitMs);
+        i--;
         continue;
       }
       const body = await resp.text().catch(() => "");
