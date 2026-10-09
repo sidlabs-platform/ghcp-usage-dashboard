@@ -71,9 +71,9 @@ export function parseAndClampDays(
 
 export function getDateRange(days: number): { start: string; end: string } {
   const end = new Date();
-  end.setDate(end.getDate() - 1); // yesterday (latest available)
+  end.setUTCDate(end.getUTCDate() - 1); // yesterday (latest available)
   const start = new Date(end);
-  start.setDate(start.getDate() - days + 1);
+  start.setUTCDate(start.getUTCDate() - days + 1);
   return {
     start: start.toISOString().split("T")[0],
     end: end.toISOString().split("T")[0],
@@ -86,7 +86,7 @@ export function datesBetween(startDay: string, endDay: string): string[] {
   const end = new Date(endDay);
   while (current <= end) {
     dates.push(current.toISOString().split("T")[0]);
-    current.setDate(current.getDate() + 1);
+    current.setUTCDate(current.getUTCDate() + 1);
   }
   return dates;
 }

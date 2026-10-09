@@ -319,6 +319,16 @@ describe("backfillOnboardingFromSeats", () => {
     expect(getSeatLifecycleRows({ ...WINDOW }, "onboarded", PAGE).total).toBe(1);
   });
 
+  it("re-runs do not erase seat metadata that has since gone null", () => {
+    insertSeat({ user_login: "dev1", assigning_team_slug: "core", assigning_team_name: "Core" });
+    backfillOnboardingFromSeats("ent1");
+    db.prepare("UPDATE copilot_seats SET assigning_team_slug = NULL, assigning_team_name = NULL").run();
+    backfillOnboardingFromSeats("ent1");
+
+    const [row] = getSeatLifecycleRows({ ...WINDOW }, "onboarded", PAGE).rows;
+    expect(row).toMatchObject({ assigning_team_slug: "core", assigning_team_name: "Core" });
+  });
+
   it("skips seats with a null created_at rather than writing a bogus date", () => {
     insertSeat({ user_login: "no-date", created_at: null });
     insertSeat({ user_login: "dated", created_at: "2026-06-15T00:00:00Z" });

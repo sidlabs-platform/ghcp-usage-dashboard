@@ -376,7 +376,7 @@ describe("chart component coverage", () => {
       .find((node) => node.getAttribute("data-json")?.includes("\"User\""));
 
     expect(pie).toBeTruthy();
-    expect(pie.getAttribute("data-json")).toContain("User");
+    expect(pie?.getAttribute("data-json")).toContain("User");
     expect(pie?.getAttribute("data-json")).toContain("Org");
   });
 

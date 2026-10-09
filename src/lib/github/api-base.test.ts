@@ -316,6 +316,28 @@ describe("githubFetchPaginatedWithCutoff", () => {
     warnSpy.mockRestore();
   });
 
+  it("gives up after bounded retries on a persistent 5xx instead of looping forever", async () => {
+    const mockFetch = fetch as unknown as ReturnType<typeof vi.fn>;
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.spyOn(Math, "random").mockReturnValue(0);
+    mockFetch.mockReset();
+    mockFetch.mockResolvedValue({ ok: false, status: 502, headers: new Map(), text: () => Promise.resolve("Bad Gateway") });
+    await expect(githubFetchPaginatedWithCutoff<{ updated_at: string }>("/orgs/o/alerts")).rejects.toThrow("GitHub API error 502");
+    expect(mockFetch).toHaveBeenCalledTimes(4);
+    vi.restoreAllMocks();
+  });
+
+  it("cursor paginator gives up after bounded retries on a persistent 429", async () => {
+    const mockFetch = fetch as unknown as ReturnType<typeof vi.fn>;
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.spyOn(Math, "random").mockReturnValue(0);
+    mockFetch.mockReset();
+    mockFetch.mockResolvedValue({ ok: false, status: 429, headers: new Map(), text: () => Promise.resolve("") });
+    await expect(githubFetchCursorPaginatedWithCutoff<{ updated_at: string }>("/orgs/o/alerts")).rejects.toThrow("GitHub API error 429");
+    expect(mockFetch).toHaveBeenCalledTimes(4);
+    vi.restoreAllMocks();
+  });
+
   it("throws on non-retryable error with body text", async () => {
     const mockFetch = fetch as unknown as ReturnType<typeof vi.fn>;
     mockFetch.mockResolvedValue({ ok: false, status: 403, headers: new Map(), text: () => Promise.resolve("Forbidden") });
@@ -391,6 +413,36 @@ describe("githubFetchCursorPaginatedWithCutoff", () => {
       });
     const result = await githubFetchCursorPaginatedWithCutoff<{ updated_at: string }>("/orgs/o/alerts");
     expect(result).toHaveLength(1);
+  });
+
+  it("does not count retries against the successful page limit", async () => {
+    const mockFetch = fetch as unknown as ReturnType<typeof vi.fn>;
+    let successfulPages = 0;
+    let retried = false;
+    vi.spyOn(Math, "random").mockReturnValue(0);
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    mockFetch.mockImplementation(async (input: string) => {
+      const url = String(input);
+      if (url.includes("after=cursor2") && !retried) {
+        retried = true;
+        return { ok: false, status: 503, headers: new Map(), text: () => Promise.resolve("unavailable") };
+      }
+
+      successfulPages++;
+      return {
+        ok: true,
+        json: () => Promise.resolve([{ updated_at: "2024-01-05", id: successfulPages }]),
+        headers: new Map([["link", `<https://api.github.com/orgs/o/alerts?after=cursor${successfulPages + 1}>; rel="next"`]]),
+      };
+    });
+
+    const result = await githubFetchCursorPaginatedWithCutoff<{ updated_at: string }>("/orgs/o/alerts");
+
+    expect(result).toHaveLength(500);
+    expect(successfulPages).toBe(500);
+    expect(mockFetch.mock.calls).toHaveLength(501);
+    expect(mockFetch.mock.calls.filter(([url]) => new URL(String(url)).searchParams.get("after") === "cursor2")).toHaveLength(2);
+    vi.restoreAllMocks();
   });
 
   it("throws on 4xx non-retryable error", async () => {
@@ -1002,6 +1054,12 @@ describe("_computeRetryDelayMsForTesting (pure backoff formula, direct/fast)", (
   it("honors a Retry-After header directly, capped at 120s", () => {
     expect(_computeRetryDelayMsForTesting(0, "30")).toBe(30_000);
     expect(_computeRetryDelayMsForTesting(0, "500")).toBe(120_000);
+  });
+
+  it("honors a Retry-After HTTP-date, capped at 120s", () => {
+    vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-01-01T00:00:00Z"));
+    expect(_computeRetryDelayMsForTesting(0, "Thu, 01 Jan 2026 00:00:30 GMT")).toBe(30_000);
+    expect(_computeRetryDelayMsForTesting(0, "Thu, 01 Jan 2026 01:00:00 GMT")).toBe(120_000);
   });
 
   it("falls through to jitter when Retry-After is non-numeric or zero", () => {

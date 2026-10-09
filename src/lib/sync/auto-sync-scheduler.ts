@@ -91,9 +91,9 @@ async function executeAutoSync(): Promise<void> {
       // Refresh summary tables
       try {
         const summaryEnd = new Date();
-        summaryEnd.setDate(summaryEnd.getDate() - 1);
+        summaryEnd.setUTCDate(summaryEnd.getUTCDate() - 1);
         const summaryStart = new Date(summaryEnd);
-        summaryStart.setDate(summaryStart.getDate() - BACKFILL_RANGE + 1);
+        summaryStart.setUTCDate(summaryStart.getUTCDate() - BACKFILL_RANGE + 1);
         refreshAllSummaries(
           summaryStart.toISOString().split("T")[0],
           summaryEnd.toISOString().split("T")[0],

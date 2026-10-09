@@ -24,6 +24,10 @@ vi.mock("next/dynamic", () => ({
   default: () => () => <div data-testid="dynamic-chart" />,
 }));
 
+vi.mock("@/components/cards/MetricCard", () => ({
+  MetricCard: () => <div data-testid="metric-card" />,
+}));
+
 vi.mock("@/contexts/DateRangeContext", () => ({
   useDateRange: () => mockDateRange,
 }));

@@ -432,9 +432,9 @@ export async function backfillEnterprise(
 
   // Calculate date range: from (today - numDays) to yesterday
   const yesterday = new Date();
-  yesterday.setDate(yesterday.getDate() - 1);
+  yesterday.setUTCDate(yesterday.getUTCDate() - 1);
   const start = new Date(yesterday);
-  start.setDate(start.getDate() - numDays + 1);
+  start.setUTCDate(start.getUTCDate() - numDays + 1);
 
   const allDays = datesBetween(
     start.toISOString().split("T")[0],
@@ -538,7 +538,7 @@ async function incrementalSyncEnterprise(
     : null;
 
   const yesterday = new Date();
-  yesterday.setDate(yesterday.getDate() - 1);
+  yesterday.setUTCDate(yesterday.getUTCDate() - 1);
   const yesterdayStr = yesterday.toISOString().split("T")[0];
 
   if (latestDay === yesterdayStr) {
@@ -553,7 +553,7 @@ async function incrementalSyncEnterprise(
 
   // Otherwise, sync from day after latest to yesterday
   const startDate = new Date(latestDay);
-  startDate.setDate(startDate.getDate() + 1);
+  startDate.setUTCDate(startDate.getUTCDate() + 1);
   const days = datesBetween(startDate.toISOString().split("T")[0], yesterdayStr);
 
   let daysSynced = 0;
@@ -1024,9 +1024,9 @@ export async function fullSync(
   onProgress?.({ phase: "summaries", current: 0, total: 1, message: "Refreshing summary tables..." });
   const BACKFILL_RANGE = parseInt(process.env.BACKFILL_DAYS || "90", 10) || 90;
   const summaryEnd = new Date();
-  summaryEnd.setDate(summaryEnd.getDate() - 1);
+  summaryEnd.setUTCDate(summaryEnd.getUTCDate() - 1);
   const summaryStart = new Date(summaryEnd);
-  summaryStart.setDate(summaryStart.getDate() - BACKFILL_RANGE + 1);
+  summaryStart.setUTCDate(summaryStart.getUTCDate() - BACKFILL_RANGE + 1);
   try {
     refreshAllSummaries(
       summaryStart.toISOString().split("T")[0],
@@ -1070,9 +1070,9 @@ async function sync28DayFallback(
 
   // Only run if enterprise_daily_metrics is still empty for the last 28 days
   const yesterday = new Date();
-  yesterday.setDate(yesterday.getDate() - 1);
+  yesterday.setUTCDate(yesterday.getUTCDate() - 1);
   const start28 = new Date(yesterday);
-  start28.setDate(start28.getDate() - 27);
+  start28.setUTCDate(start28.getUTCDate() - 27);
   const startStr = start28.toISOString().split("T")[0];
   const endStr = yesterday.toISOString().split("T")[0];
 

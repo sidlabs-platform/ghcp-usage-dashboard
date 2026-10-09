@@ -604,7 +604,7 @@ export function backfillOnboardingFromSeats(enterpriseSlug?: string): number {
   const params: unknown[] = enterpriseSlug ? [detectedAt, enterpriseSlug] : [detectedAt];
 
   const result = db.prepare(`
-    INSERT OR REPLACE INTO copilot_seat_lifecycle_events (
+    INSERT INTO copilot_seat_lifecycle_events (
       enterprise_slug, org_slug, user_login, user_id, event_type, event_date,
       occurred_at, plan_type, assigning_team_slug, assigning_team_name,
       last_activity_at, source, detected_at
@@ -618,6 +618,23 @@ export function backfillOnboardingFromSeats(enterpriseSlug?: string): number {
     WHERE created_at IS NOT NULL
       AND length(created_at) >= 10
       AND substr(created_at, 5, 1) = '-'${scope}
+    ON CONFLICT(enterprise_slug, org_slug, user_login, event_type, event_date, source) DO UPDATE SET
+      user_id = COALESCE(excluded.user_id, copilot_seat_lifecycle_events.user_id),
+      occurred_at = excluded.occurred_at,
+      plan_type = COALESCE(excluded.plan_type, copilot_seat_lifecycle_events.plan_type),
+      assigning_team_slug = COALESCE(
+        excluded.assigning_team_slug,
+        copilot_seat_lifecycle_events.assigning_team_slug
+      ),
+      assigning_team_name = COALESCE(
+        excluded.assigning_team_name,
+        copilot_seat_lifecycle_events.assigning_team_name
+      ),
+      last_activity_at = COALESCE(
+        excluded.last_activity_at,
+        copilot_seat_lifecycle_events.last_activity_at
+      ),
+      detected_at = excluded.detected_at
   `).run(...params);
 
   return result.changes;

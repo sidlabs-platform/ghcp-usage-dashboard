@@ -13,6 +13,12 @@ import { billingClient } from "./billing-client";
 
 describe("billingClient", () => {
   describe("parseUsageCSV", () => {
+    it("strips a leading UTF-8 BOM so the first column (date) is not lost", () => {
+      const csv = "\uFEFFdate,product,quantity\n2024-01-01,copilot,10";
+      const [record] = billingClient.parseUsageCSV(csv);
+      expect(record.date).toBe("2024-01-01");
+    });
+
     it("parses simple CSV into BillingUsageRecord[]", () => {
       const csv = [
         "date,product,sku,quantity,unit_type,applied_cost_per_quantity,gross_amount,discount_amount,net_amount,organization,repository,username,workflow_path,cost_center_name",

@@ -236,6 +236,16 @@ describe("roi merged pull requests", () => {
     expect(agent.prsMergedPerDevPerMonth).toBe(0);
   });
 
+  it("keeps hasPrData true when the field is present but every phase merged zero PRs", async () => {
+    creditsCostMock.mockReturnValue([phaseRow(2, 10, 100)]);
+    mockEnterpriseRow([mergedPhase(2, 0)]);
+
+    const json = await (await call()).json();
+
+    expect(json.hasPrData).toBe(true);
+    expect(json.groups.find((g: { key: string }) => g.key === "agent").prsMerged).toBe(0);
+  });
+
   it("suppresses PR figures across multiple unfiltered enterprises", async () => {
     countEnterprisesMock.mockReturnValue(3);
     creditsCostMock.mockReturnValue([phaseRow(2, 10, 100)]);

@@ -226,7 +226,7 @@ describe("getDateRange", () => {
   it("end date is yesterday", () => {
     const { end } = getDateRange(7);
     const yesterday = new Date();
-    yesterday.setDate(yesterday.getDate() - 1);
+    yesterday.setUTCDate(yesterday.getUTCDate() - 1);
     expect(end).toBe(yesterday.toISOString().split("T")[0]);
   });
 
@@ -268,6 +268,46 @@ describe("datesBetween", () => {
   it("handles leap year", () => {
     const result = datesBetween("2024-02-28", "2024-03-01");
     expect(result).toEqual(["2024-02-28", "2024-02-29", "2024-03-01"]);
+  });
+});
+
+describe("UTC date windows across daylight-saving transitions", () => {
+  it.each([
+    ["America/New_York", "2024-03-11T04:30:00Z", "2024-03-09", "2024-03-10"],
+    ["America/New_York", "2024-11-04T04:30:00Z", "2024-11-02", "2024-11-03"],
+    ["Pacific/Auckland", "2024-09-29T12:30:00Z", "2024-09-27", "2024-09-28"],
+    ["Pacific/Auckland", "2024-04-07T12:30:00Z", "2024-04-05", "2024-04-06"],
+  ])("keeps rolling bounds in UTC in %s at %s", (timezone, now, start, end) => {
+    const previousTimezone = process.env.TZ;
+    try {
+      process.env.TZ = timezone;
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date(now));
+      expect(getDateRange(2)).toEqual({ start, end });
+      expect(resolveWindow(new URLSearchParams("days=2"))).toEqual({ start, end, days: 2 });
+      expect(parseDateRangeParams(new URLSearchParams({ startDate: start, endDate: end })))
+        .toEqual({ start, end });
+    } finally {
+      vi.useRealTimers();
+      if (previousTimezone === undefined) delete process.env.TZ;
+      else process.env.TZ = previousTimezone;
+    }
+  });
+
+  it.each([
+    ["America/New_York", ["2024-03-09", "2024-03-10", "2024-03-11", "2024-03-12"]],
+    ["America/New_York", ["2024-11-02", "2024-11-03", "2024-11-04", "2024-11-05"]],
+    ["Pacific/Auckland", ["2024-09-28", "2024-09-29", "2024-09-30", "2024-10-01"]],
+    ["Pacific/Auckland", ["2024-04-06", "2024-04-07", "2024-04-08", "2024-04-09"]],
+  ])("enumerates every UTC date exactly once in %s", (timezone, expected) => {
+    const previousTimezone = process.env.TZ;
+    try {
+      process.env.TZ = timezone;
+      expect(datesBetween(expected[0], expected[expected.length - 1])).toEqual(expected);
+    } finally {
+      if (previousTimezone === undefined) delete process.env.TZ;
+      else process.env.TZ = previousTimezone;
+    }
   });
 });
 

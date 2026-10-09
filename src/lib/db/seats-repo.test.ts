@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
 import Database from "./sqlite-database";
 import path from "path";
 import fs from "fs";
+import type { CopilotSeat } from "@/lib/types/seats";
 
 let db: Database;
 
@@ -157,14 +158,13 @@ describe("seats-repo", () => {
 
 // ── Helper ────────────────────────────────────────────────────────────
 
-function makeSeat(login: string, id: number, planType: string, lastActivity: string | null, editor: string | null) {
+function makeSeat(login: string, id: number, planType: string, lastActivity: string | null, editor: string | null): CopilotSeat {
   return {
     assignee: { login, id, avatar_url: `https://github.com/${login}.png` },
     plan_type: planType,
     last_activity_at: lastActivity,
     last_activity_editor: editor,
     last_authenticated_at: "2024-06-01T00:00:00Z",
-    assigning_team: null,
     pending_cancellation_date: planType === "pending_cancellation" ? "2024-07-01" : null,
     created_at: "2024-01-01T00:00:00Z",
     updated_at: "2024-06-15T00:00:00Z",

@@ -147,14 +147,14 @@ async function syncCategory(
   if (!cutoffDate) {
     const { backfillDays } = getSecurityConfig();
     const cutoffTime = new Date();
-    cutoffTime.setDate(cutoffTime.getDate() - backfillDays);
+    cutoffTime.setUTCDate(cutoffTime.getUTCDate() - backfillDays);
     cutoffDate = cutoffTime.toISOString();
   }
 
   // Add safety overlap: go back 1 hour from last sync to catch page-boundary drift
   if (isIncremental) {
     const overlap = new Date(cutoffDate);
-    overlap.setHours(overlap.getHours() - 1);
+    overlap.setUTCHours(overlap.getUTCHours() - 1);
     cutoffDate = overlap.toISOString();
   }
 

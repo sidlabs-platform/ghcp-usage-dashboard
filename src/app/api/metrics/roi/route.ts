@@ -210,7 +210,7 @@ async function handler(request: NextRequest) {
     });
 
     const hasDevelopers = groups.some((g) => g.developers > 0);
-    const hasPrData = mergedByPhase !== null && groups.some((g) => g.prsMerged > 0);
+    const hasPrData = mergedByPhase !== null;
 
     const body: RoiResponse = {
       hasData: hasDevelopers,

@@ -118,6 +118,24 @@ describe("GET /api/metrics/code-generation", () => {
     expect(json.kpis.totalLocChanged).toBe(0);
   });
 
+  it("returns one trend point per UTC day across daylight saving", async () => {
+    const previousTimezone = process.env.TZ;
+    try {
+      process.env.TZ = "America/New_York";
+      const GET = await getHandler();
+      const res = await GET(new NextRequest(
+        "http://localhost/api/metrics/code-generation?startDate=2024-03-09&endDate=2024-03-12",
+      ));
+      expect(res.status).toBe(200);
+      const json = await res.json();
+      expect(json.dailyTrend.map((row: { day: string }) => row.day))
+        .toEqual(["2024-03-09", "2024-03-10", "2024-03-11", "2024-03-12"]);
+    } finally {
+      if (previousTimezone === undefined) delete process.env.TZ;
+      else process.env.TZ = previousTimezone;
+    }
+  });
+
   it("returns 400 when the row-count guard is exceeded", async () => {
     state.estimate = { exceeds: true, count: 999999 };
     const GET = await getHandler();

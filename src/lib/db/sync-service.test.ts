@@ -918,6 +918,47 @@ describe("sync-service", () => {
     expect(result.daysSkipped).toBeGreaterThanOrEqual(3);
   });
 
+  it("backfills every UTC day across daylight saving using real date enumeration", async () => {
+    const previousTimezone = process.env.TZ;
+    const actualUtils = await vi.importActual<typeof import("@/lib/utils")>("@/lib/utils");
+    try {
+      process.env.TZ = "America/New_York";
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date("2024-03-12T04:30:00Z"));
+      vi.mocked(datesBetween).mockImplementationOnce(actualUtils.datesBetween);
+      vi.mocked(isSynced).mockReturnValue(true);
+
+      const result = await backfillEnterprise("test-ent", 4);
+      expect(datesBetween).toHaveBeenCalledWith("2024-03-08", "2024-03-11");
+      expect(result).toEqual({ daysSynced: 0, daysSkipped: 4, errors: 0 });
+    } finally {
+      vi.useRealTimers();
+      if (previousTimezone === undefined) delete process.env.TZ;
+      else process.env.TZ = previousTimezone;
+    }
+  });
+
+  it("incremental sync advances from the last UTC day across daylight saving", async () => {
+    const previousTimezone = process.env.TZ;
+    const actualUtils = await vi.importActual<typeof import("@/lib/utils")>("@/lib/utils");
+    try {
+      process.env.TZ = "America/New_York";
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date("2024-03-12T04:30:00Z"));
+      vi.mocked(getLatestSyncDay).mockReturnValue("2024-03-10");
+      vi.mocked(datesBetween).mockImplementationOnce(actualUtils.datesBetween);
+      vi.mocked(isSynced).mockReturnValue(true);
+
+      await incrementalSync();
+      expect(datesBetween).toHaveBeenCalledWith("2024-03-11", "2024-03-11");
+    } finally {
+      vi.mocked(getLatestSyncDay).mockReturnValue(null);
+      vi.useRealTimers();
+      if (previousTimezone === undefined) delete process.env.TZ;
+      else process.env.TZ = previousTimezone;
+    }
+  });
+
   it("syncDay handles non-Error enterprise throws (String fallback)", async () => {
     (metricsClient.getEnterpriseDailyReport as ReturnType<typeof vi.fn>).mockRejectedValue("raw string error");
     const result = await syncDay("test-ent", "2025-01-01");

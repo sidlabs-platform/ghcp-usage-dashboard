@@ -47,7 +47,7 @@ import {
   getCopilotCostBasis,
   getCopilotBillingBreakdown,
 } from "./billing-repo";
-import type { BillingPremiumRequestRecord } from "@/lib/types/billing";
+import type { BillingPremiumRequestRecord, BillingUsageRecord } from "@/lib/types/billing";
 
 /** Factory for premium request records with sensible defaults. */
 function makePremiumRecord(overrides: Partial<BillingPremiumRequestRecord> = {}): BillingPremiumRequestRecord {
@@ -129,7 +129,7 @@ describe("upsertUsageRecords", () => {
   });
 
   it("upserts on conflict", () => {
-    const rec = { date: "2026-06-10", product: "copilot", sku: "sku1", quantity: 5, unit_type: "seat", applied_cost_per_quantity: 2, gross_amount: 10, discount_amount: 1, net_amount: 9, organization: "org1", repository: "repo1", username: "user1", workflow_path: "", cost_center_name: "cc1", charge_scope: "user" };
+    const rec: BillingUsageRecord = { date: "2026-06-10", product: "copilot", sku: "sku1", quantity: 5, unit_type: "seat", applied_cost_per_quantity: 2, gross_amount: 10, discount_amount: 1, net_amount: 9, organization: "org1", repository: "repo1", username: "user1", workflow_path: "", cost_center_name: "cc1", charge_scope: "user" };
     upsertUsageRecords("ent1", [rec]);
     upsertUsageRecords("ent1", [{ ...rec, net_amount: 20 }]);
     const rows = db.prepare("SELECT * FROM billing_usage_records").all() as any[];

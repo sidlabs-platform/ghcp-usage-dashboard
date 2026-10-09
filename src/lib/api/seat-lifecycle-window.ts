@@ -95,7 +95,7 @@ export function parseSeatLifecycleWindow(
 
   const end = new Date();
   const start = new Date(end);
-  start.setDate(start.getDate() - daysResult.days + 1);
+  start.setUTCDate(start.getUTCDate() - daysResult.days + 1);
   return {
     start: start.toISOString().split("T")[0],
     end: todayISO(),

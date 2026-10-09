@@ -640,6 +640,9 @@ The header provides quick date range toggles:
 
 The default view is **7 days**. The selected range applies to all pages.
 
+Rolling windows end on the previous UTC date. Date enumeration and usage sync
+boundaries use UTC, so daylight-saving changes never duplicate or skip report days.
+
 ---
 
 ## Exporting Data

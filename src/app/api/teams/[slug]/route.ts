@@ -83,7 +83,7 @@ async function handler(request: NextRequest) {
     }
     teamLoginsSql += ` GROUP BY LOWER(user_login)`;
 
-    const members = db.prepare(`
+    const memberRows = db.prepare(`
       WITH team_logins AS (
         ${teamLoginsSql}
       ),
@@ -126,6 +126,8 @@ async function handler(request: NextRequest) {
           THEN ROUND(CAST(cr.comp_accept AS REAL) / cr.comp_gen * 100, 1)
           ELSE 0
         END AS acceptanceRate,
+        COALESCE(cr.comp_gen, 0) AS compGen,
+        COALESCE(cr.comp_accept, 0) AS compAccept,
         COALESCE(mm.used_agent, 0) AS usedAgent,
         COALESCE(mm.used_chat, 0) AS usedChat,
         COALESCE(mm.used_cli, 0) AS usedCli,
@@ -134,15 +136,21 @@ async function handler(request: NextRequest) {
       LEFT JOIN member_metrics mm ON mm.login_key = tl.login_key
       LEFT JOIN completion_rates cr ON cr.login_key = tl.login_key
       ORDER BY activeDays DESC
-    `).all(...teamLoginsParams, start, end, start, end) as MemberRow[];
+    `).all(...teamLoginsParams, start, end, start, end) as (MemberRow & { compGen: number; compAccept: number })[];
+
+    // Team rate is one ratio over summed completion counts, so members with
+    // generations but no acceptances still count and heavy users weigh more.
+    let teamGen = 0;
+    let teamAccept = 0;
+    const members: MemberRow[] = memberRows.map(({ compGen, compAccept, ...m }) => {
+      teamGen += compGen;
+      teamAccept += compAccept;
+      return m;
+    });
 
     // Calculate aggregates from members
     const totalLocAdded = members.reduce((s, m) => s + m.locAdded, 0);
-    const nonZeroRates = members.filter((m) => m.acceptanceRate > 0);
-    const avgAcceptanceRate =
-      nonZeroRates.length > 0
-        ? Number((nonZeroRates.reduce((s, m) => s + m.acceptanceRate, 0) / nonZeroRates.length).toFixed(1))
-        : 0;
+    const avgAcceptanceRate = teamGen > 0 ? Number(((teamAccept / teamGen) * 100).toFixed(1)) : 0;
     const memberCount = members.length;
     const pct = (count: number) => (memberCount > 0 ? Number(((count / memberCount) * 100).toFixed(1)) : 0);
 

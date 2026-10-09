@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 vi.mock("@/lib/config/dashboard-config", () => ({
   getAutoSyncConfig: vi.fn(() => ({ enabled: false, utcTime: "03:00" })),
