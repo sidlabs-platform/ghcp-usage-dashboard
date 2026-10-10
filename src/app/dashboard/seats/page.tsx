@@ -177,11 +177,12 @@ export default function SeatsPage() {
           subtitle={`${stats?.pendingCancellation ?? 0} pending cancellation`}
         />
         <MetricCard
-          title="Utilization"
+          title="License Utilization"
           value={utilization ?? 0}
           format="percent"
           icon={<Percent className="h-4 w-4" />}
           subtitle="Active in window / total seats"
+          thresholds={{ good: 80, bad: 60, higherIsBetter: true }}
         />
       </div>
 
